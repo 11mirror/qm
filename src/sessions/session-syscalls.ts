@@ -788,7 +788,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   actor: caller.actor,
                   text: stamped,
                   ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}),
-                  audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
                 return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
@@ -1143,7 +1142,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     actor: prepared.actor,
     text,
     ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
-    audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
   if (!isSubagentThreadRef(parent.threadRef)) {
