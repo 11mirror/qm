@@ -1,14 +1,7 @@
 import { isUserMessage, type Item } from "./items.ts";
-import type { SearchHitType } from "./session-store.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
 
-export function searchHitType(item: Pick<Item, "kind" | "variant">): SearchHitType | null {
-  if (isUserMessage(item)) return "user";
-  if (item.kind !== "AgentMessage") return null;
-  if (item.variant === "narration") return "text";
-  return item.variant === null ? "assistant" : null;
-}
 const MAX_TERMS = 8;
 
 /** Lowercased alphanumeric terms, in query order — the shared tokenizer for both stores. */

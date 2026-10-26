@@ -17,7 +17,7 @@ import { isUserMessage, messageTs, proseText, type Item, type NewItem } from "..
 import { createTranscriptSource, type TranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal } from "../harness/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
-import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
+import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/item-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
@@ -113,12 +113,8 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
   const tenureOf = async (sessionId: string, principalId: string) =>
     (await deps.sessions.participantWindowsOf(sessionId)).find((w) => w.principalId === principalId);
 
-  const viewerStoredEntryAt = async (sessionId: string, principalId: string, seq: number) => {
-    const window = await tenureOf(sessionId, principalId);
-    if (!window) return undefined;
-    const entry = await deps.sessions.getItem(sessionId, seq);
-    return entry && itemWithinTenure(entry, window) ? entry : undefined;
-  };
+  const viewerStoredEntryAt = async (sessionId: string, principalId: string, seq: number) =>
+    (await deps.sessions.visibleItems(sessionId, principalId, { sinceSeq: seq, beforeSeq: seq + 1 }))[0];
 
   const entryAt = async (sessionId: string, seq: number, principalId?: string) => {
     const latest = await deps.sessions.latestItemSeq(sessionId);
@@ -521,7 +517,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const [hits, titles] = await Promise.all([
-        deps.sessions.searchEntries(principalId, query, capped).then((rows) => h.viewableRows(principalId, rows)),
+        deps.sessions.searchItems(principalId, query, capped).then((rows) => h.viewableRows(principalId, rows)),
         deps.sessions.searchSessionTitles(principalId, query, capped).then((rows) => h.viewableRows(principalId, rows)),
       ]);
       const terms = searchTerms(query);
@@ -828,13 +824,13 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
       const currentGoal = async () => openGoal((await deps.sessions.goals([session.id])).get(session.id));
       const before = await currentGoal();
       if (!before) return { cancelled: false as const, reason: "no_open_goal" as const };
-      let { lease } = await deps.sessions.acquireLease(session.id, "backfill");
+      let { lease } = await deps.sessions.acquireLease(session.id, "append");
       if (!lease) {
         if (before.status === "active")
           for (const run of await deps.runs.inFlightForThread(session.threadRef))
             if (run.status === "running")
               await deps.signals?.send(run.id, { kind: "abort", reason: "because its goal was cancelled" });
-        ({ lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", GOAL_CANCEL_LEASE_WAIT_MS));
+        ({ lease } = await acquireLeaseWithin(deps.sessions, session.id, "append", GOAL_CANCEL_LEASE_WAIT_MS));
       }
       if (!lease) return { cancelled: false as const, reason: "busy" as const };
       try {

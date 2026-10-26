@@ -91,7 +91,7 @@ test("a receipt waits for a busy session and deduplicates beyond the transcript 
         body: { name: "Alice", slackReplyReceipt: true, deliveryKey: key },
       },
       key,
-      () => sessions.hasDeliveryEntry(session.id, key, "200.123"),
+      () => sessions.hasDeliveryItem(session.id, key, "200.123"),
     );
   const { lease } = await sessions.acquireLease(session.id, "turn");
   assert.ok(lease);

@@ -12,7 +12,7 @@ import type {
   NewSessionPin,
   SessionPin,
   AttributedTurn,
-  EntrySearchHit,
+  ItemSearchHit,
   ScopeActivity,
   DistinctScope,
   ParticipantPage,
@@ -37,7 +37,7 @@ import type {
   SpendRow,
   StoreOptions,
 } from "./session-store.ts";
-import { tsPrefixQuery } from "./entry-search.ts";
+import { tsPrefixQuery } from "./item-search.ts";
 import { ITEMS_CUTOVER_MIGRATIONS, LEGACY_TAPE_MIGRATIONS } from "./legacy-history-migrations.ts";
 import {
   cronIdOf,
@@ -412,6 +412,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       threadRef: r.thread_ref as string,
       scopeId: r.scope_id as ScopeId,
     }));
+  };
+  /** Rows hanging off a session that its delete must take with it (items cascade on their own). */
+  const deleteSessionChildren = async (client: PoolClient, sessionId: string): Promise<void> => {
+    for (const table of ["session_llm_requests", "session_leases", "participants", "session_pins"])
+      await client.query(`DELETE FROM ${table} WHERE session_id = $1`, [sessionId]);
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
@@ -1412,7 +1417,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
+    async hasDeliveryItem(sessionId, deliveryKey, slackTs) {
       const rows = await q(
         `SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'UserMessage'
          AND (body ->> 'deliveryKey' = $2 OR external_id = $3) LIMIT 1`,
@@ -1645,10 +1650,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async deleteSession(sessionId): Promise<void> {
       await withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
-        await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
+        await deleteSessionChildren(client, sessionId);
         await client.query("DELETE FROM sessions WHERE id = $1", [sessionId]);
       });
     },
@@ -1664,10 +1666,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [sessionId, now()],
         );
         if (gone.rowCount === 0) return false;
-        await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
+        await deleteSessionChildren(client, sessionId);
         return true;
       });
     },
@@ -1805,7 +1804,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
       const needle = query.trim();
       if (needle.length < 2) return [];
-      const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      const like = likeContains(needle);
       const rows = await q(
         participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
@@ -1815,7 +1814,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToParticipantSession);
     },
 
-    async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
+    async searchItems(principalId, query, limit = 40): Promise<ItemSearchHit[]> {
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
@@ -1847,7 +1846,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             ...(r.surface ? { surface: r.surface as string } : {}),
             ...(r.archived ? { archived: true } : {}),
             seq: Number(r.seq),
-            type: r.type as EntrySearchHit["type"],
+            type: r.type as ItemSearchHit["type"],
             ...(r.author ? { author: r.author as string } : {}),
             text,
             createdAt: Number(r.created_at),

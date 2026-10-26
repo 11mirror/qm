@@ -2660,18 +2660,18 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   await s.append(lease, { kind: "UserMessage", text: "memo board postscript" });
   await s.releaseLease(lease);
 
-  const hits = await s.searchEntries("USRCH", "memo boar");
+  const hits = await s.searchItems("USRCH", "memo boar");
   assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
   assert.equal(hits[0]!.text, "memo board postscript", "newest first");
   assert.equal(hits[2]!.author, "josh", "user hits carry the author");
 
-  const late = await s.searchEntries("ULATE", "memo");
+  const late = await s.searchItems("ULATE", "memo");
   assert.equal(late.length, 1, "a latecomer only searches inside their window");
   assert.equal(late[0]!.text, "memo board postscript");
 
-  assert.deepEqual(await s.searchEntries("UNONE", "memo"), [], "a non-participant sees nothing");
-  assert.deepEqual(await s.searchEntries("USRCH", "  !!  "), [], "an unusable query is empty, not an error");
-  assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
+  assert.deepEqual(await s.searchItems("UNONE", "memo"), [], "a non-participant sees nothing");
+  assert.deepEqual(await s.searchItems("USRCH", "  !!  "), [], "an unusable query is empty, not an error");
+  assert.deepEqual(await s.searchItems("USRCH", "memo missing"), [], "every term must match");
 });
 
 test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
@@ -2698,13 +2698,13 @@ test("pg search: participation windows filter global matches before the result l
   await s.releaseLease(hiddenLease);
 
   for (const limit of [1, 200]) {
-    const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
+    const hits = await s.searchItems("SEARCH-WINDOW", "limitwindow", limit);
     assert.deepEqual(
       hits.map((hit) => [hit.sessionId, hit.seq]),
       [[session.id, visible.seq]],
     );
   }
-  assert.deepEqual(await s.searchEntries("SEARCH-OUTSIDER", "limitwindow", 1), []);
+  assert.deepEqual(await s.searchItems("SEARCH-OUTSIDER", "limitwindow", 1), []);
 });
 
 test("pg search: message writes populate the index and tool results stay unfindable", { skip }, async () => {
@@ -2727,18 +2727,18 @@ test("pg search: message writes populate the index and tool results stay unfinda
   });
   await s.append(lease, { kind: "AgentMessage", text: "Rotated the deploy key." });
 
-  const before = await s.searchEntries("UIDX", "deploy key");
+  const before = await s.searchItems("UIDX", "deploy key");
   assert.equal(before.length, 2, "message writes are searchable immediately");
   assert.equal(before.find((hit) => hit.type === "user")?.author, "alex");
 
   await s.append(lease, { kind: "UserMessage", text: "also rotate the staging deploy key" });
-  assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
+  assert.equal((await s.searchItems("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
 
-  assert.deepEqual(await s.searchEntries("UIDX", "secret broker"), [], "tool results are unfindable");
+  assert.deepEqual(await s.searchItems("UIDX", "secret broker"), [], "tool results are unfindable");
 
   await s.addParticipant(sess.id, "ULATE2");
   await s.append(lease, { kind: "UserMessage", text: "deploy key postscript" });
-  const late = await s.searchEntries("ULATE2", "deploy key");
+  const late = await s.searchItems("ULATE2", "deploy key");
   assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
   assert.equal(late[0]!.text, "deploy key postscript");
 
@@ -2747,7 +2747,7 @@ test("pg search: message writes populate the index and tool results stay unfinda
     text: "nul\u0000riddled deploy key",
     body: { name: "e\u0000ve" },
   });
-  const nulHits = await s.searchEntries("UIDX", "nulriddled");
+  const nulHits = await s.searchItems("UIDX", "nulriddled");
   assert.equal(nulHits.length, 1, "a NUL byte in the text never wedges the index write");
   assert.equal(nulHits[0]!.author, "eve");
   await s.releaseLease(lease);
@@ -2871,7 +2871,7 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
   }
   expected.sort((a, b) => a.sessionId.localeCompare(b.sessionId) || b.seq - a.seq);
   for (const limit of [1, 5, 12, 20]) {
-    const hits = await store.searchEntries("ULIMITSEARCH", "doc lim", limit);
+    const hits = await store.searchItems("ULIMITSEARCH", "doc lim", limit);
     assert.deepEqual(
       hits.map(({ sessionId, seq }) => ({ sessionId, seq })),
       expected.slice(0, limit),
@@ -2899,7 +2899,7 @@ test(
         ]),
         /UPDATE on items is forbidden/,
       );
-      assert.equal((await store.searchEntries("UATOMIC", "original")).length, 1);
+      assert.equal((await store.searchItems("UATOMIC", "original")).length, 1);
       await assert.rejects(
         pool.query("DELETE FROM items WHERE session_id=$1", [session.id]),
         /only allowed through its session/,
@@ -2909,7 +2909,7 @@ test(
       await store.deleteSession(session.id);
       await pool.end();
     }
-    assert.deepEqual(await store.searchEntries("UATOMIC", "original"), []);
+    assert.deepEqual(await store.searchItems("UATOMIC", "original"), []);
   },
 );
 

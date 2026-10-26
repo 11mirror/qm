@@ -56,7 +56,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
           body: { name, slackReplyReceipt: true, deliveryKey: key },
         },
         key,
-        () => sessions!.hasDeliveryEntry(source.session.id, key, ts),
+        () => sessions!.hasDeliveryItem(source.session.id, key, ts),
       );
     await record(RECEIPT_WAIT_MS).catch((error: unknown) => {
       if (!(error as { busy?: boolean }).busy) throw error;

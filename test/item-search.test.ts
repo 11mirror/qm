@@ -6,7 +6,7 @@ import {
   searchSnippet,
   searchTerms,
   tsPrefixQuery,
-} from "../src/sessions/entry-search.ts";
+} from "../src/sessions/item-search.ts";
 
 test("searchTerms tokenizes to lowercase alphanumerics", () => {
   assert.deepEqual(searchTerms("Memo-Board  refresh!"), ["memo", "board", "refresh"]);

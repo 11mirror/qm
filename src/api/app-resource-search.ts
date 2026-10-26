@@ -10,7 +10,7 @@ import {
   type ResourceKind,
   type ResourceSearchHit,
 } from "../search/resource-search.ts";
-import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
+import { matchesSearchTerms, searchTerms } from "../sessions/item-search.ts";
 import { scopeId } from "../types.ts";
 
 export function createResourceSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers) {
