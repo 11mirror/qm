@@ -69,18 +69,7 @@ test("production is parsed once", () => {
   assert.equal(loadConfig({}).production, false);
 });
 
-test("retired screening variables are ignored and the screen classifier follows the proxy settings", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (message: string) => warnings.push(message);
-  try {
-    loadConfig({ HARNESS_SHARING_POSTURE: "isolated", SECURITY_SCREEN: "enforce" });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual(warnings, [
-    "[config] HARNESS_SHARING_POSTURE, SECURITY_SCREEN are no longer read: screening always observes. Remove the variables.",
-  ]);
+test("the screen classifier follows the proxy settings", () => {
   assert.equal(loadConfig({}).securityScreenProxy, undefined);
   const proxy = {
     SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",

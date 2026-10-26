@@ -894,20 +894,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     );
   }
 
-  const ignoredScreenEnv = [
-    "HARNESS_SECURITY_POSTURE",
-    "HARNESS_SHARING_POSTURE",
-    "SECURITY_SCREEN",
-    "SECURITY_SCREEN_CLASSIFIER",
-    "SECURITY_SCREEN_BACKEND",
-    "SECURITY_SCREEN_ALL_POSTURES",
-    "SECURITY_SCREEN_PROXY_ROLLOUT",
-  ].filter((name) => env[name]?.trim());
-  if (ignoredScreenEnv.length) {
-    console.warn(
-      `[config] ${ignoredScreenEnv.join(", ")} ${ignoredScreenEnv.length === 1 ? "is" : "are"} no longer read: screening always observes. Remove the variables.`,
-    );
-  }
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
