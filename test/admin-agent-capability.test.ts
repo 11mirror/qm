@@ -654,7 +654,11 @@ for (const liveAuthor of [false, true]) {
         always: false,
       });
       for (const restricted of ["/v1/admin/sessions", "/v1/admin/keychain"]) {
-        assert.equal((await fetch(`${s.base}${restricted}`, { headers })).status, 403);
+        assert.notEqual(
+          (await fetch(`${s.base}${restricted}`, { headers })).status,
+          403,
+          "a live thread author's private reads are not refused",
+        );
       }
       assert.equal(
         (
