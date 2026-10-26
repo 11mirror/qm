@@ -390,6 +390,25 @@ test("an invited external address signs in through core's answer and an uninvite
   assert.equal(revoked.status, 403, "a link minted before the invitation was revoked must not redeem");
 });
 
+test("a failed invitation lookup is logged as an undelivered link instead of vanishing", async (t) => {
+  const errors = t.mock.method(console, "error", () => undefined);
+  const h = await startHarness({
+    emailAllowed: async () => {
+      throw new Error("core invitation lookup failed");
+    },
+  });
+  t.after(() => h.close());
+  await requestLink(h, { email: "guest@partner.test" });
+  assert.equal(h.mailer.sent.length, 0);
+  assert.ok(
+    errors.mock.calls.some((call) =>
+      /sign-in link to guest@partner\.test could not be delivered: core invitation lookup failed/.test(
+        String(call.arguments[0]),
+      ),
+    ),
+  );
+});
+
 test("the confirmation page is identical for permitted and unknown addresses", async (t) => {
   const h = await startHarness();
   t.after(() => h.close());

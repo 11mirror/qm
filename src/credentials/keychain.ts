@@ -692,9 +692,25 @@ export function createKeychain(deps: {
     );
   }
 
+  const unsettled = (rec: KeychainAsk): boolean => rec.status === "pending" || rec.status === "expired";
+  const askGrantId = (rec: KeychainAsk): string => hashId([rec.credentialId, "ask", rec.id]);
+
+  async function freshAsks(recs: KeychainAsk[], t: number): Promise<KeychainAsk[]> {
+    const ids = recs.filter(unsettled).map((rec) => rec.id);
+    const grants = new Map(
+      ids.length ? await deps.grants.selectEntries({ where: { field: "askId", anyOfFold: ids } }) : [],
+    );
+    const out: KeychainAsk[] = [];
+    for (const rec of recs) out.push(await settleAsk(rec, t, grants.get(askGrantId(rec)) ?? null));
+    return out;
+  }
+
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
-    if (rec.status !== "pending" && rec.status !== "expired") return rec;
-    const grant = await deps.grants.get(hashId([rec.credentialId, "ask", rec.id]));
+    return settleAsk(rec, t, unsettled(rec) ? await deps.grants.get(askGrantId(rec)) : null);
+  }
+
+  async function settleAsk(rec: KeychainAsk, t: number, grant: KeychainGrant | null): Promise<KeychainAsk> {
+    if (!unsettled(rec)) return rec;
     if (grant?.askId === rec.id) {
       if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic resolution");
       return (
@@ -1287,8 +1303,10 @@ export function createKeychain(deps: {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
       const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
-        const a = await freshAsk(rec, t);
+      for (const a of await freshAsks(
+        (await deps.asks.all()).reverse().sort((x, y) => y.createdAt - x.createdAt),
+        t,
+      )) {
         const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
         if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
         if (a.status === "pending") return { ask: a, existing: true };
@@ -1329,8 +1347,7 @@ export function createKeychain(deps: {
     async listAsks(filter) {
       const t = now();
       const out: KeychainAsk[] = [];
-      for (const rec of await deps.asks.all()) {
-        const a = await freshAsk(rec, t);
+      for (const a of await freshAsks(await deps.asks.all(), t)) {
         if (filter.requesterId !== undefined && !samePerson(a.requesterId, filter.requesterId)) continue;
         if (filter.ownerId !== undefined && !samePerson(a.ownerId, filter.ownerId)) continue;
         if (filter.requesterScopeId !== undefined && a.requesterScopeId !== filter.requesterScopeId) continue;
@@ -1380,16 +1397,29 @@ export function createKeychain(deps: {
     async unnotifiedResolvedAsks(nowAt) {
       const out: KeychainAsk[] = [];
       const taskDecisions = new Set<string>();
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
-        const a = await freshAsk(rec, nowAt);
+      const liveCredentials = new Map<string, Promise<boolean>>();
+      const credentialLive = (id: string): Promise<boolean> => {
+        const known = liveCredentials.get(id);
+        if (known) return known;
+        const lookup = deps.creds.get(id).then(Boolean);
+        liveCredentials.set(id, lookup);
+        return lookup;
+      };
+      for (const a of await freshAsks(
+        (await deps.asks.all()).reverse().sort((x, y) => y.createdAt - x.createdAt),
+        nowAt,
+      )) {
         const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
         const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-        const retainDecision =
-          origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+        const latestForTask = origin !== undefined && !taskDecisions.has(task);
         taskDecisions.add(task);
         if (a.status === "pending") continue;
         if (a.notifiedAt === undefined) out.push(a);
-        else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
+        else if (
+          a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS &&
+          !(latestForTask && (await credentialLive(a.credentialId)))
+        )
+          await deps.asks.delete(a.id);
       }
       return out;
     },
