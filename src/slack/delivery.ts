@@ -3,20 +3,18 @@ import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
-export interface SlackReplyArgs {
+export interface BotIdentityOverride {
+  username?: string;
+  icon_emoji?: string;
+}
+
+export interface SlackReplyArgs extends BotIdentityOverride {
   channel: string;
   text: string;
   thread_ts?: string;
   reply_broadcast?: false;
-  username?: string;
-  icon_emoji?: string;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
-}
-
-export interface BotIdentityOverride {
-  username?: string;
-  icon_emoji?: string;
 }
 
 function botIdentity(username: string | undefined, icon_emoji: string | undefined): BotIdentityOverride {
@@ -130,18 +128,18 @@ export function createSurfaceHeaderEnsurer(opts: {
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string };
   maxTracked?: number;
-}): (
-  client: SurfaceHeaderClient,
-  channel: string,
-  scopeId: string,
-  kind: "dm" | "channel",
-  ensureOpts?: { pinNew?: boolean },
-) => void {
+}) {
   const maxTracked = opts.maxTracked ?? SURFACE_HEADER_MAX_TRACKED;
   const settled = new Map<string, string>();
   const inFlight = new Set<string>();
   const requeued = new Map<string, { pinNew?: boolean }>();
-  return function ensure(client, channel, scopeId, kind, ensureOpts) {
+  return function ensure(
+    client: SurfaceHeaderClient,
+    channel: string,
+    scopeId: string,
+    kind: "dm" | "channel",
+    ensureOpts?: { pinNew?: boolean },
+  ): void {
     if (inFlight.has(channel)) {
       requeued.set(channel, { pinNew: Boolean(requeued.get(channel)?.pinNew || ensureOpts?.pinNew) });
       return;

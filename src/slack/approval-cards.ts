@@ -9,6 +9,10 @@ export function inlineCode(text: string): string {
   return `\`${safe}${cleaned.length > safe.length ? "..." : ""}\``;
 }
 
+export function slackLink(url: string | undefined, label: string): string {
+  return url && /^https?:\/\//.test(url) ? `<${url.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${label}>` : label;
+}
+
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
 export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
 
@@ -120,7 +124,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
       lines.push(
         shown
           ? commandHeading
-          : `${commandHeading} too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
+          : `${commandHeading} too long to show in Slack. Open ${slackLink(p.originUrl, "this conversation in QM")} on the web to review and approve it.`,
       );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${safeClip(p.reason, 200)}`);

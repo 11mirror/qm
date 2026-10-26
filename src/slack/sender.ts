@@ -18,7 +18,7 @@ import {
   slackReplyArgs,
 } from "./delivery.ts";
 import { createThreadTracker, dmThreadRef } from "./message-gating.ts";
-import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
+import { escapeSlackText, slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import { stripReactionDirectives, applyReactions } from "./reactions.ts";
 import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -64,10 +64,7 @@ export function createSlackSender(deps: {
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
     if (!base || !id) return attribution;
-    const title = (d.provenance?.sourceTitle?.trim() || "Cron")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
+    const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [
       ...attribution,
       { type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true },

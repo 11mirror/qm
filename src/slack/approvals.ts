@@ -4,6 +4,7 @@ import { slackFailureText } from "./turn-flow.ts";
 import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import {
   APPROVAL_ACTION_IDS,
+  type PendingApproval,
   type StoredApproval,
   approvalDecisionMessage,
   approvalDetails,
@@ -26,19 +27,13 @@ import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
 import type { Directory } from "./directory.ts";
 import { type ActionApp, applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 
-interface SlackApprovalContext {
+interface SlackApprovalContext extends Omit<PendingApproval, "requestId" | "originUrl"> {
   requesterId: string | undefined;
   channel: string;
   replyThreadTs?: string;
   triggerTs?: string;
   threadOnly: boolean;
   approvalChannel: string;
-  command: string;
-  reason: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;

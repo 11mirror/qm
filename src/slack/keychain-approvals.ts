@@ -3,6 +3,7 @@ import type { KeychainApprovalView } from "../credentials/keychain-approval.ts";
 import type { Directory } from "./directory.ts";
 import { registerDecisionButtons, updateSlackMessage, type ActionApp } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
+import { slackLink } from "./approval-cards.ts";
 import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { swallowAs } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
@@ -16,10 +17,7 @@ export function keychainApprovalMessage(
 ): { text: string; blocks: Array<Record<string, unknown>> } {
   const { ask } = view;
   const place = `in ${escapeSlackText(view.conversation).replaceAll("|", "&#124;")}`;
-  const origin =
-    originUrl && /^https?:\/\//.test(originUrl)
-      ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
-      : place;
+  const origin = slackLink(originUrl, place);
   const pending = ask.status === "pending";
   const kind = parseScopeId(ask.requesterScopeId).kind;
   const audience = { personal: "your personal conversations", channel: "this channel" }[kind as string] ?? "this group";
