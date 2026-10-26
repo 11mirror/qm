@@ -42,24 +42,7 @@ type RosterKind = { plural: string; authz: string; item: string; limit?: number;
 
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
-export interface Directory {
-  getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
-  forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
-  classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }>;
-  classifyActor(client: any, userId: string): Promise<ActorAssertion>;
-  getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
-  channelMembership(
-    client: any,
-    channel: string,
-    actor: ActorAssertion,
-    actorSlackId: string | undefined,
-    info: ChannelMeta | undefined,
-    observedAt?: number,
-  ): Promise<ChannelMembership>;
-  allInternalRosters(client: any, refs: ReadonlyArray<RosterRef>, kind: RosterKind): Promise<Map<string, string[]>>;
-  syncForUnseenGroup(client: any, groupId: string): void;
-  resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode>;
-}
+export type Directory = ReturnType<typeof createDirectory>;
 
 export function createDirectory(deps: {
   externalAccess?: ExternalSlackAccess;
@@ -71,7 +54,7 @@ export function createDirectory(deps: {
   maxPrivateChannels?: number;
   userCacheTtlMs?: number;
   coreSingleton?: boolean;
-}): Directory {
+}) {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
@@ -514,7 +497,7 @@ export function createDirectory(deps: {
     getUserSnapshot,
     forceDirectorySync,
     classifyUserCached,
-    classifyActor: async (client, userId) => (await classifyUserCached(client, userId)).actor,
+    classifyActor: async (client: any, userId: string) => (await classifyUserCached(client, userId)).actor,
     getChannelInfo,
     channelMembership,
     allInternalRosters,

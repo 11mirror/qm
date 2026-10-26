@@ -20,19 +20,12 @@ interface DevIntrospectionState {
   lastCanary: { ok: boolean; rttMs?: number; reason?: string; at: number } | null;
 }
 
-export interface DevIntrospection {
-  state: DevIntrospectionState;
-  markEvent(): void;
-  ready(info: { connectedAs: string; botUserId: string; teamId: string }): void;
-  canary(channel: string, timeoutMs?: number): Promise<{ ok: boolean; rttMs?: number; reason?: string; nonce: string }>;
-  port(): number | null;
-  close(): Promise<void>;
-}
+export type DevIntrospection = NonNullable<ReturnType<typeof installDevIntrospection>>;
 
 export function installDevIntrospection(
   app: any,
   opts: { enabled?: boolean; port?: number; host?: string; now?: () => number } = {},
-): DevIntrospection | null {
+) {
   if (!opts.enabled) return null;
   const now = opts.now ?? Date.now;
   const state: DevIntrospectionState = {
@@ -159,7 +152,7 @@ export function installDevIntrospection(
       state.lastEventAt = now();
       state.lastActivityAt = state.lastEventAt;
     },
-    ready: (info) => {
+    ready: (info: { connectedAs: string; botUserId: string; teamId: string }) => {
       state.connectedAs = info.connectedAs;
       state.botUserId = info.botUserId;
       state.teamId = info.teamId;
