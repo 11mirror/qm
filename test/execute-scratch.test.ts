@@ -84,7 +84,7 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
 const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
   (tool as unknown as { parameters: { required?: string[] } }).parameters.required ?? [];
 
-test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
+test("flag OFF: execute defaults to the scoped box and offers no scratch scope", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
   assert.deepEqual(schemaProps(execute!), [
@@ -94,8 +94,11 @@ test("flag OFF: the execute surface is exactly the legacy one (no scope/durable,
     "purpose",
     "timeout_seconds",
     "credentials",
+    "scope",
+    "durable",
     "retrySafe",
   ]);
+  assert.doesNotMatch(JSON.stringify(execute!.parameters), /"scratch"/);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -349,6 +352,8 @@ test("execute schema lists exact command credential handles", async () => {
     "purpose",
     "timeout_seconds",
     "credentials",
+    "scope",
+    "durable",
     "retrySafe",
   ]);
 
