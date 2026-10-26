@@ -84,6 +84,7 @@ import {
   revealSessionSurface,
   startNewChatInLastScope,
   startNewChat,
+  menuOption,
 } from "./sessions";
 import { openCronById, renderCronsPage, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, routeWebhooksHistory } from "./webhooks";
@@ -560,9 +561,7 @@ export function renderSidebarFooter(): void {
         ${
           userMenuOpen
             ? html`<div class="session-menu-popover user-menu-popover" role="menu">
-                <button class="session-menu-option" type="button" role="menuitem" @click=${signOutFromMenu}>
-                  ${icon(LogOut, 15)}<span>Sign out</span>
-                </button>
+                ${menuOption(LogOut, "Sign out", signOutFromMenu)}
               </div>`
             : nothing
         }

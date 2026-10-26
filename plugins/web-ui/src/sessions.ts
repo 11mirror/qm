@@ -585,8 +585,8 @@ async function loadChatsPage(append: boolean): Promise<void> {
   }
 }
 
-function reloadChatsPage(): void {
-  chatsPage.rows = [];
+function reloadChatsPage(filter: Partial<Pick<typeof chatsPage, "scope" | "status" | "surface">> = {}): void {
+  Object.assign(chatsPage, filter, { rows: [] });
   void loadChatsPage(false);
 }
 
@@ -594,8 +594,7 @@ export function drawChatsPage(): void {
   if (appState.currentView !== "chats" || !appState.mainEl || splitState.active) return;
   mainConversation().state.host = null;
   if (!chatsPage.host || chatsPage.host.parentElement !== appState.mainEl) {
-    chatsPage.host = document.createElement("div");
-    chatsPage.host.className = "pane chats-page";
+    chatsPage.host = Object.assign(document.createElement("div"), { className: "pane chats-page" });
     appState.mainEl.replaceChildren(chatsPage.host);
   }
   const cached = new Map(sessionsState.list.map((s) => [s.id, s]));
@@ -618,10 +617,7 @@ export function drawChatsPage(): void {
     listPageTpl({
       title: "Chats",
       scope: chatsPage.scope,
-      onScope: (s) => {
-        chatsPage.scope = s;
-        reloadChatsPage();
-      },
+      onScope: (scope) => reloadChatsPage({ scope }),
       action: { label: "New chat", onClick: () => startNewChat() },
       search: {
         value: chatsPage.query,
@@ -645,19 +641,13 @@ export function drawChatsPage(): void {
             { value: "archived" as const, label: "Archived" },
           ],
           chatsPage.status,
-          (value) => {
-            chatsPage.status = value;
-            reloadChatsPage();
-          },
+          (status) => reloadChatsPage({ status }),
         )}
         <div class="list-select">
           ${menuSelect({
             value: chatsPage.surface,
             ariaLabel: "Filter by surface",
-            onSelect: (value) => {
-              chatsPage.surface = (value ?? "all") as typeof chatsPage.surface;
-              reloadChatsPage();
-            },
+            onSelect: (value) => reloadChatsPage({ surface: (value ?? "all") as typeof chatsPage.surface }),
             options: [
               { value: "all", label: "All surfaces" },
               { value: "web", label: "Web" },

@@ -645,10 +645,8 @@ function beginPaneDrag(drag: PaneDrag): void {
 }
 
 function refreshPaneDrag(): void {
-  const drag = paneDrag;
-  if (!drag) return;
-  const addsTab = !drag.existing() && (dockApi?.panels.length ?? 0) < MAX_PANES;
-  canvasHost?.classList.toggle("session-dragging", addsTab);
+  if (!paneDrag) return;
+  canvasHost?.classList.toggle("session-dragging", stripJoinable());
   drawStripDrops();
   syncAllZones();
 }
