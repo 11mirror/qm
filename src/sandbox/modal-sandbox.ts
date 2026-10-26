@@ -3,7 +3,6 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   MODAL_CHECKPOINT_RETENTION_MS,
   ModalNameConflictError,
@@ -98,12 +97,11 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const { client } = opts;
   const store = upgradedStore(opts.store);
   const prefix = opts.namePrefix ?? "qm";
-  const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
+  const nameFor = (scope: string): string => provider.nameFor(scope);
   const snapshotIntervalMs = (opts.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
   const lock = opts.advisoryLock;
   const sessions = new Map<string, ModalSession>();
   const scratchNames = new Set<string>();
-  const scopeByName = new Map<string, string>();
   const rotationHold = new Map<string, number>();
   const lastTouch = new Map<string, number>();
   const refreshAttempt = new Map<string, number>();
@@ -119,14 +117,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const sharedUse = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
     (lock.withSharedLock ?? lock.withLock)(`modal-use:${scope}`, fn);
   const exclusiveUse = <T>(scope: string, fn: () => Promise<T>): Promise<T> => lock.withLock(`modal-use:${scope}`, fn);
-
-  const knownScope = (name: string): string | undefined => provider.scopeFor(name) ?? scopeByName.get(name);
-  async function scopeOf(name: string): Promise<string | undefined> {
-    const known = knownScope(name);
-    if (known) return known;
-    for (const [scope] of await store.entries()) scopeByName.set(nameFor(scope), scope);
-    return scopeByName.get(name);
-  }
 
   async function current(name: string): Promise<ModalSession> {
     const cached = sessions.get(name);
@@ -160,7 +150,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         return action(await createScratch(name));
       }
     }
-    const scope = knownScope(name);
+    const scope = provider.scopeFor(name);
     if (!scope) throw new Error("sandbox handle has been released");
     await touch(scope);
     try {
@@ -188,7 +178,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const ids = new Set<string>();
       const found = await client.fromName(name);
       if (found) ids.add(found.sandboxId);
-      const scope = await scopeOf(name);
+      const scope = await provider.scopeOf(name);
       const stored = scope ? (await store.get(scope))?.sandboxId : undefined;
       if (stored) ids.add(stored);
       if (cached) ids.delete(cached.sandboxId);
@@ -235,7 +225,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           session = adopted;
         }
         sessions.set(name, session);
-        const scope = await scopeOf(name);
+        const scope = await provider.scopeOf(name);
         const now = Date.now();
         if (scope)
           await store.merge(scope, {
@@ -249,7 +239,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       destroy,
       isLive: (name) => scratchNames.has(name) && sessions.has(name),
       async rotationDue(name) {
-        const scope = await scopeOf(name);
+        const scope = await provider.scopeOf(name);
         const expiresAtMs = scope ? (await store.get(scope))?.expiresAtMs : undefined;
         const now = Date.now();
         if (!expiresAtMs || expiresAtMs - now > ROTATE_MARGIN_MS || now < (rotationHold.get(name) ?? 0)) return false;
@@ -259,7 +249,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       checkpoints: {
         capture: async (name) => (await current(name)).snapshotHome(),
         async restore(name, checkpointId) {
-          const scope = await scopeOf(name);
+          const scope = await provider.scopeOf(name);
           const checkpointAtMs = scope ? (await store.get(scope))?.checkpointAtMs : undefined;
           if (checkpointAtMs && checkpointAtMs + MODAL_CHECKPOINT_RETENTION_MS <= Date.now())
             throw new Error(
@@ -404,7 +394,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     },
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      scopeByName.set(nameFor(scopeId), scopeId);
       const [status, rec] = await Promise.all([provider.computerStatus!(scopeId), store.get(scopeId)]);
       return {
         ...status,
@@ -422,7 +411,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
     async restartComputer(scopeId: string): Promise<void> {
       const name = nameFor(scopeId);
-      scopeByName.set(name, scopeId);
       await provider.lifecycle(scopeId, async () => {
         const rec = await store.get(scopeId);
         if (!rec) return;
@@ -441,7 +429,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       for (const [scope, rec] of await store.entries()) {
         if ((rec.orgId && rec.orgId !== tenant().orgId) || rec.initializationPending) continue;
         const name = nameFor(scope);
-        scopeByName.set(name, scope);
         let session: ModalSession | null;
         try {
           session = await client.fromName(name);

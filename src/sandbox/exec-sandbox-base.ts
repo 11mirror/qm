@@ -56,7 +56,7 @@ export interface ExecSandboxBaseDeps {
   envViaExec?: boolean;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
-  ensureResident(name: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
+  ensureResident(name: string, scope: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
   isProvisioned(name: string): boolean;
   recreateScratch(name: string): Promise<void>;
   deleteInstance(name: string): Promise<void>;
@@ -171,7 +171,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     } else {
       name = sandboxScopeName(prefix, scope);
       scopeByName.set(name, scope);
-      ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
+      ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, scope, provOpts?.onStatus)));
     }
 
     const handle: SandboxHandle = {

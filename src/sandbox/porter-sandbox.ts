@@ -17,7 +17,6 @@ import {
 } from "./porter-client.ts";
 import {
   createProviderSandbox,
-  scopeOfName,
   type ProviderSandbox,
   type SandboxShared,
   type StoredSandboxRecord,
@@ -58,7 +57,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
 
   async function slugFor(name: string): Promise<string> {
     if (isScratch(name)) return porterSlug(`${prefix}-scratch`, name);
-    const scope = await scopeOfName(sandbox, opts.store, name);
+    const scope = await sandbox.scopeOf(name);
     if (!scope) throw new Error(`porter sandbox ${name}: unknown scope`);
     return porterSlug(prefix, scope);
   }

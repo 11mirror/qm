@@ -79,6 +79,7 @@ interface DriverCheckpoints {
 
 export interface SandboxDriver {
   backend: string;
+  /** cpus/memoryMb/diskGb are read live, so a driver may fill them in once it observes the machine. */
   homeDir: string;
   os: string;
   runtimes?: string[];
@@ -108,22 +109,12 @@ export interface SandboxDriver {
 
 export type ProviderSandbox = Sandbox & {
   readonly scopeFor: (name: string) => string | undefined;
+  readonly scopeOf: (name: string) => Promise<string | undefined>;
   readonly nameFor: (scopeId: string) => string;
   readonly lifecycle: <T>(scopeId: string, fn: () => Promise<T>) => Promise<T>;
   readonly captureCheckpoint: (scopeId: string, name: string) => Promise<void>;
   readonly ensureResident: (scopeId: string) => Promise<void>;
 };
-
-export async function scopeOfName(
-  sandbox: ProviderSandbox,
-  store: DurableMap<StoredSandboxRecord>,
-  name: string,
-): Promise<string | undefined> {
-  const known = sandbox.scopeFor(name);
-  if (known) return known;
-  for (const [scope] of await store.entries()) if (sandbox.nameFor(scope) === name) return scope;
-  return undefined;
-}
 
 export function createProviderSandbox(
   workspace: WorkspaceStore,
@@ -148,6 +139,17 @@ export function createProviderSandbox(
     return name;
   };
   const scopeFor = (name: string): string | undefined => base.scopeFor(name) ?? scopeByName.get(name);
+  async function scopeOf(name: string): Promise<string | undefined> {
+    const known = scopeFor(name);
+    if (known) return known;
+    for (const [scope] of await store.entries()) nameFor(scope);
+    return scopeByName.get(name);
+  }
+  async function requireScope(name: string): Promise<string> {
+    const scope = await scopeOf(name);
+    if (!scope) throw new Error(`${backend} sandbox ${name}: no stored scope maps to this name`);
+    return scope;
+  }
   const credentialPrefixes = ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
 
   const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
@@ -273,8 +275,7 @@ export function createProviderSandbox(
     ...(driver.envViaExec ? { envViaExec: true } : {}),
     writeAbsBytes: driver.writeAbsBytes,
     readAbsBytes: driver.readAbsBytes,
-    ensureResident: async (name, onStatus) => {
-      const scope = scopeFor(name) ?? "default";
+    ensureResident: async (name, scope, onStatus) => {
       return { coldStart: await lock(scope, () => initialize(scope, name, onStatus)) };
     },
     isProvisioned: driver.isLive,
@@ -282,8 +283,8 @@ export function createProviderSandbox(
       await driver.destroy(name).catch(swallowAs(`${backend}-sandbox: stale scratch destroy`, undefined));
       await driver.create(name, { scratch: true });
     },
-    deleteInstance: (name) => {
-      const scope = scopeFor(name);
+    deleteInstance: async (name) => {
+      const scope = await scopeOf(name);
       return scope ? lock(scope, () => driver.destroy(name)) : driver.destroy(name);
     },
     ...(driver.forget ? { forgetInstance: driver.forget } : {}),
@@ -305,9 +306,15 @@ export function createProviderSandbox(
         OPTIONAL_TOOLS.filter((t) => !(driver.tools ?? []).includes(t)),
         extraTools,
       ),
-      ...(driver.cpus ? { cpus: driver.cpus } : {}),
-      ...(driver.memoryMb ? { memoryMb: driver.memoryMb } : {}),
-      ...(driver.diskGb ? { diskGb: driver.diskGb } : {}),
+      get cpus() {
+        return driver.cpus;
+      },
+      get memoryMb() {
+        return driver.memoryMb;
+      },
+      get diskGb() {
+        return driver.diskGb;
+      },
       homeDir,
       workdir: base.workspaceDir,
     },
@@ -368,13 +375,13 @@ export function createProviderSandbox(
   async function teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void> {
     if (!handle.scratch) hold(handle.id, -1);
     if (!handle.scratch && opts?.destroy && driver.checkpoints?.machineBound) {
-      const scope = scopeFor(handle.id) ?? "default";
+      const scope = await requireScope(handle.id);
       await base.provisionQueue(scope, () =>
         lock(scope, () => merge(scope, { checkpointId: undefined, checkpointAtMs: undefined })),
       );
     }
     if (!handle.scratch && !opts?.destroy) {
-      const scope = scopeFor(handle.id) ?? "default";
+      const scope = await requireScope(handle.id);
       await base.provisionQueue(scope, () =>
         lock(scope, async () => {
           const stored = await store.get(scope);
@@ -400,6 +407,7 @@ export function createProviderSandbox(
   return {
     profile,
     scopeFor,
+    scopeOf,
     nameFor,
     lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
     captureCheckpoint,
