@@ -239,10 +239,9 @@ test("a lost session is re-adopted by name when the durable record is gone", asy
   assert.equal(fake.current(scopeName())?.sessionId, before?.sessionId);
 });
 
-test("a session destroyed under a warm connection fails that provision and is replaced on the next", async () => {
+test("a session destroyed under a warm connection is replaced and the action replayed", async () => {
   await sandbox.provision(layers);
   fake.destroy(scopeName());
-  await assert.rejects(() => sandbox.provision(layers), /is gone/);
   const again = await sandbox.provision(layers);
   assert.ok(again.id);
   assert.equal(fake.createdCount(scopeName()), 2);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { egressProxyHost } from "./sandbox-env.ts";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
@@ -9,7 +10,7 @@ import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { processSessionDir } from "./exec-process-session.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
-import type { ExecPressure, ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecPressure, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/home/sprite";
 export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
@@ -103,7 +104,7 @@ interface RawExec {
   stderr: Buffer;
 }
 
-export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): Sandbox {
+export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): BackendSandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
@@ -245,12 +246,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   }
 
-  const egressProxyHost = opts.egressProxyUrl
-    ? new URL(opts.egressProxyUrl).hostname.toLowerCase().replace(/\.$/, "")
-    : "";
+  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : "";
 
   async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = [{ domain: egressProxyHost, action: "allow" as const }];
+    const rules = [{ domain: proxyHost, action: "allow" as const }];
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
     const s = sprite(name);
@@ -260,7 +259,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const bound =
       actual.length === 1 &&
       actual[0]!.action?.toLowerCase() === "allow" &&
-      (actual[0]!.domain ?? "").toLowerCase().replace(/\.$/, "") === egressProxyHost;
+      (actual[0]!.domain ?? "").toLowerCase().replace(/\.$/, "") === proxyHost;
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
     egressPolicyByName.set(name, want);

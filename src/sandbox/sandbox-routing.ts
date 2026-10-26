@@ -5,8 +5,8 @@ import {
   CapabilityUnsupportedError,
   SandboxProvisionCleanupError,
   supportsBlobStaging,
-  supportsProcessSessions,
   type AgentComputerProfile,
+  type BackendSandbox,
   type ExecOptions,
   type ExecResult,
   type ProvisionOptions,
@@ -16,18 +16,7 @@ import {
   type TeardownOptions,
 } from "./sandbox.ts";
 
-export const SANDBOX_BACKEND_NAMES = [
-  "aws",
-  "local",
-  "sprites",
-  "smolmachines",
-  "e2b",
-  "modal",
-  "porter",
-  "agent37",
-  "superserve",
-  "do-managed-agents",
-] as const;
+export const SANDBOX_BACKEND_NAMES = ["local", "sprites", "smolmachines", "e2b", "modal", "do-managed-agents"] as const;
 export type SandboxBackendName = (typeof SANDBOX_BACKEND_NAMES)[number];
 
 export class NoDefaultSandboxError extends Error {
@@ -39,7 +28,7 @@ export class NoDefaultSandboxError extends Error {
 }
 
 export interface RoutingSandboxOptions {
-  backends: Partial<Record<SandboxBackendName, Sandbox>>;
+  backends: Partial<Record<SandboxBackendName, BackendSandbox>>;
   defaultBackend: SandboxBackendName;
   resources: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -47,19 +36,19 @@ export interface RoutingSandboxOptions {
 
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
-  const fallback = ((): Sandbox => {
+  const fallback = ((): BackendSandbox => {
     const s = backends[defaultBackend];
     if (!s) throw new Error(`sandbox router: default backend ${defaultBackend} is not constructed`);
     return s;
   })();
 
-  const backendFor = (name: SandboxBackendName): Sandbox => {
+  const backendFor = (name: SandboxBackendName): BackendSandbox => {
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
     return sandbox;
   };
 
-  const forHandle = (handle: SandboxHandle): Sandbox => {
+  const forHandle = (handle: SandboxHandle): BackendSandbox => {
     if (!handle.backend) return fallback;
     const sandbox = backends[handle.backend as SandboxBackendName];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
@@ -183,70 +172,34 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         : action();
     },
 
-    ...(some(supportsProcessSessions)
-      ? {
-          startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
-            useHandle(handle, async () => {
-              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
-              const started = await sandbox.startProcess(handle, command, o);
-              try {
-                await register(started.processId);
-              } catch (error) {
-                try {
-                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
-                    handle,
-                    started.processId,
-                    "KILL",
-                  );
-                } catch (cleanupError) {
-                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
-                    cause: cleanupError,
-                  });
-                }
-                throw error;
-              }
-              return started;
-            }),
-          startProcess: (handle: SandboxHandle, command: string, o?) => {
-            const start = () =>
-              requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
-            return useHandle(handle, start);
-          },
-          readProcess: (handle: SandboxHandle, id: string, o?) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
-            ),
-          writeStdin: (handle: SandboxHandle, id: string, data: string) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
-            ),
-          signalProcess: (handle: SandboxHandle, id: string, sig: string) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
-            ),
-          listProcesses: (handle: SandboxHandle) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
-            ),
+    startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
+      useHandle(handle, async () => {
+        const sandbox = forHandle(handle);
+        const started = await sandbox.startProcess(handle, command, o);
+        try {
+          await register(started.processId);
+        } catch (error) {
+          try {
+            await sandbox.signalProcess(handle, started.processId, "KILL");
+          } catch (cleanupError) {
+            throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+              cause: cleanupError,
+            });
+          }
+          throw error;
         }
-      : {}),
-    ...(some((s) => typeof s.exportFiles === "function")
-      ? {
-          exportFiles: (handle: SandboxHandle, o?) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
-            ),
-        }
-      : {}),
-    ...(some((s) => typeof s.computerStatus === "function")
-      ? {
-          computerStatus: async (scopeId: string) => {
-            const target = await computerTarget(scopeId);
-            const action = () => requireCap(target.sandbox, "computerStatus", scopeId).computerStatus(target.scopeId);
-            return resources.use(target.resourceId, action);
-          },
-        }
-      : {}),
+        return started;
+      }),
+    startProcess: (handle, command, o?) => useHandle(handle, () => forHandle(handle).startProcess(handle, command, o)),
+    readProcess: (handle, id, o?) => useHandle(handle, () => forHandle(handle).readProcess(handle, id, o)),
+    writeStdin: (handle, id, data) => useHandle(handle, () => forHandle(handle).writeStdin(handle, id, data)),
+    signalProcess: (handle, id, sig) => useHandle(handle, () => forHandle(handle).signalProcess(handle, id, sig)),
+    listProcesses: (handle) => useHandle(handle, () => forHandle(handle).listProcesses(handle)),
+    exportFiles: (handle, o?) => useHandle(handle, () => forHandle(handle).exportFiles(handle, o)),
+    computerStatus: async (scopeId: string) => {
+      const target = await computerTarget(scopeId);
+      return resources.use(target.resourceId, () => target.sandbox.computerStatus(target.scopeId));
+    },
     ...(some((s) => typeof s.restartComputer === "function")
       ? {
           restartComputer: async (scopeId: string) => {

@@ -54,7 +54,7 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
@@ -181,18 +181,9 @@ import {
 } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
-import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox, type StoredAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
-import {
-  createConfigEpochResolver,
-  createSuperserveSandbox,
-  type StoredConfigEpoch,
-  type StoredSuperserveSandbox,
-} from "./sandbox/superserve-sandbox.ts";
-import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
 import { createE2bSandbox, E2B_TEMPLATE_TOOLS, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient, type E2bClient } from "./sandbox/e2b-client.ts";
 import {
@@ -201,16 +192,15 @@ import {
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
+import { createModalSandbox, modalLegacyRecordMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox, type StoredPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
   type LegacyRoute,
 } from "./sandbox/sandbox-resource-upgrade.ts";
-import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
+import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
   credentialRequestHeaders,
@@ -795,22 +785,21 @@ export function buildApp(
   };
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
-  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const buildLocal = (): Sandbox =>
+  pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
+  const buildLocal = (): BackendSandbox =>
     createLocalSandbox(workspace, {
       ...sandboxShared,
       ...config.localSandbox,
       store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
     });
-  const buildSprites = (): Sandbox =>
+  const buildSprites = (): BackendSandbox =>
     createSpritesSandbox(workspace, {
       ...sandboxShared,
       ...config.spritesSandbox,
       store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
       connectorSdk: loadConnectorSdk,
     });
-  const buildSmolmachines = (): Sandbox =>
+  const buildSmolmachines = (): BackendSandbox =>
     createSmolmachinesSandbox(workspace, {
       ...sandboxShared,
       ...config.smolmachinesSandbox,
@@ -831,14 +820,14 @@ export function buildApp(
         : {}),
     });
   };
-  const buildE2b = (): Sandbox =>
+  const buildE2b = (): BackendSandbox =>
     createE2bSandbox(workspace, {
       ...sandboxShared,
       client: e2bClient("computers"),
       extraTools: [...(config.e2bSandbox.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       store: e2bBodies,
     });
-  const buildManagedAgents = (): Sandbox => {
+  const buildManagedAgents = (): BackendSandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox(workspace, {
@@ -853,7 +842,7 @@ export function buildApp(
       store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
     });
   };
-  const buildModal = (): Sandbox => {
+  const buildModal = (): BackendSandbox => {
     const modal = config.modalSandbox;
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
@@ -875,62 +864,16 @@ export function buildApp(
       store: modalBodies,
     });
   };
-  const buildAgent37 = (): Sandbox =>
-    createAgent37Sandbox(workspace, {
-      ...sandboxShared,
-      ...config.agent37Sandbox,
-      store: artifactMap<StoredAgent37Sandbox>("agent37_sandbox_bodies"),
-    });
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
-  const buildSuperserve = (): Sandbox => {
-    const ss = config.superserveSandbox;
-    if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
-    if (!ss.template)
-      throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
-    const generationKey = createHash("sha256")
-      .update(
-        JSON.stringify([
-          config.buildSha ?? "",
-          ss.template,
-          sandboxShared.namePrefix ?? "",
-          sandboxShared.idleParkSec ?? null,
-          sandboxShared.maxLifetimeSec ?? null,
-          sandboxShared.keepWarmSec,
-          sandboxShared.egressProxyUrl ?? "",
-        ]),
-      )
-      .digest("hex")
-      .slice(0, 32);
-    return createSuperserveSandbox(workspace, {
-      ...sandboxShared,
-      configEpoch: createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({ apiKey: ss.apiKey }),
-      template: ss.template,
-      store: superserveBodies,
-    });
-  };
-  const buildAws = (): Sandbox =>
-    createAwsSandbox(workspace, { ...sandboxShared, ...config.awsSandbox, store: awsBodies });
-  const buildPorter = (): Sandbox =>
-    createPorterSandbox(workspace, {
-      ...sandboxShared,
-      ...config.porterSandbox,
-      store: artifactMap<StoredPorterSandbox>("porter_sandbox_bodies"),
-    });
-  const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
+  const buildBackend: Record<Config["sandboxBackend"], () => BackendSandbox> = {
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
     e2b: buildE2b,
     modal: buildModal,
-    aws: buildAws,
-    porter: buildPorter,
-    agent37: buildAgent37,
-    superserve: buildSuperserve,
     "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
-  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
+  const sandboxBackends: Partial<Record<SandboxBackendName, BackendSandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
@@ -957,25 +900,12 @@ export function buildApp(
           ...(await environments.list()).map((environment) => environment.id),
         ],
         legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve] = await Promise.all([
-            e2bBodies.entries(),
-            modalBodies.entries(),
-            awsBodies.entries(),
-            superserveBodies.entries(),
-          ]);
+          const [e2b, modal] = await Promise.all([e2bBodies.entries(), modalBodies.entries()]);
           return [
             ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
             ...modal.flatMap(([scopeId, body]) =>
               body.sandboxId ? [{ scopeId, backend: "modal" as const, machineId: body.sandboxId }] : [],
             ),
-            ...aws.flatMap(([scopeId, body]) =>
-              body.microvmId ? [{ scopeId, backend: "aws" as const, machineId: body.microvmId }] : [],
-            ),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
           ];
         },
       }),

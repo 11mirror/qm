@@ -176,14 +176,6 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       checkpointCalls.push({ sessionId: r.sessionId, checkpointId, ...(label ? { label } : {}) });
       return { checkpointId, status: "READY", createdAtMs: Date.now() };
     },
-    async deleteCheckpoint(checkpointId: string): Promise<void> {
-      if (gone(r.state)) throw new ManagedAgentsSandboxGoneError(r.sessionId, `status ${r.state}`);
-      if (r.failNextCheckpointDelete) {
-        r.failNextCheckpointDelete = false;
-        throw new Error("do-managed-agents delete checkpoint: http 500 delete failed");
-      }
-      deletedCheckpoints.push(checkpointId);
-    },
     async close(): Promise<void> {
       guestDisconnects.push(r.sessionId);
     },
@@ -256,6 +248,15 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       r.sandboxId = `sbx-restored-${nextSandbox++}`;
       r.state = "ready";
       return info(r);
+    },
+    async deleteCheckpoint(sessionId, checkpointId): Promise<void> {
+      const r = records.get(sessionId);
+      if (!r || gone(r.state)) throw new ManagedAgentsSandboxGoneError(sessionId, "session was not found");
+      if (r.failNextCheckpointDelete) {
+        r.failNextCheckpointDelete = false;
+        throw new Error("do-managed-agents delete checkpoint: http 500 delete failed");
+      }
+      deletedCheckpoints.push(checkpointId);
     },
     async kill(sessionId): Promise<void> {
       const r = records.get(sessionId);

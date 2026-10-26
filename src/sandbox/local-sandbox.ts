@@ -10,7 +10,7 @@ import { errMessage } from "../util/errors.ts";
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
 const HOME_DIR = "/root";
@@ -70,7 +70,7 @@ export const localVolumeName = (scopeId: string, prefix = DEFAULT_PREFIX): strin
 export const localNetworkName = (containerName: string, prefix = DEFAULT_PREFIX): string =>
   sibling("net", containerName, prefix);
 
-export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): Sandbox {
+export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): BackendSandbox {
   const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;

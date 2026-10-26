@@ -1,3 +1,5 @@
+import { errMessage } from "../util/errors.ts";
+import { egressProxyHost } from "./sandbox-env.ts";
 import type { ExecResult } from "./sandbox.ts";
 import { shq } from "../util/shell.ts";
 
@@ -49,16 +51,17 @@ interface E2bSandboxInfo {
 }
 
 export class E2bSandboxGoneError extends Error {
-  constructor(sandboxId: string, detail: string) {
-    super(`e2b sandbox ${sandboxId} is gone: ${detail}`);
+  constructor(sandboxId: string, cause: unknown) {
+    super(`e2b sandbox ${sandboxId} is gone: ${errMessage(cause)}`, { cause });
     this.name = "E2bSandboxGoneError";
   }
 }
 
 export class E2bCommandLostError extends Error {
-  constructor(sandboxId: string, detail: string) {
+  constructor(sandboxId: string, cause: unknown) {
     super(
-      `e2b sandbox ${sandboxId} was lost while a command was running (${detail}); the command may have partially executed and was not retried`,
+      `e2b sandbox ${sandboxId} was lost while a command was running (${errMessage(cause)}); the command may have partially executed and was not retried`,
+      { cause },
     );
     this.name = "E2bCommandLostError";
   }
@@ -123,7 +126,7 @@ const HOSTNAME_MATCHED_PORTS: Record<string, string> = { "http:": "80", "https:"
 
 export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
   const url = new URL(egressProxyUrl);
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const host = egressProxyHost(egressProxyUrl);
   const port = url.port || HOSTNAME_MATCHED_PORTS[url.protocol] || "";
   const ipLiteral = /^[\d.]+$/.test(host) || host.includes(":");
   if (!ipLiteral && port !== "80" && port !== "443")
@@ -152,16 +155,18 @@ function commandResultFrom(value: unknown): E2bCommandResult | null {
   if (typeof r?.exitCode === "number") source = r;
   else if (typeof r?.result?.exitCode === "number") source = r.result;
   if (!source) return null;
-  return { stdout: source.stdout ?? "", stderr: source.stderr ?? "", exitCode: source.exitCode ?? -1 };
+  return { stdout: source.stdout ?? "", stderr: source.stderr ?? "", exitCode: source.exitCode! };
 }
 
 type E2bSdk = typeof import("e2b");
 
-const SANDBOX_TIMEOUT_MESSAGE = /sandbox timeout|end of life|not running anymore/i;
-
-function isSandboxGone(sdk: E2bSdk, err: unknown): boolean {
+async function isSandboxGone(sdk: E2bSdk, err: unknown, isRunning?: () => Promise<boolean>): Promise<boolean> {
   if (err instanceof sdk.SandboxNotFoundError) return true;
-  return err instanceof sdk.TimeoutError && SANDBOX_TIMEOUT_MESSAGE.test(err.message);
+  if (!(err instanceof sdk.TimeoutError) || !isRunning) return false;
+  return isRunning().then(
+    (running) => !running,
+    (probeErr: unknown) => probeErr instanceof sdk.SandboxNotFoundError,
+  );
 }
 
 export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
@@ -186,15 +191,16 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
 
   const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number): E2bSession => {
     let expiresAtMs = Date.now() + ttlMs;
-    const gone = (err: unknown): unknown =>
-      isSandboxGone(lib, err) ? new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message)) : err;
+    const isRunning = (): Promise<boolean> => sbx.isRunning();
+    const gone = async (err: unknown): Promise<unknown> =>
+      (await isSandboxGone(lib, err, isRunning)) ? new E2bSandboxGoneError(sbx.sandboxId, err) : err;
     const extend = async (ms: number): Promise<void> => {
       const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
       const at = Date.now() + bounded;
       try {
         await sbx.setTimeout(bounded);
       } catch (err) {
-        throw gone(err);
+        throw await gone(err);
       }
       expiresAtMs = at;
     };
@@ -214,17 +220,20 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         try {
           handle = await sbx.commands.run(command, { background: true, timeoutMs });
         } catch (err) {
-          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, String((err as Error).message));
+          if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
           throw err;
         }
+        let result: E2bCommandResult | null;
         try {
-          return commandResultFrom(await handle.wait()) ?? { stdout: "", stderr: "", exitCode: -1 };
+          result = commandResultFrom(await handle.wait());
         } catch (err) {
           const asResult = commandResultFrom(err);
           if (asResult) return asResult;
-          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, String((err as Error).message));
+          if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
           throw err;
         }
+        if (!result) throw new Error(`e2b sandbox ${sbx.sandboxId}: the command finished without an exit code`);
+        return result;
       },
       async readFileBytes(absPath): Promise<Uint8Array | null> {
         try {
@@ -232,7 +241,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
         } catch (err) {
           if (err instanceof lib.FileNotFoundError) return null;
-          throw gone(err);
+          throw await gone(err);
         }
       },
       async writeFileBytes(absPath, data): Promise<void> {
@@ -241,7 +250,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         try {
           await sbx.files.write(absPath, buf);
         } catch (err) {
-          throw gone(err);
+          throw await gone(err);
         }
       },
       keepAlive: (ms) => extend(ms),
@@ -249,7 +258,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         try {
           await sbx.pause({ keepMemory: pauseOpts?.keepMemory ?? true });
         } catch (err) {
-          throw gone(err);
+          throw await gone(err);
         }
       },
       async createSnapshot(): Promise<{ snapshotId: string }> {
@@ -257,7 +266,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           const info = await sbx.createSnapshot();
           return { snapshotId: info.snapshotId };
         } catch (err) {
-          throw gone(err);
+          throw await gone(err);
         }
       },
       async metrics(): Promise<E2bMetrics | null> {
@@ -274,8 +283,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         };
       },
       async kill(): Promise<void> {
-        await sbx.kill().catch((err) => {
-          if (!isSandboxGone(lib, err)) throw err;
+        await sbx.kill().catch(async (err: unknown) => {
+          if (!(await isSandboxGone(lib, err, isRunning))) throw err;
         });
       },
     };
@@ -293,7 +302,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           memoryMb: info.memoryMB,
         };
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
+        if (await isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, err);
         throw err;
       }
     },
@@ -319,7 +328,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         if (network) await sbx.updateNetwork(network);
         return wrap(lib, sbx, sandboxTtlMs);
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
+        if (await isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, err);
         throw err;
       }
     },
@@ -340,8 +349,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     },
     async kill(sandboxId): Promise<void> {
       const lib = await loadSdk();
-      await lib.Sandbox.kill(sandboxId, common).catch((err) => {
-        if (!isSandboxGone(lib, err)) throw err;
+      await lib.Sandbox.kill(sandboxId, common).catch(async (err: unknown) => {
+        if (!(await isSandboxGone(lib, err))) throw err;
       });
     },
     async deleteSnapshot(snapshotId): Promise<void> {

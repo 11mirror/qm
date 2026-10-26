@@ -4,7 +4,7 @@ import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import type { ExecResult } from "./sandbox.ts";
+import type { ExecResult } from "../sandbox/sandbox.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -68,57 +68,30 @@ export interface PorterClientLike {
   };
 }
 
-const enrichPorterError = (e: unknown): unknown => {
-  if (e instanceof SandboxError) {
-    const detail = (e.body as { message?: string } | null)?.message;
-    if (detail && !e.message.includes(detail)) e.message = `${e.message}: ${detail}`;
-  }
-  return e;
-};
-
-export function withPorterErrorDetails<T>(value: T): T {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
-  return new Proxy(value as object, {
-    get(target, prop) {
-      const v = Reflect.get(target, prop, target);
-      if (typeof v !== "function") return withPorterErrorDetails(v);
-      return (...args: unknown[]) => {
-        let out: unknown;
-        try {
-          out = v.apply(target, args);
-        } catch (e) {
-          throw enrichPorterError(e);
-        }
-        if (out instanceof Promise) {
-          return out.then(
-            (r) => withPorterErrorDetails(r),
-            (e) => {
-              throw enrichPorterError(e);
-            },
-          );
-        }
-        return withPorterErrorDetails(out);
-      };
-    },
-  }) as T;
+function withBodyDetail(e: unknown): never {
+  const detail = e instanceof SandboxError ? (e.body as { message?: unknown } | null)?.message : undefined;
+  if (!(e instanceof SandboxError) || typeof detail !== "string" || e.message.includes(detail)) throw e;
+  const PorterError = e.constructor as typeof SandboxError;
+  throw new PorterError(`${e.message}: ${detail}`, {
+    body: e.body,
+    ...(e.statusCode === null ? {} : { statusCode: e.statusCode }),
+  });
 }
+
+type PorterTransport = Record<"request" | "requestBinary", (options: unknown) => Promise<unknown>>;
 
 export function createPorterClient(opts: { token?: string; baseUrl?: string }): PorterClientLike {
-  return withPorterErrorDetails(
-    new Porter({
-      ...(opts.token ? { apiKey: opts.token } : {}),
-      ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
-    }) as PorterClientLike,
-  );
+  const porter = new Porter({
+    ...(opts.token ? { apiKey: opts.token } : {}),
+    ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+  });
+  const transport = (porter.raw as unknown as { base: PorterTransport }).base;
+  for (const method of ["request", "requestBinary"] as const) {
+    const send = transport[method].bind(transport);
+    transport[method] = (options) => send(options).catch(withBodyDetail);
+  }
+  return porter as PorterClientLike;
 }
-
-export const porterSlug = (prefix: string, id: string): string => {
-  const cleaned = id
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${prefix}-${cleaned.slice(0, 28).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-};
 
 export const porterDnsLabel = (name: string): string => {
   const cleaned = name

@@ -4,7 +4,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
+import { randomBytes } from "node:crypto";
+import {
+  createModalSandbox,
+  modalLegacyRecordMigration,
+  type StoredModalSandbox,
+} from "../src/sandbox/modal-sandbox.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -16,7 +22,7 @@ import { MODAL_CHECKPOINT_RETENTION_MS, type ModalClient } from "../src/sandbox/
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
+import { testAdvisoryLock, testPgPool } from "./support/test-database.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -443,13 +449,15 @@ test("checkpoints restore across core restarts and report their expiry", async (
   assert.ok(status.expiresAtMs);
 });
 
-test("rows written by the previous Modal record shape keep their checkpoint", async () => {
+test("rows written by the previous Modal record shape are migrated and keep their checkpoint", async () => {
   const seed = await fake.client.create({ name: "seed" });
   await seed.writeFileBytes("/root/workspace/legacy.txt", Buffer.from("old checkpoint"));
   const imageId = await seed.snapshotHome();
   await seed.terminate();
   const expiresAtMs = Date.now() + 20 * 24 * 3600_000;
-  const store = testMap<StoredModalSandbox>();
+  const pool = testPgPool();
+  const table = `modal_legacy_${randomBytes(6).toString("hex")}`;
+  const store = createPostgresMap<StoredModalSandbox>(pool, table);
   await store.put(scope, {
     sandboxId: "sb-retired",
     createdAtMs: 1,
@@ -461,21 +469,25 @@ test("rows written by the previous Modal record shape keep their checkpoint", as
     lastSnapshotAttemptMs: 4,
     hydrationPending: false,
   } as StoredModalSandbox);
-  const s = make({ store });
-  const h = await s.provision(layers);
-  assert.equal(await s.readFile(h, "legacy.txt"), "old checkpoint");
+  await pool.migrate(modalLegacyRecordMigration(table));
   const upgraded = (await store.get(scope))! as StoredModalSandbox & Record<string, unknown>;
   assert.equal(upgraded.checkpointId, imageId);
   assert.equal(upgraded.checkpointAtMs, expiresAtMs - MODAL_CHECKPOINT_RETENTION_MS);
   assert.equal(upgraded.snapshotError, "earlier failure");
+  assert.equal(upgraded.lastSnapshotMs, 2);
+  assert.equal("initializationPending" in upgraded, false);
   for (const key of [
     "nativeSnapshotId",
     "nativeSnapshotExpiresAtMs",
     "recoveryError",
     "snapshotGeneration",
+    "lastSnapshotAttemptMs",
     "hydrationPending",
   ])
     assert.equal(key in upgraded, false, key);
+  const s = make({ store });
+  const h = await s.provision(layers);
+  assert.equal(await s.readFile(h, "legacy.txt"), "old checkpoint");
 });
 
 test("expired checkpoints block replacement instead of starting an empty home", async () => {
