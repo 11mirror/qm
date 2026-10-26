@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { buildApp } from "../../src/wiring.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { installSeedSkills } from "../../src/skills/seed.ts";
@@ -10,7 +11,7 @@ if (import.meta.main) {
   const { runtime, skills } = buildApp({ anthropicApiKey: "test-anthropic-key", ...config });
   await migrateRegisteredPgSchemas(databaseUrl);
   await installSeedSkills(skills, {
-    dir: config.skillsSeedDir,
+    dir: resolve("./skills-seed"),
     scopeId: scopeId("org", config.orgId),
     respectArchived: true,
   });

@@ -20,6 +20,7 @@ const MAX_EVENT_CHARS = 16_000;
 const MAX_TAIL_CHARS = 4_096;
 const MAX_READ_BYTES = 64 * 1024;
 const DEFAULT_HEARTBEAT_MS = 180_000;
+export const MONITOR_POLL_MS = 10_000;
 const DEFAULT_MIN_FIRE_INTERVAL_MS = 60_000;
 
 export interface MonitorPoller {

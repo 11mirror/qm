@@ -96,10 +96,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
       turnWallClockMs: 111_000,
-      execTimeoutDefaultMs: 22_000,
-      execTimeoutMaxMs: 33_000,
-      backgroundJobTtlMs: 44_000,
-      backgroundJobTtlMaxMs: 55_000,
     }),
   );
   assert.deepEqual(opts, {
@@ -118,10 +114,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
-    execTimeoutMs: 22_000,
-    execTimeoutCeilingMs: 33_000,
-    backgroundJobTtlMs: 44_000,
-    backgroundJobTtlMaxMs: 55_000,
   });
 });
 
