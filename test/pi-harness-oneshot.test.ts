@@ -9,12 +9,6 @@ import {
   complete,
   parseDetectVerdict,
   piHarnessConfigOptions,
-  piLastAssistantTextOrThrow,
-  piTurnError,
-  providerRefusalError,
-  refusalFallbackNote,
-  refusalFallbackModelId,
-  REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
   resolveConfiguredModelId,
   sanitizeLlmPayload,
@@ -23,6 +17,14 @@ import {
   toPiMessage,
   transportFromModel,
 } from "../src/harness/pi-harness.ts";
+import {
+  piLastAssistantTextOrThrow,
+  piTurnError,
+  providerRefusalError,
+  refusalFallbackNote,
+  refusalFallbackModelId,
+  REFUSAL_FALLBACK_MODEL_IDS,
+} from "../src/harness/turn-recovery.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
