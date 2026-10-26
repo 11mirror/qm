@@ -1,5 +1,6 @@
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
@@ -27,15 +28,6 @@ const ORPHAN_GRACE_MS = 10 * 60_000;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
 const DEFAULT_IDLE_REAP_MS = 6 * 3600_000;
 const DEFAULT_SNAPSHOT_INTERVAL_SEC = 300;
-const LEGACY_KEYS = [
-  "hydrationPending",
-  "nativeSnapshotId",
-  "nativeSnapshotExpiresAtMs",
-  "recoveryError",
-  "snapshotGeneration",
-  "lastSnapshotAttemptMs",
-];
-
 export interface StoredModalSandbox extends StoredSandboxRecord {
   sandboxId?: string;
   createdAtMs?: number;
@@ -49,53 +41,38 @@ export interface ModalSandboxOptions extends SandboxShared {
   store: DurableMap<StoredModalSandbox>;
 }
 
-function upgradeLegacy(rec: StoredModalSandbox): StoredModalSandbox | null {
-  const legacy = rec as StoredModalSandbox & Record<string, unknown>;
-  if (!LEGACY_KEYS.some((key) => key in legacy)) return null;
-  const kept = Object.fromEntries(Object.entries(legacy).filter(([key]) => !LEGACY_KEYS.includes(key)));
-  const checkpointId = legacy.nativeSnapshotId as string | undefined;
-  const expiresAtMs = legacy.nativeSnapshotExpiresAtMs as number | undefined;
+/** One-off rewrite of rows written by the previous Modal record shape (nativeSnapshotId era). */
+export function modalLegacyRecordMigration(table: string): PgMigrationDefinition {
+  const legacy = [
+    "hydrationPending",
+    "nativeSnapshotId",
+    "nativeSnapshotExpiresAtMs",
+    "recoveryError",
+    "snapshotGeneration",
+    "lastSnapshotAttemptMs",
+  ];
   return {
-    ...kept,
-    ...(legacy.hydrationPending ? { initializationPending: true } : {}),
-    ...(checkpointId
-      ? {
-          checkpointId,
-          checkpointAtMs: expiresAtMs ? expiresAtMs - MODAL_CHECKPOINT_RETENTION_MS : legacy.lastSnapshotMs,
-        }
-      : {}),
-    ...(legacy.recoveryError ? { snapshotError: legacy.recoveryError as string } : {}),
+    id: `durable-map/${table}/0002-legacy-modal-record-shape`,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+      `UPDATE ${table} SET json = (json - ${legacy.map((k) => `'${k}'`).join(" - ")})
+        || CASE WHEN json->>'hydrationPending' = 'true' THEN '{"initializationPending": true}'::jsonb ELSE '{}'::jsonb END
+        || CASE WHEN coalesce(json->>'nativeSnapshotId', '') <> '' THEN jsonb_strip_nulls(jsonb_build_object(
+             'checkpointId', json->'nativeSnapshotId',
+             'checkpointAtMs', coalesce(
+               (nullif(json->>'nativeSnapshotExpiresAtMs', '0'))::bigint - ${MODAL_CHECKPOINT_RETENTION_MS},
+               (json->>'lastSnapshotMs')::bigint)))
+           ELSE '{}'::jsonb END
+        || CASE WHEN coalesce(json->>'recoveryError', '') <> '' THEN jsonb_build_object('snapshotError', json->'recoveryError')
+           ELSE '{}'::jsonb END
+       WHERE json ?| array[${legacy.map((k) => `'${k}'`).join(", ")}]`,
+    ],
   };
-}
-
-function upgradedStore(store: DurableMap<StoredModalSandbox>): DurableMap<StoredModalSandbox> {
-  let ready: Promise<void> | null = null;
-  const upgrade = async (): Promise<void> => {
-    for (const [scope, rec] of await store.entries()) {
-      if (!upgradeLegacy(rec)) continue;
-      await store.update(scope, (current) => upgradeLegacy(current) ?? current);
-    }
-  };
-  const wait = (): Promise<void> =>
-    (ready ??= upgrade().catch((e: unknown) => {
-      ready = null;
-      throw e;
-    }));
-  return new Proxy(store, {
-    get(target, prop, receiver) {
-      const value: unknown = Reflect.get(target, prop, receiver);
-      if (typeof value !== "function") return value;
-      return async (...args: unknown[]) => {
-        await wait();
-        return (value as (...a: unknown[]) => unknown).apply(target, args);
-      };
-    },
-  });
 }
 
 export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandboxOptions): Sandbox {
   const { client } = opts;
-  const store = upgradedStore(opts.store);
+  const { store } = opts;
   const prefix = opts.namePrefix ?? "qm";
   const nameFor = (scope: string): string => provider.nameFor(scope);
   const snapshotIntervalMs = (opts.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
