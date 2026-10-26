@@ -398,15 +398,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {
     if (!rootIds.length) return [];
     const rows = await q(
-      `WITH RECURSIVE tree(id, root_id, thread_ref) AS (
-         SELECT id, parent_session_id, thread_ref FROM sessions WHERE parent_session_id = ANY($1::text[])
+      `WITH RECURSIVE tree(id, root_id, thread_ref, scope_id) AS (
+         SELECT id, parent_session_id, thread_ref, scope_id FROM sessions WHERE parent_session_id = ANY($1::text[])
          UNION
-         SELECT s.id, t.root_id, s.thread_ref FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+         SELECT s.id, t.root_id, s.thread_ref, s.scope_id FROM sessions s JOIN tree t ON s.parent_session_id = t.id
        )
-       SELECT id, root_id, thread_ref FROM tree`,
+       SELECT id, root_id, thread_ref, scope_id FROM tree`,
       [[...rootIds]],
     );
-    return rows.map((r) => ({ id: r.id as string, rootId: r.root_id as string, threadRef: r.thread_ref as string }));
+    return rows.map((r) => ({
+      id: r.id as string,
+      rootId: r.root_id as string,
+      threadRef: r.thread_ref as string,
+      scopeId: r.scope_id as ScopeId,
+    }));
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
@@ -1774,13 +1779,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return res.length > 0;
     },
 
-    async visibleItems(sessionId, principalId, opts?: GetItemsOptions): Promise<Item[]> {
-      const params: unknown[] = [sessionId, principalId, opts?.sinceSeq ?? 0];
+    async visibleItems(sessionId, principals, opts?: GetItemsOptions): Promise<Item[]> {
+      const ids = [...new Set([principals].flat())];
+      if (!ids.length) return [];
+      const params: unknown[] = [sessionId, ids, opts?.sinceSeq ?? 0];
+      // An item is visible only when every principal's participation window covers it.
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
-           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
           WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3
-            AND ${withinParticipantWindow("i", "p")}`;
-      if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i", "p")}`;
+            AND (SELECT count(*) FROM participants p
+                  WHERE p.session_id = i.session_id AND p.principal_id = ANY($2::text[])
+                    AND ${withinParticipantWindow("i", "p")}
+                    ${opts?.transcript ? `AND ${transcriptItemPredicate("i", "p")}` : ""}) = cardinality($2::text[])`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);
         sql += ` AND i.seq < $${params.length}`;

@@ -363,6 +363,7 @@ export interface SessionDescendant {
   id: string;
   rootId: string;
   threadRef: string;
+  scopeId: ScopeId;
 }
 
 export interface ParticipantScope {
@@ -599,7 +600,8 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
+  /** Items every listed principal may read (each one's participation window covers them). */
+  visibleItems(sessionId: string, principals: string | readonly string[], opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 
