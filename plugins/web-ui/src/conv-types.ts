@@ -10,8 +10,8 @@ import type {
   QueuedRun,
   TurnOptions,
   TurnRuntime,
-  itemsToMessages,
 } from "./core-bridge";
+import type { itemsToMessages } from "./transcript-messages";
 import type { EffortLevel, ModelOption } from "./model-options";
 import type { ComposerMenu } from "./composer";
 
@@ -71,7 +71,7 @@ export interface ChatSurface {
     kind: "abort" | "steer",
     text?: string,
     queuedRunId?: string,
-  ): Promise<import("./core-bridge").SignalOutcome>;
+  ): Promise<import("./run-stream").SignalOutcome>;
   stopLiveRun(): Promise<void>;
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;

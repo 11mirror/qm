@@ -3,7 +3,7 @@ import { item } from "./item-fixture.ts";
 import { activityItems } from "../src/items.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/transcript-messages.ts";
 
 const step = (id: string, stopReason: string, index: number, body: Record<string, unknown> = {}) => ({
   step: index,

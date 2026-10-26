@@ -3,7 +3,8 @@ import { streamingTextTail } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { makeRunResumeStreamFn, createRunSlot, requestStop, type AssistantWork } from "../src/core-bridge.ts";
+import { makeRunResumeStreamFn, createRunSlot, requestStop } from "../src/run-stream.ts";
+import type { AssistantWork } from "../src/transcript-messages.ts";
 import type { Api, Model, Context } from "@earendil-works/pi-ai";
 
 const fetch = globalThis.fetch;
