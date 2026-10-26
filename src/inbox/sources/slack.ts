@@ -201,6 +201,10 @@ export const slackAdapter: SourceAdapter = {
       (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
     );
   },
+  inboxMetadataKeys: ["participants", "slackAvatarsRefreshAt"],
+  inboxMetadata(sourcePayload) {
+    return { participants: sourcePayload.participants, slackAvatarsRefreshAt: sourcePayload.slackAvatarsRefreshAt };
+  },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
     return draft ? (draft as unknown as InboxPayload) : null;

@@ -48,6 +48,8 @@ export interface SourceAdapter {
 
   matchesEvent(item: InboxItem, conversationRef: string): boolean;
   parseProposal(raw: unknown): InboxPayload | null;
+  inboxMetadataKeys: readonly string[];
+  inboxMetadata(sourcePayload: InboxPayload): InboxPayload;
   act(deps: SourceActionDeps, item: InboxItem, kind: string, args: InboxPayload): Promise<SourceActionResult>;
 }
 

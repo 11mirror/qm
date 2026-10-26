@@ -141,6 +141,10 @@ export const gmailAdapter: SourceAdapter = {
   matchesEvent(item, conversationRef) {
     return metaOf(item)?.threadId === conversationRef;
   },
+  inboxMetadataKeys: ["automated"],
+  inboxMetadata(sourcePayload) {
+    return { automated: sourcePayload.automated === true };
+  },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
     return draft ? (draft as unknown as InboxPayload) : null;

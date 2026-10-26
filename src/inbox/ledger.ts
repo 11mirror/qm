@@ -3,6 +3,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThreadMessage } from "../types.ts";
 import { isResolved } from "./view.ts";
+import { adapterForItem, inboxMetadataKeys } from "./sources/index.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
@@ -243,25 +244,13 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       const items = await backing.select({
         where: { field: "cronId", anyOfFold: cronIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
+        pickNested: { sourcePayload: inboxMetadataKeys() },
       });
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source;
-        return {
-          ...item,
-          ...(source === "slack"
-            ? {
-                inboxPreview: {
-                  ...item.inboxPreview,
-                  participants: sourcePayload?.participants,
-                  slackAvatarsRefreshAt: sourcePayload?.slackAvatarsRefreshAt,
-                },
-              }
-            : {}),
-          ...(source === "gmail"
-            ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
-            : {}),
-        };
+        const adapter = adapterForItem(item);
+        return adapter
+          ? { ...item, inboxPreview: { ...item.inboxPreview, ...adapter.inboxMetadata(sourcePayload ?? {}) } }
+          : item;
       });
     },
     async ingest(entries) {
@@ -409,7 +398,7 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     async reopen(id, opts) {
       let applied = false;
       const after = await update(id, (item) => {
-        const sentReply = opts?.sentReply === true && item.source === "gmail" && item.sourcePayload?.sentChat === true;
+        const sentReply = opts?.sentReply === true && item.sourcePayload?.sentChat === true;
         if (item.status !== "skipped" && item.status !== "failed" && !(sentReply && item.status === "shipped"))
           return item;
         applied = true;
