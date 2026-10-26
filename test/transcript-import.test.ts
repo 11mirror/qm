@@ -268,6 +268,16 @@ test("ordinary appends are stamped by the store even when handed an older entry"
   });
 });
 
+test("text that storage would alter still reruns as a no-op", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const odd = [{ role: "user", text: "hello\u0000 \ud800there", createdAt: T0 }];
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, odd)]));
+    const [again] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, odd)]));
+    assert.equal(again!.appended, 0);
+  });
+});
+
 test("an import rejects messages that are not ordered user and assistant text", async () => {
   await withStores(async (store) => {
     const bad: [string, unknown[]][] = [

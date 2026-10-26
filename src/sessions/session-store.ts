@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { personalScope } from "../types.ts";
+import { pgTextSafe } from "../util/text.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 
@@ -168,7 +169,7 @@ export function transcriptImportEntries(spec: TranscriptImport): { scope: ScopeI
     )
       throw new Error("importTranscript: message times must be ascending epoch milliseconds");
     previous = message.createdAt;
-    const payload = { text: message.text };
+    const payload = { text: pgTextSafe(message.text) };
     return message.role === "user"
       ? { type: "user", payload, scopeLabel: scope, author: spec.principalId, createdAt: message.createdAt }
       : { type: "assistant", payload, scopeLabel: scope, createdAt: message.createdAt };
