@@ -204,18 +204,16 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
-      if (map.update) {
-        const record = await map.update(orgId, (current) => ({
-          orgId,
-          disabled: true,
-          serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-          ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-          updatedAt: Date.now(),
-          updatedBy,
-          version: crypto.randomUUID(),
-        }));
-        if (record) return;
-      }
+      const record = await map.update(orgId, (current) => ({
+        orgId,
+        disabled: true,
+        serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
+        ...(current.installedAt ? { installedAt: current.installedAt } : {}),
+        updatedAt: Date.now(),
+        updatedBy,
+        version: crypto.randomUUID(),
+      }));
+      if (record) return;
       const updatedAt = Date.now();
       await map.put(orgId, {
         orgId,
