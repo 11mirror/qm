@@ -126,6 +126,8 @@ export function startAdmin(host, env) {
     }
   }
 
+  const scopeUrl = (id, rest = "") => "/api/scopes/" + encodeURIComponent(id) + rest;
+  const viewUrl = (id, name) => scopeUrl(id, "?view=" + encodeURIComponent(name));
   async function openWebUiAs(target) {
     if (!target) return;
     try {
@@ -259,6 +261,8 @@ export function startAdmin(host, env) {
     node.append(...kids);
     return node;
   }
+  const pick = (map, key, fallback) => (Object.hasOwn(map, key) ? map[key] : fallback);
+  const credentialState = governanceUI.settings.credentialState;
   const badge = (text, kind) => el("span", { className: "badge" + (kind ? " " + kind : ""), textContent: text });
   function deliveryFileBadges(filesPayload) {
     const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
@@ -292,7 +296,7 @@ export function startAdmin(host, env) {
     return String(scopeId || "").split(":")[0] || "scope";
   }
   const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
-  const statusBadge = (status) => badge(titleCase(status || "unknown"), STATUS_KIND[status] || "muted");
+  const statusBadge = (status) => badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
   const entryIsNoise = (e) => ["tool_call", "tool_result", "soul", "system"].includes(e.type);
   function fileKind(path) {
     const name = String(path || "");
@@ -414,10 +418,8 @@ export function startAdmin(host, env) {
   let transcriptObserver = null;
   function render(st) {
     governanceUI.transcript.cancel();
-    if (transcriptObserver) {
-      transcriptObserver.disconnect();
-      transcriptObserver = null;
-    }
+    transcriptObserver?.disconnect();
+    transcriptObserver = null;
     $("header-controls").textContent = "";
     view = st.view;
     scope = st.scope;
@@ -441,7 +443,7 @@ export function startAdmin(host, env) {
     $("view-connectors").classList.toggle("hidden", view !== "connectors");
     $("view-data").classList.toggle(
       "hidden",
-      view === "general" || view === "onboarding" || isGovLike(view) || view === "connectors",
+      ["general", "onboarding", "connectors"].includes(view) || isGovLike(view),
     );
     if (view === "general") return;
     if (view === "onboarding") return void governanceUI.onboarding.load();
@@ -461,16 +463,8 @@ export function startAdmin(host, env) {
     renderData();
   }
 
-  const GOV_LIKE = new Set(["governance", "models", "credentials", "customize", "slack-settings"]);
-  function isGovLike(v) {
-    return GOV_LIKE.has(v);
-  }
-  function hasGovernanceDraft() {
-    return isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
-  }
-  function governanceSaveInFlight() {
-    return isGovLike(view) && !!$("view-governance").querySelector(".status.saving");
-  }
+  const isGovLike = (v) => ["governance", "models", "credentials", "customize", "slack-settings"].includes(v);
+  const hasGovernanceDraft = () => isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
   function governanceScopeName(scopeId = scope) {
     return scopeKind(scopeId) === "org"
       ? "Organization · " + scopeId.split(":").slice(1).join(":")
@@ -485,7 +479,7 @@ export function startAdmin(host, env) {
       ["Current scope", governanceScopeName()],
       ["Destination", VIEW_TITLE[destination] || titleCase(destination)],
     ];
-    if (governanceSaveInFlight()) {
+    if (isGovLike(view) && $("view-governance").querySelector(".status.saving")) {
       void reviewGovernanceChange({
         title: "Governance save in progress",
         subtitle: "Wait for the current save to finish before leaving.",
@@ -505,13 +499,11 @@ export function startAdmin(host, env) {
     });
   }
   function go(st) {
-    const leavingDraft = hasGovernanceDraft() && (st.view !== view || st.scope !== scope);
-    if (!leavingDraft) return commitGo(st);
+    if (!hasGovernanceDraft() || (st.view === view && st.scope === scope)) return commitGo(st);
     void reviewLeave(st.view).then((confirmed) => {
-      if (confirmed) {
-        if (view === "governance") governanceReadyScope = null;
-        commitGo(st);
-      }
+      if (!confirmed) return;
+      if (view === "governance") governanceReadyScope = null;
+      commitGo(st);
     });
   }
   function setView(v) {
@@ -758,26 +750,16 @@ export function startAdmin(host, env) {
     selectScope(scopeId);
   }
 
-  const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "slack-settings", "user"]);
   window.addEventListener("focus", () => {
     if (!root.isConnected) return;
-    if (view === "slack-settings") {
-      void governanceUI.integrations.loadSlackInstallation();
-      return;
-    }
-    if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
+    if (view === "slack-settings") return void governanceUI.integrations.loadSlackInstallation();
+    if (isGovLike(view) || view === "connectors" || view === "user") return;
     if (Date.now() - (viewLoadedAt[view] || 0) < 60000) return;
     if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
     if (view === "history" && urlToState().session) return;
-    if (view === "onboarding") {
-      governanceUI.onboarding.load();
-      return;
-    }
-    if (view === "slack") {
-      if (!urlToState().container) governanceUI.slackActivity.renderSlackMirror(urlToState());
-      return;
-    }
-    if (view === "crons" && cronDestinationEditId) return;
+    if (view === "onboarding") return void governanceUI.onboarding.load();
+    if (view === "slack" && !urlToState().container) governanceUI.slackActivity.renderSlackMirror(urlToState());
+    if (view === "slack" || (view === "crons" && cronDestinationEditId)) return;
     renderData();
   });
 
@@ -809,7 +791,7 @@ export function startAdmin(host, env) {
       });
       if (!confirmed || scope !== targetScope || governanceReq !== targetGeneration) return;
       setStatus("st-soul", "Restoring…", "saving", true);
-      const r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/soul", {
+      const r = await api("PUT", scopeUrl(targetScope, "/soul"), {
         content: immutable.content,
         expectedVersion,
       });
@@ -825,7 +807,7 @@ export function startAdmin(host, env) {
           true,
         );
       }
-      const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(targetScope) + "?view=customize");
+      const fresh = await api("GET", viewUrl(targetScope, "customize"));
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
         return setStatus("st-soul", "Restored, but the latest version could not be refreshed.", "warn", true);
@@ -868,10 +850,7 @@ export function startAdmin(host, env) {
       governanceUI.settings.credentialLoading();
       void loadPersonalKeychainSummary(requestId, requestedScope);
     }
-    const r = await api(
-      "GET",
-      "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(requestedView),
-    );
+    const r = await api("GET", viewUrl(scope, requestedView));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
     if (!r.ok) {
       if (requestedView === "credentials") {
@@ -909,14 +888,9 @@ export function startAdmin(host, env) {
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
     const opts = r.data.baseModelOptions || [];
     if (requestedView === "models") {
-      for (const key of [
-        "runtime",
-        "cron-runtime",
-        "subagent-runtime",
-        "fallback-runtime",
-        "webui-models",
-        "memory-embedding-model",
-      ])
+      for (const key of "runtime cron-runtime subagent-runtime fallback-runtime webui-models memory-embedding-model".split(
+        " ",
+      ))
         governanceUI.settings.load(r.data, scope, key);
       void governanceUI.settings.loadProviders();
     }
@@ -935,14 +909,7 @@ export function startAdmin(host, env) {
     initCustomDropdowns($("view-governance"));
     captureGovernanceSnapshots();
     if (r.data.modelCatalogRefreshing) {
-      void api(
-        "GET",
-        "/api/scopes/" +
-          encodeURIComponent(requestedScope) +
-          "?view=" +
-          encodeURIComponent(requestedView) +
-          "&catalog=refresh",
-      )
+      void api("GET", viewUrl(requestedScope, requestedView) + "&catalog=refresh")
         .then((fresh) => {
           if (!fresh.ok || requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
           const append = (target, incoming) => {
@@ -961,7 +928,7 @@ export function startAdmin(host, env) {
     }
   }
   async function refreshSoulConflict() {
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view));
+    const fresh = await api("GET", viewUrl(scope, view));
     if (!fresh.ok) return false;
     governanceUI.settings.refreshSoul(fresh.data);
     sectionSnapshots.set("soul", governanceUI.settings.states.get("soul").baseline);
@@ -971,19 +938,19 @@ export function startAdmin(host, env) {
     const requestedScope = scope;
     const requestedView = view;
     const requestId = ++governanceReq;
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view));
+    const fresh = await api("GET", viewUrl(scope, view));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view || !fresh.ok) return false;
     loadServiceCredDirectory(fresh.data);
     const credentials = fresh.data.serviceCredentials || [];
     const refreshedEditing = credentials.find((credential) => credential.slug === scEditing);
     if (refreshedEditing) {
       scEditVersion = refreshedEditing.updatedAt;
-      governanceUI.settings.credentialState.version = scEditVersion;
+      credentialState.version = scEditVersion;
     }
     renderServiceCreds(credentials);
     void loadServiceCredentialUsage(requestedScope, requestId);
-    governanceUI.settings.credentialState.render();
-    governanceUI.settings.credentialState.changed();
+    credentialState.render();
+    credentialState.changed();
     return refreshedEditing ? "present" : "missing";
   }
   function loadServiceCredDirectory(data) {
@@ -997,7 +964,7 @@ export function startAdmin(host, env) {
   }
   let savedBranding = {};
   governanceUI.settings.configureDecisions({
-    save: (targetScope, body) => api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/decisions", body),
+    save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/decisions"), body),
   });
   governanceUI.settings.configureFlags({
     buildSelector: buildScopeMultiSelect,
@@ -1005,7 +972,7 @@ export function startAdmin(host, env) {
       if (!scopeDir) await loadScopeDirectory();
       return (scopeDir || []).map((row) => ({ scopeId: row.scopeId, label: row.label || row.scopeId }));
     },
-    save: (targetScope, body) => api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/feature-flags", body),
+    save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/feature-flags"), body),
   });
 
   let scEditing = null;
@@ -1013,7 +980,7 @@ export function startAdmin(host, env) {
   let serviceCredList = [];
   async function loadServiceCredentialUsage(requestedScope, requestId) {
     if (!serviceCredList.length) return;
-    const result = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "/credential-usage");
+    const result = await api("GET", scopeUrl(requestedScope, "/credential-usage"));
     if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
     const summaries = new Map((result.data?.summaries || []).map((summary) => [summary.slug, summary]));
     renderServiceCreds(
@@ -1038,7 +1005,7 @@ export function startAdmin(host, env) {
   function loadScForm(c) {
     scEditing = c.slug;
     scEditVersion = c.updatedAt;
-    governanceUI.settings.credentialState.begin(c);
+    credentialState.begin(c);
     openScDialog();
     $("sc-name").focus();
   }
@@ -1049,7 +1016,7 @@ export function startAdmin(host, env) {
     scStatusHome.appendChild($("st-service-credentials"));
     scEditing = null;
     scEditVersion = null;
-    governanceUI.settings.credentialState.reset();
+    credentialState.reset();
     if (wasOpen) scAddButton.focus();
   }
   function serviceCredentialPrincipalLabel(grantee) {
@@ -1095,7 +1062,7 @@ export function startAdmin(host, env) {
       danger: true,
     });
     if (!confirmed || targetScope !== scope) return;
-    const r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/service-credentials", {
+    const r = await api("PUT", scopeUrl(targetScope, "/service-credentials"), {
       slug: c.slug,
       delete: true,
       expectedUpdatedAt: c.updatedAt,
@@ -1118,7 +1085,7 @@ export function startAdmin(host, env) {
   }
   scAddButton.onclick = () => {
     resetScForm();
-    governanceUI.settings.credentialState.begin(null);
+    credentialState.begin(null);
     openScDialog();
     $("sc-name").focus();
   };
@@ -1126,67 +1093,54 @@ export function startAdmin(host, env) {
     if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
   };
   $("sc-save").onclick = async () => {
-    const body = governanceUI.settings.credentialState.collect();
-    const targetScope = scope;
-    const invalid = governanceUI.settings.credentialState.validate(body);
-    if (invalid) {
-      setStatus("st-service-credentials", invalid, "err");
-      return;
-    }
-    $("sc-save").disabled = true;
-    setStatus("st-service-credentials", "Saving...", "saving", true);
-    let r;
-    try {
-      r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/service-credentials", body);
-    } catch {
-      if (targetScope !== scope) return;
-      governanceUI.settings.credentialState.changed();
-      setStatus(
-        "st-service-credentials",
+    const status = (message, kind, sticky) => setStatus("st-service-credentials", message, kind, sticky);
+    const unreachable = () => {
+      credentialState.changed();
+      status(
         "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
         "err",
         true,
       );
+    };
+    const body = credentialState.collect();
+    const targetScope = scope;
+    const invalid = credentialState.validate(body);
+    if (invalid) return status(invalid, "err");
+    $("sc-save").disabled = true;
+    status("Saving...", "saving", true);
+    let r;
+    try {
+      r = await api("PUT", scopeUrl(targetScope, "/service-credentials"), body);
+    } catch {
+      if (targetScope === scope) unreachable();
       return;
     }
     if (scope !== targetScope) return;
     if (r.ok) {
       await loadScope();
       if (scope !== targetScope) return;
-      governanceUI.settings.credentialState.commit(body);
-      if (!governanceUI.settings.credentialState.dirty) resetScForm();
-      setStatus("st-service-credentials", "Saved", "ok");
-    } else {
-      let conflictState;
-      try {
-        conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-      } catch {
-        governanceUI.settings.credentialState.changed();
-        setStatus(
-          "st-service-credentials",
-          "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
-          "err",
-          true,
-        );
-        return;
-      }
-      governanceUI.settings.credentialState.changed();
-      let message = r.data?.message || "Save failed.";
-      if (r.status === 403) {
-        message = "Not authorized for this scope.";
-      } else if (r.status === 409) {
-        if (conflictState === "missing") {
-          message =
-            "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
-        } else if (conflictState === "present") {
-          message = "Credential changed; latest revision loaded and your draft was preserved.";
-        } else {
-          message =
-            "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
-        }
-      }
-      setStatus("st-service-credentials", message, "err");
+      credentialState.commit(body);
+      if (!credentialState.dirty) resetScForm();
+      return status("Saved", "ok");
     }
+    let conflictState;
+    try {
+      conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
+    } catch {
+      return unreachable();
+    }
+    credentialState.changed();
+    let message = r.data?.message || "Save failed.";
+    if (r.status === 403) message = "Not authorized for this scope.";
+    else if (r.status === 409 && conflictState === "missing")
+      message =
+        "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
+    else if (r.status === 409 && conflictState === "present")
+      message = "Credential changed; latest revision loaded and your draft was preserved.";
+    else if (r.status === 409)
+      message =
+        "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
+    status(message, "err");
   };
 
   governanceUI.onboarding.configure({
@@ -1208,7 +1162,7 @@ export function startAdmin(host, env) {
       if (view !== "models") return;
       const requestedScope = scope;
       const requestedGeneration = governanceReq;
-      const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=models");
+      const fresh = await api("GET", viewUrl(requestedScope, "models"));
       if (fresh.ok && scope === requestedScope && view === "models" && governanceReq === requestedGeneration)
         governanceUI.settings.updateCatalog(fresh.data);
     },
@@ -1244,57 +1198,32 @@ export function startAdmin(host, env) {
   async function simulatePolicy() {
     const command = $("policy-sample").value;
     const result = $("policy-result");
-    if (!command.trim()) {
-      result.dataset.tone = "";
-      result.textContent = "Enter a sample command first.";
-      return;
-    }
+    const show = (tone, text) => {
+      result.dataset.tone = tone;
+      result.textContent = text;
+    };
+    if (!command.trim()) return show("", "Enter a sample command first.");
     let policy;
     try {
       policy = governanceUI.collect("command-policy");
     } catch (err) {
-      result.dataset.tone = "danger";
-      result.textContent = err instanceof Error ? err.message : "Policy is invalid.";
-      return;
+      return show("danger", err instanceof Error ? err.message : "Policy is invalid.");
     }
     $("policy-simulate").disabled = true;
-    result.dataset.tone = "";
-    result.textContent = "Evaluating with the server’s command scanner…";
+    show("", "Evaluating with the server’s command scanner…");
     const simulateBody = { command };
     if (loadedCommandPolicyPresent || $("card-command-policy").classList.contains("dirty"))
       simulateBody.policy = policy;
-    const response = await api(
-      "PUT",
-      "/api/scopes/" + encodeURIComponent(scope) + "/command-policy-simulate",
-      simulateBody,
-    );
+    const response = await api("PUT", scopeUrl(scope, "/command-policy-simulate"), simulateBody);
     $("policy-simulate").disabled = false;
-    if (!response.ok) {
-      result.dataset.tone = "danger";
-      result.textContent = response.data?.message || "Simulation failed.";
-      return;
-    }
-    const decision = response.data.decision;
-    let tone = "warn";
-    if (decision === "allow") tone = "ok";
-    else if (decision === "deny") tone = "danger";
-    result.dataset.tone = tone;
-    let ruleLabel = null;
-    if (response.data.ruleSource === "organization") {
-      ruleLabel = "Organization rule " + (response.data.ruleIndex + 1);
-    } else if (response.data.ruleSource === "scope") {
-      ruleLabel = "This scope’s rule " + (response.data.ruleIndex + 1);
-    }
-    result.textContent = ruleLabel
-      ? ruleLabel +
-        " matches" +
-        (response.data.matched ? " “" + response.data.matched + "”" : "") +
-        " → " +
-        (EFFECT_LABELS[decision] || decision) +
-        (response.data.reason ? " · " + response.data.reason : "")
-      : "No scope-policy rule matches → " +
-        (EFFECT_LABELS[decision] || decision) +
-        (response.data.reason ? " · " + response.data.reason : "");
+    if (!response.ok) return show("danger", response.data?.message || "Simulation failed.");
+    const { decision, ruleSource, ruleIndex, matched, reason } = response.data;
+    let rule = "No scope-policy rule matches";
+    if (ruleSource === "organization") rule = "Organization rule " + (ruleIndex + 1) + " matches";
+    else if (ruleSource === "scope") rule = "This scope’s rule " + (ruleIndex + 1) + " matches";
+    if (matched && (ruleSource === "organization" || ruleSource === "scope")) rule += " “" + matched + "”";
+    const outcome = " → " + (EFFECT_LABELS[decision] || decision) + (reason ? " · " + reason : "");
+    show(pick({ allow: "ok", deny: "danger" }, decision, "warn"), rule + outcome);
   }
   $("policy-simulate").onclick = simulatePolicy;
   $("policy-sample").addEventListener("keydown", (e) => {
@@ -1404,7 +1333,7 @@ export function startAdmin(host, env) {
       requestedGeneration !== governanceReq
     )
       return;
-    const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/sharing-posture", {
+    const result = await api("PUT", scopeUrl(requestedScope, "/sharing-posture"), {
       inherit: true,
     });
     if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
@@ -1413,7 +1342,7 @@ export function startAdmin(host, env) {
     else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
   };
   async function refreshPolicySetting(key, requestedScope, requestedGeneration, draftBefore, message) {
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+    const fresh = await api("GET", viewUrl(requestedScope, "governance"));
     if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
     if (!fresh.ok) return governanceUI.status(key, "Saved, but the current setting could not be refreshed.", "warn");
     const state = governanceUI.states.get(key);
@@ -1439,7 +1368,7 @@ export function startAdmin(host, env) {
     setStatus("st-auto-flagger-test", "Replaying the last " + requested + " screenings through this rubric…", "", true);
     button.disabled = true;
     try {
-      const r = await api("POST", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger/test", {
+      const r = await api("POST", scopeUrl(requestedScope, "/auto-flagger/test"), {
         window: requested,
         compare: $("auto-flagger-compare").checked,
         modelId: $("auto-flagger-model").value,
@@ -1458,7 +1387,7 @@ export function startAdmin(host, env) {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
     const draftBefore = JSON.stringify(governanceUI.collect("auto-flagger"));
-    const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger", {
+    const r = await api("PUT", scopeUrl(requestedScope, "/auto-flagger"), {
       reset: true,
     });
     if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
@@ -1486,11 +1415,7 @@ export function startAdmin(host, env) {
     setStatus(statusIdOf(key), "Saving...", "saving", true);
     const isBranding = key === "branding";
     const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
-    const r = await api(
-      "PUT",
-      "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
-      brandingBody,
-    );
+    const r = await api("PUT", scopeUrl(requestedScope, "/" + (isBranding ? "branding" : key)), brandingBody);
     if (requestedGeneration !== governanceReq) return;
     if (requestedScope !== scope) {
       if (!btn || btn.dataset.saveRequest === saveRequest) {
@@ -1512,7 +1437,7 @@ export function startAdmin(host, env) {
         return;
       }
       if (key === "soul") {
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
+        const fresh = await api("GET", viewUrl(requestedScope, "customize"));
         if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
         if (fresh.ok) {
           governanceUI.settings.refreshSoul(fresh.data);
@@ -1523,7 +1448,7 @@ export function startAdmin(host, env) {
       }
       if (key === "command-policy") loadedCommandPolicyPresent = true;
       if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+        const fresh = await api("GET", viewUrl(requestedScope, "governance"));
         if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
         if (fresh.ok && !governanceUI.states.get(key).dirty) {
           governanceUI.load(fresh.data, requestedScope, key);
@@ -1548,7 +1473,7 @@ export function startAdmin(host, env) {
   governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
   const credentialEdited = (e) => {
     if (e.target.matches("input, textarea, select") && e.target.closest("#card-service-credentials"))
-      governanceUI.settings.credentialState.changed();
+      credentialState.changed();
   };
   $("view-governance").addEventListener("input", credentialEdited);
   $("view-governance").addEventListener("change", credentialEdited);
@@ -1854,16 +1779,8 @@ export function startAdmin(host, env) {
     return "Cron " + shortId(c.id);
   }
   function wakeOriginLabel(trigger) {
-    switch (String(trigger || "").toLowerCase()) {
-      case "cron":
-        return "Cron";
-      case "monitor":
-        return "Monitor wake";
-      case "webhook":
-        return "Webhook wake";
-      default:
-        return "Background wake";
-    }
+    const labels = { cron: "Cron", monitor: "Monitor wake", webhook: "Webhook wake" };
+    return pick(labels, String(trigger || "").toLowerCase(), "Background wake");
   }
   function plural(n, one, many = one + "s") {
     return `${Number(n || 0).toLocaleString()} ${Number(n || 0) === 1 ? one : many}`;
@@ -2653,10 +2570,7 @@ export function startAdmin(host, env) {
   }
   function deliverySurfaceLabel(event) {
     const type = event?.destination?.type;
-    if (type === "principal") return "Slack DM";
-    if (type === "slack") return "Slack";
-    if (type === "web") return "Web";
-    return type || "Unknown surface";
+    return pick({ principal: "Slack DM", slack: "Slack", web: "Web" }, type, type || "Unknown surface");
   }
   const deliveryLabel = (event) => (event.shadow ? "Shadow delivery" : `${deliverySurfaceLabel(event)} delivery`);
   function slackMirrorRef(event) {
