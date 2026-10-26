@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   const failures: unknown[] = [];
   try {
     await built.identity.hydrate();
-    await built.deploymentLayerReady;
+    await built.start();
     await built.sandboxResources.initialize();
     await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
