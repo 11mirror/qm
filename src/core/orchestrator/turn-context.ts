@@ -1,3 +1,6 @@
+import type { MemoryPolicy } from "../../memory/policy.ts";
+import { resolveTurnContext } from "../../resolution/turn-context.ts";
+import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { desktopComputerTool } from "../../../plugins/chassis/src/desktop-computer.ts";
 import { withLiveTurnMembership } from "../../resolution/scope-membership.ts";
 import { desktopClientForTurn } from "../turn-origin.ts";
@@ -107,4 +110,46 @@ export async function openTurnSession(ctx: TurnCtx): Promise<Session> {
   if (!input.sessionParticipantIds?.length && !ctx.automatedTurn)
     await deps.sessions.addParticipant(session.id, actor.id);
   return session;
+}
+
+export async function resolveTurnWorkspace(ctx: TurnCtx, turn: { useMemory: boolean; memoryPolicy: MemoryPolicy }) {
+  const {
+    deps,
+    actor,
+    conversation,
+    external,
+    authorizationOrigin,
+    liveAuthorTurn,
+    scopeId,
+    resolution,
+    isCurrentSharedScopeMember,
+  } = ctx;
+  const { useMemory, memoryPolicy } = turn;
+  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
+  const rwLayer = resolution.layers.find((l) => l.mode === "rw");
+  if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
+  for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
+
+  return resolveTurnContext({
+    external,
+    actor,
+    audience: conversation.audience,
+    acl: deps.acl,
+    origin: authorizationOrigin,
+    trustedLiveHuman: liveAuthorTurn,
+    targetScope: scopeId,
+    config: deps.config,
+    sessions: deps.sessions,
+    isCurrentSharedScopeMember,
+    currentScopeMembers: deps.currentScopeMembers,
+    resolution,
+    memoryPolicy,
+    useMemory,
+    memory: deps.memory,
+    files: deps.files,
+    skills: deps.skills,
+    auditLog: deps.auditLog,
+    directory: deps.directory,
+    projects: deps.projects,
+  });
 }

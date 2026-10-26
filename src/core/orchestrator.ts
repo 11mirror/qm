@@ -1,13 +1,9 @@
-import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
-import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
-import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
-import { renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import type { GapWork } from "../harness/harness.ts";
 import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-posture.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
@@ -20,12 +16,13 @@ import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { admitTurn } from "./orchestrator/admit.ts";
 import { acquireTurnLeaseOrRefuse } from "./orchestrator/turn-lease.ts";
-import { openTurnSession, resolveTurnScope } from "./orchestrator/turn-context.ts";
+import { openTurnSession, resolveTurnScope, resolveTurnWorkspace } from "./orchestrator/turn-context.ts";
 import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
 import { concludeTurn, mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
 import { detectAmbientDecline, findRecordedTurn, replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
+import { openTurnSandboxes } from "./orchestrator/turn-sandboxes.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
@@ -41,7 +38,6 @@ import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
-import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -219,8 +215,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ambientTurn,
         sessionTurn,
         humanInput,
-        authorizationOrigin,
-        liveAuthorTurn,
         messageTs,
         entryTs,
         delegatedSession,
@@ -228,7 +222,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         mirrorRunActivity,
       } = admission.admitted;
       const ctx = await resolveTurnScope(deps, admission.admitted);
-      const { resolution, actorGrants, scopeId, isCurrentSharedScopeMember, reconcileSessionParticipants } = ctx;
+      const { resolution, actorGrants, scopeId, reconcileSessionParticipants } = ctx;
       const screened = await screenInboundTurn(ctx, { classifySecurityData, blobTransfer });
       if ("result" in screened) return screened.result;
       const { securityPolicy, enforceScreen, screenTrace, pendingScreenRequests, recordScreenRequest } =
@@ -237,33 +231,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
       const useMemory = !external && input.skipMemory !== true;
-      const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
-      const rwLayer = resolution.layers.find((l) => l.mode === "rw");
-      if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
-      for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
-
-      const context = await resolveTurnContext({
-        external,
-        actor,
-        audience: conversation.audience,
-        acl: deps.acl,
-        origin: authorizationOrigin,
-        trustedLiveHuman: liveAuthorTurn,
-        targetScope: scopeId,
-        config: deps.config,
-        sessions: deps.sessions,
-        isCurrentSharedScopeMember,
-        currentScopeMembers: deps.currentScopeMembers,
-        resolution,
-        memoryPolicy,
-        useMemory,
-        memory: deps.memory,
-        files: deps.files,
-        skills: deps.skills,
-        auditLog: deps.auditLog,
-        directory: deps.directory,
-        projects: deps.projects,
-      });
+      const context = await resolveTurnWorkspace(ctx, { useMemory, memoryPolicy });
       const { sharingSources, memoryScopeId } = context;
       resolution.grantedHandles = context.listFiles();
       let memoryView = await context.memorySnapshot(false);
@@ -279,19 +247,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         classifySecurityData,
       });
       let systemPrompt = framed.systemPrompt;
-      const {
-        turnContextBlocks,
-        scopeProfile,
-        delivery,
-        defaultDestination,
-        configuredProviders,
-        visibleSkillsForTurn,
-        transferId,
-        turnSessionDir,
-        turnFilesDir,
-        timeBlock,
-        onboardingBlock,
-      } = framed;
+      const { turnContextBlocks, delivery, defaultDestination, configuredProviders, timeBlock, onboardingBlock } =
+        framed;
 
       const session = await openTurnSession(ctx);
 
@@ -332,17 +289,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const {
         openSpeakerKeychain,
-        ownerAuthAvailable,
-        connectorEnv,
         credentialDescriptions,
         serviceCredRecords,
         grantedCredSlugs,
         actorIsOrgAdmin,
         controlClaims,
         scopeAttestation,
-        egressTokenForPolicy,
-        egressTokenForTurn,
-        openAutomationKeychain,
       } = catalog;
       const run: TurnRunState = {
         toolCalls: 0,
@@ -365,52 +317,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
-      const turnSandboxResources = external
-        ? deps.sandboxResources?.forTurn({
-            actorId: actor.id,
-            scopeId,
-            isCurrent: async () =>
-              !!(await currentExternalSlackRun(
-                {
-                  actorId: actor.id,
-                  scopeId,
-                  runId: input.runId,
-                  runLeaseToken: input.runLeaseToken,
-                  runAttempt: input.attempt,
-                  threadRef: conversation.threadRef,
-                },
-                deps,
-              )),
-          })
-        : deps.sandboxResources;
-      const workspaceLayout = {
-        hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
-        teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
-      };
-      if (turnSandboxResources) {
-        Object.assign(turnContextBlocks, renderSandboxProfiles(turnSandboxResources.profiles(), workspaceLayout));
-      } else {
-        turnContextBlocks["Sandbox environment profile"] = renderComputerBlock(scopeProfile.spec, workspaceLayout);
-      }
-
-      const sandboxes = createTurnSandboxes({
-        deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
-        input,
-        actor,
+      const { turnSandboxResources, sandboxes } = openTurnSandboxes(ctx, {
+        context,
+        framed,
+        catalog,
         session,
-        resolution,
-        scopeId,
-        memoryScopeId,
-        transferId,
-        turnSessionDir,
-        turnFilesDir,
-        connectorEnv,
-        egressTokenForTurn,
-        egressTokenForPolicy,
-        openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
-        openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
-        ownerAuthAvailable,
-        visibleSkillsForTurn,
         emitGapWork,
       });
       const { provision, reclaimBox } = sandboxes;
