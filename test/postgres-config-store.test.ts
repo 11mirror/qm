@@ -41,10 +41,10 @@ before(async () => {
 const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
 
 test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const legacyHistory = testMap<PersistedInstructionsRevision>();
-  const left = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
-  const right = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
+  const left = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const right = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
   const channel = scopeId("channel", "CAS");
 
   const results = await Promise.all([
@@ -56,15 +56,15 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
     [1, null],
   );
 
-  const durable = await souls.get(channel);
+  const durable = await instructions.get(channel);
   assert.equal(durable?.history?.length, 1);
   assert.equal(durable?.history?.[0]?.content, durable?.content);
   for (let version = 1; version < 30; version++) {
     assert.equal(await left.setInstructionsIfVersion(channel, version, `revision ${version + 1}`, "alice"), version + 1);
   }
-  assert.equal((await souls.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
+  assert.equal((await instructions.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
   assert.equal(left.instructionsHistory(channel).length, 25, "the operator view remains bounded");
-  const fresh = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
+  const fresh = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
   await fresh.hydrate?.();
   assert.equal(fresh.instructionsHistory(channel)[0]?.content, fresh.getInstructions(channel));
   await right.refreshScope(channel);
@@ -76,9 +76,9 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
 });
 
 test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
-  const souls = testMap<PersistedInstructions>();
-  const left = testConfigStore("default-org", { souls });
-  const right = testConfigStore("default-org", { souls });
+  const instructions = testMap<PersistedInstructions>();
+  const left = testConfigStore("default-org", { instructions });
+  const right = testConfigStore("default-org", { instructions });
   const channel = scopeId("channel", "snapshot");
   await left.setInstructions(channel, "one", "alice");
   await left.setInstructions(channel, "two", "bob");
@@ -96,16 +96,16 @@ test("SOUL snapshot restore preserves the canonical version and history byte-for
 });
 
 test("setInstructions advances the canonical row without trusting a stale instance cache", async () => {
-  const souls = testMap<PersistedInstructions>();
-  const left = testConfigStore("default-org", { souls });
-  const right = testConfigStore("default-org", { souls });
+  const instructions = testMap<PersistedInstructions>();
+  const left = testConfigStore("default-org", { instructions });
+  const right = testConfigStore("default-org", { instructions });
   const channel = scopeId("channel", "latest");
 
   assert.equal(await left.setInstructions(channel, "left", "alice"), 1);
   assert.equal(right.instructionsVersion(channel), 0);
   assert.equal(await right.setInstructions(channel, "right", "bob"), 2);
 
-  const durable = await souls.get(channel);
+  const durable = await instructions.get(channel);
   assert.equal(durable?.version, 2);
   assert.deepEqual(
     durable?.history?.map(({ version, content }) => ({ version, content })),
@@ -117,23 +117,23 @@ test("setInstructions advances the canonical row without trusting a stale instan
 });
 
 test("the first write after upgrade retains a canonical revision that predates embedded history", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const channel = scopeId("channel", "pre-history-upgrade");
-  await souls.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
-  const store = testConfigStore("default-org", { souls });
+  await instructions.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
+  const store = testConfigStore("default-org", { instructions });
 
   assert.equal(await store.setInstructions(channel, "post-upgrade", "alice"), 9);
   assert.deepEqual(
-    (await souls.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
+    (await instructions.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
     [
-      { version: 9, content: "post-upgrade", updatedAt: (await souls.get(channel))!.updatedAt },
+      { version: 9, content: "post-upgrade", updatedAt: (await instructions.get(channel))!.updatedAt },
       { version: 8, content: "pre-upgrade", updatedAt: 0 },
     ],
   );
 });
 
 test("refreshScope merges legacy SOUL history into a canonical row and migrates it safely", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const legacyBacking = testMap<PersistedInstructionsRevision>();
   let legacyScans = 0;
   const legacyHistory: DurableMap<PersistedInstructionsRevision> = {
@@ -151,7 +151,7 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     updatedAt: 40,
     updatedBy: "alice",
   };
-  await souls.put(channel, { ...revision });
+  await instructions.put(channel, { ...revision });
   await legacyHistory.put(`${channel}:4`, revision);
   await legacyHistory.put(`${channel}:3`, {
     scopeId: channel,
@@ -160,7 +160,7 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     updatedAt: 30,
     updatedBy: "bob",
   });
-  const store = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
+  const store = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
 
   await store.hydrate?.();
   await store.refreshScope(channel);
@@ -174,7 +174,7 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     ],
   );
   assert.deepEqual(
-    (await souls.get(channel))?.history,
+    (await instructions.get(channel))?.history,
     store.instructionsHistory(channel),
     "refresh atomically migrates legacy revisions into the canonical row",
   );
@@ -182,14 +182,14 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
 });
 
 test("embedded history prevents a stale core from re-injecting legacy revisions after restore", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const legacyHistory = testMap<PersistedInstructionsRevision>();
   const restored = scopeId("channel", "legacy-restored");
-  await souls.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
+  await instructions.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:4`, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:3`, { scopeId: restored, content: "legacy prior", version: 3, updatedAt: 30 });
-  const left = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
-  const stale = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
+  const left = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const stale = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
   await Promise.all([left.hydrate?.(), stale.hydrate?.()]);
 
   const restoredSnapshot: PersistedInstructions = {
@@ -201,10 +201,10 @@ test("embedded history prevents a stale core from re-injecting legacy revisions 
   };
   assert.equal(await left.restoreInstructionsSnapshot(restored, restoredSnapshot), true);
   await stale.refreshScope(restored);
-  assert.deepEqual((await souls.get(restored))?.history, []);
+  assert.deepEqual((await instructions.get(restored))?.history, []);
   assert.equal(await stale.setInstructions(restored, "after restore", "bob"), 2);
   assert.deepEqual(
-    (await souls.get(restored))?.history?.map(({ version, content }) => ({ version, content })),
+    (await instructions.get(restored))?.history?.map(({ version, content }) => ({ version, content })),
     [
       { version: 2, content: "after restore" },
       { version: 1, content: "restored canonical" },
@@ -224,7 +224,7 @@ test("legacy migration rechecks the canonical marker inside the atomic update", 
     history: [],
   };
   let restoreBeforeUpdate = false;
-  const souls: DurableMap<PersistedInstructions> = {
+  const instructions: DurableMap<PersistedInstructions> = {
     ...backing,
     async update(id, fn) {
       if (restoreBeforeUpdate) {
@@ -234,16 +234,16 @@ test("legacy migration rechecks the canonical marker inside the atomic update", 
       return backing.update!(id, fn);
     },
   };
-  await souls.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
+  await instructions.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
-  const stale = testConfigStore("default-org", { souls, instructionsHistory: legacyHistory });
+  const stale = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
   await stale.hydrate?.();
 
   restoreBeforeUpdate = true;
   await stale.refreshScope(channel);
 
-  assert.deepEqual(await souls.get(channel), restored);
+  assert.deepEqual(await instructions.get(channel), restored);
   assert.equal(stale.getInstructions(channel), restored.content);
   assert.deepEqual(stale.instructionsHistory(channel), []);
 });
@@ -268,7 +268,7 @@ test(
     await a.setBrowseModel(ch, "claude-sonnet-4-6");
     await settle(
       async () =>
-        (await m.souls.get(ch))?.version === version &&
+        (await m.instructions.get(ch))?.version === version &&
         !!(await m.commandPolicies.get(ch)) &&
         (await m.approvalGrantModes.get(ch))?.modes.session === false &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
@@ -318,7 +318,7 @@ test(
     await a.setBrowseModel(ch, null);
     await settle(
       async () =>
-        (await m.souls.get(ch))?.content === "soul v8" &&
+        (await m.instructions.get(ch))?.content === "soul v8" &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
         !(await m.baseModels.get(ch)) &&
         !(await m.browseMaxSteps.get(ch)) &&

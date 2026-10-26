@@ -213,7 +213,7 @@ test("ledger replay: a FAILED create is not cached, so a retry can succeed", asy
   assert.equal((await built.app.listCrons()).length, 1);
 });
 
-test("ledger replay: a soul write is CACHED — a crash-replay does NOT bump the version again", async () => {
+test("ledger replay: an instructions write is CACHED — a crash-replay does NOT bump the version again", async () => {
   const { built, control } = build();
   const { ledger } = memoryLedger();
   const run = "run-instructions";
@@ -231,84 +231,49 @@ test("ledger replay: a soul write is CACHED — a crash-replay does NOT bump the
   );
 });
 
-test("createToolContext.instructionsWrite then instructionsRead reflect the new SOUL", async () => {
+test("createToolContext.instructionsWrite then instructionsRead reflect the new instructions", async () => {
   const { control } = build();
   const ctx = ctxFor({ control, controlClaims: claims("U1") });
   const w = await ctx.instructionsWrite("Be brief.");
   assert.ok("ok" in w && w.ok);
   const r = ctx.instructionsRead();
   assert.ok(!("code" in r) || r.code !== "control_unavailable");
-  assert.equal((r as { soul: string | null }).soul, "Be brief.");
+  assert.equal((r as { instructions: string | null }).instructions, "Be brief.");
 });
 
-for (const scope of ["conversation", "channel"] as const) {
-  test(`concurrent guidance edits at ${scope} scope reject a stale replacement without losing the winner`, async () => {
-    const { control } = build();
-    const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
-    let reads = 0;
-    let releaseReads!: () => void;
-    const bothRead = new Promise<void>((resolve) => (releaseReads = resolve));
-    const racingPolicy = {
-      ...channelPolicy,
-      async get(container: string) {
-        const policy = await channelPolicy.get(container);
-        if (++reads === 2) releaseReads();
-        await bothRead;
-        return policy;
+test("concurrent instructions edits reject a stale replacement without losing the winner", async () => {
+  const { control } = build();
+  const ctx = ctxFor({ control, controlClaims: claims("U1") });
+  await ctx.instructionsWrite("First rule. Second rule.");
+  const entries: string[] = [];
+  const tool = createAgentTools(
+    {
+      current: ctx,
+      scopeLabel: scopeId("personal", "U1"),
+      emit: (entry) => {
+        entries.push(entry.kind);
       },
-    };
-    const surface = createSurfaceToolDeps({
-      deps: {
-        outbound: {},
-        channelPolicy: scope === "channel" ? racingPolicy : channelPolicy,
-        auditLog: { record() {} },
-      },
-      input: { surfaceTools: true },
-      actor: { id: "U1" },
-      conversation: { kind: "channel", channelRef: "C1" },
-      session: { id: "S1" },
-      scopeId: "channel:C1",
-      defaultDestination: {},
-    } as unknown as SurfaceToolsContext)!;
-    const ctx = ctxFor({ control, controlClaims: claims("U1"), surface });
-    await ctx.instructionsWrite("First rule. Second rule.");
-    await ctx.setStandingOrder("First rule. Second rule.");
-    const entries: string[] = [];
-    const tool = createAgentTools(
-      {
-        current: ctx,
-        scopeLabel: scopeId("personal", "U1"),
-        emit: (entry) => {
-          entries.push(entry.kind);
-        },
-      },
-      { controlTools: true },
-    ).find((t) => t.name === "guidance")!;
-    const edit = (old: string, next: string) =>
-      tool
-        .execute(old, { action: "edit", scope, old, new: next }, undefined, undefined, {} as never)
-        .then((result) => JSON.stringify(result));
-    const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
-    assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
-    assert.equal(entries.filter((kind) => kind === "ToolResult").length, 2);
-    assert.match(
-      results.find((result) => result.includes("[error]"))!,
-      /changed/,
-    );
-    const current =
-      scope === "conversation" ? control.readInstructions(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
-    assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
-    const retry = current.includes("First updated.")
-      ? await edit("Second rule.", "Second updated.")
-      : await edit("First rule.", "First updated.");
-    assert.doesNotMatch(retry, /\[error\]/);
-    const final =
-      scope === "conversation" ? control.readInstructions(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
-    assert.equal(final, "First updated. Second updated.");
-  });
-}
+    },
+    { controlTools: true },
+  ).find((t) => t.name === "instructions")!;
+  const edit = (old: string, next: string) =>
+    tool
+      .execute(old, { action: "edit", old, new: next }, undefined, undefined, {} as never)
+      .then((result) => JSON.stringify(result));
+  const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
+  assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
+  assert.equal(entries.filter((kind) => kind === "ToolResult").length, 2);
+  assert.match(results.find((result) => result.includes("[error]"))!, /changed/);
+  const current = control.readInstructions(claims("U1")).instructions!;
+  assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
+  const retry = current.includes("First updated.")
+    ? await edit("Second rule.", "Second updated.")
+    : await edit("First rule.", "First updated.");
+  assert.doesNotMatch(retry, /\[error\]/);
+  assert.equal(control.readInstructions(claims("U1")).instructions, "First updated. Second updated.");
+});
 
-test("channel guidance metadata updates preserve intervening edits and initialize missing policies", async () => {
+test("channel settings through the instructions tool initialize missing policies and keep omitted state", async () => {
   const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const surface = createSurfaceToolDeps({
     deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
@@ -320,28 +285,18 @@ test("channel guidance metadata updates preserve intervening edits and initializ
     defaultDestination: {},
   } as unknown as SurfaceToolsContext)!;
   const ctx = ctxFor({ surface });
-  const tool = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "guidance")!;
+  const tool = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "instructions")!;
   const replace = (params: Record<string, unknown>) =>
-    tool.execute("metadata", { action: "replace", scope: "channel", ...params }, undefined, undefined, {} as never);
+    tool.execute("settings", { action: "replace", ...params }, undefined, undefined, {} as never);
   await replace({ ambientEnabled: true });
-  assert.equal((await channelPolicy.get("C1"))!.orders, "");
   assert.equal((await channelPolicy.get("C1"))!.ambientEnabled, true);
-  const read = ctx.getStandingOrder;
-  ctx.getStandingOrder = async () => {
-    const snapshot = await read();
-    await surface.setStandingOrder("Concurrent edit.");
-    return snapshot;
-  };
-  await replace({ ambientEnabled: false, bots: { news: { mode: "ignore" } } });
+  await replace({ bots: { news: { mode: "ignore" } } });
   const stored = (await channelPolicy.get("C1"))!;
-  assert.equal(stored.orders, "Concurrent edit.");
-  assert.equal(stored.ambientEnabled, false);
+  assert.equal(stored.ambientEnabled, true, "an omitted ambientEnabled is kept");
   assert.deepEqual(stored.bots, { news: { mode: "ignore" } });
-  assert.equal((await channelPolicy.history("C1"))[0]!.orders, stored.orders);
-  await replace({ content: "Explicit replacement." });
-  assert.equal((await channelPolicy.get("C1"))!.orders, "Explicit replacement.");
-  await replace({ content: 42, ambientEnabled: true });
-  assert.equal((await channelPolicy.get("C1"))!.orders, "Concurrent edit.");
+  await replace({ ambientEnabled: null });
+  assert.equal((await channelPolicy.get("C1"))!.ambientEnabled, undefined);
+  assert.deepEqual((await channelPolicy.get("C1"))!.bots, { news: { mode: "ignore" } });
 });
 
 test("without control/controlClaims wired, every control method returns CONTROL_UNAVAILABLE", async () => {

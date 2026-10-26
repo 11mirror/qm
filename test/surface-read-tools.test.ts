@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
+import { scopeId, type SurfaceContextResult, type TurnRequest } from "../src/types.ts";
 import type { Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
@@ -338,20 +338,23 @@ test("search source=slack with no connected login for the asker tells the agent 
   }
 });
 
-test("set_standing_order writes the channel policy the ambient judge reads (recorded via a real turn)", async () => {
+test("set_instructions writes the channel instructions the ambient judge reads (recorded via a real turn)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     await built.app.turn(
-      mention("!set_standing_order when someone posts a tweet link, reply with a piratey line", "C20", "2000.1"),
+      mention("!set_instructions when someone posts a tweet link, reply with a piratey line", "C20", "2000.1"),
     );
-    const reply = await subToolResult(built, "C20:2000.1", "set_standing_order");
-    assert.match(reply, /standing order set/);
-    const policy = await built.app.getChannelPolicy("C20");
-    assert.ok(policy && /piratey/.test(policy.orders), "the policy store holds what the tool wrote");
+    const reply = await subToolResult(built, "C20:2000.1", "set_instructions");
+    assert.match(reply, /instructions set/);
+    assert.match(
+      (await built.config.getInstructionsDurable(scopeId("channel", "C20"))) ?? "",
+      /piratey/,
+      "the instructions store holds what the tool wrote",
+    );
 
-    await built.app.turn(mention("!get_standing_order", "C20", "2000.2"));
-    const got = await subToolResult(built, "C20:2000.2", "get_standing_order");
+    await built.app.turn(mention("!get_instructions", "C20", "2000.2"));
+    const got = await subToolResult(built, "C20:2000.2", "get_instructions");
     assert.match(got, /piratey/);
   } finally {
     await built.runtime.stop();

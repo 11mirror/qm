@@ -247,24 +247,24 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const lock = testAdvisoryLock();
-  const leftConfig = testConfigStore(ORG, { souls });
-  const rightConfig = testConfigStore(ORG, { souls });
+  const leftConfig = testConfigStore(ORG, { instructions });
+  const rightConfig = testConfigStore(ORG, { instructions });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
   assert.equal(await left.updateInstructions(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
   assert.equal(rightConfig.instructionsVersion(privScope), 0, "the second core starts with a stale cache");
   assert.equal(await right.updateInstructions(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
-  assert.equal((await souls.get(privScope))?.version, 2);
-  assert.equal((await souls.get(privScope))?.content, "right");
+  assert.equal((await instructions.get(privScope))?.version, 2);
+  assert.equal((await instructions.get(privScope))?.content, "right");
 });
 
 test("SOUL: a durable write failure rejects and restores the live cache", async () => {
   const control = { fail: false };
-  const souls = failingPutMap<PersistedInstructions>(control);
-  const config = testConfigStore(ORG, { souls });
+  const instructions = failingPutMap<PersistedInstructions>(control);
+  const config = testConfigStore(ORG, { instructions });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateInstructions(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   control.fail = true;
@@ -278,7 +278,7 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
-  const config = testConfigStore(ORG, { souls: failingPutMap<PersistedInstructions>(control) });
+  const config = testConfigStore(ORG, { instructions: failingPutMap<PersistedInstructions>(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -332,7 +332,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
   await backing.put(privScope, prior);
-  const config = testConfigStore(ORG, { souls: putThenFailReadsMap(backing) });
+  const config = testConfigStore(ORG, { instructions: putThenFailReadsMap(backing) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {

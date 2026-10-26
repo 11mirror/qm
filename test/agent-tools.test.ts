@@ -290,7 +290,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return { ok: true };
     },
     instructionsRead() {
-      return { effectiveInstructions: "Org policy.\n\nBe terse.", soul: "Be terse.", instructionsVersion: 3 };
+      return { effectiveInstructions: "Org policy.\n\nBe terse.", instructions: "Be terse.", instructionsVersion: 3 };
     },
     async instructionsWrite() {
       return { ok: true, version: 4 };
@@ -352,11 +352,11 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         return { ok: true, sizeBytes: 1024, contentType: "application/octet-stream" };
       return { ok: false, message: "I can't find that file — it may have expired." };
     },
-    async getStandingOrder() {
-      return { ok: true, orders: "" };
+    async getChannelBehavior() {
+      return { ok: true };
     },
-    async setStandingOrder(orders) {
-      return { ok: true, orders: orders ?? "" };
+    async setChannelBehavior() {
+      return { ok: true };
     },
     async callMcpTool() {
       return "";
@@ -1159,11 +1159,11 @@ test("readOnly exposes observation and constrained session coordination without 
   const readOnly = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
-  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
+  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "instructions"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
   assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
-  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
+  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "instructions"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
 });
@@ -1593,14 +1593,14 @@ test("background surfaces a policy denial/approval as a tool_result, not a throw
   assert.equal(pending[0]!.command, "deploy prod");
 });
 
-test("cron/webhook register only when controlTools is on; guidance registers with controlTools OR surfaceTools", () => {
+test("cron/webhook register only when controlTools is on; instructions registers with controlTools OR surfaceTools", () => {
   const off = createAgentTools({ current: fakeToolContext() });
-  assert.ok(!off.some((t) => ["cron", "webhook", "guidance"].includes(t.name)), "off by default");
+  assert.ok(!off.some((t) => ["cron", "webhook", "instructions"].includes(t.name)), "off by default");
   const on = createAgentTools({ current: fakeToolContext() }, { controlTools: true }).map((t) => t.name);
-  for (const name of ["cron", "webhook", "guidance"])
+  for (const name of ["cron", "webhook", "instructions"])
     assert.ok(on.includes(name), `${name} registers when controlTools is on`);
   const surfaceOnly = createAgentTools({ current: fakeToolContext() }, { surfaceTools: true }).map((t) => t.name);
-  assert.ok(surfaceOnly.includes("guidance"), "guidance registers when surfaceTools is on");
+  assert.ok(surfaceOnly.includes("instructions"), "instructions registers when surfaceTools is on");
   assert.ok(!surfaceOnly.includes("cron") && !surfaceOnly.includes("webhook"), "cron/webhook stay control-only");
 });
 
@@ -1889,170 +1889,119 @@ test("webhook create requires task + verification; list and disable dispatch", a
   assert.match(textOut(await call(tool("webhook"), { action: "disable" })), /\[error\].*requires `id`/);
 });
 
-test("guidance conversation scope reads its own instructions; replace requires content and reports the version", async () => {
-  assert.equal(textOut(await call(tool("guidance"), { action: "read", scope: "conversation" })), "Be terse.");
-  assert.match(
-    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation", content: "New guidance." })),
-    /version 4/,
-  );
-  assert.match(
-    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation" })),
-    /\[error\].*requires `content`/,
-  );
+test("instructions reads the scope's own text; replace requires content and reports the version", async () => {
+  assert.equal(textOut(await call(tool("instructions"), { action: "read" })), "Be terse.");
+  assert.match(textOut(await call(tool("instructions"), { action: "replace", content: "New text." })), /version 4/);
+  assert.match(textOut(await call(tool("instructions"), { action: "replace" })), /\[error\].*needs `content`/);
 });
 
-test("guidance conversation scope with no own instructions does not return inherited policy", async () => {
-  for (const soul of [null, ""]) {
+test("instructions with no own text does not return inherited policy", async () => {
+  for (const instructions of [null, ""]) {
     const tc: ToolContext = {
       ...fakeToolContext(),
-      instructionsRead: () => ({ effectiveInstructions: "Org policy.", soul, instructionsVersion: 0 }),
+      instructionsRead: () => ({ effectiveInstructions: "Org policy.", instructions, instructionsVersion: 0 }),
     };
-    assert.equal(
-      textOut(await call(tool("guidance", tc), { action: "read", scope: "conversation" })),
-      "(no standing instructions set)",
-    );
+    assert.equal(textOut(await call(tool("instructions", tc), { action: "read" })), "(no instructions set)");
   }
 });
 
-test("guidance read then replace keeps inherited policy out of saved instructions", async () => {
-  let soul = "Be terse.";
+test("instructions read then replace keeps inherited policy out of saved instructions", async () => {
+  let saved = "Be terse.";
   const tc: ToolContext = {
     ...fakeToolContext(),
-    instructionsRead: () => ({ effectiveInstructions: `Org policy.\n\n${soul}`, soul, instructionsVersion: 3 }),
+    instructionsRead: () => ({
+      effectiveInstructions: `Org policy.\n\n${saved}`,
+      instructions: saved,
+      instructionsVersion: 3,
+    }),
     async instructionsWrite(content) {
-      soul = content;
+      saved = content;
       return { ok: true, version: 4 };
     },
   };
-  const guidance = tool("guidance", tc);
-  const content = textOut(await call(guidance, { action: "read", scope: "conversation" }));
-  await call(guidance, { action: "replace", scope: "conversation", content: `${content}\nUse plain text.` });
-  assert.equal(soul, "Be terse.\nUse plain text.");
+  const instructions = tool("instructions", tc);
+  const content = textOut(await call(instructions, { action: "read" }));
+  await call(instructions, { action: "replace", content: `${content}\nUse plain text.` });
+  assert.equal(saved, "Be terse.\nUse plain text.");
 });
 
-test("guidance defaults to channel scope when a channel is available, and rewrites the channel order", async () => {
-  assert.match(textOut(await call(tool("guidance"), { action: "read" })), /Ambient replies: default/);
-  assert.match(
-    textOut(await call(tool("guidance"), { action: "replace", content: "reply piratey to tweets" })),
-    /channel guidance updated/,
-  );
-  assert.match(
-    textOut(await call(tool("guidance"), { action: "replace", bots: { newsbot: { mode: "ignore" } } })),
-    /channel guidance updated/,
-  );
-  assert.match(
-    textOut(await call(tool("guidance"), { action: "replace" })),
-    /\[error\].*needs `content`.*`bots`.*and\/or `ambientEnabled`/,
-  );
-});
-
-test("guidance reads and writes channel ambient replies without changing omitted state", async () => {
+test("in a channel, instructions also reads and writes ambient replies and the bot ledger", async () => {
   let ambientEnabled: boolean | undefined;
+  let bots: Record<string, { mode: "ignore" | "rollup" | "action" | "user"; rollupHours?: number }> = {
+    newsbot: { mode: "rollup", rollupHours: 6 },
+  };
+  const writes: string[] = [];
   const tc: ToolContext = {
     ...fakeToolContext(),
-    async getStandingOrder() {
-      return { ok: true, orders: "keep watch", ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+    async getChannelBehavior() {
+      return { ok: true, bots, ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
     },
-    async setStandingOrder(orders, _bots, nextAmbientEnabled) {
+    async setChannelBehavior(nextBots, nextAmbientEnabled) {
+      if (nextBots) bots = nextBots;
       if (nextAmbientEnabled !== undefined) ambientEnabled = nextAmbientEnabled ?? undefined;
-      return { ok: true, orders: orders ?? "keep watch", ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+      return { ok: true, bots, ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+    },
+    async instructionsWrite(content) {
+      writes.push(content);
+      return { ok: true, version: 4 };
     },
   };
-
-  assert.match(textOut(await call(tool("guidance", tc), { action: "replace", ambientEnabled: true })), /updated/);
-  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
-  await call(tool("guidance", tc), { action: "replace", content: "keep watching" });
-  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
-  await call(tool("guidance", tc), { action: "replace", ambientEnabled: false });
-  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: off/);
-  await call(tool("guidance", tc), { action: "replace", ambientEnabled: null });
-  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: default/);
+  const read = async () => textOut(await call(tool("instructions", tc), { action: "read" }));
+  assert.match(await read(), /Be terse\.[\s\S]*Ambient replies: default[\s\S]*newsbot: rollup \(every 6h\)/);
+  assert.match(
+    textOut(await call(tool("instructions", tc), { action: "replace", ambientEnabled: true })),
+    /channel settings updated/,
+  );
+  assert.deepEqual(writes, [], "a settings-only change leaves the instructions text alone");
+  assert.match(await read(), /Ambient replies: on/);
+  await call(tool("instructions", tc), { action: "replace", content: "keep watching" });
+  assert.deepEqual(writes, ["keep watching"]);
+  assert.match(await read(), /Ambient replies: on/);
+  await call(tool("instructions", tc), { action: "replace", ambientEnabled: null, bots: { newsbot: { mode: "ignore" } } });
+  assert.match(await read(), /Ambient replies: default[\s\S]*newsbot: ignore/);
 });
 
-test("guidance edit swaps one exact passage in either scope and refuses ambiguous or missing matches", async () => {
-  let orders = "reply piratey\nwatch tweets\nwatch tweets";
-  const instructionsWrites: string[] = [];
-  const setCalls: unknown[] = [];
+test("instructions edit swaps one exact passage and refuses ambiguous or missing matches", async () => {
+  const writes: Array<{ content: string; expectedVersion?: number }> = [];
   const tc: ToolContext = {
     ...fakeToolContext(),
-    async getStandingOrder() {
-      return { ok: true, orders };
-    },
-    async setStandingOrder(next, bots, ambientEnabled) {
-      orders = next ?? orders;
-      setCalls.push({ bots, ambientEnabled });
-      return { ok: true, orders };
-    },
     instructionsRead() {
       return {
-        effectiveInstructions: "Org policy.\n\nBe terse. Use $1 sparingly.",
-        soul: "Be terse. Use $1 sparingly.",
+        effectiveInstructions: "Org policy.\n\nBe terse. Use $1 sparingly.\nwatch tweets\nwatch tweets",
+        instructions: "Be terse. Use $1 sparingly.\nwatch tweets\nwatch tweets",
         instructionsVersion: 3,
       };
     },
-    async instructionsWrite(content) {
-      instructionsWrites.push(content);
+    async instructionsWrite(content, expectedVersion) {
+      writes.push({ content, ...(expectedVersion !== undefined ? { expectedVersion } : {}) });
       return { ok: true, version: 4 };
     },
   };
-  const edit = (args: Record<string, unknown>) => call(tool("guidance", tc), { action: "edit", ...args });
+  const edit = (args: Record<string, unknown>) => call(tool("instructions", tc), { action: "edit", ...args });
   assert.match(textOut(await edit({ old: "watch tweets", new: "x" })), /\[error\].*more than once/);
   assert.match(textOut(await edit({ old: "absent", new: "x" })), /\[error\].*no exact match/);
   assert.match(textOut(await edit({ content: "everything" })), /\[error\].*requires `old`/);
-  assert.equal(orders, "reply piratey\nwatch tweets\nwatch tweets");
-  assert.match(
-    textOut(await edit({ old: "piratey", new: "plainly", bots: { newsbot: { mode: "ignore" } } })),
-    /channel guidance updated/,
-  );
-  assert.equal(orders, "reply plainly\nwatch tweets\nwatch tweets");
-  assert.deepEqual(setCalls, [{ bots: { newsbot: { mode: "ignore" } }, ambientEnabled: undefined }]);
-  assert.match(textOut(await edit({ scope: "conversation", old: "Be terse.", new: "Be $& brief." })), /version 4/);
-  assert.deepEqual(instructionsWrites, ["Be $& brief. Use $1 sparingly."]);
-  assert.match(textOut(await edit({ scope: "conversation", old: "Org policy.", new: "x" })), /no exact match/);
-  assert.ok(!Check(tool("guidance").parameters, { action: "write", content: "x" }));
+  assert.match(textOut(await edit({ old: "Org policy.", new: "x" })), /no exact match/);
+  assert.deepEqual(writes, []);
+  assert.match(textOut(await edit({ old: "Be terse.", new: "Be $& brief." })), /version 4/);
+  assert.deepEqual(writes, [
+    { content: "Be $& brief. Use $1 sparingly.\nwatch tweets\nwatch tweets", expectedVersion: 3 },
+  ]);
+  assert.ok(!Check(tool("instructions").parameters, { action: "write", content: "x" }));
 });
 
-test("guidance rejects ambient replies at conversation scope", async () => {
-  assert.match(
-    textOut(
-      await call(tool("guidance"), {
-        action: "replace",
-        scope: "conversation",
-        content: "Be terse.",
-        ambientEnabled: true,
-      }),
-    ),
-    /\[error\].*applies only to channel scope/,
-  );
-});
-
-test("guidance surfaces the channel bot ledger and cross-scope note on read", async () => {
+test("instructions rejects channel settings outside a channel", async () => {
   const tc: ToolContext = {
     ...fakeToolContext(),
-    async getStandingOrder() {
-      return { ok: true, orders: "watch the Q3 launch", bots: { newsbot: { mode: "rollup", rollupHours: 6 } } };
-    },
-    instructionsRead() {
-      return { effectiveInstructions: "Org policy.\n\nBe terse.", soul: "Be terse.", instructionsVersion: 3 };
-    },
-  };
-  const out = textOut(await call(tool("guidance", tc), { action: "read" }));
-  assert.match(out, /watch the Q3 launch/);
-  assert.match(out, /newsbot: rollup \(every 6h\)/);
-  assert.match(out, /conversation-scope guidance also exists/);
-});
-
-test("guidance at channel scope in a DM (no channel) points to the conversation scope", async () => {
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    async getStandingOrder() {
-      return { ok: false, message: "standing orders are per-channel — there isn't one for a DM." };
+    async getChannelBehavior() {
+      return { ok: false, message: "channel settings apply only inside a channel." };
     },
   };
   assert.match(
-    textOut(await call(tool("guidance", tc), { action: "read", scope: "channel" })),
-    /no channel scope here; use scope=conversation/,
+    textOut(await call(tool("instructions", tc), { action: "replace", content: "Be terse.", ambientEnabled: true })),
+    /\[error\].*apply only in a channel/,
   );
+  assert.equal(textOut(await call(tool("instructions", tc), { action: "read" })), "Be terse.");
 });
 
 test("control tools degrade to a crisp [error] when the turn has no self-API (CONTROL_UNAVAILABLE)", async () => {
@@ -2065,8 +2014,8 @@ test("control tools degrade to a crisp [error] when the turn has no self-API (CO
     async webhookList() {
       return CONTROL_UNAVAILABLE;
     },
-    async getStandingOrder() {
-      return { ok: false, message: "standing orders aren't available on this turn" };
+    async getChannelBehavior() {
+      return { ok: false, message: "channel settings aren't available on this turn" };
     },
     instructionsRead() {
       return CONTROL_UNAVAILABLE;
@@ -2081,7 +2030,7 @@ test("control tools degrade to a crisp [error] when the turn has no self-API (CO
     /\[error\].*aren't available on this turn/,
   );
   assert.match(
-    textOut(await call(tool("guidance", tc), { action: "read", scope: "conversation" })),
+    textOut(await call(tool("instructions", tc), { action: "read" })),
     /\[error\].*aren't available on this turn/,
   );
 });

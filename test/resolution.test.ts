@@ -98,11 +98,11 @@ test("the writable layer is the scope, global is read-only", async () => {
 });
 
 test("resolution refreshes security config written by another instance", async () => {
-  const souls = testMap<PersistedInstructions>();
+  const instructions = testMap<PersistedInstructions>();
   const egressPolicies = testMap<PersistedEgressPolicy>();
-  const reader = testConfigStore("default-org", { souls, egressPolicies });
+  const reader = testConfigStore("default-org", { instructions, egressPolicies });
   const personal = scopeId("personal", "U1");
-  await souls.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
+  await instructions.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
   await egressPolicies.put(personal, {
     scopeId: personal,
     policy: { allowedHosts: [], deniedHosts: ["blocked.example"] },

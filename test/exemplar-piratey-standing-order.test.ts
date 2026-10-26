@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { setChannelInstructions } from "./support/channel-instructions.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -25,7 +26,7 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
   built.runtime.start();
   try {
     const container = "C-pirate";
-    await built.app.setChannelPolicy(container, DIRECTIVE, "U-alice");
+    await setChannelInstructions(built, container, DIRECTIVE, "U-alice");
 
     await built.app.ingestSurfaceEvents(
       [

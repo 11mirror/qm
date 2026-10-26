@@ -129,24 +129,24 @@ test("oldest_ts is the numeric floor of ingested ts — compared numerically, no
   assert.equal(st?.oldestTs, "999.1", "the coverage floor is the numerically-smallest ts (not the lexically-smallest)");
 });
 
-test("channel policy store: set + get + list standing orders", async () => {
+test("channel policy store: set + get + list channel settings", async () => {
   const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   assert.equal(await store.get("C1"), null);
-  await store.set("C1", "flag anything about the Q3 launch", { setBy: "U-admin" });
+  await store.set("C1", { setBy: "U-admin", ambientEnabled: true });
   const p = await store.get("C1");
-  assert.equal(p?.orders, "flag anything about the Q3 launch");
+  assert.equal(p?.ambientEnabled, true);
   assert.equal(p?.setBy, "U-admin");
   assert.equal((await store.list()).length, 1);
 });
 
 test("channel policy store: every set appends a provenance revision to history", async () => {
   const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  await store.set("C1", "flag the launch", { setBy: "U-alice", sessionId: "sess-1" });
-  await store.set("C1", "flag the launch and incidents", { setBy: "U-bob", sessionId: "sess-2" });
-  await store.set("C-other", "unrelated", { setBy: "U-carol" });
+  await store.set("C1", { setBy: "U-alice", sessionId: "sess-1" });
+  await store.set("C1", { setBy: "U-bob", sessionId: "sess-2", ambientEnabled: false });
+  await store.set("C-other", { setBy: "U-carol" });
   const h = await store.history("C1");
   assert.equal(h.length, 2, "one revision per set, other containers excluded");
-  assert.equal(h[0]?.orders, "flag the launch and incidents");
+  assert.equal(h[0]?.ambientEnabled, false);
   assert.equal(h[0]?.setBy, "U-bob");
   assert.equal(h[0]?.sessionId, "sess-2");
   assert.equal(h[1]?.setBy, "U-alice");
@@ -156,28 +156,28 @@ test("channel policy store: every set appends a provenance revision to history",
 test("channel policy store: bot ledger round-trips and an omitted `bots` leaves it unchanged", async () => {
   const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   const ledger = { newsbot: { mode: "rollup" as const, rollupHours: 6 }, deploybot: { mode: "action" as const } };
-  await store.set("C1", "watch the launch", { setBy: "U-admin", bots: ledger });
+  await store.set("C1", { setBy: "U-admin", bots: ledger });
   const p = await store.get("C1");
   assert.deepEqual(p?.bots, ledger, "the bot ledger persists verbatim");
-  await store.set("C1", "watch the launch AND the incident channel", { setBy: "U-admin" });
+  await store.set("C1", { setBy: "U-admin", ambientEnabled: true });
   const p2 = await store.get("C1");
-  assert.equal(p2?.orders, "watch the launch AND the incident channel");
+  assert.equal(p2?.ambientEnabled, true);
   assert.deepEqual(p2?.bots, ledger, "an omitted bots arg leaves the ledger unchanged");
-  await store.set("C2", "hi");
+  await store.set("C2", {});
   assert.deepEqual((await store.get("C2"))?.bots, {});
 });
 
 test("channel policy store: ambientEnabled is tri-state — unset by default, round-trips, omitted leaves it, null clears it", async () => {
   const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  await store.set("C1", "watch the launch", { setBy: "U-admin" });
+  await store.set("C1", { setBy: "U-admin" });
   assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "unset by default — the size rule decides");
-  await store.set("C1", "watch the launch", { setBy: "U-admin", ambientEnabled: false });
+  await store.set("C1", { setBy: "U-admin", ambientEnabled: false });
   assert.equal((await store.get("C1"))?.ambientEnabled, false, "off persists");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin" });
+  await store.set("C1", { setBy: "U-admin" });
   assert.equal((await store.get("C1"))?.ambientEnabled, false, "an omitted arg leaves the override unchanged");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: true });
+  await store.set("C1", { setBy: "U-admin", ambientEnabled: true });
   assert.equal((await store.get("C1"))?.ambientEnabled, true, "explicit on persists");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: null });
+  await store.set("C1", { setBy: "U-admin", ambientEnabled: null });
   assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "null clears back to the default rule");
   const h = await store.history("C1");
   assert.deepEqual(
@@ -199,7 +199,7 @@ test("ambient judge: engage decision spawns the smart-model worker", async () =>
   const batch: AmbientBatch = {
     container: "C1",
     surface: "slack",
-    orders: "flag anything about the Q3 launch",
+    instructions: "flag anything about the Q3 launch",
     messages: [{ container: "C1", ts: "1.0", authorId: "U1", text: "did the Q3 launch slip?", createdAt: 1 }],
   };
   const decision = await judgeAmbientBatch(
@@ -228,7 +228,7 @@ test("ambient judge: a silence decision spawns NO worker (silence is the default
     {
       container: "C1",
       surface: "slack",
-      orders: "flag Q3 launch",
+      instructions: "flag Q3 launch",
       messages: [{ container: "C1", ts: "1.0", text: "lunch anyone?", createdAt: 1 }],
     },
   );
@@ -236,7 +236,7 @@ test("ambient judge: a silence decision spawns NO worker (silence is the default
   assert.equal(spawns, 0);
 });
 
-test("ambient judge: empty standing orders no longer short-circuits — the judge still decides", async () => {
+test("ambient judge: empty instructions no longer short-circuit — the judge still decides", async () => {
   let judged = 0;
   let spawns = 0;
   const decision = await judgeAmbientBatch(
@@ -252,13 +252,13 @@ test("ambient judge: empty standing orders no longer short-circuits — the judg
     {
       container: "C1",
       surface: "slack",
-      orders: "   ",
+      instructions: "   ",
       self: { name: "bot" },
       messages: [{ container: "C1", ts: "1.0", text: "hey bot, help?", createdAt: 1 }],
     },
   );
   assert.equal(decision.act, true);
-  assert.equal(judged, 1, "the cheap-model judge is consulted even with no standing orders");
+  assert.equal(judged, 1, "the cheap-model judge is consulted even with no instructions");
   assert.equal(spawns, 1);
 });
 
@@ -275,7 +275,7 @@ test("ambient judge: the agent's own posts are never shown to the judge as new m
     {
       container: "C1",
       surface: "slack",
-      orders: "flag launch talk",
+      instructions: "flag launch talk",
       messages: [{ container: "C1", ts: "1.0", text: "", deleted: true, createdAt: 1 }],
     },
   );

@@ -108,7 +108,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
   assert.deepEqual(calls, { provision: 0, read: 0, put: 0, grant: 0 });
 });
 
-test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
+test("surface channel settings preserve and reset the stored ambient reply policy", async () => {
   const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const tools = createSurfaceToolDeps({
     deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
@@ -129,16 +129,16 @@ test("surface standing orders preserve and reset the stored ambient reply policy
     spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
   } as unknown as SurfaceToolsContext)!;
 
-  await tools.setStandingOrder("watch", undefined, true);
+  await tools.setChannelBehavior(undefined, true);
   assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, true);
-  const enabledOrder = await tools.getStandingOrder();
-  assert.equal(enabledOrder.ok && enabledOrder.ambientEnabled, true);
-  await tools.setStandingOrder("keep watching");
+  const enabled = await tools.getChannelBehavior();
+  assert.equal(enabled.ok && enabled.ambientEnabled, true);
+  await tools.setChannelBehavior({ newsbot: { mode: "ignore" } });
   assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, true);
-  await tools.setStandingOrder("keep watching", undefined, null);
+  await tools.setChannelBehavior(undefined, null);
   assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, undefined);
-  const defaultOrder = await tools.getStandingOrder();
-  assert.equal(defaultOrder.ok && defaultOrder.ambientEnabled, undefined);
+  const reset = await tools.getChannelBehavior();
+  assert.equal(reset.ok && reset.ambientEnabled, undefined);
 });
 
 test("collectNamedOutbound: a missing/empty path is reported (so post can fail the WHOLE call)", async () => {

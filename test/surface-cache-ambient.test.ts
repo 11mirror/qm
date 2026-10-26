@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { setChannelInstructions } from "./support/channel-instructions.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -44,7 +45,7 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
   built.runtime.start();
   try {
     const container = "C1";
-    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin");
 
     await built.app.ingestSurfaceEvents([
       { container, ts: "100.1", authorId: "U1", text: "did the Q3 launch slip?", createdAt: 1 },
@@ -68,7 +69,7 @@ test("a prompt-injected ambient judge reason is screened even when the shown mes
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.setChannelPolicy("C-reason-risk", "!engage !security-risk", "U-admin");
+    await setChannelInstructions(built, "C-reason-risk", "!engage !security-risk", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container: "C-reason-risk",
@@ -110,7 +111,7 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
   built.runtime.start();
   try {
     const container = "C-off";
-    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin", undefined, undefined, false);
+    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, false);
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
     ]);
@@ -118,7 +119,7 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
     assert.equal(decision.act, false, "the judge never runs in a switched-off channel");
     await sleep(200);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "no proactive post");
-    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
     const replay = await built.app.judgeAmbientContainer("slack", container);
     assert.equal(replay.act, false, "messages overheard while off are not replayed");
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
@@ -134,7 +135,7 @@ test("default rule: standing orders opt the room into ambient, regardless of siz
   built.runtime.start();
   try {
     const container = "C-big";
-    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -158,7 +159,7 @@ test("default rule: an action-mode bot entry opts the room in, with no standing 
   built.runtime.start();
   try {
     const container = "C-actionbot";
-    await built.app.setChannelPolicy(container, "", "U-admin", { deploybot: { mode: "action" } });
+    await setChannelInstructions(built, container, "", "U-admin", { deploybot: { mode: "action" } });
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -183,7 +184,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
   built.runtime.start();
   try {
     const container = "C-orgoff";
-    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
     await built.config.setOrgAmbient(false);
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
@@ -260,7 +261,7 @@ test("a BARE @mention is ALSO owned by the direct dispatch path, so the ambient 
   built.runtime.start();
   try {
     const container = "C-bare";
-    await built.app.setChannelPolicy(container, "!engage !post here", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post here", "U-admin");
     await built.app.ingestSurfaceEvents(
       [{ container, ts: "1.0", authorId: "U1", text: "@bot", mentionsSelf: true, createdAt: 1 }],
       "slack",
@@ -279,7 +280,7 @@ test("a message the direct path owns (ingested handled) is excluded from the amb
   built.runtime.start();
   try {
     const container = "C-owned";
-    await built.app.setChannelPolicy(container, "!engage !post here", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post here", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "following up on the thread", handled: true, createdAt: 1 },
     ]);
@@ -302,7 +303,7 @@ test("a message that @mentions ANOTHER person (not the bot) is judged normally, 
   built.runtime.start();
   try {
     const container = "C-other";
-    await built.app.setChannelPolicy(container, "", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(built, container, "", "U-admin", undefined, undefined, true);
     await built.app.ingestSurfaceEvents(
       [{ container, ts: "1.0", authorId: "U1", text: "@jordan can you send those emails?", createdAt: 1 }],
       "slack",
@@ -328,7 +329,7 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
   const built = freshApp();
   try {
     const container = "C-once";
-    await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await setChannelInstructions(built, container, "flag launch talk", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
     await built.app.judgeAmbientContainer("slack", container);
     const again = await built.app.judgeAmbientContainer("slack", container);
@@ -359,7 +360,7 @@ test("the worker DECIDES where to post: a thread_ts roots the reply under the me
   built.runtime.start();
   try {
     const container = "C-choose";
-    await built.app.setChannelPolicy(container, "!engage !postthread 200.1 ahoy matey", "U-admin");
+    await setChannelInstructions(built, container, "!engage !postthread 200.1 ahoy matey", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "200.1", authorId: "U1", text: "a fresh tweet link", createdAt: 1 },
     ]);
@@ -377,7 +378,7 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
   built.runtime.start();
   try {
     const container = "C-xml";
-    await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Ann", text: "check <https://x.com/foo>", createdAt: 1 },
     ]);
@@ -400,7 +401,7 @@ test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first j
   built.runtime.start();
   try {
     const container = "C-bd";
-    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await setChannelInstructions(built, container, "watch this channel", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "Alice", text: "first message", createdAt: 1 },
     ]);
@@ -435,7 +436,7 @@ test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
   built.runtime.start();
   try {
     const container = "C-bdcap";
-    await built.app.setChannelPolicy(container, "watch", "U-admin");
+    await setChannelInstructions(built, container, "watch", "U-admin");
     await built.app.ingestSurfaceEvents(
       Array.from({ length: 12 }, (_v, i) => ({
         container,
@@ -468,7 +469,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
   built.runtime.start();
   try {
     const container = "C-row";
-    await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
     const rows = await listFull(built.ambientJudgments!, { container });
@@ -492,7 +493,7 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
   built.runtime.start();
   try {
     const container = "C-judgemodel";
-    await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
     const rows = await listFull(built.ambientJudgments!, { container });
@@ -509,7 +510,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
   built.runtime.start();
   try {
     const container = "C-openai-judge";
-    await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
     const rows = await listFull(built.ambientJudgments!, { container });
@@ -527,7 +528,7 @@ test("an admin-set org base model drives the auxiliary, not just the PI_MODEL en
   built.runtime.start();
   try {
     const container = "C-admin-base";
-    await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
     const rows = await listFull(built.ambientJudgments!, { container });
@@ -547,7 +548,7 @@ test("a formal-mention fastlane records a fastlane row (§2.2)", async () => {
   built.runtime.start();
   try {
     const container = "C-fast";
-    await built.app.setChannelPolicy(container, "", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(built, container, "", "U-admin", undefined, undefined, true);
     await built.app.ingestSurfaceEvents(
       [{ container, ts: "6.0", authorId: "U1", text: "@bot please help", mentionsSelf: true, createdAt: 6 }],
       "slack",
@@ -572,7 +573,7 @@ test("worker seed is the trigger plus the 3 messages before it (§2.4)", async (
   built.runtime.start();
   try {
     const container = "C-seed";
-    await built.app.setChannelPolicy(container, "watch", "U-admin");
+    await setChannelInstructions(built, container, "watch", "U-admin");
     await built.app.ingestSurfaceEvents([
       ...Array.from({ length: 5 }, (_v, i) => ({
         container,
@@ -604,7 +605,7 @@ test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and
   built.runtime.start();
   try {
     const container = "C-botignore";
-    await built.app.setChannelPolicy(container, "watch", "U-admin", { newsbot: { mode: "ignore" } });
+    await setChannelInstructions(built, container, "watch", "U-admin", { newsbot: { mode: "ignore" } });
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "NewsBot", text: "big news !engage !post go", bot: true, createdAt: 1 },
     ]);
@@ -624,15 +625,15 @@ test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag;
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.setChannelPolicy("C-botact", "watch", "U-admin", { deploybot: { mode: "action" } });
+    await setChannelInstructions(built, "C-botact", "watch", "U-admin", { deploybot: { mode: "action" } });
     await built.app.ingestSurfaceEvents([
       { container: "C-botact", ts: "1.0", authorName: "DeployBot", text: "deploy finished", bot: true, createdAt: 1 },
     ]);
-    await built.app.setChannelPolicy("C-botuser", "watch", "U-admin", { helperbot: { mode: "user" } });
+    await setChannelInstructions(built, "C-botuser", "watch", "U-admin", { helperbot: { mode: "user" } });
     await built.app.ingestSurfaceEvents([
       { container: "C-botuser", ts: "1.0", authorName: "HelperBot", text: "hello team", bot: true, createdAt: 1 },
     ]);
-    await built.app.setChannelPolicy("C-botunlisted", "watch", "U-admin");
+    await setChannelInstructions(built, "C-botunlisted", "watch", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container: "C-botunlisted", ts: "1.0", authorName: "RandomBot", text: "beep boop", bot: true, createdAt: 1 },
     ]);
@@ -666,7 +667,7 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
   built.runtime.start();
   try {
     const container = "C-botrollup";
-    await built.app.setChannelPolicy(container, "watch", "U-admin", { newsbot: { mode: "rollup", rollupHours: 6 } });
+    await setChannelInstructions(built, container, "watch", "U-admin", { newsbot: { mode: "rollup", rollupHours: 6 } });
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "NewsBot", text: "item 1", bot: true, createdAt: 1 },
     ]);
@@ -714,7 +715,7 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
       [{ channelId: container, name: "solicited-chan", isPrivate: false }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
-    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Alice", text: "!post solicited reply", createdAt: 1 },
     ]);
@@ -750,7 +751,7 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
         { channelId: container, principalId: "bob@acme.com" },
       ],
     );
-    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "350.1", authorId: "U1", authorName: "Alice", text: "!sysprompt", createdAt: 1 },
     ]);
@@ -769,7 +770,7 @@ test("an ambient worker in a group DM runs at the group scope, not a fabricated 
   built.runtime.start();
   try {
     const container = "C-mpim";
-    await built.app.setChannelPolicy(container, "!engage !post group reply", "U-admin");
+    await setChannelInstructions(built, container, "!engage !post group reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -801,7 +802,7 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceGroups([{ groupId: container, principalId: "alice@acme.com" }]);
-    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -834,7 +835,7 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
     await built.directory.replace([
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U9" },
     ]);
-    await built.app.setChannelPolicy(container, "!engage-asked !post proactive fallback", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked !post proactive fallback", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -867,7 +868,7 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U2" },
     ]);
     await built.directory.replaceChannels([{ channelId: container, name: "disarmed-chan", isPrivate: false }]);
-    await built.app.setChannelPolicy(container, "!engage-asked !post disarmed reply", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked !post disarmed reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -903,7 +904,7 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
       [{ channelId: container, name: "private-chan", isPrivate: true }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
-    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "600.1", authorId: "U1", authorName: "Alice", text: "!post private reply", createdAt: 1 },
     ]);
@@ -923,7 +924,7 @@ test("a solicited wake whose author isn't in the directory degrades to the proac
   built.runtime.start();
   try {
     const container = "C-unknown-asker";
-    await built.app.setChannelPolicy(container, "!engage-asked !post fallback reply", "U-admin");
+    await setChannelInstructions(built, container, "!engage-asked !post fallback reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -949,7 +950,7 @@ test("a solicited wake whose author isn't in the directory degrades to the proac
 test("a second ambient wake while the first worker is LIVE steers into it instead of forking a sibling reply", async () => {
   const built = freshApp();
   const container = "C-coalesce";
-  await built.app.setChannelPolicy(container, "!engage !post tag the team", "U-admin");
+  await setChannelInstructions(built, container, "!engage !post tag the team", "U-admin");
 
   await built.app.ingestSurfaceEvents([
     { container, ts: "100.1", authorId: "U1", text: "events site is down", createdAt: 1 },

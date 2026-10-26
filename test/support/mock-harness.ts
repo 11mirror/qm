@@ -52,8 +52,8 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!search ",
   "!read_members",
   "!read_file ",
-  "!set_standing_order ",
-  "!get_standing_order",
+  "!set_instructions ",
+  "!get_instructions",
 ];
 
 function streamChunks(text: string): string[] {
@@ -764,19 +764,17 @@ export function createMockHarness(): Harness {
         } else {
           reply = `file-pointer: ${r.sizeBytes ?? 0}B ${r.contentType ?? "binary"}`;
         }
-      } else if (command0.startsWith("!set_standing_order ")) {
-        const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
-        const r = await turn.tools.setStandingOrder(orders);
-        await turn.emit({ kind: "ToolResult", tool: "set_standing_order", body: { ok: r.ok } });
+      } else if (command0.startsWith("!set_instructions ")) {
+        const text = cmd.slice(cmd.indexOf("!set_instructions ") + "!set_instructions ".length).trim();
+        const r = await turn.tools.instructionsWrite(text);
+        await turn.emit({ kind: "ToolResult", tool: "set_instructions", body: { ok: r.ok } });
         usedTool = true;
-        reply = r.ok ? "standing order set" : `[couldn't set standing order] ${r.message ?? "unavailable"}`;
-      } else if (command0 === "!get_standing_order") {
-        const r = await turn.tools.getStandingOrder();
-        await turn.emit({ kind: "ToolResult", tool: "get_standing_order", body: { ok: r.ok } });
+        reply = r.ok ? "instructions set" : `[couldn't set instructions] ${r.message}`;
+      } else if (command0 === "!get_instructions") {
+        const r = turn.tools.instructionsRead();
+        await turn.emit({ kind: "ToolResult", tool: "get_instructions", body: { ok: !("code" in r) } });
         usedTool = true;
-        reply = r.ok
-          ? `standing order: ${r.orders || "(none)"}`
-          : `[couldn't read standing order] ${r.message ?? "unavailable"}`;
+        reply = "code" in r ? "[couldn't read instructions]" : `instructions: ${r.instructions || "(none)"}`;
       } else if (command0 === "!priorturns") {
         reply = turn.priorTurns?.length
           ? "priorturns:\n" + turn.priorTurns.map((t) => `${t.role}${t.name ? `/${t.name}` : ""}: ${t.text}`).join("\n")

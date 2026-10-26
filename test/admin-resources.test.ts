@@ -487,9 +487,9 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     ).json()) as Record<string, unknown>;
     assert.equal("ambientPolicy" in org, false);
     const empty = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
-      ambientPolicy: { orders: string; bots: object; updatedAt: number };
+      ambientPolicy: { ambientEnabled?: boolean | null; bots: object; updatedAt: number };
     };
-    assert.deepEqual(empty.ambientPolicy, { orders: "", bots: {}, ambientEnabled: null, updatedAt: 0 });
+    assert.deepEqual(empty.ambientPolicy, { bots: {}, ambientEnabled: null, updatedAt: 0 });
 
     const badScope = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/ambient-policy`, {
       method: "PUT",
@@ -500,20 +500,20 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const badMode = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "mute" } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "mute" } } }),
     });
     assert.equal(badMode.status, 400);
     assert.match(((await badMode.json()) as { message: string }).message, /mode must be one of/);
     const badHours = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "rollup", rollupHours: -2 } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "rollup", rollupHours: -2 } } }),
     });
     assert.equal(badHours.status, 400);
     const caseDup = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "action" }, github: { mode: "ignore" } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "action" }, github: { mode: "ignore" } } }),
     });
     assert.equal(caseDup.status, 400);
     assert.match(((await caseDup.json()) as { message: string }).message, /duplicate bot/i);
@@ -521,14 +521,14 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const put = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: '{"orders":"flag anything about the Q3 launch","bots":{"GitHub":{"mode":"rollup","rollupHours":24},"Linear":{"mode":"ignore"},"__proto__":{"mode":"ignore"}}}',
+      body: '{"ambientEnabled":true,"bots":{"GitHub":{"mode":"rollup","rollupHours":24},"Linear":{"mode":"ignore"},"__proto__":{"mode":"ignore"}}}',
     });
     assert.equal(put.status, 200);
     const got = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
-      ambientPolicy: { orders: string; bots: object; updatedAt: number };
+      ambientPolicy: { ambientEnabled?: boolean | null; bots: object; updatedAt: number };
     };
     const stored = await srv.built.channelPolicy.get("C1");
-    assert.equal(got.ambientPolicy.orders, "flag anything about the Q3 launch");
+    assert.equal(got.ambientPolicy.ambientEnabled, true);
     assert.deepEqual(Object.keys(got.ambientPolicy.bots).sort(), ["GitHub", "Linear", "__proto__"]);
     assert.equal(got.ambientPolicy.updatedAt, stored?.updatedAt);
     assert.equal(stored?.setBy, "admin-alice");
@@ -538,17 +538,17 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const stale = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "overwrite", bots: {}, baseUpdatedAt: 1 }),
+      body: JSON.stringify({ ambientEnabled: false, bots: {}, baseUpdatedAt: 1 }),
     });
     assert.equal(stale.status, 409);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "flag anything about the Q3 launch");
+    assert.equal((await srv.built.channelPolicy.get("C1"))?.ambientEnabled, true);
     const fresh = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "updated", bots: {}, baseUpdatedAt: stored?.updatedAt }),
+      body: JSON.stringify({ ambientEnabled: false, bots: {}, baseUpdatedAt: stored?.updatedAt }),
     });
     assert.equal(fresh.status, 200);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "updated");
+    assert.equal((await srv.built.channelPolicy.get("C1"))?.ambientEnabled, false);
   } finally {
     await srv.close();
   }
