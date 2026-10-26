@@ -117,7 +117,8 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createInboxLedger, INBOX_ITEM_SOURCE_MIGRATION, type InboxEventSink } from "./inbox/ledger.ts";

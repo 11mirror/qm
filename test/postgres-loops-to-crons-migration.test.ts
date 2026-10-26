@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { LOOPS_TO_CRONS_MIGRATION } from "../src/cron/cron-store.ts";
+import { LOOPS_TO_CRONS_MIGRATION } from "../src/cron/migrations.ts";
 import { pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
 import { applyTenancy } from "../src/persistence/tenancy.ts";
 
