@@ -73,13 +73,7 @@ async function resolveCredential(ctx: ApiCtx): Promise<Access | Denial> {
   if (!(await activePrincipal(ctx.deps, principal))) return deny(403, "forbidden");
   const personal = scopeId("personal", principal);
   const cap = ctx.capability;
-  if (
-    cap &&
-    (cap.ownerConnections !== true ||
-      cap.deployment ||
-      cap.botActor ||
-      (cap.scopeId !== personal && !livePersonCapability(cap)))
-  )
+  if (cap && (cap.ownerConnections !== true || cap.deployment || cap.botActor))
     return deny(
       403,
       "private_connections",
