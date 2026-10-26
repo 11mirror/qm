@@ -10,6 +10,7 @@ import { recordSurfacePosts } from "./support/recording-outbound.ts";
 import type { OutboundPost } from "../src/surfaces/outbound.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
+import { retryClock } from "./support/retry-clock.ts";
 import { runNowSettled } from "./support/settle.ts";
 import type { Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
@@ -373,7 +374,7 @@ test(
   "an inline turn retries its failed predecessor before executing without a background worker",
   { timeout: 10_000 },
   async (t) => {
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const backoff = retryClock(t);
     const built = freshApp();
     const { app, keychain } = built;
     assert.ok(keychain);
@@ -396,7 +397,7 @@ test(
     };
 
     await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
-    t.mock.timers.tick(18_000);
+    backoff();
 
     const res = await app.turn(dm("hi again"));
     assert.equal(res.status, "ok", res.reason);
@@ -405,11 +406,13 @@ test(
   },
 );
 
-test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
+test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async (t) => {
+  const backoff = retryClock(t);
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
 
   await assert.rejects(app.turn(req), /boom/);
+  backoff();
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -424,11 +427,13 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
   );
 });
 
-test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async () => {
+test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async (t) => {
+  const backoff = retryClock(t);
   const { app } = freshApp();
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
 
   await assert.rejects(app.turn(req), /boom/);
+  backoff();
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -4001,14 +4006,17 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
 
-test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
+test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async (t) => {
+  const backoff = retryClock(t);
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
   const req = dm("!boom-always", { idempotencyKey: "exhaust-1" });
   await assert.rejects(app.turn(req), /boom/);
+  backoff();
   await assert.rejects(app.turn(req), /boom/);
+  backoff();
   let found = await app.getSession(t1.sessionId!);
   assert.equal(
     found!.items.filter((e) => turnFailure(e)).length,

@@ -6,6 +6,7 @@ import { recordSteerIntake } from "../src/harness/harness-shared.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { retryClock } from "./support/retry-clock.ts";
 import { isUserMessage } from "../src/sessions/items.ts";
 
 let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
@@ -26,7 +27,8 @@ mock.module("./support/mock-harness.ts", {
 const { buildApp } = await import("./support/build-app.ts");
 
 for (const mode of ["retry", "handoff"] as const) {
-  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async () => {
+  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async (t) => {
+    const backoff = retryClock(t);
     const built = buildApp(testConfig());
     const request: TurnRequest = {
       surface: "test",
@@ -35,7 +37,10 @@ for (const mode of ["retry", "handoff"] as const) {
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",
     };
-    if (mode === "retry") await assert.rejects(built.app.turn(request), /boom/);
+    if (mode === "retry") {
+      await assert.rejects(built.app.turn(request), /boom/);
+      backoff();
+    }
     let runId: string | undefined;
     exercise = async (turn) => {
       runId = turn.runId;

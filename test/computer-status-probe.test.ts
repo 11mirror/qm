@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -73,7 +74,8 @@ test("computerStatus never provisions when the backend reports no machine", asyn
   assert.equal(provisions, 0, "a status check must not cold-start a box");
 });
 
-test("a probe that hangs on the real exec path reports NOT answering within the probe bound", async () => {
+test("a probe that hangs on the real exec path reports NOT answering within the probe bound", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const ctx = ctxFor(
     {
       computerStatus: async () => healthy,
@@ -81,14 +83,16 @@ test("a probe that hangs on the real exec path reports NOT answering within the 
     },
     async () => handle,
   );
-  const started = Date.now();
-  const status = await ctx.computerStatus();
+  const pending = ctx.computerStatus();
+  await setImmediate();
+  t.mock.timers.tick(20_000);
+  const status = await pending;
   assert.equal(status.guestResponsive, false);
   assert.match(status.probeError ?? "", /timed out/);
-  assert.ok(Date.now() - started < 30_000);
 });
 
-test("status for an explicit sandbox probes its exec path instead of trusting the provider", async () => {
+test("status for an explicit sandbox probes its exec path instead of trusting the provider", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const scope = scopeId("channel", "C1");
   const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
   const access = { resource: { id: "sb1", ownerScopeId: scope }, crossScope: false } as never;
@@ -110,7 +114,10 @@ test("status for an explicit sandbox probes its exec path instead of trusting th
     acl: {} as never,
     createdBy: "U1",
   });
-  const status = await ctx.computerStatus("sb1");
+  const pending = ctx.computerStatus("sb1");
+  await setImmediate();
+  t.mock.timers.tick(20_000);
+  const status = await pending;
   assert.equal(status.guestResponsive, false);
   assert.match(status.probeError ?? "", /timed out/);
 });
