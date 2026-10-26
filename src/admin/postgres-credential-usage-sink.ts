@@ -8,13 +8,13 @@ import {
 import { tenantCols } from "../persistence/pg-pool.ts";
 
 const COLUMNS: readonly EventColumn<keyof CredentialUsageSample & string>[] = [
-  ["ts", "ts", "BIGINT", "number", true],
-  ["slug", "slug", "TEXT", "string", true],
-  ["host", "host", "TEXT", "string", true],
-  ["status", "status", "TEXT", "string", true],
-  ["upstream_status", "upstreamStatus", "INT", "number"],
-  ["scope_label", "scopeLabel", "TEXT", "string", true],
-  ["principal_id", "principalId", "TEXT", "string", true],
+  ["ts", "ts", "number", true],
+  ["slug", "slug", "string", true],
+  ["host", "host", "string", true],
+  ["status", "status", "string", true],
+  ["upstream_status", "upstreamStatus", "number"],
+  ["scope_label", "scopeLabel", "string", true],
+  ["principal_id", "principalId", "string", true],
 ];
 
 export function createPostgresCredentialUsageSink(connectionString: string): CredentialUsageSink {
@@ -22,24 +22,6 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
     connectionString,
     table: "credential_usage",
     columns: COLUMNS,
-
-    schema: {
-      expectedChecksum: "42188c2f50734398496ddd5a47a9ec3c15a507059c713a4a6ced0b0b81d908eb",
-      followUps: [
-        {
-          id: "admin/scoped-events/credential_usage/0002",
-          statements: [
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS credential_usage_by_slug_ts_id ON credential_usage(slug, ts DESC, id DESC)",
-          ],
-        },
-        {
-          id: "admin/scoped-events/credential_usage/0003",
-          statements: [
-            "CREATE TABLE IF NOT EXISTS credential_daily_calls(slug TEXT NOT NULL, day BIGINT NOT NULL, sent INT NOT NULL, PRIMARY KEY (slug, day))",
-          ],
-        },
-      ],
-    },
     defaultLimit: CREDENTIAL_USAGE_WINDOW,
     equalityFilters: { scopeId: "scope_label", slug: "slug" },
     persistErrorMessage: "[credential-usage] failed to persist broker call:",

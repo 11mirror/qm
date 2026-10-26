@@ -2,19 +2,22 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { tenantFor, withTenant } from "../src/tenant.ts";
+import { truncateTables } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_groups, directory_group_members, directory_sync, directory_meta CASCADE",
-  );
-  await p.end();
+  await truncateTables(URL, [
+    "directory_members",
+    "directory_channels",
+    "directory_channel_members",
+    "directory_groups",
+    "directory_group_members",
+    "directory_sync",
+    "directory_meta",
+  ]);
 });
 
 const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {

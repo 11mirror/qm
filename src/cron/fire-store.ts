@@ -131,32 +131,7 @@ const RETIRE_LEGACY_FIRE_HISTORY = {
 };
 
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(
-    connectionString,
-    [
-      {
-        id: "cron/fires/0001",
-        statements: [
-          `CREATE TABLE IF NOT EXISTS cron_fires(
-        cron_id TEXT NOT NULL,
-        fire_key TEXT NOT NULL,
-        thread_ref TEXT NOT NULL,
-        session_id TEXT,
-        fired_at BIGINT NOT NULL,
-        scheduled_at BIGINT,
-        ended_at BIGINT,
-        status TEXT,
-        note TEXT,
-        reply TEXT,
-        PRIMARY KEY (cron_id, fire_key)
-      )`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
-        ],
-      },
-      RETIRE_LEGACY_FIRE_HISTORY,
-    ],
-  );
+  const { q, query, pool } = createPgPool(connectionString, [RETIRE_LEGACY_FIRE_HISTORY]);
 
   return {
     async record(cronId, entry) {

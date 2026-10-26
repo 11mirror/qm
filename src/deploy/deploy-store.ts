@@ -144,22 +144,10 @@ interface DeployAccess {
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  const migration = {
-    id: "deploy/access/0001",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `CREATE TABLE IF NOT EXISTS deployment_access (
-        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
-        last_access_at BIGINT NOT NULL
-      )`,
-    ],
-  };
-  pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
-        await pg.migrate(migration);
         await pg
           .q(
             `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}

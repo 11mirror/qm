@@ -30,7 +30,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./item-search.ts";
-import { SESSION_STORE_MAINTENANCE, SESSION_STORE_MIGRATIONS } from "./postgres-session-migrations.ts";
+import { SESSION_STORE_MIGRATIONS } from "./postgres-session-migrations.ts";
 import { TENANT, tsOf, userTurn, withinParticipantWindow, participantWindowBounds } from "./postgres-session-sql.ts";
 import { createSessionReports } from "./postgres-session-reports.ts";
 import { createLlmCapture } from "./postgres-llm-capture.ts";
@@ -292,7 +292,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${alias}.origin NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
 
-  const db = createPgPool(connectionString, SESSION_STORE_MIGRATIONS, SESSION_STORE_MAINTENANCE);
+  const db = createPgPool(connectionString, SESSION_STORE_MIGRATIONS);
   const { pool, q } = db;
   const reports = createSessionReports(db, now);
   const llmCapture = createLlmCapture(db, now);

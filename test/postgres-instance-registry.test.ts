@@ -3,17 +3,14 @@ import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { settle } from "./support/settle.ts";
+import { truncateTables } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS instance_heartbeats CASCADE");
-  await p.end();
+  await truncateTables(URL, ["instance_heartbeats"]);
 });
 
 test(

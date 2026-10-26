@@ -17,9 +17,9 @@ beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifact_deletions CASCADE");
+  await p.query(
+    "DO $$ BEGIN IF to_regclass('file_artifacts') IS NOT NULL THEN TRUNCATE file_artifacts, file_artifact_deletions; END IF; END $$",
+  );
   await p.end();
 });
 

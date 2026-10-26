@@ -14,7 +14,7 @@ test(
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    const pg = createPgPool(url.toString());
+    const pg = createPgPool(url.toString(), []);
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];

@@ -12,19 +12,8 @@ function rowToGrant(r: Record<string, unknown>): AdminGrant {
   };
 }
 
-const SCHEMA_SQL = [
-  `CREATE TABLE IF NOT EXISTS admin_grants(
-    principal_id TEXT   NOT NULL,
-    scope_id     TEXT   NOT NULL,
-    role         TEXT   NOT NULL,
-    granted_by   TEXT,
-    created_at   BIGINT,
-    PRIMARY KEY (principal_id, scope_id, role)
-  )`,
-];
-
 export function createPostgresAdminGrantStore(connectionString: string): AdminGrantPersistence {
-  const pg = createPgPool(connectionString, "admin/grants/0001", SCHEMA_SQL);
+  const pg = createPgPool(connectionString, []);
 
   return {
     async all() {

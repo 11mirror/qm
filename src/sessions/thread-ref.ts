@@ -8,19 +8,12 @@ export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "l
 
 /** Thread refs carry their origin in one of two live shapes: `agent:main:<origin>:<id>` for a background
  * thread that persists across runs, and `<origin>:<id>[:…]` for one fire (a cron slot, a webhook delivery,
- * a swarm). Both are parsed here, in TypeScript and as SQL, and nowhere else. */
-export const agentOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
-export const fireOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
-export const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
-const AGENT_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
-const FIRE_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
-export const threadRefCronIdExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${AGENT_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${FIRE_CRON_ID_PATTERN}'))`;
-
-const AGENT_ORIGIN_RE = new RegExp(agentOriginPattern(ORIGIN_ALTERNATION));
-const FIRE_ORIGIN_RE = new RegExp(fireOriginPattern(ORIGIN_ALTERNATION));
-const AGENT_CRON_ID_RE = new RegExp(AGENT_CRON_ID_PATTERN);
-const FIRE_CRON_ID_RE = new RegExp(FIRE_CRON_ID_PATTERN);
+ * a swarm). Both are parsed here and nowhere else. */
+const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
+const AGENT_ORIGIN_RE = new RegExp(`^agent:main:${ORIGIN_ALTERNATION}:[^:]+$`);
+const FIRE_ORIGIN_RE = new RegExp(`^${ORIGIN_ALTERNATION}:[^:]+(:.+)?$`);
+const AGENT_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
+const FIRE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
 
 export function sessionOrigin(threadRef: string | null | undefined): SessionOrigin {
   const match = AGENT_ORIGIN_RE.exec(threadRef ?? "") ?? FIRE_ORIGIN_RE.exec(threadRef ?? "");

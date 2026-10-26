@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const view = () => ({
@@ -21,7 +22,9 @@ test("pg page-view log stores one row per view with clipped request fields", { s
   try {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
-    await admin.query("CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    const schema = createPgPool(URL!, []);
+    await schema.pool();
+    await schema.close();
     await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
     const log = createPostgresAppPageViewLog(URL!);
     await log.record({

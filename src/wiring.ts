@@ -118,8 +118,7 @@ import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
-import { DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
-import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import { LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createInboxLedger, INBOX_ITEM_SOURCE_MIGRATION, type InboxEventSink } from "./inbox/ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
@@ -1025,15 +1024,6 @@ export function buildApp(
     ...deriveConnectorKey(connectorSecretKey, "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
-      `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
-    ],
-  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
@@ -1618,33 +1608,13 @@ export function buildApp(
       await inboxItems.deleteByCron(id);
     },
   };
-  pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
   pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
-  pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/turn_wall_clock_configs/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS turn_wall_clock_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/pinned_skills/0002-drop",
-    statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
-  });
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/model_registry/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS model_registry",
       "DELETE FROM durable_map_versions WHERE tbl = 'model_registry'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/internal_member_overrides/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS internal_member_overrides",
-      "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
     ],
   });
   pgArtifactMap.pool.registerMigration({
@@ -1667,24 +1637,7 @@ export function buildApp(
       "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'`,
-      `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
-    ],
-  });
   const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
-    ],
-  });
   const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
     surfaces: chatSurfaces,

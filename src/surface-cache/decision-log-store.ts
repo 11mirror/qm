@@ -23,8 +23,6 @@ type ColumnType = "text" | "int";
 
 export interface DecisionLogSpec<Outcome extends string> {
   table: string;
-  migrationId: string;
-  migrations: string[];
   /** Column that list/counts narrow by (a channel or a container). */
   scopeColumn: string;
   /** Column holding the outcome counted by `counts`. */
@@ -40,7 +38,7 @@ export function createDecisionLogStore<Row extends { createdAt: number }, Outcom
   connectionString: string,
   spec: DecisionLogSpec<Outcome>,
 ): DecisionLogStore<Row, Outcome, Summary> {
-  const { q, close } = createPgPool(connectionString, spec.migrationId, spec.migrations);
+  const { q, close } = createPgPool(connectionString, []);
   const { table, scopeColumn, outcomeColumn } = spec;
   const listColumns = spec.columns.filter(([, key]) => !spec.omitFromList.includes(key)).map(([column]) => column);
   const toRow = (r: Record<string, unknown>): Row => {

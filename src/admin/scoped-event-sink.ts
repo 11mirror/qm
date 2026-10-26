@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
 export interface ScopedEvent {
@@ -84,7 +84,7 @@ export function createTimestampedEventSink<E extends ScopedEvent & { ts: number 
 
 type ColumnKind = "number" | "string" | "boolean";
 
-export type EventColumn<F extends string = string> = readonly [string, F, string, ColumnKind, boolean?];
+export type EventColumn<F extends string = string> = readonly [string, F, ColumnKind, boolean?];
 
 const CONVERT: Record<ColumnKind, (v: unknown) => unknown> = {
   number: Number,
@@ -92,19 +92,10 @@ const CONVERT: Record<ColumnKind, (v: unknown) => unknown> = {
   boolean: Boolean,
 };
 
-interface PostgresEventSinkSchema<F extends string = string> {
-  initialColumns?: readonly EventColumn<F>[];
-  expectedChecksum?: string;
-  followUps?: readonly PgMigrationDefinition[];
-}
-
 export interface PostgresEventSinkConfig<E> {
   connectionString: string;
   table: string;
-
   columns: readonly EventColumn<keyof E & string>[];
-  extraSchemaStatements?: string[];
-  schema?: PostgresEventSinkSchema<keyof E & string>;
   defaultLimit: number;
   equalityFilters: Record<string, string>;
   persistErrorMessage: string;
@@ -118,46 +109,8 @@ export interface PostgresEventSink<E> {
   count(opts?: object): Promise<number>;
 }
 
-function standardIndexes(table: string): string[] {
-  return [
-    `CREATE INDEX IF NOT EXISTS ${table}_by_ts ON ${table}(ts DESC)`,
-    `CREATE INDEX IF NOT EXISTS ${table}_by_scope_ts ON ${table}(scope_label, ts DESC)`,
-  ];
-}
-
-export function scopedEventMigrationId(table: string, ordinal: number): string {
-  return `admin/scoped-events/${table}/${String(ordinal).padStart(4, "0")}`;
-}
-
 export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): PostgresEventSink<E> {
-  const initialColumns = cfg.schema?.initialColumns ?? cfg.columns;
-  const followUps = cfg.schema?.followUps ?? [];
-  const createTable = [
-    `CREATE TABLE IF NOT EXISTS ${cfg.table}(`,
-    [
-      "  id BIGSERIAL PRIMARY KEY",
-      ...initialColumns.map(([db, , sqlType, , required]) => `  ${db} ${sqlType}${required ? " NOT NULL" : ""}`),
-    ].join(",\n"),
-    ")",
-  ].join("\n");
-  const initialDbColumns = new Set(initialColumns.map(([db]) => db));
-  const followUpSql = followUps.flatMap((migration) => migration.statements).join("\n");
-  for (const [db] of cfg.columns) {
-    if (initialDbColumns.has(db)) continue;
-    if (!new RegExp(`\\b${db}\\b`).test(followUpSql)) {
-      throw new Error(
-        `scoped-event-sink: column ${cfg.table}.${db} is not part of the released 0001 schema and no follow-up migration adds it`,
-      );
-    }
-  }
-  const { q } = createPgPool(cfg.connectionString, [
-    {
-      id: scopedEventMigrationId(cfg.table, 1),
-      statements: [createTable, ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table))],
-      ...(cfg.schema?.expectedChecksum !== undefined ? { expectedChecksum: cfg.schema.expectedChecksum } : {}),
-    },
-    ...followUps,
-  ]);
+  const { q } = createPgPool(cfg.connectionString, []);
 
   const dbCols = cfg.columns.map(([db]) => db).join(", ");
   const insertSql = `INSERT INTO ${cfg.table}(${dbCols}) VALUES (${cfg.columns.map((_, i) => `$${i + 1}`).join(",")})`;
@@ -166,7 +119,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
 
   const toEvent = (r: Record<string, unknown>): E => {
     const out: Record<string, unknown> = {};
-    for (const [db, js, , kind, required] of cfg.columns) {
+    for (const [db, js, kind, required] of cfg.columns) {
       if (required || r[db] != null) out[js] = CONVERT[kind](r[db]);
     }
     return out as E;

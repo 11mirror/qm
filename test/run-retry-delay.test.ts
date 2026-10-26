@@ -217,7 +217,7 @@ test("memory: one claim uses one clock snapshot across the retry boundary", asyn
 });
 
 test(
-  "postgres: retry migration bounds lock waiting and can be retried",
+  "postgres: a run migration bounds lock waiting and can be retried",
   { skip: !process.env.DATABASE_URL },
   async () => {
     const pg = (await import("pg")).default;
@@ -234,7 +234,7 @@ test(
       const migrations = registeredPgMigrations(url.toString());
       await applyPgMigrations(
         pool,
-        migrations.filter((m) => m.id !== "runs/store/0004"),
+        migrations.filter((m) => !m.id.startsWith("runs/store/0011-") && !m.id.startsWith("runs/store/0012-")),
       );
       await holder.query("BEGIN");
       await holder.query("SELECT * FROM runs");
@@ -243,7 +243,7 @@ test(
       await holder.query("ROLLBACK");
       await applyPgMigrations(pool, migrations);
       await applyPgMigrations(pool, migrations);
-      await pool.query("SELECT retry_after FROM runs");
+      await pool.query("SELECT engine FROM runs");
     } finally {
       await holder.query("ROLLBACK");
       holder.release();

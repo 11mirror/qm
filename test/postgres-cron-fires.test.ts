@@ -12,8 +12,13 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS cron_fires, fire_test_crons, durable_map_versions CASCADE");
+  await p.query("DROP TABLE IF EXISTS fire_test_crons");
+  await p.query(
+    "DO $$ BEGIN IF to_regclass('qm_schema_migrations') IS NOT NULL THEN DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/fire\\_test\\_crons/%'; END IF; END $$",
+  );
+  await p.query(
+    "DO $$ BEGIN IF to_regclass('cron_fires') IS NOT NULL THEN TRUNCATE cron_fires, durable_map_versions; END IF; END $$",
+  );
   await p.end();
 });
 
@@ -220,4 +225,3 @@ test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and ru
     "k3 outlived the cutoff; nothing else qualifies",
   );
 });
-

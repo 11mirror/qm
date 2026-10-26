@@ -47,8 +47,12 @@ const rows = async (pool: pg.Pool, table: string) =>
 
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
   await withDatabase(async (url, admin) => {
+    await migrate(url);
+    await admin.query(
+      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'durable-map/swarms/0002-drop')",
+    );
     for (const table of JSON_TABLES)
-      await admin.query(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
+      await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     const insert = (table: string, id: string, json: unknown) =>
       admin.query(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, JSON.stringify(json)]);
     await insert("base_model_configs", "org:o", {
