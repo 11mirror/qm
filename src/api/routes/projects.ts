@@ -2,6 +2,20 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
+type ProjectMutation = Awaited<ReturnType<ApiCtx["app"]["addProjectMember"]>>;
+
+const MUTATION_ERRORS: Record<string, [number, string]> = {
+  invalid_name: [400, "project name required"],
+  invalid_channel: [400, "channel not found among the channels you can see"],
+  channel_in_use: [409, "that channel already has its own workspace — it can't also be a project's home channel"],
+  invalid_member: [400, "member must be an internal directory member and cannot be the project owner"],
+};
+
+function bodyText(ctx: ApiCtx, key: string): string {
+  const value = isObj(ctx.body) ? ctx.body[key] : undefined;
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
   if (requested && requested !== ctx.capability.actorId) {
@@ -12,100 +26,63 @@ function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
 }
 
 async function listProjects(ctx: ApiCtx): Promise<void> {
-  const requested = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, (ctx.url.searchParams.get("principalId") ?? "").trim());
   if (principalId === null) return;
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   return sendJson(ctx.res, 200, { projects: await ctx.app.listProjects(principalId) });
 }
 
 async function createProject(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
   if (principalId === null) return;
-  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const name = bodyText(ctx, "name");
   if (!principalId || !name)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and name required" });
   const project = await ctx.app.createProject(principalId, name);
   return project ? sendJson(ctx.res, 201, { project }) : sendJson(ctx.res, 403, { error: "forbidden" });
 }
 
-function mutationResponse(ctx: ApiCtx, result: Awaited<ReturnType<ApiCtx["app"]["addProjectMember"]>>): void {
-  if (result.status === "ok") return sendJson(ctx.res, 200, { project: result.project });
-  if (result.status === "not_found") return sendJson(ctx.res, 404, { error: "not_found" });
-  if (result.status === "forbidden")
-    return sendJson(ctx.res, ctx.capability ? 404 : 403, { error: ctx.capability ? "not_found" : "forbidden" });
-  if (result.status === "invalid_name")
-    return sendJson(ctx.res, 400, { error: "invalid_name", message: "project name required" });
-  if (result.status === "invalid_channel")
-    return sendJson(ctx.res, 400, {
-      error: "invalid_channel",
-      message: "channel not found among the channels you can see",
-    });
-  if (result.status === "channel_in_use")
-    return sendJson(ctx.res, 409, {
-      error: "channel_in_use",
-      message: "that channel already has its own workspace — it can't also be a project's home channel",
-    });
-  return sendJson(ctx.res, 400, {
-    error: "invalid_member",
-    message: "member must be an internal directory member and cannot be the project owner",
-  });
+function projectMutation(
+  field: string | null,
+  call: (ctx: ApiCtx, principalId: string, value: string) => Promise<ProjectMutation>,
+  read: (ctx: ApiCtx) => string = (ctx) => (field ? bodyText(ctx, field) : ""),
+): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
+    if (principalId === null) return;
+    const value = read(ctx);
+    if (!principalId || (field && !value))
+      return sendJson(ctx.res, 400, {
+        error: "bad_request",
+        message: field ? `principalId and ${field} required` : "principalId required",
+      });
+    const result = await call(ctx, principalId, value);
+    if (result.status === "ok") return sendJson(ctx.res, 200, { project: result.project });
+    if (result.status === "not_found") return sendJson(ctx.res, 404, { error: "not_found" });
+    if (result.status === "forbidden")
+      return sendJson(ctx.res, ctx.capability ? 404 : 403, { error: ctx.capability ? "not_found" : "forbidden" });
+    const [status, message] = MUTATION_ERRORS[result.status]!;
+    return sendJson(ctx.res, status, { error: result.status, message });
+  };
 }
 
-async function addProjectMember(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
-  if (principalId === null) return;
-  const memberId = typeof body.memberId === "string" ? body.memberId.trim() : "";
-  if (!principalId || !memberId)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and memberId required" });
-  return mutationResponse(ctx, await ctx.app.addProjectMember(ctx.params.id!, principalId, memberId));
-}
-
-async function renameProject(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
-  if (principalId === null) return;
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  if (!principalId || !name)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and name required" });
-  return mutationResponse(ctx, await ctx.app.renameProject(ctx.params.id!, principalId, name));
-}
-
-async function removeProjectMember(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
-  if (principalId === null) return;
-  const memberId = ctx.params.memberId?.trim() ?? "";
-  if (!principalId || !memberId)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and memberId required" });
-  return mutationResponse(ctx, await ctx.app.removeProjectMember(ctx.params.id!, principalId, memberId));
-}
-
-async function setProjectSlackChannel(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
-  if (principalId === null) return;
-  const channel = typeof body.channel === "string" ? body.channel.trim() : "";
-  if (!principalId || !channel)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and channel required" });
-  return mutationResponse(ctx, await ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, channel));
-}
-
-async function clearProjectSlackChannel(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
-  if (principalId === null) return;
-  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  return mutationResponse(ctx, await ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, null));
-}
+const renameProject = projectMutation("name", (ctx, principalId, name) =>
+  ctx.app.renameProject(ctx.params.id!, principalId, name),
+);
+const addProjectMember = projectMutation("memberId", (ctx, principalId, memberId) =>
+  ctx.app.addProjectMember(ctx.params.id!, principalId, memberId),
+);
+const removeProjectMember = projectMutation(
+  "memberId",
+  (ctx, principalId, memberId) => ctx.app.removeProjectMember(ctx.params.id!, principalId, memberId),
+  (ctx) => ctx.params.memberId?.trim() ?? "",
+);
+const setProjectSlackChannel = projectMutation("channel", (ctx, principalId, channel) =>
+  ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, channel),
+);
+const clearProjectSlackChannel = projectMutation(null, (ctx, principalId) =>
+  ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, null),
+);
 
 export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/projects", actor: "query.principalId", auth: "either", handle: listProjects },

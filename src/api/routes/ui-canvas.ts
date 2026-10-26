@@ -11,7 +11,7 @@ import {
   type UiCanvas,
   type UiCanvasPatch,
 } from "../../surfaces/ui-canvas.ts";
-import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
+import { uiStateId, UI_STATE_MAX_BYTES, type UiStateStore } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
@@ -40,7 +40,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
     return null;
   }
-  if ((await deps.featureFlags?.enabled("ui_canvas", scopeId("personal", cap.actorId))) !== true) {
+  if (!(await canvasEnabled(ctx, cap.actorId))) {
     sendJson(res, 403, {
       error: "feature_disabled",
       message: "The ui_canvas feature flag is off for this person. An org admin can enable it under feature flags.",
@@ -93,23 +93,22 @@ function canvasSummary(canvas: UiCanvas | null): Record<string, unknown> | null 
   };
 }
 
-function flag(ctx: ApiCtx, name: string): boolean {
-  const b = isObj(ctx.body) ? ctx.body : {};
-  const q = ctx.url.searchParams.get(name);
-  return b[name] === true || q === "true" || q === "1";
-}
-
 function canvasTarget(ctx: ApiCtx, turn: Pick<UiTurn, "sessionId">): string {
-  return flag(ctx, "alwaysOn") ? ALWAYS_ON_CANVAS : turn.sessionId;
+  const q = ctx.url.searchParams.get("alwaysOn");
+  const alwaysOn = (isObj(ctx.body) && ctx.body.alwaysOn === true) || q === "true" || q === "1";
+  return alwaysOn ? ALWAYS_ON_CANVAS : turn.sessionId;
 }
 
-async function getCanvas(ctx: ApiCtx): Promise<void> {
-  const turn = await liveWebTurn(ctx);
-  if (!turn) return;
-  return sendJson(ctx.res, 200, {
-    canvas: await readUiCanvas(ctx.deps.uiState!, turn.actorId, canvasTarget(ctx, turn)),
-  });
+function withTurn(handle: (ctx: ApiCtx, turn: UiTurn) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const turn = await liveWebTurn(ctx);
+    if (turn) return handle(ctx, turn);
+  };
 }
+
+const getCanvas = withTurn(async (ctx, turn) =>
+  sendJson(ctx.res, 200, { canvas: await readUiCanvas(ctx.deps.uiState!, turn.actorId, canvasTarget(ctx, turn)) }),
+);
 
 function parsePatch(body: unknown): UiCanvasPatch | string {
   const b = isObj(body) ? body : {};
@@ -128,11 +127,9 @@ function parsePatch(body: unknown): UiCanvasPatch | string {
   return patch;
 }
 
-async function applyCanvas(
-  ctx: ApiCtx,
-  turn: Pick<UiTurn, "actorId" | "sessionId" | "threadRef">,
-  patch: UiCanvasPatch | null,
-): Promise<void> {
+const writeCanvas = withTurn(async (ctx, turn) => {
+  const patch = ctx.method === "DELETE" ? null : parsePatch(ctx.body);
+  if (typeof patch === "string") return sendJson(ctx.res, 400, { error: "bad_request", message: patch });
   const target = canvasTarget(ctx, turn);
   let canvas: UiCanvas | null;
   try {
@@ -155,26 +152,10 @@ async function applyCanvas(
   });
   signalBrowser(ctx, turn, { kind: "canvas" });
   return sendJson(ctx.res, 200, { canvas: canvasSummary(canvas) });
-}
+});
 
-async function postCanvas(ctx: ApiCtx): Promise<void> {
-  const turn = await liveWebTurn(ctx);
-  if (!turn) return;
-  const patch = parsePatch(ctx.body);
-  if (typeof patch === "string") return sendJson(ctx.res, 400, { error: "bad_request", message: patch });
-  return applyCanvas(ctx, turn, patch);
-}
-
-async function deleteCanvas(ctx: ApiCtx): Promise<void> {
-  const turn = await liveWebTurn(ctx);
-  if (!turn) return;
-  return applyCanvas(ctx, turn, null);
-}
-
-async function observe(ctx: ApiCtx): Promise<void> {
+const observe = withTurn(async (ctx, turn) => {
   const { res, deps, body } = ctx;
-  const turn = await liveWebTurn(ctx);
-  if (!turn) return;
   if (!turn.personal) {
     return sendJson(res, 403, {
       error: "not_private",
@@ -216,7 +197,7 @@ async function observe(ctx: ApiCtx): Promise<void> {
     });
   }
   return sendJson(res, 200, { snapshot: outcome.structured ?? null });
-}
+});
 
 async function observeResult(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params } = ctx;
@@ -242,18 +223,23 @@ async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean>
   return (await ctx.deps.featureFlags?.enabled("ui_canvas", scopeId("personal", principalId))) === true;
 }
 
-async function isCanvasTarget(ctx: ApiCtx, target: string): Promise<boolean> {
-  return target === ALWAYS_ON_CANVAS || Boolean(await ctx.deps.sessions?.get(target));
+async function userCanvasStore(ctx: ApiCtx, principalId: string): Promise<UiStateStore | null> {
+  const sessionId = ctx.params.sessionId!;
+  if (!principalId || (sessionId !== ALWAYS_ON_CANVAS && !(await ctx.deps.sessions?.get(sessionId)))) {
+    sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    return null;
+  }
+  if (ctx.deps.uiState && (await canvasEnabled(ctx, principalId))) return ctx.deps.uiState;
+  sendJson(ctx.res, 404, { error: "not_found" });
+  return null;
 }
 
 async function userCanvasContent(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, params } = ctx;
-  const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-  if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
-  const canvas = await readUiCanvas(deps.uiState, principalId, params.sessionId!);
-  return canvas ? sendJson(res, 200, { canvas }) : sendJson(res, 404, { error: "not_found" });
+  const principalId = ctx.url.searchParams.get("principalId") ?? "";
+  const store = await userCanvasStore(ctx, principalId);
+  if (!store) return;
+  const canvas = await readUiCanvas(store, principalId, ctx.params.sessionId!);
+  return canvas ? sendJson(ctx.res, 200, { canvas }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
 async function userCanvas(ctx: ApiCtx): Promise<void> {
@@ -261,13 +247,12 @@ async function userCanvas(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const sessionId = params.sessionId!;
-  if (!principalId || !(await isCanvasTarget(ctx, sessionId)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-  if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
+  const store = await userCanvasStore(ctx, principalId);
+  if (!store) return;
   if (b.dismiss !== true && typeof b.pinned !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "pass dismiss or pinned" });
   const patch = b.dismiss === true ? null : { pinned: b.pinned as boolean };
-  const canvas = await writeUiCanvas(deps.uiState, principalId, sessionId, patch);
+  const canvas = await writeUiCanvas(store, principalId, sessionId, patch);
   if (patch && !canvas) return sendJson(res, 404, { error: "not_found" });
   const session = await deps.sessions?.get(sessionId);
   if (session)
@@ -277,8 +262,8 @@ async function userCanvas(ctx: ApiCtx): Promise<void> {
 
 export const uiCanvasRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/ui/canvas", auth: "either", handle: getCanvas },
-  { method: "POST", path: "/v1/ui/canvas", auth: "either", handle: postCanvas },
-  { method: "DELETE", path: "/v1/ui/canvas", auth: "either", handle: deleteCanvas },
+  { method: "POST", path: "/v1/ui/canvas", auth: "either", handle: writeCanvas },
+  { method: "DELETE", path: "/v1/ui/canvas", auth: "either", handle: writeCanvas },
   { method: "POST", path: "/v1/ui/observe", auth: "either", handle: observe },
   {
     method: "POST",

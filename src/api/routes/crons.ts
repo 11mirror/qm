@@ -31,33 +31,32 @@ function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
   return rest;
 }
 
-async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
+async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cron | null> {
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
-  if (!cron) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId) return cron;
-  if (await canAdministerCron(app, cron, principalId)) return cron;
+  if (cron && (!principalId || (await canAdministerCron(app, cron, principalId)))) return cron;
+  if (cron && read && (await app.listCronsForViewer(principalId!)).visible.some((candidate) => candidate.id === id))
+    return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
 
-async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null> {
-  const { res, app, url } = ctx;
-  const cron = await app.getCron(id);
-  if (!cron) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId || (await canAdministerCron(app, cron, principalId))) return cron;
-  const { visible } = await app.listCronsForViewer(principalId);
-  if (visible.some((candidate) => candidate.id === id)) return cron;
-  sendJson(res, 404, { error: "not_found" });
-  return null;
+const CRON_PATCH_TYPES = {
+  runtime: null,
+  title: "string",
+  action: "string",
+  task: "string",
+  schedule: null,
+  enabled: "boolean",
+  archived: "boolean",
+  unfurlLinks: "boolean",
+  unattendedGrants: null,
+  session: "boolean",
+} as const;
+
+function hasCronPatchFields(b: Record<string, unknown>): boolean {
+  return Object.keys(CRON_PATCH_TYPES).some((key) => b[key] !== undefined);
 }
 
 function isCronPatch(b: unknown): b is {
@@ -73,50 +72,15 @@ function isCronPatch(b: unknown): b is {
   session?: boolean;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
-  if (!hasCronPatchFields(b)) return true;
-  const hasTitle = b.title !== undefined;
-  const hasAction = b.action !== undefined;
-  const hasTask = b.task !== undefined;
-  const hasSchedule = b.schedule !== undefined;
-  const hasEnabled = b.enabled !== undefined;
-  const hasArchived = b.archived !== undefined;
-  const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  const hasUnattendedGrants = b.unattendedGrants !== undefined;
-  if (hasTitle && typeof b.title !== "string") return false;
-  if (hasAction && typeof b.action !== "string") return false;
-  if (hasTask && typeof b.task !== "string") return false;
-  if (hasEnabled && typeof b.enabled !== "boolean") return false;
-  if (hasArchived && typeof b.archived !== "boolean") return false;
-  if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
+  for (const [key, type] of Object.entries(CRON_PATCH_TYPES))
+    if (type && b[key] !== undefined && typeof b[key] !== type) return false;
   if (
-    hasUnattendedGrants &&
+    b.unattendedGrants !== undefined &&
     (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
   )
     return false;
-  if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
-  if (b.session !== undefined && typeof b.session !== "boolean") return false;
-  return true;
+  return b.schedule === undefined || userScheduleFromBody(b.schedule) !== null;
 }
-
-function hasCronPatchFields(b: Record<string, unknown>): boolean {
-  return (
-    b.runtime !== undefined ||
-    b.title !== undefined ||
-    b.action !== undefined ||
-    b.task !== undefined ||
-    b.schedule !== undefined ||
-    b.enabled !== undefined ||
-    b.archived !== undefined ||
-    b.unfurlLinks !== undefined ||
-    b.unattendedGrants !== undefined ||
-    b.session !== undefined
-  );
-}
-
-const CRON_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  already_running: 409,
-};
 
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
@@ -166,7 +130,7 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   const result = await deps.scheduler.runNow(id);
   if (!result.started) {
     const refusal = describeRunNowRefusal(id, result)!;
-    return sendJson(res, CRON_ERROR_STATUS[refusal.error] ?? 400, refusal);
+    return sendJson(res, refusal.error === "already_running" ? 409 : 400, refusal);
   }
   return sendJson(res, 200, { ok: true, fireKey: result.fireKey });
 }
@@ -189,10 +153,10 @@ const CRON_PATCH_BAD_REQUEST =
   "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, pathname, method, body } = ctx;
-  const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
+  const { res, app, url, method, body } = ctx;
+  const id = ctx.params.id!;
   if (method === "GET") {
-    const cron = await gateSourceCronRead(ctx, id);
+    const cron = await gateSourceCron(ctx, id, true);
     if (!cron) return;
     return sendJson(res, 200, { cron: withoutFireLog(cron) });
   }
@@ -263,13 +227,8 @@ export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/crons/:id/disable", auth: "source", handle: disableCron },
     { method: "POST", path: "/v1/crons/:id/run", auth: "source", handle: runCronNow },
     { method: "GET", path: "/v1/crons/:id/runs", auth: "source", handle: cronRuns },
-    {
-      match: (m, p) =>
-        p.startsWith("/v1/crons/") &&
-        !p.slice("/v1/crons/".length).includes("/") &&
-        (m === "GET" || m === "PATCH" || m === "DELETE"),
-      auth: "source",
-      handle: cronById,
-    },
+    { method: "GET", path: "/v1/crons/:id", auth: "source", handle: cronById },
+    { method: "PATCH", path: "/v1/crons/:id", auth: "source", handle: cronById },
+    { method: "DELETE", path: "/v1/crons/:id", auth: "source", handle: cronById },
   ]),
 ];

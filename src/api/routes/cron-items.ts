@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { Cron, InboxItem, InboxPayload } from "../../types.ts";
-import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -36,44 +35,48 @@ export interface InboxServiceDeps {
   lock?: AdvisoryLock;
 }
 
-export function inboxDeps(ctx: ApiCtx): InboxServiceDeps | null {
-  return ctx.deps.inbox ?? null;
-}
-
-interface ActingPrincipal {
-  actorId: string;
-  capability?: CapabilityClaims;
-}
-
-export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
-  if (ctx.capability) return { actorId: ctx.capability.actorId, capability: ctx.capability };
-  if (ctx.actor?.p) return { actorId: ctx.actor.p };
-  const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  if (principalId) return { actorId: principalId };
+export function actingPrincipal(ctx: ApiCtx): string | null {
+  const principalId = ctx.capability?.actorId || ctx.actor?.p || (ctx.url.searchParams.get("principalId") ?? "").trim();
+  if (principalId) return principalId;
   sendJson(ctx.res, 403, { error: "forbidden", message: "inbox routes need an agent capability or a principalId" });
   return null;
+}
+
+export async function inboxLoopsEnabled(ctx: ApiCtx, principalId: string): Promise<boolean> {
+  return (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
+function sendItem(ctx: ApiCtx, item: InboxItem): void {
+  sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
+}
+
+function sendConflict(ctx: ApiCtx, message: string, error = "conflict"): void {
+  sendJson(ctx.res, 409, { error, message });
+}
+
+function sendItemOrConflict(ctx: ApiCtx, item: InboxItem | null, message: string): void {
+  if (item) sendItem(ctx, item);
+  else sendConflict(ctx, message);
 }
 
 export function appCrons(ctx: ApiCtx): Pick<CronStore, "list" | "create"> {
   return { list: () => ctx.app.listCrons(), create: (input) => ctx.app.createCron(input) };
 }
 
-async function loadInboxCron(
-  ctx: ApiCtx,
-): Promise<{ deps: InboxServiceDeps; cron: Cron; acting: ActingPrincipal } | null> {
-  const deps = inboxDeps(ctx);
+async function loadInboxCron(ctx: ApiCtx): Promise<{ deps: InboxServiceDeps; cron: Cron; actorId: string } | null> {
+  const deps = ctx.deps.inbox;
   if (!deps) {
     sendJson(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
     return null;
   }
-  const acting = actingPrincipal(ctx);
-  if (!acting) return null;
+  const actorId = actingPrincipal(ctx);
+  if (!actorId) return null;
   const cron = await ctx.app.getCron(ctx.params.id ?? "");
-  if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, acting.actorId))) {
+  if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, actorId))) {
     sendJson(ctx.res, 404, { error: "not_found", message: "no such cron inbox" });
     return null;
   }
-  return { deps, cron, acting };
+  return { deps, cron, actorId };
 }
 
 async function requireCronAuthority(ctx: ApiCtx, cron: Cron): Promise<boolean> {
@@ -173,7 +176,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if (cron.inbox?.source === "gmail" && cron.owner === loaded.acting.actorId) {
+  if (cron.inbox?.source === "gmail" && cron.owner === loaded.actorId) {
     const openMail = (await deps.items.byCron(cron.id)).filter(
       (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
     );
@@ -210,7 +213,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const classifyInboxEmail =
     cron.inbox?.source === "gmail" &&
     cron.ownerScopeId === scopeId("personal", cron.owner) &&
-    (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", cron.owner))) === true;
+    (await inboxLoopsEnabled(ctx, cron.owner));
   const entries: IngestEntryInput[] = [];
   const existingItems = await deps.items.byCron(cron.id);
   for (const [at, raw] of body.items.entries()) {
@@ -248,7 +251,7 @@ async function loadItem(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such inbox item" });
     return null;
   }
-  return { deps: loaded.deps, cron: loaded.cron, item, actorId: loaded.acting.actorId };
+  return { ...loaded, item };
 }
 
 const IMAGE_MAX_BYTES = 8_000_000;
@@ -318,9 +321,7 @@ async function getItem(ctx: ApiCtx): Promise<void> {
     loaded.cron.owner === loaded.actorId
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.cron.owner, [loaded.item]);
-  sendJson(ctx.res, 200, {
-    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, !!ctx.capability),
-  });
+  sendItem(ctx, (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item);
 }
 
 function sameProposalData(item: InboxItem, data: InboxPayload): boolean {
@@ -352,20 +353,24 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
-
-  if (kind === "edit") {
-    const data = proposalFrom(item, args.proposal ?? args);
-    if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
-    if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
-    if (sameProposalData(item, data)) return sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
-    const next = await deps.items.setProposal(
+  const staleDraft = (): boolean => expectedAt !== undefined && !!item.proposal && item.proposal.at !== expectedAt;
+  const invalidProposal = (): void =>
+    sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+  const setProposal = (data: InboxPayload) =>
+    deps.items.setProposal(
       item.id,
       { data, by: proposalAuthor },
       expectedAt !== undefined ? { expectedAt } : undefined,
     );
+
+  if (kind === "edit") {
+    const data = proposalFrom(item, args.proposal ?? args);
+    if (!data) return invalidProposal();
+    if (staleDraft()) return draftChanged();
+    if (sameProposalData(item, data)) return sendItem(ctx, item);
+    const next = await setProposal(data);
     if (!next && expectedAt !== undefined) return draftChanged();
-    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, !!ctx.capability) });
+    return sendItemOrConflict(ctx, next, "this item is already actioned");
   }
 
   const closing = CLOSING_KINDS.get(kind);
@@ -381,41 +386,34 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       kind === "replied" && latest?.author === "owner" && typeof latest.text === "string" ? latest.text : "";
     const result = ownText || reason;
     const next = await deps.items.recordAction(item.id, { kind, outcome: closing, ...(result ? { result } : {}) });
-    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, !!ctx.capability) });
+    return sendItemOrConflict(ctx, next, "this item is already actioned");
   }
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
-    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, !!ctx.capability) });
+    return sendItemOrConflict(ctx, next, "a reply is already being drafted");
   }
 
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
-    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, !!ctx.capability) });
+    return sendItemOrConflict(ctx, next, "this item is not dismissed");
   }
 
   if (kind === "send" && item.status !== "ready") {
-    return sendJson(ctx.res, 409, { error: "not_ready", message: "This item needs a fresh draft before sending" });
+    return sendConflict(ctx, "This item needs a fresh draft before sending", "not_ready");
   }
   if (ledgerState(item) === "actioned") {
-    return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
+    return sendConflict(ctx, "this item was already actioned", "already_actioned");
   }
 
-  if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
+  if (staleDraft()) return draftChanged();
 
   if (args.proposal !== undefined) {
     const data = proposalFrom(item, args.proposal);
-    if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+    if (!data) return invalidProposal();
     if (!sameProposalData(item, data)) {
-      const revised = await deps.items.setProposal(
-        item.id,
-        { data, by: proposalAuthor },
-        expectedAt !== undefined ? { expectedAt } : undefined,
-      );
+      const revised = await setProposal(data);
       if (!revised && expectedAt !== undefined) return draftChanged();
       item = revised ?? item;
     }
@@ -426,12 +424,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     const tokens = ctx.deps.inboxSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
-    if (!decisionToken)
-      return sendJson(ctx.res, 409, { error: "conflict", message: "an action is already in progress" });
+    if (!decisionToken) return sendConflict(ctx, "an action is already in progress");
     try {
       const current = await deps.items.get(item.id);
       if (!current || ledgerState(current) === "actioned")
-        return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
+        return sendConflict(ctx, "this item was already actioned", "already_actioned");
       if (current.proposal?.at !== item.proposal?.at) return draftChanged();
       item = current;
       const slackClient = ctx.deps.inboxSlackClient;
@@ -447,9 +444,9 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
-      if (result.resolves === false) return sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
+      if (result.resolves === false) return sendItem(ctx, item);
       const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, !!ctx.capability) });
+      return sendItem(ctx, next ?? item);
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);
     }
@@ -509,7 +506,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, !!ctx.capability) });
+    sendItem(ctx, next ?? item);
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }
@@ -533,9 +530,8 @@ export function cronSummary(cron: Cron | null): {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
-  const deps = inboxDeps(ctx);
+  if (!(await inboxLoopsEnabled(ctx, owner))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  const deps = ctx.deps.inbox;
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
@@ -556,8 +552,8 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
       accountType,
       messageId: text("messageId", 200),
       subject: text("subject", 300),
-      to: to ?? [],
-      cc: cc ?? [],
+      to,
+      cc,
       rfcMessageId: text("rfcMessageId", 400),
     },
     sentChat: true,
@@ -583,23 +579,21 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
   if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
-  sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
+  sendItem(ctx, item);
 }
 
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
-  const deps = inboxDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
-  const acting = actingPrincipal(ctx);
-  if (!acting) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  if (!ctx.deps.inbox)
+    return sendJson(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
+  const owner = actingPrincipal(ctx);
+  if (!owner) return;
+  if (!(await inboxLoopsEnabled(ctx, owner))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
       ? Math.max(5 * 60 * 1000, Math.min(24 * 60 * 60 * 1000 - 1, Math.floor(body.everyMs)))
       : INBOX_SYNC_DEFAULT_EVERY_MS;
   const enable = body.enabled !== false;
-  const owner = acting.actorId;
   try {
     const existing = await inboxCrons(appCrons(ctx), owner);
     const requested = typeof body.cronId === "string" ? body.cronId : null;
@@ -626,7 +620,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
 
 function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
   return (ctx) => {
-    const lock = inboxDeps(ctx)?.lock;
+    const lock = ctx.deps.inbox?.lock;
     return lock && !ctx.capability
       ? lock.withLock(`cron-inbox:${ctx.params.id ?? ""}`, () => handler(ctx))
       : handler(ctx);

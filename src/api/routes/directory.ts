@@ -8,34 +8,34 @@ import { tenant } from "../../tenant.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
-async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity.deactivate(id);
-  audit(deps, {
-    principalId: id,
-    action: "principal.deactivate",
-    resource: "principal",
-    scopeLabel: tenant().orgScope,
-  });
-  return sendJson(res, 200, { ok: true, principalId: id, active: false });
+function strings(v: unknown): string[] | undefined {
+  return Array.isArray(v) ? v.filter((item): item is string => typeof item === "string") : undefined;
 }
 
-async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity.reactivate(id);
-  audit(deps, {
-    principalId: id,
-    action: "principal.reactivate",
-    resource: "principal",
-    scopeLabel: tenant().orgScope,
-  });
-  return sendJson(res, 200, { ok: true, principalId: id, active: true });
+function memberships<K extends "channelId" | "groupId">(
+  v: unknown[],
+  key: K,
+): Array<Record<K, string> & { principalId: string }> {
+  return v.filter(
+    (m): m is Record<K, string> & { principalId: string } =>
+      isObj(m) && typeof m[key] === "string" && typeof m.principalId === "string",
+  );
+}
+
+function setPrincipalActive(active: boolean): (ctx: ApiCtx) => Promise<void> {
+  return async ({ res, deps, params }) => {
+    if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+    const id = params.id!;
+    if (!id) return sendJson(res, 404, { error: "not_found" });
+    await (active ? deps.identity.reactivate(id) : deps.identity.deactivate(id));
+    audit(deps, {
+      principalId: id,
+      action: active ? "principal.reactivate" : "principal.deactivate",
+      resource: "principal",
+      scopeLabel: tenant().orgScope,
+    });
+    return sendJson(res, 200, { ok: true, principalId: id, active });
+  };
 }
 
 async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
@@ -48,21 +48,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
 
 async function pushDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
-  const b = body as {
-    members?: unknown;
-    channels?: unknown;
-    channelMembers?: unknown;
-    channelRosterIds?: unknown;
-    channelRevocations?: unknown;
-    groupMembers?: unknown;
-    groupIds?: unknown;
-    groupRosterIds?: unknown;
-    workspaceUrl?: unknown;
-    membersSyncedAt?: unknown;
-    channelsSyncedAt?: unknown;
-    partialChannels?: unknown;
-    groupsSyncedAt?: unknown;
-  };
+  const b = body as Record<string, unknown>;
   if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
     return sendJson(res, 400, {
       error: "bad_request",
@@ -114,27 +100,12 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       (c): c is { channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean } =>
         isObj(c) && typeof c.channelId === "string" && typeof c.name === "string",
     );
-    const channelMembers = Array.isArray(b.channelMembers)
-      ? b.channelMembers.filter(
-          (m): m is { channelId: string; principalId: string } =>
-            isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
-        )
-      : undefined;
-    const channelRosterIds = Array.isArray(b.channelRosterIds)
-      ? b.channelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
-      : undefined;
-    const channelRevocations = Array.isArray(b.channelRevocations)
-      ? b.channelRevocations.filter(
-          (m): m is { channelId: string; principalId: string } =>
-            isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
-        )
-      : undefined;
     const applied = await app.upsertChannels(
       channels,
-      channelMembers,
+      Array.isArray(b.channelMembers) ? memberships(b.channelMembers, "channelId") : undefined,
       numOrUndef(b.channelsSyncedAt),
-      channelRosterIds,
-      channelRevocations,
+      strings(b.channelRosterIds),
+      Array.isArray(b.channelRevocations) ? memberships(b.channelRevocations, "channelId") : undefined,
       b.partialChannels === true,
     );
     if (b.partialChannels && !applied) return sendJson(res, 409, { error: "stale_directory_observation" });
@@ -142,17 +113,8 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   }
   let groupMemberCount: number | undefined;
   if (Array.isArray(b.groupMembers)) {
-    const groupMembers = b.groupMembers.filter(
-      (m): m is { groupId: string; principalId: string } =>
-        isObj(m) && typeof m.groupId === "string" && typeof m.principalId === "string",
-    );
-    const groupIds = Array.isArray(b.groupIds)
-      ? b.groupIds.filter((groupId): groupId is string => typeof groupId === "string")
-      : undefined;
-    const groupRosterIds = Array.isArray(b.groupRosterIds)
-      ? b.groupRosterIds.filter((groupId): groupId is string => typeof groupId === "string")
-      : undefined;
-    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), groupIds, groupRosterIds);
+    const groupMembers = memberships(b.groupMembers, "groupId");
+    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), strings(b.groupIds), strings(b.groupRosterIds));
     groupMemberCount = groupMembers.length;
   }
   return sendJson(res, 200, {
@@ -163,8 +125,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function directoryMeta(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
+async function directoryMeta({ res, app }: ApiCtx): Promise<void> {
   return sendJson(res, 200, await app.directoryMeta());
 }
 
@@ -201,8 +162,8 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   },
   { method: "GET", path: "/v1/directory/resolve", actor: "person", auth: "either", handle: resolveDirectory },
   ...withActor("system", [
-    { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
-    { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
+    { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: setPrincipalActive(false) },
+    { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: setPrincipalActive(true) },
     { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
   ]),
 ];

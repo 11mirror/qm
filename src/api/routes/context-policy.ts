@@ -6,32 +6,35 @@ import { type ApiCtx, type Route } from "./route.ts";
 
 const MAX_ORDERS_CHARS = 20_000;
 
-function channelContainer(scope: string): string | undefined {
+async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
+  const { res, deps } = ctx;
+  if (!principalId || !scope) {
+    sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
+    return null;
+  }
   const { kind, ref } = parseScopeId(scope);
-  return ref && (kind === "channel" || kind === "group") ? ref : undefined;
-}
-
-async function memberScope(ctx: ApiCtx, principalId: string, scope: string): Promise<boolean> {
-  const contexts = await ctx.app.listContexts(principalId);
-  return contexts.some((c) => c.scopeId === scope);
+  if (!ref || (kind !== "channel" && kind !== "group")) {
+    sendJson(res, 400, { error: "bad_request", message: "ambient policy applies to channel and group scopes only" });
+    return null;
+  }
+  if (!deps.channelPolicy) {
+    sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
+    return null;
+  }
+  if ((await ctx.app.listContexts(principalId)).some((c) => c.scopeId === scope)) return ref;
+  sendJson(res, 403, { error: "forbidden" });
+  return null;
 }
 
 export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const principalId = (url.searchParams.get("principalId") ?? "").trim();
-  const scope = (url.searchParams.get("scope") ?? "").trim();
-  if (!principalId || !scope)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
-  const container = channelContainer(scope);
-  if (!container)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambient policy applies to channel and group scopes only",
-    });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
-  if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
-  const p = await deps.channelPolicy.get(container);
+  const container = await policyContainer(
+    ctx,
+    (url.searchParams.get("principalId") ?? "").trim(),
+    (url.searchParams.get("scope") ?? "").trim(),
+  );
+  if (!container) return;
+  const p = await deps.channelPolicy!.get(container);
   return sendJson(res, 200, {
     policy: {
       orders: p?.orders ?? "",
@@ -47,17 +50,8 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
-  if (!principalId || !scope)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
-  const container = channelContainer(scope);
-  if (!container)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambient policy applies to channel and group scopes only",
-    });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
-  if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
+  const container = await policyContainer(ctx, principalId, scope);
+  if (!container) return;
   if (typeof b.orders !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
   if (b.orders.length > MAX_ORDERS_CHARS)
@@ -72,14 +66,14 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "ambientEnabled must be a boolean or null (null = default rule)",
     });
-  const current = await deps.channelPolicy.get(container);
+  const current = await deps.channelPolicy!.get(container);
   if (typeof b.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== b.baseUpdatedAt) {
     return sendJson(res, 409, {
       error: "conflict",
       message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
     });
   }
-  const p = await deps.channelPolicy.set(container, b.orders, {
+  const p = await deps.channelPolicy!.set(container, b.orders, {
     setBy: principalId,
     bots: parsed.bots,
     ambientEnabled: b.ambientEnabled as boolean | null | undefined,
