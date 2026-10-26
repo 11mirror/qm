@@ -11,6 +11,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { idleCronQueue } from "./support/cron-slots.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -29,6 +30,7 @@ function fixture() {
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
+    jobQueue: idleCronQueue(),
     ...singleProcessDeps(),
     now: () => time,
     crons,

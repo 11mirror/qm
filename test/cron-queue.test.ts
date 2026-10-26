@@ -1,7 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
+import { cronJobQueue } from "../src/cron/job-queue.ts";
+import { createJobWorker } from "../src/jobs/job-worker.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore } from "../src/cron/fire-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
@@ -16,7 +17,6 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
 
-const SCHEMA = "pgboss_cron_queue_test";
 const CRONS_TABLE = "cron_queue_test_crons";
 const IDEM_TABLE = "cron_queue_test_idempotency";
 
@@ -25,7 +25,6 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
 });
@@ -54,21 +53,21 @@ function instance(
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
-    jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
+    jobQueue: cronJobQueue(createJobWorker(URL ?? ""), 4),
   });
   return { scheduler, crons };
 }
 
 test(
-  "pg-boss queue: a slow fire is not double-run by a sibling instance (durable slot claim)",
+  "cron job queue: a slow fire is not double-run by a sibling instance (durable slot claim)",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const cron = await a.crons.create({
         schedule: { firstFireAt: Date.now() + 500 },
@@ -93,15 +92,15 @@ test(
 );
 
 test(
-  "pg-boss queue: a recurring cron chains fires with unique slots, and a schedule edit invalidates queued slots",
+  "cron job queue: a recurring cron chains fires with unique slots, and a schedule edit invalidates queued slots",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
     const fireStore = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const cron = await a.crons.create({
         schedule: { everyMs: 2000 },
@@ -131,7 +130,7 @@ test(
 );
 
 test(
-  "pg-boss queue: a cron persisted without its fire job is enqueued once by startup reconciliation",
+  "cron job queue: a cron persisted without its fire job is enqueued once by startup reconciliation",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
@@ -145,8 +144,8 @@ test(
       createdBy: "U3",
       ownerScopeId: scopeId("personal", "U3"),
     });
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const fired = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fired() >= 1, 30_000);
@@ -157,6 +156,36 @@ test(
       a.scheduler.stop();
       b.scheduler.stop();
       await new Promise((r) => setTimeout(r, 500));
+    }
+  },
+);
+
+test(
+  "cron job queue: a released slot is re-armed by the next enqueue, a consumed one is not",
+  { skip, timeout: 60_000 },
+  async () => {
+    const queue = cronJobQueue(createJobWorker(URL!), 4);
+    const seen: number[] = [];
+    const job = { cronId: `rearm-${Date.now()}`, scheduledAt: Date.now() };
+    await queue.start({
+      onFire: async () => {
+        seen.push(Date.now());
+        return seen.length === 1 ? "release" : "done";
+      },
+    });
+    try {
+      await queue.enqueueFire(job);
+      await until(() => seen.length >= 1, 15_000);
+      await new Promise((r) => setTimeout(r, 300));
+      await queue.enqueueFire(job);
+      await until(() => seen.length >= 2, 15_000);
+      assert.equal(seen.length, 2, "the released slot fired again");
+      await new Promise((r) => setTimeout(r, 300));
+      await queue.enqueueFire(job);
+      await new Promise((r) => setTimeout(r, 2_500));
+      assert.equal(seen.length, 2, "a consumed slot never fires twice");
+    } finally {
+      await queue.stop();
     }
   },
 );

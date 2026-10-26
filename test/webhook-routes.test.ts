@@ -22,9 +22,13 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
     ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
+  void built.jobs.start();
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    close: async () => {
+      await new Promise<void>((r) => server.close(() => r()));
+      await built.jobs.stop();
+    },
   };
 }
 

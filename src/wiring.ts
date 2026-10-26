@@ -117,7 +117,8 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createInboxLedger, INBOX_ITEM_SOURCE_MIGRATION, type InboxEventSink } from "./inbox/ledger.ts";
@@ -135,7 +136,8 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { cronJobQueue } from "./cron/job-queue.ts";
+import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
@@ -448,6 +450,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
+  jobs: JobWorker;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -2259,16 +2262,16 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  const jobs = createJobWorker(databaseUrl);
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     ...scopedTriggerDeps,
     leaderLease,
-    jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
+    jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
     ...(sweepAsks ? { sweepAsks } : {}),
   });
   const suggestedActivities = createSuggestedActivityService({
@@ -2333,6 +2336,7 @@ export function buildApp(
   const webhookReceiver = createWebhookReceiver({
     webhooks,
     ...triggerDeps,
+    jobs,
     currentScopeMembers,
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
@@ -2684,6 +2688,7 @@ export function buildApp(
     scheduler,
     inbox,
     webhookReceiver,
+    jobs,
     admin,
     rateLimiter,
     errors,

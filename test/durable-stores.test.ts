@@ -8,6 +8,7 @@ import type { Cron } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { markFired } from "./support/cron-slots.ts";
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
   const map = testMap<Cron>();
@@ -20,7 +21,7 @@ test("crons persist to the backing map (a second store instance reads them back)
     createdBy: "U1",
     destination: { type: "dm", target: "U1" },
   });
-  await s1.markFired(c.id, 123);
+  await markFired(s1, c.id, 123);
 
   const s2 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const got = await s2.get(c.id);

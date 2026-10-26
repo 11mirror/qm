@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DROP_RUN_AS_MIGRATION } from "../src/cron/cron-store.ts";
+import { DROP_RUN_AS_MIGRATION } from "../src/cron/migrations.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron run-mode migration test";

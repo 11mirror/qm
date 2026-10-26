@@ -11,6 +11,9 @@ import {
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
+/** Most recent deliveries kept per webhook for the history view; payloads arrive already capped by the receiver. */
+const HISTORY_EVENTS = 50;
+
 export interface CreateWebhookInput extends CreateTriggerInput {
   action: string;
   verification: Webhook["verification"];
@@ -47,15 +50,9 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       await updateHistory(id, (value) => {
         if (value.events.some((e) => e.deliveryId === event.deliveryId)) return value;
         return {
-          events: [
-            ...value.events,
-            {
-              ...event,
-              payload: event.payload.slice(0, 16_100),
-            },
-          ]
+          events: [...value.events, event]
             .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId))
-            .slice(0, 50),
+            .slice(0, HISTORY_EVENTS),
         };
       });
     },

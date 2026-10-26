@@ -279,7 +279,6 @@ export interface Cron extends TriggerBase {
   runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;
-  lastAttemptAt?: number;
   deferUntil?: number;
   title?: string;
   archived?: boolean;
@@ -290,7 +289,6 @@ export interface Cron extends TriggerBase {
   unattendedGrants?: string[];
   sessionRef?: string;
 
-  fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;
 }
 

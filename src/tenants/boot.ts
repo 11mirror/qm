@@ -34,8 +34,6 @@ export async function bootTenant(
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl) await ensureTenantQueues(config.databaseUrl);
   await built.sandboxResources.initialize();
-  const backfilledFires = await built.crons.backfillFires();
-  if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
   const rewrittenCredentials = (await built.keychain?.normalizeLegacyCredentials()) ?? 0;
   if (rewrittenCredentials > 0)
     console.log(`[qm] rewrote ${rewrittenCredentials} keychain credential(s) to the current shape`);
@@ -96,7 +94,7 @@ export async function bootTenant(
   }
 
   if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-    built.scheduler.start(1000);
+    built.scheduler.start();
   } else if (!config.backgroundDeploymentId) {
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
   }
@@ -162,7 +160,7 @@ export async function bootTenant(
         built.runtime.startBackground();
         await periodicStop;
         if (signal.aborted || epoch !== activationEpoch) return;
-        built.scheduler.start(1000);
+        built.scheduler.start();
         await built.scheduler.ready();
         if (signal.aborted || epoch !== activationEpoch) return;
         for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {

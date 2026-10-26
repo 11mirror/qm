@@ -4,8 +4,12 @@ import { tenant } from "../tenant.ts";
 
 export const TURN_QUEUES = ["turns_people", "turns_delegated", "turns_background"] as const;
 export type TurnQueue = (typeof TURN_QUEUES)[number];
+/** Background jobs (cron fires) that are not conversation turns. */
+export const JOB_QUEUE = "jobs";
+export type AbsurdQueue = TurnQueue | typeof JOB_QUEUE;
+export const ABSURD_QUEUES: readonly AbsurdQueue[] = [...TURN_QUEUES, JOB_QUEUE];
 
-export function tenantQueue(queue: TurnQueue, tenantId = tenant().id): string {
+export function tenantQueue(queue: AbsurdQueue, tenantId = tenant().id): string {
   return tenantId ? `${queue}_t${tenantId.replace(/-/g, "").slice(0, 12).toLowerCase()}` : queue;
 }
 
@@ -73,12 +77,20 @@ export const ABSURD_MIGRATION: PgMigrationDefinition = {
   expectedChecksum: "4f8dd2e6249339a7c89d650d4d71b5a04228cf329a45f515a834acdeca3864e9",
 };
 
+export const ABSURD_JOBS_MIGRATION: PgMigrationDefinition = {
+  id: "absurd/jobs-queue",
+  statements: [
+    `SELECT absurd.create_queue('${JOB_QUEUE}', 'unpartitioned')`,
+    `SELECT absurd.set_queue_policy('${JOB_QUEUE}', '{"cleanup_ttl":"7 days"}'::jsonb)`,
+  ],
+};
+
 export function registerAbsurdSchema(connectionString: string): PgPool {
-  return createPgPool(connectionString, [ABSURD_MIGRATION]);
+  return createPgPool(connectionString, [ABSURD_MIGRATION, ABSURD_JOBS_MIGRATION]);
 }
 
 export async function ensureTenantQueues(connectionString: string): Promise<void> {
-  const queues = TURN_QUEUES.map((queue) => tenantQueue(queue)).filter((queue, i) => queue !== TURN_QUEUES[i]);
+  const queues = ABSURD_QUEUES.map((queue) => tenantQueue(queue)).filter((queue, i) => queue !== ABSURD_QUEUES[i]);
   if (!queues.length) return;
   const pool = await registerAbsurdSchema(connectionString).pool();
   for (const queue of queues) {

@@ -139,7 +139,7 @@ test("history survives reconstruction without entering webhook listings", async 
   assert.deepEqual(await restored.listEvents("unknown"), []);
 });
 
-test("history atomically retains the latest 50 and bounds payloads", async () => {
+test("history atomically retains the latest 50", async () => {
   const store = createWebhookStore(testMap(), testMap());
   const wh = await store.create(base);
   await Promise.all(
@@ -147,14 +147,13 @@ test("history atomically retains the latest 50 and bounds payloads", async () =>
       store.recordEvent(wh.id, {
         deliveryId: `delivery-${i}`,
         receivedAt: i,
-        payload: "x".repeat(20_000),
+        payload: "x",
       }),
     ),
   );
   const events = await store.listEvents(wh.id);
   assert.equal(events.length, 50);
   assert.equal(events[0]?.receivedAt, 69);
-  assert.equal(events[1]?.payload.length, 16_100);
   assert.equal(events.at(-1)?.receivedAt, 20);
   events.pop();
   assert.equal((await store.listEvents(wh.id)).length, 50);
