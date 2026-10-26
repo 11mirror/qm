@@ -147,10 +147,10 @@ export async function doctorCommon(
   }
   if (localSandboxActive(config)) {
     step("local Docker sandbox: configured");
-  } else if (config.target === "aws") {
-    step("AWS Lambda MicroVM sandbox: configured");
-  } else if (config.sandbox) {
-    step("sandbox: sprites boot the platform's stock image");
+  } else if (config.sandbox?.backend || config.env.core?.SANDBOX_BACKEND?.trim()) {
+    step(
+      `sandbox: ${config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend} boots the platform's stock image`,
+    );
   } else {
     step("sandbox: not configured — agents cannot execute commands");
   }

@@ -27,7 +27,7 @@ import {
   waitPorterRunning,
   type PorterClientLike,
   type PorterSandboxLike,
-} from "../sandbox/porter-client.ts";
+} from "./porter-client.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";

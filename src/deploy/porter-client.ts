@@ -4,7 +4,7 @@ import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import type { ExecResult } from "./sandbox.ts";
+import type { ExecResult } from "../sandbox/sandbox.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -92,14 +92,6 @@ export function createPorterClient(opts: { token?: string; baseUrl?: string }): 
   }
   return porter as PorterClientLike;
 }
-
-export const porterSlug = (prefix: string, id: string): string => {
-  const cleaned = id
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${prefix}-${cleaned.slice(0, 28).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-};
 
 export const porterDnsLabel = (name: string): string => {
   const cleaned = name
