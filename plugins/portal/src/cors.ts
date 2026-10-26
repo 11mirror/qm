@@ -7,7 +7,7 @@ const PREFLIGHT_MAX_AGE_S = 600;
 
 const ID = "[^/]+";
 const FILE_ID = "(?!by-name(?:/|$))[^/]+";
-const CHAT_API_ROUTES: ReadonlyArray<{ method: string; re: RegExp }> = [
+export const CHAT_API_ROUTES: ReadonlyArray<{ method: string; re: RegExp }> = [
   { method: "GET", re: /^\/me$/ },
   { method: "POST", re: /^\/api\/turn$/ },
   { method: "GET", re: /^\/api\/runs\/active$/ },

@@ -62,6 +62,8 @@ import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError 
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { isPrivateNetworkIp } from "../../chassis/src/network.ts";
+import { validEmail } from "../../chassis/src/email.ts";
 import { isUiChannel, UI_CHANNEL_COOKIE } from "../../chassis/src/ui-release.ts";
 import { ALERT_ICON, cardPage, LOCK_ICON } from "../../chassis/src/card-page.ts";
 import {
@@ -434,12 +436,7 @@ export function isPrivateNetworkUrl(raw: string): boolean {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   if (host.endsWith(".internal") || host.endsWith(".local")) return true;
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
-  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
-  return false;
+  return isPrivateNetworkIp(host);
 }
 
 export function isLoopbackAddress(address: string | null | undefined): boolean {
@@ -1693,11 +1690,7 @@ export function bootChecks(): void {
     ) {
       problems.push("OIDC_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
     }
-    if (
-      PRINCIPAL_RULE.allowedEmails?.some(
-        (email) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || isMissingOrPlaceholder(email),
-      )
-    ) {
+    if (PRINCIPAL_RULE.allowedEmails?.some((email) => !validEmail(email) || isMissingOrPlaceholder(email))) {
       problems.push("OIDC_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
     }
     if (

@@ -1096,7 +1096,7 @@ const required =
 
 const managesDeployment = (c: WebCtx) => gateManageDeployment(c.res, c.user, c.params.id!);
 
-const apiRoutes: readonly WebRoute[] = [
+export const apiRoutes: readonly WebRoute[] = [
   route("GET", "/api/files/by-name/content", async (c) => {
     const { res, url, user } = c;
     const name = url.searchParams.get("name")?.trim();

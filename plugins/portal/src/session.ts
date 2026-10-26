@@ -149,27 +149,13 @@ export function sessionCookieHeaders(value: string, attrs: CookieOpts): string[]
   ];
 }
 
-export function readCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = header.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1] ?? "");
-  } catch {
-    return null;
-  }
-}
+export { readCookie } from "../../chassis/src/http.ts";
 
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("hex");
 }
 
-export function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
+export { safeEqual } from "../../chassis/src/safe-equal.ts";
 
 function sanitizeAppsReturnTo(value: string, appsDomain: string): string | null {
   let u: URL;

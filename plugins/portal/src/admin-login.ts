@@ -1,3 +1,4 @@
+import { validEmail } from "../../chassis/src/email.ts";
 import { createHash } from "node:crypto";
 import { deriveKey, open } from "./session.ts";
 
@@ -11,8 +12,7 @@ export function openAdminLogin(token: string, secret: string, publicUrl: string,
     k !== "admin-login" ||
     aud !== publicUrl ||
     typeof sub !== "string" ||
-    sub.length > 254 ||
-    !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(sub) ||
+    !validEmail(sub) ||
     sub !== sub.trim().toLowerCase() ||
     typeof iat !== "number" ||
     !Number.isSafeInteger(iat) ||

@@ -97,8 +97,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 400, { error: "invalid_token" });
     return sendJson(res, 200, { session: await deps.brokerSessions.use(b.token) });
   }
-  if (typeof b.email !== "string" || b.email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email))
-    return sendJson(res, 400, { error: "invalid_email" });
+  if (typeof b.email !== "string" || !validEmail(b.email)) return sendJson(res, 400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
     if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, tenant().orgScope))) return;
