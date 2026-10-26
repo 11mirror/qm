@@ -1012,7 +1012,9 @@ export function startAdmin(host, env) {
     resetScForm();
     loadScForm(null);
   };
-  $("sc-reset").onclick = dismiss;
+  $("sc-reset").onclick = () => {
+    if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
+  };
   $("sc-save").onclick = async () => {
     const status = (message, kind, sticky) => setStatus("st-service-credentials", message, kind, sticky);
     const unreachable = () => {
