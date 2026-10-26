@@ -684,3 +684,8 @@ test("QM_ROLES defaults to every role and a split core runs no background work",
     /cannot split roles while BACKGROUND_DEPLOYMENT_ID/,
   );
 });
+
+test("the Docker target's QM_CORE_CONTAINER reaches the local sandbox", () => {
+  assert.equal(loadConfig({ QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer, "qm-acme-core");
+  assert.equal(loadConfig({}).localSandbox.coreContainer, undefined);
+});

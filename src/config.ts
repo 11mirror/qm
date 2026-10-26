@@ -268,6 +268,7 @@ function sandboxProvidersEnv(env: Env) {
   const e = readEnv(env, {
     LOCAL_SANDBOX_IMAGE: str,
     LOCAL_SANDBOX_DOCKER_BIN: str,
+    QM_CORE_CONTAINER: str,
     SPRITES_TOKEN: str,
     SMOLMACHINES_TOKEN: str,
     E2B_API_KEY: str,
@@ -281,11 +282,11 @@ function sandboxProvidersEnv(env: Env) {
     MODAL_IMAGE: str,
   });
   return {
-    // coreContainer has no env name; the live-Slack harness sets it.
+    // The Docker target sets QM_CORE_CONTAINER so core, itself a container, joins each sandbox's network.
     localSandbox: defined({
       image: e.LOCAL_SANDBOX_IMAGE,
       dockerBin: e.LOCAL_SANDBOX_DOCKER_BIN,
-      coreContainer: undefined as string | undefined,
+      coreContainer: e.QM_CORE_CONTAINER,
     }),
     spritesSandbox: defined({ token: e.SPRITES_TOKEN }),
     smolmachinesSandbox: defined({ token: e.SMOLMACHINES_TOKEN }),
