@@ -164,7 +164,6 @@ import {
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
-import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
@@ -495,8 +494,6 @@ export interface BuiltApp {
   chatSurfaces: SurfaceRegistry;
 }
 
-const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
-
 export function buildApp(
   config: Config,
   overrides: {
@@ -734,19 +731,7 @@ export function buildApp(
     leaderLease,
     createSweeper,
   });
-  // Session storage is built further down; trace-derived providers only read it after the first turn.
-  const memorySessions: { store?: SessionStore } = {};
-  const baseMemory: MemoryService = withMemoryTidy(
-    createConfiguredMemoryService({
-      defaultMemory: semanticMemory.memory,
-      config: config.memoryProviderConfig,
-      sessionItems: (sessionId) => {
-        if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
-      },
-    }),
-    (scope) => memoryTidy.ensure(scope),
-  );
+  const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const sandboxOnError = (
@@ -1097,7 +1082,6 @@ export function buildApp(
   const modelGateway = createModelGateway();
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
-  memorySessions.store = sessions;
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) =>

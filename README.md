@@ -101,8 +101,7 @@ uses Bolt; the web UI builds with Vite and renders with Lit.
 The core itself is generic. Everything specific to one company — org config, custom tools
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
 [`qm` CLI](./cli/README.md) validates and deploys. Every substrate (harness, session
-store, sandbox, memory) sits behind an interface. Memory can also be routed by scope to
-[external providers](./docs/memory-providers.md) while retaining the built-in notebook.
+store, sandbox, memory) sits behind an interface.
 
 ## Security and secrets
 
