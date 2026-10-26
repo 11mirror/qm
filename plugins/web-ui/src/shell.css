@@ -67,6 +67,8 @@
   --success: #1a7f37;
   --warning: #a66700;
   --scrim: oklch(0.145 0 0);
+  --scrim-overlay: color-mix(in srgb, var(--scrim) 28%, transparent);
+  --working-dot: #2f81f7;
 }
 
 @media (min-width: 861px) and (hover: hover) {
@@ -638,7 +640,7 @@ a.chat-row-open {
   height: 8px;
   margin-left: 8px;
   border-radius: 50%;
-  background: #2f81f7;
+  background: var(--working-dot);
 }
 .session-row:hover .unread-dot,
 .session-row:focus-within .unread-dot,
@@ -655,7 +657,7 @@ a.chat-row-open {
   margin-left: 3px;
   margin-right: 7px;
   vertical-align: middle;
-  color: var(--working-dot, #2f81f7);
+  color: var(--working-dot);
 }
 .working-mark .working-wave {
   display: block;
@@ -4780,13 +4782,13 @@ a.connector-widget:focus-visible {
   justify-content: center;
   width: auto;
   padding: 24px;
-  background: color-mix(in srgb, var(--scrim) 42%, transparent);
+  background: var(--scrim-overlay);
 }
 .kc-confirm {
-  width: min(430px, 100%);
-  padding: 22px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
-  border-radius: var(--radius-lg);
+  width: min(440px, 100%);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--background);
 }
 .kc-confirm h2 {
@@ -5910,10 +5912,10 @@ a.connector-widget:focus-visible {
   justify-content: center;
   padding: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
   box-sizing: border-box;
-  background: color-mix(in srgb, var(--scrim) 28%, transparent);
+  background: var(--scrim-overlay);
 }
 .project-dialog::backdrop {
-  background: color-mix(in srgb, var(--scrim) 28%, transparent);
+  background: var(--scrim-overlay);
 }
 .project-dialog {
   margin: auto;
@@ -7773,7 +7775,7 @@ h3.ambient-field-label {
   justify-content: center;
   align-items: flex-start;
   padding-top: clamp(48px, 12vh, 120px);
-  background: color-mix(in srgb, var(--scrim) 32%, transparent);
+  background: var(--scrim-overlay);
 }
 .chat-search-palette {
   display: flex;
@@ -9024,7 +9026,7 @@ h3.ambient-field-label {
 }
 .inbox-chat-working .working-wave {
   flex: 0 0 auto;
-  color: var(--working-dot, #2f81f7);
+  color: var(--working-dot);
 }
 
 :is(.inbox-index-chat, .inbox-item-aside) .runtime-upgrade {
@@ -10157,7 +10159,7 @@ h3.ambient-field-label {
 .mc-overlay {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--scrim) 24%, transparent);
+  background: var(--scrim-overlay);
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -10498,17 +10500,12 @@ h3.ambient-field-label {
   }
 }
 
-.suggested-activity-yc {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.suggested-activity-icon > .brand-mark {
   width: 17px;
   height: 17px;
-  background: #ff6600;
-  color: white;
-  font:
-    14px/1 Arial,
-    sans-serif;
+  flex-basis: 17px;
+  border-radius: 4px;
+  font-size: var(--font-11);
 }
 
 .slack-setup-checklist {

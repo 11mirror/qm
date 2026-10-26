@@ -3,6 +3,7 @@ import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
 import { X } from "lucide";
 import { icon } from "./icons";
+import { brandMark } from "./ui";
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
 const icons: Record<string, string> = {
@@ -117,7 +118,7 @@ export function suggestedActivities(
                 @click=${() => onSelect(activity)}
               >
                 <span class="suggested-activity-icon" data-icon=${activity.icon} aria-hidden="true"
-                  >${activity.icon === "yc" ? html`<span class="suggested-activity-yc">Y</span>` : (icons[activity.icon] ?? activity.icon)}</span
+                  >${activity.icon === "yc" ? brandMark() : (icons[activity.icon] ?? activity.icon)}</span
                 >
                 <span class="suggested-activity-title">${activity.title}</span>
               </button>
