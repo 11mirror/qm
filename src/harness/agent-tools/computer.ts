@@ -1,7 +1,9 @@
+import { Check } from "typebox/value";
+import { isObj } from "../../util/objects.ts";
 // The execute, sandbox and background tools: one command path for scoped, scratch, owner and reached computers.
 
-import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type, type TSchema } from "typebox";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
@@ -646,7 +648,47 @@ export function computerTools(kit: ToolKit) {
       }
     },
   });
-  return { execute, sandboxManagement, background };
+  const validateSandboxTool = (tool: ToolDefinition): ToolDefinition => {
+    const rules = SANDBOX_TOOL_ARGS[tool.name];
+    if (!rules) return tool;
+    const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
+    const schema = Type.Object(properties, { additionalProperties: false });
+    return {
+      ...tool,
+      parameters: schema,
+      async execute(callId, params, signal, onUpdate, ctx) {
+        const action = isObj(params) ? String(params.action) : "";
+        const key = "" in rules ? "" : action;
+        const rule = Object.hasOwn(rules, key) ? rules[key] : undefined;
+        const missing = rule?.required.find(
+          (key) =>
+            !isObj(params) ||
+            params[key] === undefined ||
+            (typeof params[key] === "string" && key !== "data" && !params[key].trim()),
+        );
+        const allowed = rule?.fields && ["action", "purpose", ...rule.fields, ...rule.required];
+        if (
+          !rule ||
+          !Check(schema, params) ||
+          missing ||
+          (allowed && Object.keys(params).some((key) => !allowed.includes(key))) ||
+          Object.entries(params).some(([key, value]) => value === null && !rule.nullable?.includes(key))
+        ) {
+          await recordCall(callId, {
+            tool: tool.name,
+            ...(isObj(params) ? { purpose: params.purpose, action: params.action } : {}),
+          });
+          return recordFail(
+            callId,
+            { tool: tool.name, invalid: true },
+            `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
+          );
+        }
+        return tool.execute(callId, params, signal, onUpdate, ctx);
+      },
+    };
+  };
+  return { execute, sandboxManagement, background, validateSandboxTool };
 }
 
 /**
@@ -655,7 +697,7 @@ export function computerTools(kit: ToolKit) {
  * `purpose`) are the only ones an action accepts, and omitting it skips that check; `nullable` fields
  * may be null. A call breaking a rule is refused before the tool runs, so handlers can rely on them.
  */
-export const SANDBOX_TOOL_ARGS: Record<
+const SANDBOX_TOOL_ARGS: Record<
   string,
   Record<string, { required: string[]; fields?: string[]; nullable?: string[] }>
 > = {
