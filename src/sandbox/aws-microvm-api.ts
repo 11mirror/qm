@@ -397,7 +397,6 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     const started = Date.now();
     const deadline = started + 60_000;
     let lastErr = "";
-    let throttled = 0;
     while (Date.now() < deadline) {
       try {
         const res = await vmFetch(endpoint, await tokenFor(id), "/health", {
@@ -407,14 +406,8 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
           ...fetchOpt,
         });
         if (res.status === 200) return;
-        if (res.status === 429) {
-          if (++throttled >= 3) return;
-        } else {
-          throttled = 0;
-          lastErr = `http ${res.status}`;
-        }
+        lastErr = `http ${res.status}`;
       } catch (e) {
-        throttled = 0;
         lastErr = errMessage(e);
       }
       await sleep(pollInterval(started, 2000));
@@ -428,7 +421,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     if (desc.state === "RUNNING") return;
     if (desc.state === "TERMINATED" || desc.state === "TERMINATING")
       throw new Error(`microVM ${id} is ${desc.state}, cannot run`);
-    if (desc.state === "SUSPENDED") await api.resume(id).catch((e) => swallow("aws-microvm: resume", e));
+    if (desc.state === "SUSPENDED") await api.resume(id);
     await waitDaemon(id, endpoint);
   }
 
