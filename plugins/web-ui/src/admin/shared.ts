@@ -14,13 +14,31 @@ export function badge(text: unknown, kind = "", title = "") {
 
 export const empty = (text: unknown) => html`<p class="empty">${text}</p>`;
 
+export const stacked = (primary: unknown, secondary: unknown) =>
+  html`<div>
+    <div class="primaryline">${primary}</div>
+    ${secondary ? html`<div class="subline">${secondary}</div>` : nothing}
+  </div>`;
+
+export const subline = (text: unknown) => html`<span class="subline">${text}</span>`;
+
+export const matches = (needle: string, ...parts: unknown[]) =>
+  parts.join(" ").toLowerCase().includes(needle.trim().toLowerCase());
+
+export function keepSearch(doc: Document, previous: HTMLElement | null, shell: () => void) {
+  if (previous && !previous.isConnected) return previous;
+  const active = doc.activeElement as HTMLElement | null;
+  const focused = !!active && !!previous?.contains(active);
+  shell();
+  const search = doc.querySelector<HTMLElement>("#shellbar .shell-search");
+  if (!previous || !search) return search;
+  search.replaceWith(previous);
+  if (focused) active?.focus({ preventScroll: true });
+  return previous;
+}
+
 function cell(value: any): unknown {
   if (value?.node) return value.node;
-  if (value?.badges)
-    return html`<div class="badges">
-      ${value.badges.filter(Boolean).map((b: any) => b.node || (Array.isArray(b) ? badge(b[0], b[1]) : badge(b.text, b.kind)))}
-    </div>`;
-  if (value?.badge !== undefined) return value.badge ? badge(value.badge, value.kind || "admin") : "-";
   if (value?.action) {
     const a = value.action;
     return html`<button
@@ -40,20 +58,13 @@ function cell(value: any): unknown {
 export function table(
   headers: unknown[],
   rows: any[][],
-  empty: string,
+  none: string,
   onOpen?: (index: number) => void,
-  options: { className?: string; cols?: string[]; wrapClass?: string } = {},
+  options: { className?: string; wrapClass?: string } = {},
 ) {
-  if (!rows.length) return html`<p class="empty">${empty}</p>`;
+  if (!rows.length) return empty(none);
   return html`<div class=${"tablewrap" + (options.wrapClass ? " " + options.wrapClass : "")}>
     <table class=${ifDefined(options.className)}>
-      ${
-        options.cols?.length
-          ? html`<colgroup>
-              ${options.cols.map((width) => html`<col style=${"width:" + width}></col>`)}
-            </colgroup>`
-          : nothing
-      }
       <thead>
         <tr>
           ${headers.map((h) => html`<th>${h}</th>`)}
@@ -63,7 +74,7 @@ export function table(
         ${rows.map(
           (row, i) =>
             html`<tr class=${ifDefined(onOpen ? "openable" : undefined)} @click=${onOpen ? () => onOpen(i) : nothing}>
-              ${row.map((value, j) => html`<td class=${ifDefined(value?.cls || (value?.badge === "" ? "num" : undefined))}>${onOpen && j === 0 ? html`<div class="open">${cell(value)}</div>` : cell(value)}</td>`)}
+              ${row.map((value, j) => html`<td class=${ifDefined(value?.cls)}>${onOpen && j === 0 ? html`<div class="open">${cell(value)}</div>` : cell(value)}</td>`)}
             </tr>`,
         )}
       </tbody>
@@ -102,11 +113,6 @@ export function pager(total: number, limit: number, offset: number, go: (page: n
   </div>`;
 }
 
-export function mount(root: HTMLElement, template: unknown) {
-  const end = root.appendChild(document.createComment(""));
-  render(template, root, { renderBefore: end });
-}
-
 export function renderer(root: HTMLElement) {
   const end = root.appendChild(document.createComment(""));
   return (template: unknown) => {
@@ -114,8 +120,10 @@ export function renderer(root: HTMLElement) {
   };
 }
 
-export function denseList(items: any[], rowOf: (item: any) => any, open: (item: any) => void, empty: string) {
-  if (!items.length) return html`<p class="empty">${empty}</p>`;
+export const mount = (root: HTMLElement, template: unknown) => renderer(root)(template);
+
+export function denseList(items: any[], rowOf: (item: any) => any, open: (item: any) => void, none: string) {
+  if (!items.length) return empty(none);
   return html`<div class="dense-list">
     ${repeat(
       items,

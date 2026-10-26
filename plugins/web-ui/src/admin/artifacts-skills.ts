@@ -1,22 +1,10 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { badge, card, table, renderer } from "./shared.ts";
+import { badge, card, table, renderer, stacked } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
-const stacked = (name: unknown, desc: unknown) =>
-  html`<div>
-    <div class="primaryline">${name}</div>
-    ${desc ? html`<div class="subline">${desc}</div>` : nothing}
-  </div>`;
 export async function removeSkill(s: Data, c: Context) {
-  if (
-    !confirm(
-      "Remove '" +
-        (s.name || s.id) +
-        "' from " +
-        (c.dirLabel(s.ownerScopeId) || s.ownerScopeId) +
-        "? It stops being available to agents (kept for audit).",
-    )
-  )
+  const where = c.dirLabel(s.ownerScopeId) || s.ownerScopeId;
+  if (!confirm(`Remove '${s.name || s.id}' from ${where}? It stops being available to agents (kept for audit).`))
     return;
   try {
     const response = await c.api(
@@ -50,10 +38,10 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
     return;
   }
   const k = response.data;
-  const by = (() => {
-    if (k.pack) return "from " + (c.packRepoLabel(k.pack.url) || "pack " + c.shortId(k.pack.id, 8));
-    return k.createdBy?.startsWith("system:") ? "built-in" : "by " + (k.createdBy || "None");
-  })();
+  const by =
+    (k.pack && "from " + (c.packRepoLabel(k.pack.url) || "pack " + c.shortId(k.pack.id, 8))) ||
+    (k.createdBy?.startsWith("system:") ? "built-in" : "by " + (k.createdBy || "None"));
+  const org = (g: Data) => c.scopeKind(g.ownerScopeId) === "org";
   paint(
     card(
       k.name || k.id,
@@ -68,13 +56,8 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
           table(
             ["Scope", "Status", "Version", ""],
             [...group]
-              .sort((a, b) =>
-                (() => {
-                  if (c.scopeKind(a.ownerScopeId) === "org") return -1;
-                  return c.scopeKind(b.ownerScopeId) === "org"
-                    ? 1
-                    : (a.ownerScopeId || "").localeCompare(b.ownerScopeId || "");
-                })(),
+              .sort(
+                (a, b) => (org(a) && -1) || (org(b) && 1) || (a.ownerScopeId || "").localeCompare(b.ownerScopeId || ""),
               )
               .map((g) => [
                 c.scopeCell(g.ownerScopeId),
@@ -133,13 +116,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
   const paint = renderer(root);
   const detail = document.createElement("div");
   const draft = { url: "", ref: "", exclude: "", slug: "", tier: "third-party" };
-  let advanced = false,
-    registering = false,
-    message = "",
-    tone = "",
-    menu: string | null = null,
-    menuTop = 0,
-    menuLeft = 0;
+  let [advanced, registering, message, tone] = [false, false, "", ""];
+  let [menu, menuTop, menuLeft] = [null as string | null, 0, 0];
   const statuses = new Map<string, Data>();
   const pending = new Set<string>();
   const closeMenu = () => {
@@ -166,15 +144,13 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
   const register = async () => {
     if (registering) return;
     if (!draft.url.trim()) {
-      message = "A repo URL is required.";
-      tone = "err";
+      [message, tone] = ["A repo URL is required.", "err"];
       draw();
       return;
     }
     const submitted = JSON.stringify(draft);
     registering = true;
-    message = "Registering…";
-    tone = "";
+    [message, tone] = ["Registering…", ""];
     draw();
     const excluded = draft.exclude
       .split(",")
@@ -189,19 +165,16 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         ...(draft.tier !== "third-party" ? { trustTier: draft.tier } : {}),
       });
       if (!response.ok) {
-        message = response.data?.message || "Failed (" + response.status + ").";
-        tone = "err";
+        [message, tone] = [response.data?.message || "Failed (" + response.status + ").", "err"];
       } else {
         c.invalidate();
         if (JSON.stringify(draft) === submitted) await c.reload();
         else {
-          message = "Pack registered. Your newer changes have not been registered.";
-          tone = "ok";
+          [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
         }
       }
     } catch {
-      message = "Registration failed.";
-      tone = "err";
+      [message, tone] = ["Registration failed.", "err"];
     } finally {
       registering = false;
       draw();
@@ -220,33 +193,26 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
       return;
     }
     pending.add(s.id);
-    if (action === "sync") statuses.set(s.id, { text: "syncing…", tone: "saving" });
+    const sync = action === "sync";
+    if (sync) statuses.set(s.id, { text: "syncing…", tone: "saving" });
     draw();
     try {
-      const path = "/api/skill-packs/" + encodeURIComponent(s.id);
+      const syncMode = s.syncMode === "tracked" ? "pinned" : "tracked";
+      const [method, body] = ({ remove: ["DELETE"], sync: ["POST", {}], track: ["PATCH", { syncMode }] } as Data)[
+        action
+      ];
       const response = await c.api(
-        (() => {
-          if (action === "remove") return "DELETE";
-          return action === "sync" ? "POST" : "PATCH";
-        })(),
-        path + (action === "sync" ? "/sync" : ""),
-        (() => {
-          if (action === "sync") return {};
-          return action === "track" ? { syncMode: s.syncMode === "tracked" ? "pinned" : "tracked" } : undefined;
-        })(),
+        method,
+        "/api/skill-packs/" + encodeURIComponent(s.id) + (sync ? "/sync" : ""),
+        body,
       );
       if (!response.ok) {
-        statuses.set(s.id, {
-          text: (action === "sync" ? "sync failed: " : "Failed: ") + (response.data?.message || response.status),
-          tone: "err",
-        });
+        const text = (sync ? "sync failed: " : "Failed: ") + (response.data?.message || response.status);
+        statuses.set(s.id, { text, tone: "err" });
         return;
       }
-      if (action === "sync") {
-        const data = response.data || {},
-          n = (data.imported || []).length,
-          u = (data.updated || []).length,
-          a = (data.archived || []).length;
+      if (sync) {
+        const [n, u, a] = ["imported", "updated", "archived"].map((k) => (response.data?.[k] || []).length);
         statuses.set(s.id, {
           text:
             n || u || a
@@ -315,29 +281,24 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
               const li = s.lastImport,
                 counts = li?.counts || {},
                 tracked = s.syncMode === "tracked";
+              const removed = counts.archived ? ` · ${counts.archived} removed` : "";
               const delta = li
-                ? "last sync: " +
-                  (counts.imported || 0) +
-                  " new · " +
-                  (counts.updated || 0) +
-                  " updated · " +
-                  (counts.skipped || 0) +
-                  " skipped" +
-                  (counts.archived ? " · " + counts.archived + " removed" : "")
+                ? `last sync: ${counts.imported || 0} new · ${counts.updated || 0} updated · ${counts.skipped || 0} skipped${removed}`
                 : "";
               const status =
                 statuses.get(s.id) ||
-                (() => {
-                  if (li?.status === "error")
-                    return { text: "error: " + (li.error || "sync failed"), tone: "err", title: li.error || "" };
-                  return s.updateAvailable
-                    ? {
-                        text: "update available",
-                        tone: "dirty",
-                        title: "Upstream advanced past the imported commit. Sync now (or turn on Auto-sync) to apply.",
-                      }
-                    : { text: li ? "up to date" : "not imported", tone: "muted", title: delta };
-                })();
+                (li?.status === "error" && {
+                  text: "error: " + (li.error || "sync failed"),
+                  tone: "err",
+                  title: li.error || "",
+                }) ||
+                (s.updateAvailable
+                  ? {
+                      text: "update available",
+                      tone: "dirty",
+                      title: "Upstream advanced past the imported commit. Sync now (or turn on Auto-sync) to apply.",
+                    }
+                  : { text: li ? "up to date" : "not imported", tone: "muted", title: delta });
               return [
                 {
                   node: html`<span class="pack-name" title=${s.url + (delta ? "\n" + delta : "")}
@@ -433,14 +394,11 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     counts = plan.counts || {};
   const selectedScopes = new Set<string>(["org:" + c.orgId]);
   const selected = new Set<string>();
-  let filter = "all",
-    busy = false,
-    message = "",
-    tone = "",
-    closed = false;
+  let [filter, busy, message, tone, closed] = ["all", false, "", "", false];
   const all = (row: Data) =>
     selectedScopes.size > 0 && [...selectedScopes].every((scope) => (row.importedScopes || []).includes(scope));
   const eligible = (row: Data) => row.eligible && !all(row);
+  const state = (r: Data) => (all(r) && "imported") || (r.eligible ? "eligible" : r.excludeReason || "excluded");
   let previousEligible = new Set<string>();
   const recompute = () => {
     const next = new Set(candidates.filter(eligible).map((r) => r.upstreamName));
@@ -451,6 +409,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     previousEligible = next;
     draw();
   };
+  const held = (label: string, help: string) => ({ label, tone: "muted", help: "Held back: " + help });
   const reasons: Record<string, Data> = {
     all: { label: "all", tone: "muted", help: "Show every skill." },
     eligible: {
@@ -463,23 +422,23 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
       tone: "info",
       help: "Already imported into the selected scope(s). Sync refreshes them; un-index to remove.",
     },
-    scope: {
-      label: "personal-scoped",
-      tone: "muted",
-      help: "Held back: declares a personal/owner scope, so it isn't imported as a shared pack skill.",
-    },
-    private: { label: "private", tone: "muted", help: "Held back: marked owner-only / agent-only." },
-    collision: {
-      label: "collision",
-      tone: "muted",
-      help: "Held back: the name matches an existing platform or seed skill.",
-    },
-    "binary-asset": {
-      label: "binary files",
-      tone: "muted",
-      help: "Held back: contains binary files (import is text-only).",
-    },
-    malformed: { label: "malformed", tone: "muted", help: "Held back: missing or unreadable SKILL.md frontmatter." },
+    scope: held("personal-scoped", "declares a personal/owner scope, so it isn't imported as a shared pack skill."),
+    private: held("private", "marked owner-only / agent-only."),
+    collision: held("collision", "the name matches an existing platform or seed skill."),
+    "binary-asset": held("binary files", "contains binary files (import is text-only)."),
+    malformed: held("malformed", "missing or unreadable SKILL.md frontmatter."),
+  };
+  const rowBadge = (row: Data) => {
+    const where = (row.importedScopes || []).join(", ");
+    if (all(row)) return badge("imported", "info", "Already imported into the selected scope(s): " + where);
+    const reason = reasons[row.excludeReason];
+    if (!row.eligible) return badge(reason?.label || row.excludeReason || "excluded", "warn", reason?.help || "");
+    const partial = [...selectedScopes].some((s) => (row.importedScopes || []).includes(s));
+    return badge(
+      "eligible",
+      "ok",
+      partial ? "Imported into " + where + ". Importing adds it to the other selected scope(s)." : "",
+    );
   };
   const choices = [
     { scopeId: "org:" + c.orgId, label: "org-wide" },
@@ -489,14 +448,15 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
   const importSelected = async () => {
     if (busy) return;
     if (!selectedScopes.size || !selected.size) {
-      message = !selectedScopes.size ? "Pick at least one scope to add skills to." : "Select at least one skill.";
-      tone = "err";
+      [message, tone] = [
+        !selectedScopes.size ? "Pick at least one scope to add skills to." : "Select at least one skill.",
+        "err",
+      ];
       draw();
       return;
     }
     busy = true;
-    message = "Importing…";
-    tone = "";
+    [message, tone] = ["Importing…", ""];
     draw();
     const scopes = [...selectedScopes],
       names = [...selected];
@@ -506,26 +466,18 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
         scopeIds: scopes,
       });
       if (!result.ok) {
-        message = result.data?.message || "Import failed (" + result.status + ").";
-        tone = "err";
+        [message, tone] = [result.data?.message || "Import failed (" + result.status + ").", "err"];
       } else {
         const added = result.data.imported?.length ?? 0;
-        message =
-          "✓ " +
-          added +
-          " skill" +
-          (added === 1 ? "" : "s") +
-          " added" +
-          (scopes.length > 1 ? " across " + scopes.length + " scopes" : "");
-        tone = "ok";
+        const across = scopes.length > 1 ? " across " + scopes.length + " scopes" : "";
+        [message, tone] = [`✓ ${added} skill${added === 1 ? "" : "s"} added${across}`, "ok"];
         c.invalidate();
         setTimeout(() => {
           if (root.isConnected && !closed) c.reload();
         }, 1500);
       }
     } catch {
-      message = "Import failed.";
-      tone = "err";
+      [message, tone] = ["Import failed.", "err"];
     } finally {
       busy = false;
       draw();
@@ -542,14 +494,12 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     if (closed) return;
     const importable = candidates.filter(eligible),
       selectedCount = importable.filter((r) => selected.has(r.upstreamName)).length;
-    const shown = candidates.filter(
-      (r) =>
-        filter === "all" ||
-        (() => {
-          if (all(r)) return "imported";
-          return r.eligible ? "eligible" : r.excludeReason || "excluded";
-        })() === filter,
-    );
+    const shown = candidates.filter((r) => filter === "all" || state(r) === filter);
+    const tally: Data = {
+      all: candidates.length,
+      eligible: importable.length,
+      imported: candidates.filter(all).length,
+    };
     paint(
       html`<section class="card" style="position:relative">
         <div class="head">
@@ -596,17 +546,7 @@ ${plan.bundlePaths.join("\n")}</pre>
                           filter = key;
                           draw();
                         }}
-                        >${
-                          (() => {
-                            if (key === "all") return candidates.length;
-                            return (() => {
-                              if (key === "eligible") return importable.length;
-                              return key === "imported" ? candidates.filter(all).length : counts[key] || 0;
-                            })();
-                          })() +
-                          " " +
-                          reason.label
-                        }</span
+                        >${(tally[key] ?? (counts[key] || 0)) + " " + reason.label}</span
                       >`,
                   )}
               </div>
@@ -621,11 +561,8 @@ ${plan.bundlePaths.join("\n")}</pre>
                     .checked=${importable.length > 0 && selectedCount === importable.length}
                     .indeterminate=${selectedCount > 0 && selectedCount < importable.length}
                     @change=${(e: Event) => {
-                      const on = (e.target as HTMLInputElement).checked;
-                      for (const row of importable) {
-                        if (on) selected.add(row.upstreamName);
-                        else selected.delete(row.upstreamName);
-                      }
+                      const toggle = (e.target as HTMLInputElement).checked ? "add" : "delete";
+                      for (const row of importable) selected[toggle](row.upstreamName);
                       draw();
                     }}
                   />`,
@@ -640,38 +577,13 @@ ${plan.bundlePaths.join("\n")}</pre>
                       .checked=${selected.has(row.upstreamName)}
                       ?disabled=${!eligible(row)}
                       @change=${(e: Event) => {
-                        if ((e.target as HTMLInputElement).checked) selected.add(row.upstreamName);
-                        else selected.delete(row.upstreamName);
+                        selected[(e.target as HTMLInputElement).checked ? "add" : "delete"](row.upstreamName);
                         draw();
                       }}
                     />`,
                   },
                   { node: stacked(row.upstreamName, row.normalized?.manifest?.description || "") },
-                  {
-                    node: (() => {
-                      if (all(row))
-                        return badge(
-                          "imported",
-                          "info",
-                          "Already imported into the selected scope(s): " + (row.importedScopes || []).join(", "),
-                        );
-                      return row.eligible
-                        ? badge(
-                            "eligible",
-                            "ok",
-                            [...selectedScopes].some((s) => (row.importedScopes || []).includes(s))
-                              ? "Imported into " +
-                                  (row.importedScopes || []).join(", ") +
-                                  ". Importing adds it to the other selected scope(s)."
-                              : "",
-                          )
-                        : badge(
-                            reasons[row.excludeReason]?.label || row.excludeReason || "excluded",
-                            "warn",
-                            reasons[row.excludeReason]?.help || "",
-                          );
-                    })(),
-                  },
+                  { node: rowBadge(row) },
                 ]),
                 filter === "all"
                   ? "No skills found in this pack."
@@ -686,12 +598,8 @@ ${plan.bundlePaths.join("\n")}</pre>
           title="Close"
           aria-label="Close browse"
           style="position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px"
-          @mouseenter=${(e: Event) => {
-            (e.target as HTMLElement).style.opacity = "1";
-          }}
-          @mouseleave=${(e: Event) => {
-            (e.target as HTMLElement).style.opacity = "0.55";
-          }}
+          @mouseenter=${(e: Event) => ((e.target as HTMLElement).style.opacity = "1")}
+          @mouseleave=${(e: Event) => ((e.target as HTMLElement).style.opacity = "0.55")}
           @click=${() => {
             closed = true;
             paint(nothing);
