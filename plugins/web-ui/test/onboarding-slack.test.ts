@@ -112,6 +112,10 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     assert.equal(closed, true);
     assert.match(element.textContent ?? "", /Could not start Slack installation/);
     assert.equal(element.querySelector<HTMLButtonElement>(".slack-connect")!.disabled, false);
+    launchCode = 403;
+    element.querySelector<HTMLButtonElement>(".slack-connect")!.click();
+    await settle();
+    assert.match(element.textContent ?? "", /Only a QM administrator can add QM to Slack/);
     statusCode = 200;
     status = { configured: false };
     window.dispatchEvent(new window.Event("focus"));
