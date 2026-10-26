@@ -290,7 +290,9 @@ test("a silent cron source run stays out of normal human chat history", async ()
   await runNowSettled(built.scheduler, cron.id);
 
   assert.equal((await built.posts.pending("principal")).length, 0, "finish_silently means no delivery");
-  const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
+  const source = (await built.sessions.listByScope(scopeId("personal", "U1"))).find((s) =>
+    s.threadRef.startsWith(`cron:${cron.id}:fire:`),
+  );
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
   const sourceEntries = await built.sessions.getItems(source!.id);
   assert.ok(

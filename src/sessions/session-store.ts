@@ -579,7 +579,7 @@ export interface SessionStore {
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
-  purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
+  purgeLlmCaptures(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
@@ -606,8 +606,6 @@ export interface SessionStore {
   /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
-  scanAll(): Promise<Session[]>;
-
   countSessions(): Promise<number>;
 
   listByScope(scope: ScopeId): Promise<Session[]>;
@@ -628,9 +626,9 @@ export interface SessionStore {
 
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
-  spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
+  spendReport(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
 
-  refreshSpendRollup?(): Promise<void>;
+  refreshSpendRollup(): Promise<void>;
 
   listParticipants(): Promise<ParticipantWindow[]>;
 

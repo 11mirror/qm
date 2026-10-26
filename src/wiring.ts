@@ -2516,28 +2516,25 @@ export function buildApp(
   const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
   const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
   const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
-  const spendSweeper = sessions.refreshSpendRollup
-    ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
-        label: "spend-refresh",
-        immediate: true,
-      })
-    : null;
-  const llmCaptureSweeper = sessions.purgeLlmCaptures
-    ? createSweeper(
-        () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
-            let leaseLost = false;
-            void lost.then(() => (leaseLost = true));
-            const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-              deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
-              stop: () => leaseLost,
-            });
-            if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-          }),
-        LLM_CAPTURE_SWEEP_MS,
-        { label: "llm-capture-retention" },
-      )
-    : null;
+  const spendSweeper = createSweeper(
+    () => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup()),
+    60_000,
+    { label: "spend-refresh", immediate: true },
+  );
+  const llmCaptureSweeper = createSweeper(
+    () =>
+      leaderLease.hold("llm-capture:retention", async (lost) => {
+        let leaseLost = false;
+        void lost.then(() => (leaseLost = true));
+        const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
+          deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
+          stop: () => leaseLost,
+        });
+        if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
+      }),
+    LLM_CAPTURE_SWEEP_MS,
+    { label: "llm-capture-retention" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2609,8 +2606,8 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
-      spendSweeper?.start();
-      llmCaptureSweeper?.start();
+      spendSweeper.start();
+      llmCaptureSweeper.start();
       semanticMemory.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
@@ -2642,8 +2639,8 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
-      spendSweeper?.stop(),
-      llmCaptureSweeper?.stop(),
+      spendSweeper.stop(),
+      llmCaptureSweeper.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
       deployMaintenanceSweeper.stop(),

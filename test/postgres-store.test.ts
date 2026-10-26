@@ -188,48 +188,48 @@ test("pg saved spend refreshes changed days and preserves live attribution", { s
       scopeLabel: scope,
       usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, totalTokens: 14, costUsd: 0.25 },
     });
-  const read = async () => (await store.spendReport!(range)).rows;
+  const read = async () => (await store.spendReport(range)).rows;
   const check = async () => assert.deepEqual(await read(), await store.spendRollup(range));
   try {
     const first = await bill();
     await check();
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await check();
     at += 1_000;
     await bill();
     assert.equal((await read())[0]!.calls, 1);
-    assert.equal((await store.spendReport!(range)).asOf, base + 123);
-    await store.refreshSpendRollup!();
+    assert.equal((await store.spendReport(range)).asOf, base + 123);
+    await store.refreshSpendRollup();
     await check();
     assert.equal((await read())[0]!.calls, 2);
     const restarted = createPostgresSessionStore(URL!, { now: () => at });
-    assert.deepEqual((await restarted.spendReport!(range)).rows, await read());
+    assert.deepEqual((await restarted.spendReport(range)).rows, await read());
 
     await raw.query("UPDATE session_llm_requests SET created_at = $2, model = 'moved', usage_json = $3 WHERE id = $1", [
       first.id,
       base + day + 1,
       JSON.stringify({ input: 1, costUsd: 2 }),
     ]);
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await check();
     assert.equal((await read()).length, 2);
     const parent = await store.getOrCreateByThread(`cron:${randomUUID()}`, "dm", scope);
     await store.setParentSession(session.id, parent.id);
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await check();
     assert.ok((await read()).every((r) => r.origin === "cron"));
     await raw.query("UPDATE sessions SET scope_id = $2 WHERE id = $1", [session.id, "personal:saved-moved"]);
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await check();
     assert.ok((await read()).every((r) => r.scopeId === "personal:saved-moved"));
     await store.deleteSession(parent.id);
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await check();
     assert.ok((await read()).every((r) => r.origin === "conversation"));
     const partial = { from: base + 124, to: base + day };
-    assert.deepEqual((await store.spendReport!(partial)).rows, await store.spendRollup(partial));
+    assert.deepEqual((await store.spendReport(partial)).rows, await store.spendRollup(partial));
     await store.deleteSession(session.id);
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     assert.deepEqual(await read(), []);
     assert.equal(
       (await raw.query("SELECT jsonb_array_length(rows) AS n FROM session_spend_days WHERE day = $1", [base / day]))
@@ -273,11 +273,11 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
   };
   try {
     await bill();
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await bill();
     duringRollup = bill;
-    await store.refreshSpendRollup!();
-    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 2);
+    await store.refreshSpendRollup();
+    assert.equal((await store.spendReport(range)).rows[0]!.calls, 2);
     assert.equal((await store.spendRollup(range))[0]!.calls, 3);
     assert.ok(
       Number(
@@ -285,14 +285,14 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
           .n,
       ) > 0,
     );
-    await store.refreshSpendRollup!();
-    assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
+    await store.refreshSpendRollup();
+    assert.deepEqual((await store.spendReport(range)).rows, await store.spendRollup(range));
     const healthyId = randomUUID();
     await raw.query(
       "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,'healthy',$3,$4,$5)",
       [healthyId, session.id, scope, base - 86_400_000, JSON.stringify({ costUsd: 1 })],
     );
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     await raw.query("UPDATE session_llm_requests SET usage_json = $2 WHERE id = $1", [
       healthyId,
       JSON.stringify({ costUsd: 2 }),
@@ -303,13 +303,13 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
       Date.now = () => elapsed;
       throw new Error("injected slow spend refresh failure");
     };
-    await store.refreshSpendRollup!();
+    await store.refreshSpendRollup();
     Date.now = wallClock;
-    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 3);
-    const healthy = await store.spendReport!({ from: base - 86_400_000, to: base });
+    assert.equal((await store.spendReport(range)).rows[0]!.calls, 3);
+    const healthy = await store.spendReport({ from: base - 86_400_000, to: base });
     assert.equal(healthy.rows[0]!.costUsd, 2);
-    await Promise.all([store.refreshSpendRollup!(), store.refreshSpendRollup!()]);
-    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 4);
+    await Promise.all([store.refreshSpendRollup(), store.refreshSpendRollup()]);
+    assert.equal((await store.spendReport(range)).rows[0]!.calls, 4);
     assert.equal(
       Number(
         (await raw.query("SELECT count(*) AS n FROM session_spend_dirty WHERE day = $1", [base / 86_400_000])).rows[0]
@@ -364,7 +364,7 @@ test(
       clock += 60_000;
       at = clock;
       slow = true;
-      await store.refreshSpendRollup!();
+      await store.refreshSpendRollup();
       slow = false;
     };
     const pending = async () =>
@@ -375,7 +375,7 @@ test(
       for (const offset of [0, 1, 2, 3]) {
         await bill(offset);
         at = base + offset * day;
-        await store.refreshSpendRollup!();
+        await store.refreshSpendRollup();
       }
       for (const offset of [0, 1, 2, 3]) await bill(offset);
       t.mock.method(Date, "now", () => elapsed);
@@ -413,7 +413,7 @@ test(
     const scope = scopeId("personal", `commit-${randomUUID()}`);
     const session = await store.getOrCreateByThread(scope, "dm", scope);
     try {
-      await store.refreshSpendRollup!();
+      await store.refreshSpendRollup();
       await editor.query("BEGIN");
       await editor.query("UPDATE sessions SET origin = 'cron' WHERE id = $1", [session.id]);
       await store.recordLlmRequest(session.id, {
@@ -423,23 +423,23 @@ test(
         scopeLabel: scope,
         usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, costUsd: 1 },
       });
-      await store.refreshSpendRollup!();
-      assert.equal((await store.spendReport!(range)).rows[0]!.origin, "conversation");
+      await store.refreshSpendRollup();
+      assert.equal((await store.spendReport(range)).rows[0]!.origin, "conversation");
       await editor.query("COMMIT");
       at += 1_000;
-      assert.ok((await store.spendReport!(range)).asOf! < at);
-      await store.refreshSpendRollup!();
-      assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
-      assert.equal((await store.spendReport!(range)).rows[0]!.origin, "cron");
+      assert.ok((await store.spendReport(range)).asOf! < at);
+      await store.refreshSpendRollup();
+      assert.deepEqual((await store.spendReport(range)).rows, await store.spendRollup(range));
+      assert.equal((await store.spendReport(range)).rows[0]!.origin, "cron");
       for (const cost of ["NaN", "Infinity", "-Infinity"]) {
         await raw.query(
           "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,$3,$4,$5,$6)",
           [randomUUID(), session.id, cost, scope, base, JSON.stringify({ costUsd: cost })],
         );
       }
-      await store.refreshSpendRollup!();
-      assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
-      assert.ok(Number.isNaN((await store.spendReport!(range)).rows.find((r) => r.model === "NaN")!.costUsd));
+      await store.refreshSpendRollup();
+      assert.deepEqual((await store.spendReport(range)).rows, await store.spendRollup(range));
+      assert.ok(Number.isNaN((await store.spendReport(range)).rows.find((r) => r.model === "NaN")!.costUsd));
     } finally {
       await editor.query("ROLLBACK");
       editor.release();
@@ -825,10 +825,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     "only entries from the member's tenure are visible",
   );
   assert.equal((await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries, true);
-  assert.equal(
-    (await s.scanAll()).some((x) => x.id === a.id),
-    true,
-  );
+  assert.ok(await s.get(a.id));
 
   assert.equal((await s.getByThread("t1"))?.id, a.id);
   assert.equal(await s.getByThread("never-written"), null, "missing thread → null, no session created");
@@ -1456,7 +1453,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
 
 test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
-  await s.scanAll();
+  await s.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1584,14 +1581,14 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
   const raw = new pg.Pool({ connectionString: URL });
   try {
     const seed = createPostgresSessionStore(URL!);
-    await seed.scanAll();
+    await seed.countSessions();
     await raw.query(`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
       LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
       BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
     await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON sessions ((safe_jsonb(title) ->> 'ts'))");
 
     const s = createPostgresSessionStore(URL!);
-    await s.scanAll();
+    await s.countSessions();
 
     const result = await raw.query(
       `SELECT proname, proparallel
@@ -1621,7 +1618,7 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
 
 test("no plpgsql exception handler is marked parallel-safe anywhere in the schema", { skip }, async () => {
   const seed = createPostgresSessionStore(URL!);
-  await seed.scanAll();
+  await seed.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -2545,7 +2542,14 @@ test(
     await s.getOrCreateByThread("btr-c", "dm", uma);
     await s.updateTitle(a.id, "board deck");
 
-    const all = await s.scanAll();
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const all = (
+      await raw.query<{ threadRef: string; scopeId: string; type: string }>(
+        `SELECT thread_ref AS "threadRef", scope_id AS "scopeId", type FROM sessions`,
+      )
+    ).rows;
+    await raw.end();
     const byRefExpected = new Map(all.map((x) => [x.threadRef, x]));
     const refs = await s.sessionsByThreadRefs(["btr-a", "btr-c", "btr-missing"]);
     assert.deepEqual(refs.map((r) => r.threadRef).sort(), ["btr-a", "btr-c"], "only existing refs returned");
@@ -2558,11 +2562,11 @@ test(
 
     const distinct = new Map((await s.distinctScopes()).map((d) => [d.scopeId, d.channelName]));
     const scopesFromAll = new Set(all.map((x) => x.scopeId));
-    assert.deepEqual([...distinct.keys()].sort(), [...scopesFromAll].sort(), "same distinct scope set as scanAll");
+    assert.deepEqual([...distinct.keys()].sort(), [...scopesFromAll].sort(), "same distinct scope set as a full scan");
     assert.equal(distinct.get(eng), "eng", "a non-null channel name wins for the scope");
     assert.equal(distinct.get(uma), undefined, "no channel name for a personal scope");
 
-    assert.equal(await s.countSessions(), all.length, "same total as scanAll");
+    assert.equal(await s.countSessions(), all.length, "same total as a full scan");
     await s.addParticipant(a.id, "UMA");
     await s.addParticipant(a.id, "UBOB");
     await s.removeParticipant(a.id, "UBOB");
@@ -3146,13 +3150,13 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
     const kept = await record("recent");
     await record("reused");
     const range = { from: Date.UTC(2025, 0, 1), to: Date.UTC(2025, 0, 1) + 41 * day };
-    await store.refreshSpendRollup!();
-    const spendBefore = (await store.spendReport!(range)).rows;
+    await store.refreshSpendRollup();
+    const spendBefore = (await store.spendReport(range)).rows;
     const dirtyBefore = Number((await raw.query("SELECT count(*) AS n FROM session_spend_dirty")).rows[0].n);
 
-    assert.equal(await store.purgeLlmCaptures!(at - 30 * day, { stop: () => true }), 0);
-    assert.equal(await store.purgeLlmCaptures!(at - 30 * day), 251);
-    assert.equal(await store.purgeLlmCaptures!(at - 30 * day), 0);
+    assert.equal(await store.purgeLlmCaptures(at - 30 * day, { stop: () => true }), 0);
+    assert.equal(await store.purgeLlmCaptures(at - 30 * day), 251);
+    assert.equal(await store.purgeLlmCaptures(at - 30 * day), 0);
 
     const rows = new Map((await store.listLlmRequests(session.id)).map((r) => [r.id, r]));
     assert.equal(rows.size, 254);
@@ -3165,7 +3169,7 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
       dirtyBefore,
       "purging prompts does not dirty spend days",
     );
-    assert.deepEqual((await store.spendReport!(range)).rows, spendBefore);
+    assert.deepEqual((await store.spendReport(range)).rows, spendBefore);
     assert.deepEqual(await store.spendRollup(range), spendBefore);
     assert.equal(
       (

@@ -422,7 +422,7 @@ async function loadSpendRows(
   sessions: SessionStore,
   range: { from: number; to: number },
 ): Promise<{ rows: SpendRow[]; asOf?: number }> {
-  return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
+  return sessions.spendReport(range);
 }
 
 async function cronInfoLookup(
