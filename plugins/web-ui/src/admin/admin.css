@@ -342,12 +342,6 @@
 #app-view #view-connectors section.card {
   box-shadow: none;
 }
-#app-view .card-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-}
 #app-view .viewlink {
   border: 0;
   background: transparent;
@@ -360,29 +354,6 @@
 #app-view .viewlink:hover,
 #app-view .viewlink:focus-visible {
   color: var(--text);
-}
-#app-view .parity-subsection {
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-}
-#app-view .parity-subsection:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-#app-view .parity-subsection:last-child {
-  padding-bottom: 0;
-}
-#app-view .parity-subsection > .head {
-  margin-bottom: 12px;
-}
-#app-view .parity-subsection > .head h2 {
-  margin: 0;
-  font-size: 13px;
-}
-#app-view .parity-subsection > .head p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 12px;
 }
 #app-view .card.dirty {
   border-color: #d0a85c;
@@ -689,40 +660,6 @@
 #app-view .tablewrap table {
   min-width: 680px;
 }
-#app-view .history-table {
-  min-width: 860px;
-  table-layout: fixed;
-}
-#app-view .history-table td {
-  min-width: 0;
-}
-#app-view .history-table .primaryline,
-#app-view .history-table .subline {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-#app-view .history-conversation .primaryline {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-weight: 500;
-}
-#app-view .history-activity .primaryline {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#app-view .history-activity .subline {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#app-view .history-conversation .subline {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 #app-view th {
   text-align: left;
   font-size: 12px;
@@ -791,9 +728,6 @@
   color: var(--muted);
   font-size: 12px;
   margin-top: 2px;
-}
-#app-view .history-volume-cell {
-  white-space: nowrap;
 }
 #app-view .badge {
   display: inline-block;
@@ -965,12 +899,6 @@
 #app-view .history-empty-scope:hover {
   color: var(--text);
 }
-#app-view .segmented {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
 #app-view .seg {
   color: var(--muted);
   font-size: 12px;
@@ -1007,10 +935,6 @@
 #app-view .grant-form .f.grow {
   flex: 1;
   min-width: 200px;
-}
-#app-view td .rowact {
-  display: flex;
-  gap: 8px;
 }
 #app-view .slack-message-example {
   margin: 20px 0 0;
@@ -1193,19 +1117,6 @@
   width: 36px;
   height: 28px;
 }
-#app-view .scope-link {
-  border: 0;
-  padding: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-#app-view .scope-link:hover {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 #app-view .kpis {
   display: grid;
   gap: 10px;
@@ -1229,26 +1140,12 @@
   font-size: 12px;
   margin-top: 2px;
 }
-#app-view .history-scope-cell {
-  font-family: inherit;
-  color: var(--muted);
-}
-#app-view .history-scope-cell .primaryline {
-  font-weight: 400;
-}
-#app-view .history-scope-cell .subline {
-  display: none;
-}
 #app-view.history-view #view-data > .card {
   margin-bottom: 14px;
 }
 #app-view.history-view #view-data > .card > .head {
   margin-bottom: 10px;
   padding-bottom: 8px;
-}
-#app-view.history-view .history-table td {
-  padding-top: 6px;
-  padding-bottom: 6px;
 }
 #app-view .status {
   font-size: 13px;
@@ -1269,10 +1166,6 @@
 #app-view .empty {
   color: var(--muted);
   padding: 10px 0;
-}
-#app-view .notebox {
-  color: var(--muted);
-  font-size: 13px;
 }
 #app-view .loadingline {
   color: var(--muted);
@@ -1352,38 +1245,10 @@
 #app-view tr.openable:hover td {
   background: var(--subtle);
 }
-#app-view tr.monologue-row td {
-  background-color: color-mix(in srgb, var(--trigger) 3%, transparent);
-}
-#app-view tr.monologue-row td:first-child {
-  background-image: linear-gradient(to right, var(--trigger) 0 2px, transparent 2px);
-}
-#app-view tr.monologue-row.openable:hover td {
-  background-color: color-mix(in srgb, var(--trigger) 8%, transparent);
-}
 #app-view td .open,
 #app-view td a {
   color: var(--text);
   text-decoration: none;
-}
-#app-view .cell-link {
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: none;
-}
-#app-view .cell-link:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-#app-view tr.openable.unlinkable {
-  cursor: default;
-}
-#app-view tr.openable.unlinkable:hover td {
-  background: transparent;
 }
 #app-view .dense-list {
   display: flex;
@@ -1464,19 +1329,6 @@
   max-width: var(--readw);
   display: flex;
   flex-direction: column;
-}
-#app-view .sm-rawfeed {
-  max-width: var(--readw);
-  margin: 0 0 8px;
-  font-size: 12px;
-}
-#app-view .sm-rawfeed a {
-  color: var(--muted);
-  text-decoration: none;
-}
-#app-view .sm-rawfeed a:hover {
-  color: var(--accent, #4a7dff);
-  text-decoration: underline;
 }
 #app-view .sm-msg {
   display: flex;
@@ -1764,38 +1616,6 @@
   border-radius: 8px;
   background: var(--surface);
 }
-#app-view .vhead {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 0 0 16px;
-  padding: 0 0 10px;
-  border-bottom: 1px solid var(--border);
-}
-#app-view .vhead h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0;
-}
-#app-view .vhead .titleblock {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-#app-view .vhead .meta {
-  color: var(--muted);
-  font-size: 12px;
-}
-#app-view .vhead .actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-left: auto;
-}
-#app-view .vhead .copy {
-  margin-left: auto;
-}
 #app-view .transcript-stream {
   display: flex;
   flex-direction: column;
@@ -2058,13 +1878,6 @@
   border-left: 3px solid var(--danger);
   padding-left: 10px;
 }
-#app-view .cache-row {
-  margin: 6px 0 0;
-}
-#app-view .cache-row .cache-label {
-  color: var(--muted);
-  font-size: 12px;
-}
 #app-view .context-turn.collapsed {
   margin-bottom: 12px;
 }
@@ -2093,22 +1906,6 @@
   border: 0;
   background: transparent;
   padding: 0;
-}
-#app-view .context-total {
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 12px;
-  margin: 0 0 8px;
-}
-#app-view .context-total strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-#app-view .context-total span {
-  color: var(--muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
 }
 #app-view .context-stack {
   display: flex;
@@ -2198,12 +1995,6 @@
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-#app-view .context-request-actions {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-left: auto;
 }
 #app-view .context-raw {
   appearance: none;
@@ -2458,8 +2249,7 @@
   color: var(--text);
   background: none;
 }
-#app-view .entry pre,
-#app-view .filepre {
+#app-view .entry pre {
   margin: 0;
   padding: 5px 9px;
   background: var(--subtle);
@@ -2531,17 +2321,6 @@
 #app-view .entry.noise > pre {
   max-height: 220px;
   overflow: auto;
-}
-#app-view .filemeta {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  color: var(--muted);
-  font-size: 12px;
-}
-#app-view .pathcrumb {
-  word-break: break-all;
 }
 #app-view .field-hint {
   color: var(--muted);
@@ -3311,23 +3090,6 @@
   font-size: 11px;
   line-height: 1.35;
 }
-#app-view .governance-effective {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: 7px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
-  vertical-align: 1px;
-}
-#app-view .governance-effective::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: #98a2b3;
-}
 #app-view .policy-result {
   margin-top: 10px;
   padding: 10px 12px;
@@ -3349,15 +3111,6 @@
   gap: 5px;
   margin-top: 10px;
   color: var(--warn);
-  font-size: 12px;
-}
-#app-view .policy-notice {
-  margin: 10px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--warn-border);
-  border-radius: 8px;
-  color: var(--warn-text);
-  background: var(--warn-surface);
   font-size: 12px;
 }
 #app-view.governance-view .shellbar {
@@ -3734,14 +3487,6 @@
   #app-view .viewer {
     padding: 12px;
   }
-  #app-view .vhead {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  #app-view .vhead .actions,
-  #app-view .vhead .copy {
-    margin-left: 0;
-  }
   #app-view .entry .who {
     flex-wrap: wrap;
   }
@@ -3758,14 +3503,12 @@
   #app-view .context-turn {
     margin-left: 0;
   }
-  #app-view .context-total,
   #app-view .context-request-head {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
   }
-  #app-view .context-stats,
-  #app-view .context-request-actions {
+  #app-view .context-stats {
     margin-left: 0;
     justify-content: flex-start;
   }
@@ -3947,16 +3690,6 @@
   font-size: 12.5px;
   font-weight: 500;
 }
-#app-view #view-governance .parity-subsection {
-  padding: 4px 0;
-  border: 0;
-}
-#app-view #view-governance .parity-subsection > .head {
-  display: none;
-}
-#app-view #view-governance .parity-subsection > .foot {
-  margin-top: 6px;
-}
 #app-view #view-governance .environment-notice.hidden {
   display: none;
 }
@@ -4072,13 +3805,6 @@
   min-height: 140px;
   max-height: 360px;
   resize: vertical;
-}
-#app-view .governance-secondary-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
 }
 #app-view #view-governance :is(.card, .parity-subsection) > .foot:has([data-save]),
 #app-view #view-governance :is(.card, .parity-subsection) > .foot:has(#governance-org-ambient-save) {
@@ -4290,26 +4016,11 @@
   text-align: right;
   font-size: 12px;
 }
-#app-view #view-governance .audience-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  min-height: 34px;
-}
-#app-view #view-governance .audience-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-}
 #app-view #view-governance #card-command-policy > .body,
 #app-view #view-governance #card-egress > .body,
 #app-view #view-governance #card-ambient-policy > .body {
   grid-column: 1 / -1;
   margin-top: 12px;
-}
-#app-view #view-governance .governance-secondary-actions {
-  font-size: 12px;
 }
 @media (max-width: 1100px) {
   #app-view #view-governance section.card,
@@ -4338,23 +4049,6 @@
   #app-view #view-governance #sharing-posture-effective {
     text-align: left;
   }
-  #app-view #view-governance .audience-toggle {
-    justify-content: flex-start;
-  }
-}
-#app-view .posture-help {
-  margin-top: 8px;
-  font-size: 13px;
-}
-#app-view .posture-help dl {
-  margin: 12px 0 0;
-}
-#app-view .posture-help dt {
-  font-weight: 500;
-}
-#app-view .posture-help dd {
-  margin: 4px 0 12px;
-  color: var(--muted);
 }
 #app-view .screening-count {
   display: flex;
@@ -4379,12 +4073,6 @@
 }
 #app-view #view-governance .screening-test-help {
   margin: 0 0 12px;
-}
-#app-view #view-governance .posture-help dl {
-  margin-top: 12px;
-}
-#app-view #view-governance .posture-help dd:last-child {
-  margin-bottom: 0;
 }
 #app-view #view-governance #card-security-posture .choice-stack,
 #app-view #view-governance #card-sharing-posture .choice-stack,
@@ -5086,19 +4774,6 @@
 #app-view #view-governance .sv-customize .setting-copy small {
   margin-top: 4px;
 }
-#app-view #view-governance .parity-subsection {
-  display: block;
-  min-height: 0;
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-}
-#app-view #view-governance .parity-subsection:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-#app-view #view-governance .parity-subsection:last-child {
-  padding-bottom: 0;
-}
 #app-view #view-governance :is(.card, .parity-subsection) > .foot .status {
   font-size: 12px;
   line-height: 1.4;
@@ -5741,9 +5416,7 @@
   margin-bottom: 4px;
 }
 
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head h2,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .parity-subsection > .head h2,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .spec-demo > .head h2 {
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head h2 {
   margin: 0;
   font-size: var(--section-font);
   font-weight: 500;
@@ -5751,7 +5424,6 @@
 }
 
 :where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head p,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .parity-subsection > .head p,
 :where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .hint,
 :where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .field-hint {
   font-size: var(--control-font);
@@ -5760,8 +5432,7 @@
   color: var(--muted);
 }
 
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head p,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .parity-subsection > .head p {
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head p {
   margin: 4px 0 0;
   max-width: 70ch;
 }
@@ -5771,15 +5442,13 @@
   padding-block: var(--section-gap);
 }
 
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .parity-subsection > .foot {
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot {
   gap: var(--control-gap);
   align-items: center;
   flex-wrap: wrap;
 }
 
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot:has(> .primary),
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .parity-subsection > .foot:has(> .primary) {
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot:has(> .primary) {
   display: flex;
   justify-content: flex-end;
 }
@@ -6538,73 +6207,6 @@
   #app-view.judgments-view .dense-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-}
-
-#app-view .admin-main .two-way-toggle {
-  display: inline-flex;
-  gap: 2px;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0;
-  padding: 3px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--subtle);
-}
-#app-view .admin-main .two-way-toggle legend,
-#app-view .admin-main .two-way-toggle input[type="radio"] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  min-height: 0;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-#app-view .admin-main .two-way-toggle label {
-  position: relative;
-  display: flex;
-  margin: 0;
-  min-width: 0;
-  flex: 1 1 auto;
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 18px;
-  color: var(--muted);
-  cursor: pointer;
-}
-#app-view .admin-main .two-way-toggle label > span {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 28px;
-  padding: 5px 14px;
-  border: 0;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-#app-view .admin-main .two-way-toggle input:checked + span {
-  color: var(--cta-foreground);
-  background: var(--cta);
-  box-shadow: none;
-}
-#app-view .admin-main .two-way-toggle input:focus-visible + span {
-  outline: 2px solid var(--cta);
-  outline-offset: 2px;
-}
-#app-view .admin-main .two-way-toggle label:hover > input:not(:disabled):not(:checked) + span {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-}
-#app-view .admin-main .two-way-toggle:disabled {
-  opacity: 0.45;
-}
-#app-view .admin-main .two-way-toggle:disabled label {
-  cursor: not-allowed;
 }
 
 :where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main #view-data > .card {
