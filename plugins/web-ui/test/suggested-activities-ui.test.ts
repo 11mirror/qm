@@ -120,7 +120,7 @@ test("activity selection fills and persists an editable draft without sending or
     assert.equal(host.querySelector(".suggested-activity-title")?.textContent, activities[0].title);
     assert.equal(host.querySelector("img"), null);
     const region = host.querySelector(".suggested-activities")!;
-    assert.equal(host.querySelector(".suggested-activity-yc")?.textContent, "Y");
+    assert.ok(host.querySelector(".suggested-activity-icon[data-icon=\"yc\"] > .brand-mark"));
     assert.match(host.querySelector(".suggested-activity-icon")?.textContent ?? "", /🛠️/);
     host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
     await new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
