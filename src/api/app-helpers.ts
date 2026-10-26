@@ -61,6 +61,8 @@ import {
 } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
 
+const DRIVE_RECHECK_MS = 1_000;
+
 function detached<T extends { clientTools?: unknown; desktopClientId?: unknown }>(
   request: T,
 ): Omit<T, "clientTools" | "desktopClientId"> {
@@ -281,8 +283,24 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
-      await sleep(Math.min(100, remaining));
+      await sessionChange(run.sessionId, Math.min(DRIVE_RECHECK_MS, remaining));
     }
+  }
+
+  function sessionChange(threadRef: string, ms: number): Promise<void> {
+    const bus = deps.sessionStateBus;
+    if (!bus) return sleep(Math.min(ms, 100));
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        stop();
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      const stop = bus.subscribe((event) => {
+        if (event.threadRef === threadRef) done();
+      });
+    });
   }
 
   async function mayUseSharedScope(kind: "channel" | "group", ref: string, actor: Principal): Promise<boolean> {
