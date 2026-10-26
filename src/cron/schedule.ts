@@ -1,5 +1,6 @@
 import { Cron as Croner } from "croner";
 import type { CronSchedule } from "../types.ts";
+import { isObj } from "../util/objects.ts";
 
 export const DEFAULT_CRON_TIMEZONE = "America/Los_Angeles";
 
@@ -10,10 +11,6 @@ const PAST_FIRE_GRACE_MS = 5 * 60_000;
 export interface NormalizedSchedule {
   schedule: CronSchedule;
   nextFireAt?: number;
-}
-
-function isObj(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {

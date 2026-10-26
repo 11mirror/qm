@@ -3,12 +3,12 @@ import type { InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isObj } from "../../util/objects.ts";
 import {
   addressList,
   clip,
   clipOpt,
   draftOf,
-  isObj,
   parseCommonFields,
   parseReplyDraft,
   tokenFor,

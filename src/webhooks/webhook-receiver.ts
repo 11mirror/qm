@@ -4,6 +4,7 @@ import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
+import { isObj } from "../util/objects.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
@@ -17,7 +18,6 @@ export interface WebhookReceiverDeps extends TriggerDeps {
 
 const MAX_EVENT_CHARS = 16_000;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 function parseBody(headers: VerifierInput["headers"], rawBody: string): unknown {
   const ctRaw = headers["content-type"];

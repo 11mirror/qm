@@ -1,4 +1,5 @@
 import type { InboxItem, InboxPayload } from "../../types.ts";
+import { isObj } from "../../util/objects.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
@@ -52,8 +53,6 @@ export interface SourceAdapter {
   inboxMetadata(sourcePayload: InboxPayload): InboxPayload;
   act(deps: SourceActionDeps, item: InboxItem, kind: string, args: InboxPayload): Promise<SourceActionResult>;
 }
-
-export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 export function clip(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
