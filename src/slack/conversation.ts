@@ -16,7 +16,7 @@ export interface ContextWireMessage {
 
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
 
-function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
+export function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
   if (a.ts < b.ts) return -1;
   if (a.ts > b.ts) return 1;
   return 0;

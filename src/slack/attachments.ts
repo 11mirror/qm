@@ -33,6 +33,8 @@ export interface SlackFile {
   user?: string;
 }
 
+export const slackFileName = (f: SlackFile): string => f.name || f.title || f.id || "file";
+
 export async function hydrateSlackFiles(
   files: readonly SlackFile[],
   lookup: (fileId: string) => Promise<SlackFile | undefined>,

@@ -4,18 +4,13 @@ import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import { type RecentMessage, buildContextWindow } from "./conversation.ts";
-import { type SlackFile, downloadSlackFile, isOversize, oversizeMsg } from "./attachments.ts";
+import { type SlackFile, downloadSlackFile, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
 import { isExternallyShared } from "./identity.ts";
 import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
-import {
-  type ConversationSerializer,
-  RECENT_HISTORY_LIMIT,
-  RECENT_THREAD_LIMIT,
-  slackFileName,
-} from "./conversation-view.ts";
+import { type ConversationSerializer, RECENT_THREAD_LIMIT } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
   rateLimitNotice?: SlackRateLimitNotice;
@@ -26,7 +21,7 @@ export function createSurfaceContextFulfiller(deps: {
   trustedFileHost?: string;
   userToken?: string;
   clientOptions: Record<string, unknown>;
-  readHistory?: SlackHistoryReader;
+  readHistory: SlackHistoryReader;
   historyClient?: any;
   historyLimit?: number;
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
@@ -66,37 +61,6 @@ export function createSurfaceContextFulfiller(deps: {
       }
       await post({ error: `Slack search failed: ${(err as Error).message}` });
     }
-  }
-
-  async function fetchContextHistory(
-    client: any,
-    channel: string,
-    threadTs: string | undefined,
-    before: string | undefined,
-    live: boolean,
-  ): Promise<{ raw: SlackHistoryMessage[]; hasMore: boolean; note?: string }> {
-    if (deps.readHistory) return deps.readHistory(client, channel, threadTs, before, false, live);
-    if (live) throw new Error("Live Slack history is unavailable.");
-    const page = before ? { latest: before, inclusive: false } : {};
-    if (threadTs) {
-      const { messages, hasMore } = parseMessageList(
-        await client.conversations.replies({
-          channel,
-          ts: threadTs,
-          limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_THREAD_LIMIT),
-          ...page,
-        }),
-      );
-      return { raw: messages, hasMore };
-    }
-    const { messages, hasMore } = parseMessageList(
-      await client.conversations.history({
-        channel,
-        limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_HISTORY_LIMIT),
-        ...page,
-      }),
-    );
-    return { raw: messages.slice().reverse(), hasMore };
   }
 
   async function findMessageAt(
@@ -246,9 +210,9 @@ export function createSurfaceContextFulfiller(deps: {
       );
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
       const outcomes = await Promise.allSettled([
-        fetchContextHistory(client, channel, undefined, before, q.live === true),
+        deps.readHistory(client, channel, undefined, before, false, q.live === true),
         threadTs
-          ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
+          ? deps.readHistory(client, channel, threadTs, before, false, q.live === true)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
       const byTs = new Map<string, SlackHistoryMessage>();

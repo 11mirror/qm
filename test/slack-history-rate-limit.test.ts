@@ -159,6 +159,13 @@ for (const { managed, historyLimit } of [
       clientOptions: {},
       historyRateLimitOptions: { managed },
       historyLimit,
+      readHistory: (await import("../src/slack/history.ts")).createSlackHistoryReader({
+        core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
+        ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
+        source: "live",
+        managed,
+        historyLimit,
+      }),
     });
     const query = { conversationTarget: "C1:1.0" };
     await fulfiller.fulfillSurfaceContext(client, {
