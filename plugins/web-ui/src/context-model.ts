@@ -44,14 +44,12 @@ export function resetContextModel(): void {
   loadSeq += 1;
   unsubscribeRuntime?.();
   unsubscribeRuntime = undefined;
-  contextModelState.scope = null;
-  contextModelState.loading = false;
-  contextModelState.saving = false;
-  contextModelState.pending = null;
-  contextModelState.pendingEffort = null;
-  contextModelState.pendingFast = null;
-  contextModelState.notice = "";
-  contextModelState.noticeKind = "";
+  Object.assign(contextModelState, { scope: null, loading: false, saving: false, notice: "", noticeKind: "" });
+  clearPending();
+}
+
+function clearPending(): void {
+  Object.assign(contextModelState, { pending: null, pendingEffort: null, pendingFast: null });
 }
 
 export async function loadContextModel(scopeId: string, onChange: () => void): Promise<void> {
@@ -68,23 +66,12 @@ export async function loadContextModel(scopeId: string, onChange: () => void): P
   const config = await loadRuntimeConfig(scopeId);
   if (seq !== loadSeq) return;
   contextModelState.loading = false;
-  if (!config) {
-    contextModelState.notice = "Couldn't load this project's model.";
-    contextModelState.noticeKind = "error";
-  }
+  if (!config) Object.assign(contextModelState, { notice: "Couldn't load this project's model.", noticeKind: "error" });
   redraw();
 }
 
 function optionsFor(config: RuntimeConfig): ModelOption[] {
   return runtimeModelOptions(config.models, config.modelCatalog);
-}
-
-function labelForRuntime(config: RuntimeConfig, runtime: { modelId: string }): string {
-  return optionsFor(config).find((o) => o.value === runtime.modelId)?.label ?? runtime.modelId;
-}
-
-function selectedValue(config: RuntimeConfig): string {
-  return config.scopeOverride ? config.scopeOverride.modelId : INHERIT;
 }
 
 function selectedEffort(config: RuntimeConfig): string {
@@ -98,13 +85,9 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
   if (contextModelState.saving) return;
   const seq = loadSeq;
   const restoreFocus = document.activeElement?.closest(".context-model .loadout-control") !== null;
-  contextModelState.saving = true;
-  contextModelState.pending = value;
-  contextModelState.pendingEffort = effort ?? null;
-  contextModelState.pendingFast = fast;
+  Object.assign(contextModelState, { saving: true, pending: value, pendingEffort: effort ?? null, pendingFast: fast });
   picker?.resetSection();
-  contextModelState.notice = "";
-  contextModelState.noticeKind = "";
+  Object.assign(contextModelState, { notice: "", noticeKind: "" });
   redraw();
   try {
     const model = contextModelState.config
@@ -128,9 +111,7 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
   } finally {
     if (seq === loadSeq) {
       contextModelState.saving = false;
-      contextModelState.pending = null;
-      contextModelState.pendingEffort = null;
-      contextModelState.pendingFast = null;
+      clearPending();
       redraw();
       if (restoreFocus)
         requestAnimationFrame(() => {
@@ -183,41 +164,40 @@ function contextPicker(scopeId: string) {
   });
 }
 
+const modelPanel = (body: unknown) =>
+  html`<section class="context-panel context-model" aria-labelledby="context-model-title">
+    <h2 class="context-panel-title" id="context-model-title">Model</h2>
+    ${body}
+  </section>`;
+
 export function contextModelSection(scopeId: string): TemplateResult | typeof nothing {
   if (contextModelState.scope !== scopeId) return nothing;
-  if (contextModelState.loading)
-    return html`<section class="context-panel context-model" aria-labelledby="context-model-title">
-      <h2 class="context-panel-title" id="context-model-title">Model</h2>
-      <div class="context-panel-loading">Loading…</div>
-    </section>`;
+  if (contextModelState.loading) return modelPanel(html`<div class="context-panel-loading">Loading…</div>`);
   const config = contextModelState.config;
   if (!config)
-    return html`<section class="context-panel context-model" aria-labelledby="context-model-title">
-      <h2 class="context-panel-title" id="context-model-title">Model</h2>
-      <span class="context-model-status error" aria-live="polite">${contextModelState.notice}</span>
-    </section>`;
+    return modelPanel(
+      html`<span class="context-model-status error" aria-live="polite">${contextModelState.notice}</span>`,
+    );
   const options = optionsFor(config);
   const active = activeEntry(config);
   const option = options.find((option) => option.value === active.value);
-  const stalePin = config.scopeOverride && !options.some((option) => option.value === selectedValue(config));
   pickerState.effortLevel = active.effort;
   picker ??= contextPicker(scopeId);
   picker.place();
-  return html`
-    <section class="context-panel context-model" aria-labelledby="context-model-title">
-      <h2 class="context-panel-title" id="context-model-title">Model</h2>
-      ${stalePin ? html`<span class="context-model-status">${labelForRuntime(config, config.scopeOverride!)} (no longer offered)</span>` : nothing}
-      ${!option && !stalePin ? html`<span class="context-model-status">${labelForRuntime(config, config.effective)} (no longer offered)</span>` : nothing}
-      ${picker.render(undefined, option, contextModelState.saving)}
-      ${
-        contextModelState.notice
-          ? html`<span
-              class=${`context-model-status ${contextModelState.noticeKind === "error" ? "error" : ""}`}
-              aria-live="polite"
-              >${contextModelState.notice}</span
-            >`
-          : nothing
-      }
-    </section>
-  `;
+  let stale = option ? undefined : config.effective;
+  const pin = config.scopeOverride;
+  if (pin && !options.some((option) => option.value === pin.modelId)) stale = pin;
+  return modelPanel(html`
+    ${stale ? html`<span class="context-model-status">${options.find((o) => o.value === stale.modelId)?.label ?? stale.modelId} (no longer offered)</span>` : nothing}
+    ${picker.render(undefined, option, contextModelState.saving)}
+    ${
+      contextModelState.notice
+        ? html`<span
+            class=${`context-model-status ${contextModelState.noticeKind === "error" ? "error" : ""}`}
+            aria-live="polite"
+            >${contextModelState.notice}</span
+          >`
+        : nothing
+    }
+  `);
 }
