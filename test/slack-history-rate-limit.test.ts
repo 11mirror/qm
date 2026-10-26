@@ -70,7 +70,7 @@ test("Slack history 429 returns immediately instead of sleeping inside the SDK",
   }
 });
 
-for (const source of ["live", "shadow", "mirror"] as const) {
+for (const source of ["live", "mirror"] as const) {
   for (const { managed, historyLimit } of [
     { managed: false },
     { managed: true },

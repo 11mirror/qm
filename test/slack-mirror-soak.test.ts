@@ -11,20 +11,12 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
-async function shadowComparisons(logs: string[], count = 1) {
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const lines = logs.filter((line) => line.includes('"slack_mirror_shadow"'));
-    if (lines.length >= count) return lines.map((line) => JSON.parse(line));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`expected ${count} shadow comparisons`);
-}
-
 test("context source defaults live and invalid modes fail closed", () => {
   assert.equal(parseSlackContextSource(undefined), "live");
   assert.equal(parseSlackContextSource(""), "live");
-  for (const source of ["live", "shadow", "mirror"]) assert.equal(parseSlackContextSource(source), source);
+  for (const source of ["live", "mirror"]) assert.equal(parseSlackContextSource(source), source);
   assert.throws(() => parseSlackContextSource("miror"));
+  assert.throws(() => parseSlackContextSource("shadow"));
 });
 
 test("default live context never reads or writes mirror and expands recent channel threads", async () => {
@@ -65,71 +57,8 @@ test("default live context never reads or writes mirror and expands recent chann
   assert.equal(result.note, undefined);
 });
 
-test("shadow compares counts and text but returns live context without waiting for the mirror", async (t) => {
-  let release!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    release = resolve;
-  });
-  const logs: string[] = [];
-  let mirrorReads = 0;
-  t.mock.method(console, "info", (line: string) => {
-    logs.push(line);
-  });
-  const core = {
-    readSurfaceMessages: async () => {
-      mirrorReads++;
-      return pending;
-    },
-    rememberSurfaceHistory: async () => {
-      throw new Error("must not backfill");
-    },
-  } as unknown as SlackCoreClient;
-  const client = {
-    conversations: {
-      history: async () => ({
-        messages: [
-          { ts: "1", text: "live secret text" },
-          { ts: "2", text: "second secret" },
-        ],
-      }),
-    },
-  };
-  const read = createSlackHistoryReader({ core, ids, source: "shadow" });
-  const result = await read(client, "C-secret");
-  await read(client, "C-secret");
-  assert.equal(mirrorReads, 1);
-  assert.equal(result.raw[0]?.text, "second secret");
-  assert.equal(logs.length, 0);
-  release([{ ts: "1", text: "stale secret text" }]);
-  await new Promise((resolve) => setImmediate(resolve));
-  const comparison = JSON.parse(logs[0]!);
-  assert.equal(comparison.liveMessagesMissingFromMirror, 1);
-  assert.equal(comparison.textMismatches, 1);
-  assert.ok(logs.every((line) => !line.includes("secret")));
-});
-
-test("shadow failures never replace or fail the live result", async (t) => {
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => {
-    logs.push(line);
-  });
-  const core = {
-    readSurfaceMessages: async () => {
-      throw new Error("private error details");
-    },
-  } as unknown as SlackCoreClient;
-  const client = { conversations: { replies: async () => ({ messages: [{ ts: "1", text: "live" }] }) } };
-  assert.equal(
-    (await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1", "1")).raw[0]?.text,
-    "live",
-  );
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.ok(logs.some((line) => line.includes("read_failed")));
-  assert.ok(logs.every((line) => !line.includes("private error")));
-});
-
-test("live and shadow default search cannot source mirror data", async () => {
-  for (const source of [undefined, "live", "shadow"] as const) {
+test("live default search cannot source mirror data", async () => {
+  for (const source of [undefined, "live"] as const) {
     let cacheReads = 0;
     const tools = createSurfaceToolDeps({
       deps: {
@@ -163,82 +92,6 @@ test("live and shadow default search cannot source mirror data", async () => {
   }
 });
 
-test("shadow distinguishes stored messages with wrong parents from ingestion loss", async (t) => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1", text: "root" },
-    { container: "C1", ts: "2", sub: "wrong", text: "reply" },
-  ]);
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
-  const reader = createSlackHistoryReader({
-    ids,
-    source: "shadow",
-    core: {
-      readSurfaceMessages: cache.readMessages,
-      rememberSurfaceHistory: async () => {
-        throw new Error("shadow must never repair what it measures");
-      },
-    } as unknown as SlackCoreClient,
-  });
-  await reader(
-    {
-      conversations: {
-        replies: async () => ({
-          messages: [
-            { ts: "1", text: "root" },
-            { ts: "2", thread_ts: "1", text: "reply" },
-            { ts: "3", thread_ts: "1", text: "absent" },
-          ],
-        }),
-      },
-    },
-    "C1",
-    "1",
-  );
-  const [result] = await shadowComparisons(logs);
-  assert.equal(result.liveMessagesMissingFromStorage, 1);
-  assert.equal(result.liveMessagesMissingFromMirror, 2);
-  assert.equal(result.threadParentMismatches, 1);
-  assert.equal(result.storedMessages, 2);
-  assert.equal(result.matchingMessages, 1);
-});
-
-test("shadow compares canonical mention IDs without erasing literal entity or attachment differences", async (t) => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1", text: "Hi <@U1> &lt;", mentions: { U1: "Alice" } },
-    { container: "C1", ts: "2", text: "<" },
-    { container: "C1", ts: "3", text: "file", files: [{ fileId: "old" }] },
-  ]);
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
-  const reader = createSlackHistoryReader({
-    ids,
-    source: "shadow",
-    core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
-  });
-  await reader(
-    {
-      conversations: {
-        history: async () => ({
-          messages: [
-            { ts: "3", text: "file", files: [{ id: "new" }] },
-            { ts: "2", text: "&amp;lt;" },
-            { ts: "1", text: "Hi <@U1> &amp;lt;" },
-          ],
-        }),
-      },
-    },
-    "C1",
-  );
-  const [result] = await shadowComparisons(logs);
-  assert.equal(result.textMismatches, 1);
-  assert.equal(result.fileMismatches, 1);
-  assert.equal(result.matchingMessages, 1);
-  assert.equal(result.liveMessagesMissingFromStorage, 0);
-});
-
 test("mirror selects newest channel roots and the first thread page", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const ts = (n: number) => String(n).padStart(6, "0");
@@ -264,43 +117,7 @@ test("mirror selects newest channel roots and the first thread page", async () =
   assert.equal(expanded.raw.at(-1)?.ts, ts(498));
 });
 
-test("shadow never certifies failed or truncated live thread expansion as complete", async (t) => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "1", text: "root" }]);
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
-  for (const [index, fail] of [true, false].entries()) {
-    const reader = createSlackHistoryReader({
-      ids,
-      source: "shadow",
-      core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
-    });
-    await reader(
-      {
-        conversations: {
-          history: async () => ({ messages: [{ ts: "1", text: "root", reply_count: 1 }] }),
-          replies: async () => {
-            if (fail) throw new Error("rate limited");
-            return { messages: [{ ts: "1", text: "root" }], has_more: true };
-          },
-        },
-      },
-      "C1",
-      undefined,
-      undefined,
-      true,
-    );
-    const result = (await shadowComparisons(logs, index + 1))[index];
-    assert.equal(result.matchingMessages, 1);
-    assert.equal(result.liveComplete, false);
-    assert.equal(result.liveExpansionFailures, fail ? 1 : 0);
-    assert.equal(result.liveTruncatedExpansions, fail ? 0 : 1);
-  }
-});
-
-test("shadow and mirror use the live first-page thread contract without fallback", async (t) => {
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
+test("mirror uses the live first-page thread contract without fallback", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const messages = Array.from({ length: 220 }, (_, index) => ({
     ts: `1000.${String(index).padStart(6, "0")}`,
@@ -330,66 +147,5 @@ test("shadow and mirror use the live first-page thread contract without fallback
     mirrored.raw.map((message) => message.ts),
     messages.slice(0, 200).map((message) => message.ts),
   );
-  const live = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1", "1000.000000");
-  assert.deepEqual(live.raw, messages.slice(0, 200));
-  const [comparison] = await shadowComparisons(logs);
-  assert.equal(comparison.liveMessages, 200);
-  assert.equal(comparison.mirroredMessages, 200);
-  assert.equal(comparison.liveMessagesMissingFromMirror, 0);
-  assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 0);
-  assert.equal(comparison.matchingMessages, 200);
-  assert.equal(comparison.liveComplete, false);
   await cache.close();
-});
-
-test("shadow freezes live messages and attachments before callers modify their context", async (t) => {
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const stored = [{ container: "C1", ts: "1", text: "original", files: [{ fileId: "F1", name: "original.txt" }] }];
-  const core = {
-    readSurfaceMessages: async () => {
-      await pending;
-      return stored;
-    },
-    rememberSurfaceHistory: async () => {
-      throw new Error("must not backfill");
-    },
-  } as unknown as SlackCoreClient;
-  const client = {
-    conversations: {
-      history: async () => ({ messages: [{ ts: "1", text: "original", files: [{ id: "F1", name: "original.txt" }] }] }),
-    },
-  };
-  const live = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1");
-  live.raw.push({ ts: "2", text: "trigger appended by caller" });
-  live.raw[0]!.text = "changed by caller";
-  live.raw[0]!.files![0]!.name = "changed.txt";
-  release();
-  await new Promise((resolve) => setImmediate(resolve));
-  const comparison = JSON.parse(logs[0]!);
-  assert.equal(comparison.liveMessages, 1);
-  assert.equal(comparison.matchingMessages, 1);
-  assert.equal(comparison.textMismatches, 0);
-  assert.equal(comparison.fileMismatches, 0);
-  assert.equal(comparison.liveMessagesMissingFromStorage, 0);
-});
-
-test("shadow reports legacy rewritten mentions as a difference", async (t) => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C", ts: "1", text: "Hi @Alice", mentions: { U1: "Alice" } }]);
-  const logs: string[] = [];
-  t.mock.method(console, "info", (line: string) => logs.push(line));
-  const read = createSlackHistoryReader({
-    ids,
-    source: "shadow",
-    core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
-  });
-  await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "Hi <@U1>" }] }) } }, "C");
-  const [comparison] = await shadowComparisons(logs);
-  assert.equal(comparison.textMismatches, 1);
-  assert.equal(comparison.matchingMessages, 0);
 });
