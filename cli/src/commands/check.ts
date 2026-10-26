@@ -70,12 +70,7 @@ export function runChecks(
           for (const name of Object.keys(config.env[service] ?? {})) configured.add(name);
         }
       }
-      let rendered: string[];
-      try {
-        rendered = Object.keys(serviceEnvironment(config, workload));
-      } catch {
-        continue;
-      }
+      const rendered = Object.keys(serviceEnvironment(config, workload));
       const managed = new Set(rendered.filter((name) => !configured.has(name)));
       for (const secret of secrets) {
         for (const name of runtimeSecretNames(workload, secret, pluginNames)) {

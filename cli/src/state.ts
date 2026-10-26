@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { CliError } from "./log.ts";
+import { CliError, errMessage } from "./log.ts";
 
 const xdgConfigHome = (): string => process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 
@@ -65,8 +65,8 @@ export function readDeploymentState(orgId: string): DeploymentState | undefined 
   if (!existsSync(path)) return undefined;
   try {
     return JSON.parse(readFileSync(path, "utf8")) as DeploymentState;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw new CliError(`${path} is not valid JSON; fix or remove it: ${errMessage(error)}`, { cause: error });
   }
 }
 
