@@ -6,11 +6,12 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  S3Client,
-  PutObjectCommand,
-  HeadBucketCommand,
-  CreateBucketCommand,
   type BucketLocationConstraint,
+  CreateBucketCommand,
+  HeadBucketCommand,
+  NotFound,
+  PutObjectCommand,
+  S3Client,
 } from "@aws-sdk/client-s3";
 import { createMicrovmApi } from "../src/sandbox/aws-microvm-api.ts";
 import { sleep } from "../src/util/async.ts";
@@ -46,7 +47,8 @@ async function main(): Promise<void> {
 
   try {
     await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-  } catch {
+  } catch (error) {
+    if (!(error instanceof NotFound)) throw error;
     await s3.send(
       new CreateBucketCommand({
         Bucket: bucket,

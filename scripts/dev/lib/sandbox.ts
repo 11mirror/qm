@@ -1,4 +1,4 @@
-import { existsSync, openSync, readFileSync } from "node:fs";
+import { openSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -16,10 +16,6 @@ export interface SandboxResolution {
   warnings: string[];
 }
 
-function worktreeSupportsLocalSandbox(worktree: string): boolean {
-  return existsSync(join(worktree, "src/sandbox/local-sandbox.ts"));
-}
-
 async function localImagePresent(image: string): Promise<boolean> {
   return (await run("docker", ["image", "inspect", image], { timeoutMs: 30_000 })).code === 0;
 }
@@ -35,12 +31,6 @@ export async function resolveSandbox(opts: {
   const warnings: string[] = [];
   let backend = opts.requested;
   if (backend === "auto") backend = "local";
-  if (backend === "local" && !worktreeSupportsLocalSandbox(opts.worktree)) {
-    throw new Error(
-      "this worktree's code has no local sandbox backend (src/sandbox/local-sandbox.ts missing) -- use --sandbox sprites",
-    );
-  }
-
   if (backend === "local") {
     if (!(await ensureDockerDaemon(opts.log))) {
       throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");

@@ -10,13 +10,11 @@ const QM_CONFIG_DIR = join(CONFIG_HOME, "qm");
 
 export function poolStore(): string {
   if (process.env.QM_POOL_STORE) return process.env.QM_POOL_STORE;
-  if (process.env.DEV_INSTANCE_POOL_STORE) return process.env.DEV_INSTANCE_POOL_STORE;
   return join(QM_CONFIG_DIR, "slack-pool");
 }
 
 export function liveEnvPath(): string {
   if (process.env.QM_DEV_ENV) return process.env.QM_DEV_ENV;
-  if (process.env.DEV_INSTANCE_LIVE_ENV) return process.env.DEV_INSTANCE_LIVE_ENV;
   return join(QM_CONFIG_DIR, "dev.env");
 }
 
