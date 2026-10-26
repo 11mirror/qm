@@ -1,12 +1,6 @@
-import { SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
-import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
-import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
-import { loadDocumentInputs } from "./document-inputs.ts";
-import { goalView } from "../runs/turn-stream.ts";
-import { type GoalRecord, openGoal } from "../harness/goal.ts";
-import { type ScopeId, type TurnResult, type TurnRuntime, type PendingApprovalRecord } from "../types.ts";
+import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { loadProtocolFile } from "../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
@@ -14,41 +8,22 @@ import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
-import { isOverheard, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
-import { environmentDelta, renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
+import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
+import { renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
-import type { GapWork, HarnessDetectResult, HarnessTurnInput, RuntimeChoice } from "../harness/harness.ts";
+import type { GapWork, HarnessDetectResult } from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
-import {
-  quarantineReleaseKey,
-  securityScreenChunks,
-  securityScreenPayload,
-  toolLabelOf,
-  UNSCREENED_REASON,
-  unscreenedNotice,
-  type SecurityScreenVerdict,
-  type ToolResultScreen,
-  type ToolResultScreenInput,
-} from "../security/security-posture.ts";
+import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-posture.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
-import { artifactImageLoader } from "../harness/replay-images.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import {
-  environmentNote,
-  inboundIssuesNote,
-  inboundIssueList,
-  inboundManifest,
-  materializeInbound,
-  safeAttachmentName,
-} from "./attachments.ts";
+import { environmentNote, inboundIssuesNote } from "./attachments.ts";
 import { findTrailingPartialTurn, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import { NonRetryableTurnError } from "./turn-error.ts";
 import { personKey } from "../directory/person.ts";
-import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { admitTurn } from "./orchestrator/admit.ts";
@@ -62,18 +37,14 @@ import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
 import { selectTurnRuntime } from "./orchestrator/turn-runtime.ts";
+import { createHarnessSegment, type TurnRunState } from "./orchestrator/turn-segment.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
   type QuarantineReleaseApproval,
 } from "./orchestrator/approvals.ts";
 import { createSessionTitles } from "./session-title.ts";
-import {
-  isScreenableTextAttachment,
-  renderTitleTranscript,
-  stripAckPrefix,
-  visibleTitleItemText,
-} from "./orchestrator/turn-helpers.ts";
+import { renderTitleTranscript, stripAckPrefix, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
@@ -84,8 +55,6 @@ export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orches
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
 
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
-
-const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 
 const DETECT_HISTORY_TAIL = 400;
 
@@ -265,8 +234,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         liveAuthorTurn,
         messageTs,
         entryTs,
-        coreReceivedAt,
-        turnTimezone,
         delegatedSession,
         withManagedRosterVersion,
         mirrorRunActivity,
@@ -331,8 +298,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       let systemPrompt = framed.systemPrompt;
       const {
-        surfaceName,
-        delegateWork,
         turnContextBlocks,
         scopeProfile,
         delivery,
@@ -342,9 +307,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         transferId,
         turnSessionDir,
         turnFilesDir,
-        turnInboxDir,
         timeBlock,
-        memoryHeading,
         onboardingBlock,
       } = framed;
 
@@ -408,19 +371,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
       const approvalLedger = loadApprovalLedger(await actorGrants(), session.id, resolution.approvalGrantModes);
-      const { consume: consumeApproval, authorizeToolCall, authorizeCommand } = approvalLedger;
       const quarantineReleaseApprovals: QuarantineReleaseApproval[] = [];
-      const quarantinePreview = (payload: string): string => {
-        const cleaned = payload
-          .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-        return cleaned.length > 240 ? `${cleaned.slice(0, 240)}…` : cleaned;
-      };
-      const quarantineFullText = (payload: string): string => {
-        const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
-        return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
-      };
       const catalog = await buildCredentialCatalog(ctx, {
         securityPolicy,
         strictReadOnly,
@@ -443,7 +394,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForTurn,
         openAutomationKeychain,
       } = catalog;
-      let toolCalls = 0;
+      const run: TurnRunState = {
+        toolCalls: 0,
+        turnProgress: 0,
+        firstTokenMarked: false,
+        runtimeHandoffs: 0,
+        remainingDocumentBytes: 0,
+        remainingDocumentCount: 0,
+        remainingDocumentTokens: 0,
+      };
       const gapWork: { listener?: (work: GapWork) => void } = {};
       const emitGapWork = (phase: GapPhase, start: number, end: number): void => {
         try {
@@ -534,15 +493,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let tailOwnsCleanup = false;
       let leaseReleased = false;
       let contextRecovered = false;
-      let turnProgress = 0;
       const turnAbort = new AbortController();
       if (input.cancel?.aborted) turnAbort.abort();
       else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
       const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
-        progress: () => turnProgress,
+        progress: () => run.turnProgress,
         onStalled: () => turnAbort.abort(),
       });
-      let failureUserItem: NewItem<"UserMessage"> | undefined;
       try {
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
@@ -556,7 +513,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...memoryView.facts,
           ...(!memoryView.complete ||
           memoryWindow.items.length > 0 ||
-          toolCalls > 0 ||
+          run.toolCalls > 0 ||
           input.priorTurns?.length ||
           input.overheard?.length ||
           input.attachments?.length ||
@@ -690,19 +647,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           captureDependencies,
           blobTransfer,
         });
-        const {
-          spine,
-          postKeys,
-          spineFirst,
-          fileRegistration,
-          postProvenance,
-          earlyTaskAck,
-          turnKey,
-          mayReadArtifact,
-          surfaceToolDeps,
-          attachStaging,
-          tools,
-        } = turnTools;
+        const { spine, postKeys, spineFirst, postProvenance, turnKey, surfaceToolDeps, attachStaging } = turnTools;
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
@@ -753,33 +698,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           classifySecurityData,
         });
         contextRecovered = prepared.contextRecovered;
-        let { remainingDocumentBytes, remainingDocumentCount, remainingDocumentTokens } = prepared;
+        run.remainingDocumentBytes = prepared.remainingDocumentBytes;
+        run.remainingDocumentCount = prepared.remainingDocumentCount;
+        run.remainingDocumentTokens = prepared.remainingDocumentTokens;
         const {
           inbound,
           inboundIssues,
           importedOverheard,
           priorTurns,
-          recalled,
           partial,
-          resumePlan,
-          history,
-          documentInputs,
-          screenDocuments,
-          observeDocuments,
-          turnEnvironmentContents,
           baseText,
           approvalReplay,
           resume,
           turnInput,
-          continueTurn,
           isPollFire,
         } = prepared;
         const turnStart = Date.now();
-        let firstTokenMarked = false;
         const emittedEntries: Item[] = [];
-        let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
-        failureUserItem =
+        run.failureUserItem =
           !syntheticPrompt && (input.text.trim() || inboundIssues.length)
             ? {
                 kind: "UserMessage",
@@ -794,495 +731,40 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
               }
             : undefined;
-        const {
-          effectiveTurnWallClockMs,
-          runtimePurpose,
-          purposeDefault,
-          runtimeDefaults,
-          runtimeClaims,
-          restoredRuntime,
-          checkRuntimeAuth,
-          adoptRuntime,
-          runtimeState,
-        } = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
-        const runHarnessSegment = async (
-          harnessInput: string,
-          extras: {
-            priorTurns?: typeof input.priorTurns;
-            overheard?: typeof importedOverheard;
-            attachments?: typeof inbound.metas;
-            images?: typeof inbound.images;
-          },
-          continuation?: { history: Item[] },
-        ) => {
-          const recall = memoryRecallDelta(
-            recalled,
-            continuation?.history ?? history,
-            memoryView.held,
-            context.memoryLabels,
-          );
-          const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
-          const turnEnvironment = environmentNote(
-            [
-              turnEnvironmentContents,
-              snapshot.text,
-              recall.text ? `${memoryHeading}${recall.text}` : "",
-              inboundIssuesNote(inboundIssues),
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-          );
-          const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-          const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
-          let recordedRecall = false;
-          const emit: HarnessTurnInput["emit"] = async (entry) => {
-            turnProgress++;
-            const persistStart = Date.now();
-            try {
-              const stored = ((): NewItem => {
-                if (
-                  (entry.kind === "AgentMessage" && !entry.variant) ||
-                  entry.kind === "Elicitation" ||
-                  ((entry.kind === "ToolResult" || entry.kind === "ToolCall") &&
-                    entry.body?.blocked === "needs_approval")
-                ) {
-                  const body = { ...entry.body };
-                  if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-                  if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
-                  return { ...entry, body };
-                }
-                if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
-                const body: Record<string, unknown> = { ...entry.body };
-                const steered = entry.kind === "SteeringMessage";
-                const overheard = body.overheard === true;
-                const turnStart = !steered && !overheard;
-                if (!recordedRecall && turnStart) {
-                  recordedRecall = true;
-                  body.environmentSnapshot = snapshot.record;
-                  if (environment) body.environment = environment;
-                  if (recall.text) body.memoryRecall = recall.record;
-                }
-                delete body.speakerId;
-                if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
-                if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
-                if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
-                  body.display = input.displayText;
-                if ((partial || continuation) && turnStart) body.resumeNote = true;
-                return entry.kind === "UserMessage"
-                  ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
-                  : { ...entry, body };
-              })();
-              const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-              emittedEntries.push(appended);
-              if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
-                spine.turnUserEntrySeq = appended.seq;
-                if (input.runId && deps.runs)
-                  await deps.runs
-                    .noteTurnUserSeq(input.runId, appended.seq)
-                    .catch(swallowAs("orchestrator: record turn boundary", false));
-              }
-              if (isUserMessage(appended)) failureUserItem = undefined;
-              if (appended.kind === "ToolCall") {
-                toolCalls += 1;
-                if (toolCalls === 1 && input.runId) {
-                  if (!input.surfaceTools) {
-                    deps.turnStream?.noteToolCall(input.runId);
-                  } else {
-                    publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
-                  }
-                }
-              }
-              await mirrorRunActivity(appended);
-              return appended;
-            } finally {
-              emitGapWork("persist", persistStart, Date.now());
-            }
-          };
-          const initialDocuments = [...documentInputs.documents];
-          const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
-          const sessionGoal = openGoal(storedGoal);
-          const saveGoal = async (goal: GoalRecord): Promise<void> => {
-            await deps.sessions.setGoal(lease, goal);
-            if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
-          };
-          const turnResult = await deps.harness.turns.runTurn({
-            session,
-            loadImage: artifactImageLoader(deps.files, mayReadArtifact),
-            ...(turnTimezone ? { timezone: turnTimezone } : {}),
-            prepareSteer: async (text, request) => {
-              const author = request ? deps.identity.resolve(request.actor).id : actor.id;
-              const refreshedInbox =
-                input.surface === "web" &&
-                conversation.kind === "dm" &&
-                /^web:.+:inbox$/.test(conversation.threadRef) &&
-                request?.conversation.threadRef === conversation.threadRef
-                  ? request.conversationHeader?.trim()
-                  : undefined;
-              if (refreshedInbox) {
-                let allowed = true;
-                if (securityPolicy.screening !== "off") {
-                  for (const chunk of securityScreenChunks("conversation-header", refreshedInbox)) {
-                    const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                      ...screenTrace,
-                      sessionId: session.id,
-                      hook: "user_input",
-                      request: text,
-                      surface: "steer",
-                      origin: input.origin.kind,
-                    });
-                    if (verdict?.decision !== "auto" || verdict.unscreened) {
-                      allowed = false;
-                      break;
-                    }
-                  }
-                }
-                text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
-              }
-              if (!request?.attachments?.length) return { text, author };
-              const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-              const received = strictReadOnly
-                ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
-                : await materializeInbound(
-                    deps.sandbox,
-                    provision,
-                    request.attachments,
-                    blobTransfer,
-                    { ...fileRegistration, seed },
-                    inboxDir,
-                    securityPolicy.screening !== "off"
-                      ? ({ content, name, mimetype }) =>
-                          classifySecurityData(
-                            JSON.stringify({ name, mimetype, content }),
-                            actor.id,
-                            scopeId,
-                            undefined,
-                            {
-                              ...screenTrace,
-                              sessionId: session.id,
-                              hook: "tool_response",
-                              surface: "inbound_file",
-                              origin: input.origin.kind,
-                            },
-                          )
-                      : undefined,
-                  );
-              const steeredDocuments = await loadDocumentInputs(
-                deps.files,
-                received.metas,
-                mayReadArtifact,
-                remainingDocumentBytes,
-                turnAbort.signal,
-                remainingDocumentCount,
-                initialDocuments,
-                remainingDocumentTokens,
-              );
-              let steeredUnscreened = false;
-              if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
-              else observeDocuments(steeredDocuments, text);
-              remainingDocumentBytes -= steeredDocuments.documents.reduce(
-                (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
-                0,
-              );
-              remainingDocumentCount -= steeredDocuments.documents.length;
-              remainingDocumentTokens -= steeredDocuments.tokens;
-              documentInputs.documents.push(...steeredDocuments.documents);
-              const issues = inboundIssueList({
-                ...received,
-                surfaceNotes: strictReadOnly
-                  ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-                  : [],
-              });
-              return {
-                text: [
-                  text,
-                  inboundManifest(received.metas, inboxDir, received.unstaged),
-                  ...steeredDocuments.notices,
-                  inboundIssuesNote(issues),
-                  enforceScreen &&
-                  (steeredUnscreened ||
-                    received.unscreened.length ||
-                    received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
-                    ? unscreenedNotice("inbound content")
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-                attachments: received.metas,
-                images: received.images,
-                documents: steeredDocuments.documents,
-                author,
-              };
-            },
-            ...(runtimeState.userProviderKeys ? { providerKeys: runtimeState.userProviderKeys } : {}),
-            ...(runtimeState.personalAuth && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
-              ? { runtimePinned: true }
-              : {}),
-            runtimeActorId: actor.id,
-            onRuntime: (reported: TurnRuntime) => {
-              const runtime: TurnRuntime = runtimeState.agentSwitch
-                ? { ...reported, change: { agent: runtimeState.agentSwitch } }
-                : reported;
-              turnRuntime = runtime;
-              if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
-            },
-            ...(runtimePurpose ? { runtimePurpose } : {}),
-            ...(deps.runtime && input.runId
-              ? {
-                  runtimeControl: (
-                    active: RuntimeChoice,
-                    request: import("../harness/runtime-types.ts").RuntimeRequest,
-                    signal?: AbortSignal,
-                  ) =>
-                    deps.runtime!(
-                      sessionTurn && request.lifetime === "scope"
-                        ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
-                        : runtimeClaims,
-                      active,
-                      request,
-                      checkRuntimeAuth,
-                      runtimeState.personalAuth,
-                      signal,
-                      automatedTurn && input.surface === "cron",
-                      runtimePurpose,
-                      runtimeDefaults,
-                    ),
-                }
-              : {}),
-            ...(input.runId ? { runId: input.runId } : {}),
-            cancel: turnAbort.signal,
-            ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
-            ...(input.shutdown ? { shutdown: input.shutdown } : {}),
-            input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
-            ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
-            ...(!partial && entryTs ? { entryTs } : {}),
-            ...(environment ? { environment } : {}),
-            ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
-            ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
-            ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
-            ...(extras.images?.length ? { images: extras.images } : {}),
-            documents: initialDocuments,
-            ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
-            ...(strictReadOnly ? { readOnly: true } : {}),
-            surfaceName,
-            delegateWork,
-            ...((session.clientTools ?? input.clientTools)?.length
-              ? { clientTools: session.clientTools ?? input.clientTools }
-              : {}),
-            ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-            ...(isPollFire ? { pollFire: true } : {}),
-            turnWallClockMs:
-              effectiveTurnWallClockMs > 0
-                ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
-                : effectiveTurnWallClockMs,
-            ...(securityPolicy.screening !== "off"
-              ? {
-                  screenToolResult: async ({
-                    tool,
-                    result,
-                    unscreenable,
-                    provenance,
-                    sourceScopeId,
-                    source,
-                  }: ToolResultScreenInput): Promise<ToolResultScreen> => {
-                    if (provenance !== "external") return { outcome: "allow" };
-                    const toolLabel = toolLabelOf(tool);
-                    const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-                    const screenChunk = (chunk: string) =>
-                      classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                        ...screenTrace,
-                        sessionId: session.id,
-                        hook: "tool_response",
-                        request: input.text,
-                        surface: toolLabel,
-                        origin: input.origin.kind,
-                      });
-                    if (!enforceScreen) {
-                      if (!unscreenable)
-                        await Promise.all(
-                          securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result).map(screenChunk),
-                        );
-                      return { outcome: "allow" };
-                    }
-                    if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
-                        action: "security_posture.tool_result_released",
-                        resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
-                        status: "allowed",
-                        detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                      });
-                      return { outcome: "unscreened" };
-                    }
-                    const chunks = unscreenable
-                      ? []
-                      : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
-                    if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
-                    const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-                    for (let i = 0; i < chunks.length && !verdicts.some((v) => v?.decision === "strict"); i += 4) {
-                      verdicts.push(...(await Promise.all(chunks.slice(i, i + 4).map(screenChunk))));
-                    }
-                    const verdict =
-                      verdicts.find((v) => v?.decision === "strict") ??
-                      (verdicts.length === chunks.length &&
-                      verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
-                        ? verdicts[0]
-                        : undefined);
-                    if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
-                    if (verdict?.decision === "strict") {
-                      const releaseKey = `security-screen-release:${toolLabel}`;
-                      if (authorizeCommand(releaseKey)) {
-                        deps.auditLog.record({
-                          at: Date.now(),
-                          principalId: actor.id,
-                          action: "security_posture.tool_result_release",
-                          resource: input.surface ?? "unknown",
-                          scopeLabel: scopeId,
-                          status: "allowed",
-                          detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                        });
-                        return { outcome: "allow" };
-                      }
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
-                        action: SECURITY_TOOL_RESULT_QUARANTINE,
-                        resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
-                        status: "refused",
-                        detail: JSON.stringify({
-                          reason: "screen_verdict",
-                          tool: toolLabel,
-                          ...(source ? { source } : {}),
-                          ...(verdict.reason ? { verdict: verdict.reason } : {}),
-                        }),
-                      });
-                      if (
-                        !quarantineReleaseApprovals.some(
-                          (qa) =>
-                            qa.approvalKey === releaseKey &&
-                            qa.screenedOutput?.text === result &&
-                            qa.screenedOutput?.sourceScopeId === sourceScopeId,
-                        )
-                      ) {
-                        quarantineReleaseApprovals.push({
-                          command: `release quarantined ${toolLabel} output`,
-                          reason: verdict.reason
-                            ? `security screen flagged this ${toolLabel} output: ${verdict.reason}`
-                            : `security screen flagged this ${toolLabel} output`,
-                          purpose: `Release the quarantined ${toolLabel} output into the conversation (once), or keep it blocked.`,
-                          summary: `Blocked content preview: ${quarantinePreview(result)}`,
-                          summaryDetail: quarantineFullText(result),
-                          ...(!toolLabel.startsWith("session_message_")
-                            ? {
-                                screenedOutput: {
-                                  tool: toolLabel,
-                                  text: result,
-                                  ...(sourceScopeId ? { sourceScopeId } : {}),
-                                },
-                              }
-                            : {}),
-                          approvalKey: releaseKey,
-                          grantModes: { session: false, always: false },
-                        });
-                      }
-                      return {
-                        outcome: "quarantine",
-                        approvalRequested: true,
-                        ...(verdict.reason ? { reason: verdict.reason } : {}),
-                      };
-                    }
-                    deps.auditLog.record({
-                      at: Date.now(),
-                      principalId: actor.id,
-                      action: "security_posture.tool_result_failed_open",
-                      resource: input.surface ?? "unknown",
-                      scopeLabel: scopeId,
-                      status: "allowed",
-                      detail: JSON.stringify({
-                        reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
-                      }),
-                    });
-                    return { outcome: "unscreened" };
-                  },
-                }
-              : {}),
-            toolApprovalGate: (tool: string, callKey?: string) => {
-              if (callKey) return consumeApproval(callKey);
-              return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
-            },
-            systemPrompt,
-            history: continuation?.history ?? history,
-            tools,
-            ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
-            ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
-            emit,
-            goal: sessionGoal,
-            saveGoal,
-            scopeLabel: scopeId,
-            orgScopeId: resolution.orgScopeId,
-            onDelta: (chunk: string) => {
-              if (!firstTokenMarked) {
-                firstTokenMarked = true;
-                markFirstToken();
-              }
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
-              if (input.surfaceTools && spineFirst.open && spineFirst.block.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
-                spineFirst.block += chunk;
-            },
-            onReasoningDelta: (step: string, index: number, chunk: string) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools)
-                deps.turnStream.publishReasoning(input.runId, step, index, chunk);
-            },
-            onToolCallStart: (name: string) => {
-              if (!earlyTaskAck || name === surfaceName) return;
-              if (input.surfaceTools) publishFirstAck(false);
-              else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
-            },
-            onTextBlockStart: async (phase) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
-              if (input.surfaceTools && spineFirst.block) spineFirst.open = false;
-              if (!input.surfaceTools) {
-                const streamOffset =
-                  input.runId && deps.turnStream
-                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
-                    : undefined;
-                if (input.runId && deps.runActivity) {
-                  const started = deps.runActivity.append(input.runId, {
-                    marker: "text_start",
-                    seq: emittedEntries.at(-1)?.seq ?? 0,
-                    createdAt: Date.now(),
-                    ...(phase ? { phase } : {}),
-                    ...(streamOffset !== undefined ? { streamOffset } : {}),
-                  });
-                  await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
-                }
-              }
-            },
-            onGapWork: (cb) => {
-              gapWork.listener = cb;
-            },
-            recordModelCall: (rec) => {
-              deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-            },
-            recordLlmRequest: async (rec, signal) => {
-              try {
-                await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
-              } catch (err) {
-                reportFailure("orchestrator: persist LLM request snapshot", err);
-              }
-            },
-          });
-          return turnResult;
-        };
-        let runtimeHandoffs = restoredRuntime ? 1 : 0;
+        const selected = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
+        const { effectiveTurnWallClockMs, restoredRuntime, adoptRuntime, runtimeState } = selected;
+        const runHarnessSegment = createHarnessSegment(ctx, {
+          screen: screened.screen,
+          framed,
+          approvalLedger,
+          provision,
+          turnTools,
+          prepared,
+          selected,
+          strictReadOnly,
+          mcpToolsReady,
+          context,
+          memoryView,
+          systemPrompt,
+          session,
+          quarantineReleaseApprovals,
+          gapWork,
+          emitGapWork,
+          lease,
+          turnAbort,
+          run,
+          publishFirstAck,
+          turnStart,
+          emittedEntries,
+          syntheticPrompt: Boolean(syntheticPrompt),
+          blobTransfer,
+          classifySecurityData,
+        });
+        run.runtimeHandoffs = restoredRuntime ? 1 : 0;
         const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
           let segment = await runHarnessSegment(...args);
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
-            if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
+            if (++run.runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
             const recovery = "context" in segment.runtimeHandoff;
@@ -1468,7 +950,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnCompleted,
           turnUserSeq,
         });
-        if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (run.turnRuntime) finalResult = { ...finalResult, runtime: run.turnRuntime };
         await fallbackTitleWrite;
 
         if (input.background) {
@@ -1484,7 +966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
-        return await mapTurnFailure(ctx, { session, lease, failureUserItem }, err);
+        return await mapTurnFailure(ctx, { session, lease, failureUserItem: run.failureUserItem }, err);
       } finally {
         if (input.runId) deps.turnStream?.end(input.runId);
         stopLeaseKeepalive();
