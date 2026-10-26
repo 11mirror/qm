@@ -1,7 +1,6 @@
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
-import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
@@ -29,7 +28,7 @@ import { openTurnSession, resolveTurnScope } from "./orchestrator/turn-context.t
 import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
-import { mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
+import { concludeTurn, mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
@@ -41,7 +40,7 @@ import {
   type QuarantineReleaseApproval,
 } from "./orchestrator/approvals.ts";
 import { createSessionTitles } from "./session-title.ts";
-import { renderTitleTranscript, stripAckPrefix, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
+import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
@@ -761,61 +760,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           compactRecent,
         });
 
-        const stagedAttachments = attachStaging.staged();
-        const harvestedAck = (() => {
-          if (input.surface !== "slack" || input.surfaceTools || !input.runId) return undefined;
-          const fb = deps.turnStream?.firstBlock(input.runId);
-          const text = fb?.text.trim();
-          return fb?.closed && text ? text : undefined;
-        })();
-        const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
-        const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
-
-        const outcome = deriveTurnOutcome({
-          ...(reply !== undefined ? { reply } : {}),
-          attachments: stagedAttachments.length,
-          pendingApprovals: result.pendingApprovals ?? [],
-          terminatedOnApproval: result.pausedOnApproval === true,
-        });
-        const turnCompleted = outcome.completed;
-        const pausing = outcome.paused;
-        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
-        const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
-        const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-          const prior = pendingCaptures.get(memoryScopeId);
-          const capture = (async () => {
-            if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
-            try {
-              await onTurnEnd({
-                scopeId: memoryScopeId,
-                conversationScopeId: scopeId,
-                inheritedFacts: captureDependencies(),
-                input: turnInput,
-                reply,
-                actorId: actor.id,
-                ...(automatedTurn ? { autonomous: true } : {}),
-                sessionId: session.id,
-                idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-              });
-            } catch (e) {
-              deps.errors?.record(
-                {
-                  category: "memory",
-                  code: "capture_failed",
-                  message: errMessage(e),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                e,
-              );
-            }
-          })();
-          pendingCaptures.set(memoryScopeId, capture);
-          void capture.finally(() => {
-            if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
+        const { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq } =
+          await concludeTurn(ctx, {
+            session,
+            result,
+            attachStaging,
+            spine,
+            partial,
+            turnInput,
+            emittedEntries,
+            useMemory,
+            memoryScopeId,
+            captureDependencies,
+            memoryStrategy,
+            memoryPolicy,
+            pendingCaptures,
           });
-        }
 
         const tail = async (): Promise<void> => {
           try {

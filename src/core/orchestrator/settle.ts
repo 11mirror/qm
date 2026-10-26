@@ -1,10 +1,18 @@
-import type { Session } from "../../types.ts";
-import type { Lease } from "../../sessions/session-store.ts";
-import type { TurnOutcome } from "../turn-outcome.ts";
 import type { OutgoingAttachment } from "../../types.ts";
-import { type TurnResult, type PendingApprovalRecord } from "../../types.ts";
-import { approvalBlocksInput } from "../turn-outcome.ts";
-import { isReply, type Item, type NewItem } from "../../sessions/items.ts";
+import type { TurnOutcome } from "../turn-outcome.ts";
+import type { MemoryStrategy } from "../../memory/strategy.ts";
+import type { MemoryPolicy } from "../../memory/policy.ts";
+import { ProjectRosterChanged, rosterChangedRefusal } from "./admit.ts";
+import { parkApprovals, summarizeApproval, type ApprovalRequest } from "./approvals.ts";
+import type { TurnCtx } from "./turn-context.ts";
+import type { QuarantineReleaseApproval } from "./approvals.ts";
+import type { Session } from "../../types.ts";
+import type { MemoryProvenance } from "../../memory/facts.ts";
+import type { PartialTurn } from "../turn-resume.ts";
+import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../../types.ts";
+import { deriveTurnOutcome, approvalBlocksInput } from "../turn-outcome.ts";
+import type { Lease } from "../../sessions/session-store.ts";
+import { isReply, isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import type { HarnessTurnResult } from "../../harness/harness.ts";
 import { commandApprovalId } from "../approval-id.ts";
 import { NeedsApproval, CommandDenied } from "../../tools/primitives.ts";
@@ -17,11 +25,9 @@ import {
   turnFailureItem,
 } from "../turn-error.ts";
 import { hashId } from "../../util/crypto.ts";
-import { ProjectRosterChanged, rosterChangedRefusal } from "./admit.ts";
-import { parkApprovals, summarizeApproval, type ApprovalRequest } from "./approvals.ts";
-
-import type { TurnCtx } from "./turn-context.ts";
-import type { QuarantineReleaseApproval } from "./approvals.ts";
+import { stripAckPrefix } from "./turn-helpers.ts";
+import { type SpineState } from "./surface-tools.ts";
+import { createAttachStaging } from "./attach-tool.ts";
 
 export async function settleTurnResult(
   ctx: TurnCtx,
@@ -205,4 +211,96 @@ export async function mapTurnFailure(
       refusalKind: "model_budget",
     };
   throw err;
+}
+
+export async function concludeTurn(
+  ctx: TurnCtx,
+  turn: {
+    session: Session;
+    result: HarnessTurnResult;
+    attachStaging: ReturnType<typeof createAttachStaging>;
+    spine: SpineState;
+    partial: PartialTurn | null;
+    turnInput: string;
+    emittedEntries: Item[];
+    useMemory: boolean;
+    memoryScopeId: ScopeId;
+    captureDependencies: () => MemoryProvenance[];
+    memoryStrategy: MemoryStrategy;
+    memoryPolicy: MemoryPolicy;
+    pendingCaptures: Map<ScopeId, Promise<void>>;
+  },
+) {
+  const { deps, input, actor, automatedTurn, scopeId } = ctx;
+  const {
+    session,
+    result,
+    attachStaging,
+    spine,
+    partial,
+    turnInput,
+    emittedEntries,
+    useMemory,
+    memoryScopeId,
+    captureDependencies,
+    memoryStrategy,
+    memoryPolicy,
+    pendingCaptures,
+  } = turn;
+  const stagedAttachments = attachStaging.staged();
+  const harvestedAck = (() => {
+    if (input.surface !== "slack" || input.surfaceTools || !input.runId) return undefined;
+    const fb = deps.turnStream?.firstBlock(input.runId);
+    const text = fb?.text.trim();
+    return fb?.closed && text ? text : undefined;
+  })();
+  const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
+  const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
+
+  const outcome = deriveTurnOutcome({
+    ...(reply !== undefined ? { reply } : {}),
+    attachments: stagedAttachments.length,
+    pendingApprovals: result.pendingApprovals ?? [],
+    terminatedOnApproval: result.pausedOnApproval === true,
+  });
+  const turnCompleted = outcome.completed;
+  const pausing = outcome.paused;
+  if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
+  const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
+  const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
+  if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+    const prior = pendingCaptures.get(memoryScopeId);
+    const capture = (async () => {
+      if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
+      try {
+        await onTurnEnd({
+          scopeId: memoryScopeId,
+          conversationScopeId: scopeId,
+          inheritedFacts: captureDependencies(),
+          input: turnInput,
+          reply,
+          actorId: actor.id,
+          ...(automatedTurn ? { autonomous: true } : {}),
+          sessionId: session.id,
+          idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
+        });
+      } catch (e) {
+        deps.errors?.record(
+          {
+            category: "memory",
+            code: "capture_failed",
+            message: errMessage(e),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          e,
+        );
+      }
+    })();
+    pendingCaptures.set(memoryScopeId, capture);
+    void capture.finally(() => {
+      if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
+    });
+  }
+  return { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq };
 }
