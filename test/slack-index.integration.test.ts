@@ -349,6 +349,8 @@ class FakeCore implements SlackCoreClient {
       this.senders.push(send);
       return () => void this.senders.splice(this.senders.indexOf(send), 1);
     },
+    serveEvents: () => () => {},
+    events: () => undefined,
   };
   async pendingContextRequests(): Promise<[]> {
     return [];

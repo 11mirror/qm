@@ -12,17 +12,17 @@ function requireEnv(name: string): string {
 
 const admin = new TwinAdmin(requireEnv("ARGA_TWIN_ADMIN_URL"), requireEnv("ARGA_TWIN_PROXY_TOKEN"));
 const bot = new SlackClient(requireEnv("SLACK_BOT_TOKEN"), requireEnv("SLACK_API_URL"));
-const port = process.env.SLACK_EVENTS_PORT ?? "8182";
+const targetUrl = `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`;
 
 const { userId } = await bot.authTest();
 const pump = startEventPump({
   admin,
   signingSecret: requireEnv("SLACK_SIGNING_SECRET"),
-  targetUrl: `http://127.0.0.1:${port}/slack/events`,
+  targetUrl,
   botUserId: userId,
 });
 await pump.ready;
-console.log(`twin event pump running → 127.0.0.1:${port}/slack/events (bot <@${userId}>)`);
+console.log(`twin event pump running → ${targetUrl} (bot <@${userId}>)`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

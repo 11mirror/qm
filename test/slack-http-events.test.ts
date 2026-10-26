@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
-import { createHttpEventsReceiver, SLACK_EVENTS_PATH } from "../src/slack/http-events.ts";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { normalizeSlackApiUrl, slackPluginConfigFromEnv } from "../src/slack/index.ts";
 
 const SECRET = "test-signing-secret";
@@ -40,18 +42,18 @@ async function withReceiver(
     ) => Promise<Response>,
   ) => Promise<void>,
 ): Promise<void> {
-  const receiver = createHttpEventsReceiver({ signingSecret: SECRET, port: 0, capMs: 500 });
+  const receiver = createHttpEventsReceiver({ signingSecret: SECRET, capMs: 500, serve: () => () => {} });
   receiver.init?.({ processEvent } as unknown as BoltApp);
-  await receiver.start(0 as never);
-  const address = receiver.server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
+  const server = createServer((req, res) => void receiver.handle(req, res));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
   const post = async (
     body: unknown,
     opts: { badSig?: boolean; timestampOffsetSeconds?: number; form?: boolean } = {},
   ): Promise<Response> => {
     const raw = opts.form ? `payload=${encodeURIComponent(JSON.stringify(body))}` : JSON.stringify(body);
     const { signature, timestamp } = sign(raw, Math.floor(Date.now() / 1000) + (opts.timestampOffsetSeconds ?? 0));
-    return fetch(`http://127.0.0.1:${port}${SLACK_EVENTS_PATH}`, {
+    return fetch(`http://127.0.0.1:${port}/slack/events`, {
       method: "POST",
       headers: {
         "content-type": opts.form ? "application/x-www-form-urlencoded" : "application/json",
@@ -64,7 +66,7 @@ async function withReceiver(
   try {
     await run(post);
   } finally {
-    await receiver.stop(0 as never);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 

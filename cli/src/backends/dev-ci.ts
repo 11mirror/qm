@@ -68,9 +68,6 @@ export async function devCiUp(): Promise<void> {
   const port = ciPort();
 
   const overlay: Record<string, string> = {};
-  if (process.env.SLACK_EVENTS_MODE === "http" && !process.env.SLACK_EVENTS_PORT) {
-    overlay.SLACK_EVENTS_PORT = String(port + 1);
-  }
   if (process.env.SPRITES_TOKEN) {
     if (!process.env.SANDBOX_BACKEND) overlay.SANDBOX_BACKEND = "sprites";
     if (!process.env.SANDBOX_NAME_PREFIX) overlay.SANDBOX_NAME_PREFIX = "qmci";

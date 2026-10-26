@@ -40,7 +40,6 @@ export interface SlackPluginConfig {
   apiUrl?: string;
   eventsMode?: "socket" | "http";
   signingSecret?: string;
-  eventsPort?: number;
   ackCapMs?: number;
   userToken?: string;
   copilotBotToken?: string;
@@ -92,7 +91,6 @@ export function slackPluginConfigFromEnv(
     ...opt("apiUrl", env.SLACK_API_URL),
     ...(eventsMode === "http" ? { eventsMode } : {}),
     ...opt("signingSecret", env.SLACK_SIGNING_SECRET),
-    ...opt("eventsPort", num(env.SLACK_EVENTS_PORT)),
     ...opt("ackCapMs", num(env.SLACK_ACK_CAP_MS)),
     ...opt("userToken", env.SLACK_USER_TOKEN),
     ...opt("copilotBotToken", env.SLACK_COPILOT_BOT_TOKEN),
@@ -151,7 +149,6 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       SLACK_APP_TOKEN: str(a.appToken),
       SLACK_EVENTS_MODE: str(a.eventsMode),
       SLACK_SIGNING_SECRET: str(a.signingSecret),
-      SLACK_EVENTS_PORT: a.eventsPort === undefined ? undefined : String(a.eventsPort),
       SLACK_API_URL: str(a.apiUrl),
       SLACK_IDENTITY_EMAIL: str(a.identityEmail) ?? "1",
       SLACK_LOG_LEVEL: env.SLACK_LOG_LEVEL,

@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import bolt from "@slack/bolt";
 import type { Receiver, App as BoltApp } from "@slack/bolt";
 import { processEnvelope } from "./deferred-ack.ts";
@@ -7,7 +7,6 @@ import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.t
 
 const { isValidSlackRequest } = bolt;
 
-export const SLACK_EVENTS_PATH = "/slack/events";
 const MAX_BODY_BYTES = 5_000_000;
 
 function respond(res: ServerResponse, status: number, body: unknown): void {
@@ -16,25 +15,18 @@ function respond(res: ServerResponse, status: number, body: unknown): void {
   res.end(typeof body === "string" ? body : (JSON.stringify(body) ?? ""));
 }
 
+export type SlackEventsHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
 export function createHttpEventsReceiver(opts: {
   signingSecret: string;
-  port: number;
-  host?: string;
-  path?: string;
   capMs?: number | undefined;
   staging?: EnvelopeStaging | undefined;
-}): Receiver & { server: Server } {
-  const path = opts.path ?? SLACK_EVENTS_PATH;
-  const host = opts.host ?? "127.0.0.1";
+  serve: (handler: SlackEventsHandler) => () => void;
+}): Receiver & { handle: SlackEventsHandler } {
   let app: BoltApp | undefined;
-
-  const server = createServer((req, res) => {
-    void handle(req, res);
-  });
+  let release: (() => void) | undefined;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = (req.url ?? "").split("?")[0];
-    if (req.method !== "POST" || url !== path) return respond(res, 404, { error: "not_found" });
     let raw: string;
     try {
       raw = await readBody(req, MAX_BODY_BYTES);
@@ -76,21 +68,18 @@ export function createHttpEventsReceiver(opts: {
   }
 
   return {
-    server,
+    handle,
     init(a: BoltApp) {
       app = a;
     },
-    start: () =>
-      new Promise((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(opts.port, host, () => {
-          server.removeListener("error", reject);
-          console.log(`[slack-plugin] http events receiver listening on ${host}:${opts.port}${path}`);
-          resolve(undefined);
-        });
-      }),
-    stop: () => new Promise((resolve) => server.close(() => resolve(undefined))),
-  } as Receiver & { server: Server };
+    async start() {
+      release = opts.serve(handle);
+    },
+    async stop() {
+      release?.();
+      release = undefined;
+    },
+  } as Receiver & { handle: SlackEventsHandler };
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

@@ -1,4 +1,5 @@
 import type { ExternalSlackAccess } from "../slack/external-access.ts";
+import type { SlackEventsHandler } from "../slack/http-events.ts";
 import type { SurfaceSender } from "../surfaces/outbound.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { Surface, SurfaceUser } from "./surface.ts";
@@ -13,6 +14,8 @@ interface SlackAccountHandle {
 export interface SlackNative {
   accounts: Map<string, SlackAccountHandle>;
   attach(sender: SurfaceSender): () => void;
+  serveEvents(account: string, handler: SlackEventsHandler): () => void;
+  events(account: string): SlackEventsHandler | undefined;
 }
 
 export interface SlackSurface extends Surface {
@@ -22,6 +25,7 @@ export interface SlackSurface extends Surface {
 export function createSlackSurface(): SlackSurface {
   const accounts = new Map<string, SlackAccountHandle>();
   let senders: SurfaceSender[] = [];
+  const events = new Map<string, SlackEventsHandler>();
   const slack: SlackNative = {
     accounts,
     attach(sender) {
@@ -30,6 +34,13 @@ export function createSlackSurface(): SlackSurface {
         senders = senders.filter((s) => s !== sender);
       };
     },
+    serveEvents(account, handler) {
+      events.set(account, handler);
+      return () => {
+        if (events.get(account) === handler) events.delete(account);
+      };
+    },
+    events: (account) => events.get(account),
   };
   return {
     kind: "slack",

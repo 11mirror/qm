@@ -16,10 +16,10 @@ interface Twin {
   proxyToken: string;
   qaToken: string;
   actors: Record<string, string>;
-  eventsPort: number;
+  eventsUrl: string;
 }
 
-function twinFromEnv(prefix: string, label: string, eventsPort: number): Twin {
+function twinFromEnv(prefix: string, label: string, eventsUrl: string): Twin {
   return {
     label,
     baseUrl: req(`${prefix}SLACK_API_URL`),
@@ -29,7 +29,7 @@ function twinFromEnv(prefix: string, label: string, eventsPort: number): Twin {
     proxyToken: req(`${prefix}ARGA_TWIN_PROXY_TOKEN`),
     qaToken: req(`${prefix}SLACK_QA_USER_TOKEN`),
     actors: JSON.parse(req(`${prefix}LIVE_E2E_ACTOR_TOKENS`)) as Record<string, string>,
-    eventsPort,
+    eventsUrl,
   };
 }
 
@@ -53,8 +53,10 @@ async function botReplyAfter(client: SlackClient, channel: string, afterTs: stri
 }
 
 async function main(): Promise<void> {
-  const a = twinFromEnv("", "primary", Number(process.env.SLACK_EVENTS_PORT ?? "8182"));
-  const b = twinFromEnv("B_", "batch", Number(req("B_SLACK_EVENTS_PORT")));
+  const events = `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`;
+  const [account] = JSON.parse(req("SLACK_ACCOUNTS")) as Array<{ id: string }>;
+  const a = twinFromEnv("", "primary", events);
+  const b = twinFromEnv("B_", "batch", `${events}/${account!.id}`);
 
   const results: string[] = [];
   const pumps: Array<{ stop(): void }> = [];
@@ -66,11 +68,11 @@ async function main(): Promise<void> {
         startEventPump({
           admin,
           signingSecret: t.signingSecret,
-          targetUrl: `http://127.0.0.1:${t.eventsPort}/slack/events`,
+          targetUrl: t.eventsUrl,
           botUserId: bot.userId,
         }),
       );
-      console.log(`pump ${t.label} → :${t.eventsPort} (bot ${bot.userId})`);
+      console.log(`pump ${t.label} → ${t.eventsUrl} (bot ${bot.userId})`);
     }
 
     const botA = await new SlackClient(a.botToken, a.baseUrl).authTest();
