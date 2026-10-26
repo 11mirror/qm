@@ -1,10 +1,9 @@
 import { errMessage } from "../../../chassis/src/errors";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { badge, card, table, renderer, stacked } from "./shared.ts";
+import { badge, card, table, renderer, stacked, statusBadge } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
 import { packRepoLabel, scopeKind, shortId } from "./format.ts";
-import { statusBadge } from "./dom.ts";
 import { scopeMultiSelect } from "./scope-picker.ts";
 export async function removeSkill(s: Data, c: Context) {
   const where = c.dirLabel(s.ownerScopeId) || s.ownerScopeId;

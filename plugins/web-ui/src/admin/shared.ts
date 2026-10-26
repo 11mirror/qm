@@ -1,6 +1,8 @@
 import { html, render, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
+import { copyText, linkClick, type ErrorRow } from "./dom.ts";
+import { firstLine, pick, relTime, titleCase } from "./format.ts";
 
 export function node(template: unknown): HTMLElement {
   const fragment = document.createDocumentFragment();
@@ -173,4 +175,55 @@ export function mountTemplate(selector: string, template: () => unknown) {
 
 export function scroller(from: Element): HTMLElement {
   return from.closest<HTMLElement>(".pane") ?? (document.scrollingElement as HTMLElement);
+}
+
+const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
+export const statusBadge = (status: string | null | undefined) =>
+  badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
+
+export const metaChip = (text: string, kind = "") =>
+  html`<span class=${"meta-chip" + (kind ? " " + kind : "")}>${text}</span>`;
+
+export function copyButton(label: string, getText: () => string) {
+  return html`<button
+    type="button"
+    class="copy"
+    @click=${async (ev: Event) => {
+      ev.stopPropagation();
+      const btn = ev.currentTarget as HTMLButtonElement;
+      const ok = await copyText(getText());
+      btn.textContent = ok ? "Copied" : "Copy failed";
+      if (ok) btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = label;
+        btn.classList.remove("copied");
+      }, 1200);
+    }}
+  >
+    ${label}
+  </button>`;
+}
+
+export function errorStripBox(
+  errs: ErrorRow[],
+  headText: string,
+  max: number,
+  rowLink?: (e: ErrorRow) => { href: string; go: () => void } | null,
+) {
+  const row = (e: ErrorRow) => {
+    const link = rowLink ? rowLink(e) : null;
+    const meta = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
+    const content = html`<span class="mono" title=${e.message || ""}
+        >${firstLine(e.message || "(no message)", 160)}</span
+      ><span class="subline">${meta}</span>`;
+    return link
+      ? html`<a class="error-strip-row" href=${link.href} @click=${linkClick(link.go)}>${content}</a>`
+      : html`<div class="error-strip-row">${content}</div>`;
+  };
+  return html`<div class="error-strip">
+    <div class="error-strip-head">${headText}</div>
+    ${errs.slice(0, max).map(row)}${
+      errs.length > max ? html`<div class="subline">${"…and " + (errs.length - max) + " more"}</div>` : nothing
+    }
+  </div>`;
 }

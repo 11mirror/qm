@@ -1,4 +1,5 @@
-import { el, stacked } from "./dom.ts";
+import { el } from "./dom.ts";
+import { node, stacked } from "./shared.ts";
 import { scopeKind } from "./format.ts";
 
 export interface ScopeChoice {
@@ -78,7 +79,7 @@ export function scopeMultiSelect(
     list.replaceChildren(
       ...shown.map((c) => {
         const on = selected.has(c.scopeId);
-        const name = el("span.scope-name", {}, stacked(c.label, c.label === c.scopeId ? "" : c.scopeId));
+        const name = el("span.scope-name", {}, node(stacked(c.label, c.label === c.scopeId ? "" : c.scopeId)));
         return el(
           "button.scope-option" + (on ? " selected" : ""),
           {

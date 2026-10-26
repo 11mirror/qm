@@ -2,10 +2,9 @@ import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { node, renderer, scroller } from "./shared.ts";
+import { badge, copyButton, errorStripBox, metaChip, node, renderer, scroller } from "./shared.ts";
 import { isUserMessage, itemFields, type Item } from "../items.ts";
-import { firstLine, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
-import { copyButton, errorStripBox, metaChip } from "./dom.ts";
+import { firstLine, fmtBytes, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
 import { isXmlishText } from "./rich-text.ts";
 import { markdown } from "../message-markdown.ts";
 import {
@@ -75,6 +74,18 @@ function itemText(item: Item): string {
   if (item.kind === "Reasoning") return item.text || (item.body.redacted ? "[redacted thinking]" : "");
   if (item.text != null && item.kind !== "ToolCall" && item.kind !== "ToolResult") return item.text;
   return json(itemFields(item));
+}
+function deliveryFileBadges(files: Row[], s: Row) {
+  const named = files.filter((f) => f && f.name);
+  if (!named.length) return nothing;
+  return html`<div class="badges">
+    ${named.map((f) => {
+      const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
+      if (!f.artifactId) return badge(label, "muted");
+      const file = { id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true };
+      return html`<button class="badge info" @click=${() => s.downloadFile(file)}>${label}</button>`;
+    })}
+  </div>`;
 }
 const isOriginPrompt = (item: Item) => isUserMessage(item) || item.kind === "Wake";
 export function prepare(data: Row, requests: Row[]) {
@@ -413,7 +424,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     else if (user) label = (typeof e.body.name === "string" && e.body.name.trim()) || e.author || "User";
     if (isOrigin) label = origin.label || wakeOriginLabel(origin.trigger);
     const files =
-      e.kind === "AgentMessage" && Array.isArray(e.body.files) ? s.deliveryFileBadges(e.body.files) : nothing;
+      e.kind === "AgentMessage" && Array.isArray(e.body.files) ? deliveryFileBadges(e.body.files, s) : nothing;
     return html`<div
       class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.kind === "Reasoning", "message-entry": user || e.kind === "AgentMessage", "user-entry": user, "assistant-entry": e.kind === "AgentMessage", "cron-prompt-entry": !!isOrigin, "system-entry": e.kind === "Wake", filtered: s.entryHidden([e.kind]) })}
     >

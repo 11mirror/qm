@@ -6,8 +6,9 @@ import { startSettings } from "./settings-controller.ts";
 import { scopeMultiSelect } from "./scope-picker.ts";
 import * as routes from "./routes.ts";
 import { watchCustomDropdowns } from "./dropdown.ts";
-import { backArrow, badge, el, kpis, linkClick, searchField, stacked } from "./dom.ts";
-import { KIND_LABEL, fileName, fmtBytes, historyCategory, relTime, scopeKind, titleCase } from "./format.ts";
+import { backArrow, el, kpis, linkClick, searchField } from "./dom.ts";
+import { stacked } from "./shared.ts";
+import { KIND_LABEL, fileName, historyCategory, relTime, scopeKind, titleCase } from "./format.ts";
 
 export function startAdmin(host, env) {
   host.innerHTML = ADMIN_MARKUP;
@@ -61,20 +62,6 @@ export function startAdmin(host, env) {
     );
   }
   const settings = governanceUI.settings;
-  function deliveryFileBadges(filesPayload) {
-    const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
-    if (!filesWithNames.length) return null;
-    return el(
-      "div.badges",
-      {},
-      ...filesWithNames.map((f) => {
-        const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
-        if (!f.artifactId) return badge(label, "muted");
-        const file = { id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true };
-        return el("button.badge info", { textContent: label, onclick: () => downloadFile(file) });
-      }),
-    );
-  }
   const stateToUrl = (st) => routes.stateToUrl(st, PAGE_BASE);
   const urlToState = () => routes.urlToState(PAGE_BASE, orgId, scope);
   let transcriptObserver = null;
@@ -278,11 +265,19 @@ export function startAdmin(host, env) {
       const amount = Number.isFinite(number) ? number.toLocaleString() : String(value);
       return el("span.log-count", amount + " " + noun.toLowerCase());
     };
-    if (opts.back) {
-      const back = el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
-      back.append(el("span", opts.back.label.replace(/^←\s*/, "")));
-      bar.appendChild(el("div.shell-back-row", {}, back));
+    const back = opts.back && el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
+    back?.append(el("span", opts.back.label.replace(/^←\s*/, "")));
+    if (opts.stacked) {
+      const context = el("span.shell-context", opts.context || "");
+      bar.append(
+        el("div.sm-toolbar", {}, back, ...(opts.actions || [])),
+        el("div.sm-channel-heading", {}, el("h2.shell-title", opts.title), context),
+        counts,
+      );
+      if (opts.search) bar.appendChild(searchField(opts.search));
+      return;
     }
+    if (back) bar.appendChild(el("div.shell-back-row", {}, back));
     if (opts.title) bar.appendChild(el("h2.shell-title", opts.title));
     if (logView) bar.appendChild(counts);
     if (opts.context) {
@@ -497,7 +492,6 @@ export function startAdmin(host, env) {
       apiBase: API_BASE,
       fmtHistoryTime: relTime,
       deploymentHref: (dep) => dep.publicUrl || "",
-      stacked,
       invalidate: () => dataCache.clear(),
       reload: () => (current() ? renderData() : Promise.resolve()),
       setCronEditing: (id) => {
@@ -618,7 +612,6 @@ export function startAdmin(host, env) {
       adminErrors,
       adminErrorCount,
       downloadFile,
-      deliveryFileBadges,
       brandSelfLabel,
       slackContainerLabel,
       slackContainerScope,

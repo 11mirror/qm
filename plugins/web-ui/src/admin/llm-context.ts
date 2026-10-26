@@ -1,4 +1,5 @@
-import { el, metaChip } from "./dom.ts";
+import { html } from "lit";
+import { metaChip } from "./shared.ts";
 import { fmtPct, fmtTokens, stringify } from "./format.ts";
 
 type Row = Record<string, any>;
@@ -170,17 +171,11 @@ export function rawJsonLink(requests: Row[], label = "Raw JSON") {
     payload = requests[0]?.transport
       ? { request: requestBody(requests[0]), transport: requests[0].transport }
       : requestBody(requests[0]);
-  const a = el("a.context-raw", {
-    href: "#",
-    target: "_blank",
-    rel: "noopener",
-    textContent: label,
-  }) as HTMLAnchorElement;
   let url: string | null = null;
-  a.addEventListener("click", () => {
+  const open = (e: Event) => {
     if (url) URL.revokeObjectURL(url);
     url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-    a.href = url;
-  });
-  return a;
+    (e.currentTarget as HTMLAnchorElement).href = url;
+  };
+  return html`<a class="context-raw" href="#" target="_blank" rel="noopener" @click=${open}>${label}</a>`;
 }

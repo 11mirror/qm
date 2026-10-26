@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { bareCard, card, denseList, renderer, node } from "./shared.ts";
 import { cronName, historyKindMatches, historyModeLabel, plural, relTime, scopeKind, titleCase } from "./format.ts";
-import { errorStripBox } from "./dom.ts";
+import { errorStripBox } from "./shared.ts";
 
 export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
