@@ -33,15 +33,6 @@ export interface ContextWindow {
   totalItems: number;
 }
 
-export function contextWindowFromItems(items: Item[]): ContextWindow {
-  let throughSeq: number | undefined;
-  for (const item of items) throughSeq = contextSummary(item)?.throughSeq ?? throughSeq;
-  return {
-    items: throughSeq === undefined ? [...items] : items.filter((item) => item.seq > throughSeq),
-    totalItems: items.length,
-  };
-}
-
 export interface Lease {
   sessionId: string;
   token: string;
@@ -49,7 +40,8 @@ export interface Lease {
   fenceToken?: string;
 }
 
-export type LeaseHolder = "turn" | "compaction" | "fork" | "backfill";
+/** Who holds a session lease: a turn, compaction, a fork copy, or an out-of-turn append (delivery, failure record, goal cancel). */
+export type LeaseHolder = "turn" | "compaction" | "fork" | "append";
 
 export interface LeaseAttempt {
   lease: Lease | null;
@@ -375,16 +367,8 @@ export interface ParticipantScope {
 
 export type SearchHitType = "user" | "assistant" | "text";
 
-export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
+export interface ItemSearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
-  seq: number;
-  type: SearchHitType;
-  author?: string;
-  text: string;
-  createdAt: number;
-}
-
-export interface NewSearchEntry {
   seq: number;
   type: SearchHitType;
   author?: string;
@@ -418,7 +402,7 @@ export function userMessagePreview(text: string | null | undefined, maxLen = 160
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
-export const ENTRY_STRING_BUDGET = 2_000;
+export const ITEM_STRING_BUDGET = 2_000;
 
 export type TranscriptItem = Item & { truncated?: true };
 
@@ -431,13 +415,13 @@ const WALK_DEPTH = 8;
 
 function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
   if (typeof value === "string") {
-    return value.length > ENTRY_STRING_BUDGET
-      ? { value: value.slice(0, ENTRY_STRING_BUDGET), truncated: true }
+    return value.length > ITEM_STRING_BUDGET
+      ? { value: value.slice(0, ITEM_STRING_BUDGET), truncated: true }
       : { value, truncated: false };
   }
   if (value === null || typeof value !== "object") return { value, truncated: false };
   if (depth >= WALK_DEPTH) {
-    return payloadBytes(value, depth) > ENTRY_STRING_BUDGET
+    return payloadBytes(value, depth) > ITEM_STRING_BUDGET
       ? { value: null, truncated: true }
       : { value, truncated: false };
   }
@@ -568,7 +552,7 @@ export interface SessionStore {
   append(lease: Lease, item: NewItem): Promise<Item>;
   appendMany(lease: Lease, items: readonly NewItem[]): Promise<Item[]>;
   getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
-  hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
+  hasDeliveryItem(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
   countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
@@ -603,7 +587,7 @@ export interface SessionStore {
   /** Items every listed principal may read (each one's participation window covers them). */
   visibleItems(sessionId: string, principals: string | readonly string[], opts?: GetItemsOptions): Promise<Item[]>;
 
-  searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
+  searchItems(principalId: string, query: string, limit?: number): Promise<ItemSearchHit[]>;
 
   /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;

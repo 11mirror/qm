@@ -53,20 +53,20 @@ async function secretTurn(sim: Sim): Promise<void> {
 test("message writes index only conversational text — tool results and thinking stay unsearchable", async () => {
   const sim = await simSession();
   await secretTurn(sim);
-  assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
-  assert.deepEqual(await sim.store.searchEntries(VIEWER, THINKING_SECRET), []);
-  assert.deepEqual(await sim.store.searchEntries(VIEWER, "brokered credential"), []);
-  const replyHits = await sim.store.searchEntries(VIEWER, "finished cleanly");
+  assert.deepEqual(await sim.store.searchItems(VIEWER, TOOL_SECRET), []);
+  assert.deepEqual(await sim.store.searchItems(VIEWER, THINKING_SECRET), []);
+  assert.deepEqual(await sim.store.searchItems(VIEWER, "brokered credential"), []);
+  const replyHits = await sim.store.searchItems(VIEWER, "finished cleanly");
   assert.equal(replyHits.length, 1);
   assert.equal(replyHits[0]!.type, "assistant");
-  const userHits = await sim.store.searchEntries(VIEWER, "deploy status");
+  const userHits = await sim.store.searchItems(VIEWER, "deploy status");
   assert.ok(userHits.some((h) => h.type === "user" && h.author === "Alex"));
 });
 
 test("messages are searchable as soon as they are appended", async () => {
   const sim = await simSession();
   await sim.store.append(sim.lease, { kind: "UserMessage", text: "legacy document" });
-  assert.equal((await sim.store.searchEntries(VIEWER, "legacy document")).length, 1);
+  assert.equal((await sim.store.searchItems(VIEWER, "legacy document")).length, 1);
 });
 
 test("tenure windows filter search hits", async () => {
@@ -74,7 +74,7 @@ test("tenure windows filter search hits", async () => {
   await simTurn(sim, { input: "early private question", reply: "early answer" });
   await sim.store.addParticipant(sim.session.id, "latecomer");
   await simTurn(sim, { input: "late shared question", reply: "late answer" });
-  assert.deepEqual(await sim.store.searchEntries("latecomer", "early private"), []);
-  assert.equal((await sim.store.searchEntries("latecomer", "late shared")).length, 1);
-  assert.equal((await sim.store.searchEntries(VIEWER, "early private")).length, 1);
+  assert.deepEqual(await sim.store.searchItems("latecomer", "early private"), []);
+  assert.equal((await sim.store.searchItems("latecomer", "late shared")).length, 1);
+  assert.equal((await sim.store.searchItems(VIEWER, "early private")).length, 1);
 });
