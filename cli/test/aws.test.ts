@@ -543,7 +543,6 @@ const config: QmConfig = {
   imageOverrides: {},
   sandbox: {
     backend: "sprites",
-    secretEnv: ["ACME_API_KEY"],
   },
   env: {
     core: { AWS_DEPLOY_IMAGE: "acme-qm-sandbox", AWS_DEPLOY_IMAGE_VERSION: "1" },
@@ -1966,7 +1965,6 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "CONNECTOR_SECRET_KEY",
     "CORE_SIGNING_SECRET",
     "DATABASE_URL",
-    "FLY_RESIDENT_ENV_ACME_API_KEY",
     "OIDC_CLIENT_SECRET",
     "PORTAL_IDENTITY_SECRET",
     "PORTAL_SESSION_SECRET",
@@ -2664,7 +2662,7 @@ test("AWS secret upload registers and records a task revision for a newly suppli
   );
   writeFileSync(
     join(dir, ".env"),
-    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "ACME_API_KEY=optional-value"].join("\n"),
+    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "OPENAI_API_KEY=optional-value"].join("\n"),
   );
   const fake = statefulAws(dir, secretsConfig);
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -2694,7 +2692,7 @@ test("AWS secret upload registers and records a task revision for a newly suppli
     const names = after.definitions[manifest.tasks.core].containerDefinitions[0].secrets.map(
       (secret: { name: string }) => secret.name,
     );
-    assert.ok(names.includes("FLY_RESIDENT_ENV_ACME_API_KEY"));
+    assert.ok(names.includes("OPENAI_API_KEY"));
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
@@ -2709,7 +2707,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
   );
   writeFileSync(
     join(dir, ".env"),
-    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "ACME_API_KEY=optional-value"].join("\n"),
+    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "OPENAI_API_KEY=optional-value"].join("\n"),
   );
   const fake = statefulAws(dir, secretsConfig, {}, { failForcedDeploymentResponse: true });
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -2750,27 +2748,6 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-test("a dual-role secret (core service + sandbox.secretEnv) is delivered under BOTH names on core", () => {
-  const dual: QmConfig = {
-    ...config,
-    sandbox: { ...config.sandbox!, secretEnv: ["ACME_API_KEY", "ANTHROPIC_API_KEY"] },
-  };
-  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
-  const task = renderTaskDefinition(dual, "core", image);
-  const secrets = task.containerDefinitions[0]!.secrets as Array<{ name: string; valueFrom: string }>;
-  const names = secrets.map((secret) => secret.name);
-  assert.ok(names.includes("ANTHROPIC_API_KEY"), "plain name for the core process");
-  assert.ok(names.includes("FLY_RESIDENT_ENV_ANTHROPIC_API_KEY"), "renamed variant forwarded into sandboxes");
-  assert.ok(names.includes("FLY_RESIDENT_ENV_ACME_API_KEY"));
-  assert.ok(!names.includes("ACME_API_KEY"), "a sandbox-only secret is not delivered plain");
-  const dualEntries = secrets.filter((secret) => secret.name.endsWith("ANTHROPIC_API_KEY"));
-  assert.equal(
-    new Set(dualEntries.map((secret) => secret.valueFrom)).size,
-    1,
-    "both names read the same stored secret",
-  );
 });
 
 const oneServiceConfig = (name = "core"): QmConfig => ({
