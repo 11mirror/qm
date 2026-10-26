@@ -1,10 +1,10 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import { type RecentMessage, buildContextWindow } from "./conversation.ts";
-import { type SlackFile, downloadSlackFile, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
+import { downloadSlackFile, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
 import { isExternallyShared } from "./identity.ts";
 import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
@@ -94,36 +94,27 @@ export function createSurfaceContextFulfiller(deps: {
     }
     const files = (msg.files ?? []).filter((f) => f?.id);
     if (!files.length) return { error: "that message has no files attached" };
-    let file: SlackFile | undefined;
-    if (ref.name) {
-      const want = ref.name.toLowerCase();
-      file =
-        files.find((f) => slackFileName(f).toLowerCase() === want) ??
-        files.find((f) => slackFileName(f).toLowerCase().includes(want));
-      if (!file)
-        return {
-          error: `that message has no file matching "${ref.name}" — it carries: ${files.map(slackFileName).join(", ")}`,
-        };
-    } else if (files.length === 1) {
-      file = files[0]!;
-    } else {
+    const names = files.map(slackFileName);
+    const want = ref.name?.toLowerCase();
+    const exact = want ? names.findIndex((n) => n.toLowerCase() === want) : -1;
+    let at = files.length === 1 ? 0 : -1;
+    if (want) at = exact >= 0 ? exact : names.findIndex((n) => n.toLowerCase().includes(want));
+    if (at < 0)
       return {
-        error: `that message carries ${files.length} files — pass a name: ${files.map(slackFileName).join(", ")}`,
+        error: want
+          ? `that message has no file matching "${ref.name}" — it carries: ${names.join(", ")}`
+          : `that message carries ${files.length} files — pass a name: ${names.join(", ")}`,
       };
-    }
-    if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };
-    let bytes: Uint8Array;
-    let blobId: string;
-    try {
-      bytes = await downloadSlackFile(file, {
-        token: botToken,
-        ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-      });
-      ({ blobId } = await core.stageBlob(bytes));
-    } catch (err) {
-      swallow("slack: surface-file fetch", err);
-      return { error: `I couldn't read "${slackFileName(file)}" — it may be restricted, deleted, or too large for me` };
-    }
+    const file = files[at]!;
+    const name = names[at]!;
+    if (isOversize(file)) return { error: oversizeMsg(name) };
+    const staged = await downloadSlackFile(file, {
+      token: botToken,
+      ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
+    })
+      .then(async (bytes) => ({ bytes, ...(await core.stageBlob(bytes)) }))
+      .catch(swallowAs("slack: surface-file fetch", undefined));
+    if (!staged) return { error: `I couldn't read "${name}" — it may be restricted, deleted, or too large for me` };
     const author = file.user
       ? await directory.classifyUserCached(client, file.user).then(
           (c) => c.actor.displayName,
@@ -132,9 +123,9 @@ export function createSurfaceContextFulfiller(deps: {
       : undefined;
     return {
       file: {
-        blobId,
-        name: slackFileName(file),
-        sizeBytes: bytes.length,
+        blobId: staged.blobId,
+        name,
+        sizeBytes: staged.bytes.length,
         ...(file.mimetype ? { mimetype: file.mimetype } : {}),
         ...(author ? { author } : {}),
       },
