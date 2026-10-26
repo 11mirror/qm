@@ -1,16 +1,10 @@
 import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
+import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 
 type SecretGate =
+  | SandboxBackendName
   | "production"
   | "background-work-control"
-  | "sprites"
-  | "smolmachines"
-  | "e2b"
-  | "modal"
-  | "porter"
-  | "agent37"
-  | "superserve"
-  | "do-managed-agents"
   | "porter-deploy"
   | "e2b-deploy"
   | "aws-deploy-gate"
@@ -59,21 +53,15 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
 ];
 
-function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolean {
-  return env.SANDBOX_BACKEND?.trim() === backend;
-}
-
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
-  sprites: (env) => sandboxBackendSelected(env, "sprites"),
-  smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
-  e2b: (env) => sandboxBackendSelected(env, "e2b"),
-  modal: (env) => sandboxBackendSelected(env, "modal"),
-  porter: (env) => sandboxBackendSelected(env, "porter"),
-  agent37: (env) => sandboxBackendSelected(env, "agent37"),
-  superserve: (env) => sandboxBackendSelected(env, "superserve"),
-  "do-managed-agents": (env) => sandboxBackendSelected(env, "do-managed-agents"),
+  ...(Object.fromEntries(
+    SANDBOX_BACKEND_NAMES.map((backend) => [
+      backend,
+      (env: NodeJS.ProcessEnv) => env.SANDBOX_BACKEND?.trim() === backend,
+    ]),
+  ) as Record<SandboxBackendName, (env: NodeJS.ProcessEnv) => boolean>),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "e2b-deploy": (env) => env.DEPLOY_PROVIDER === "e2b",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),

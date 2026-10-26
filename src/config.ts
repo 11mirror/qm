@@ -7,7 +7,7 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
-import type { SandboxBackendName } from "./sandbox/sandbox-routing.ts";
+import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
@@ -615,25 +615,15 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
   return [...enabled];
 }
 
-const SANDBOX_BACKENDS = [
-  "aws",
-  "local",
-  "sprites",
-  "smolmachines",
-  "e2b",
-  "modal",
-  "agent37",
-  "superserve",
-  "do-managed-agents",
-  "porter",
-] as const satisfies readonly SandboxBackendName[];
+/** "a, b, or c" */
+const orList = (names: readonly string[]): string => `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`;
 
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
-  if ((SANDBOX_BACKENDS as readonly string[]).includes(backend)) return backend as SandboxBackendName;
+  if ((SANDBOX_BACKEND_NAMES as readonly string[]).includes(backend)) return backend as SandboxBackendName;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, or do-managed-agents, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use ${orList(SANDBOX_BACKEND_NAMES)}, or unset it.`,
   );
 }
 
@@ -763,9 +753,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     }
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
-    throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, aws, or local.",
-    );
+    throw new Error(`SANDBOX_BACKEND must be set explicitly in production — use ${orList(SANDBOX_BACKEND_NAMES)}.`);
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
