@@ -190,7 +190,6 @@ test("a newer source event replaces the payload the annotation lived in", async 
 
 test("prune drops resolved items past retention and over the cap, never open ones", async () => {
   const ledger = createInboxLedger(testMap());
-  const now = Date.now();
   await ledger.ingest([
     entry({ dedupeKey: "a" }),
     entry({ dedupeKey: "b" }),
@@ -202,6 +201,7 @@ test("prune drops resolved items past retention and over the cap, never open one
   await ledger.recordAction(byKey.get("b")!.id, { kind: "send", outcome: "actioned" });
   await ledger.recordAction(byKey.get("c")!.id, { kind: "dismiss", outcome: "dismissed" });
   await ledger.recordAction(byKey.get("d")!.id, { kind: "dismiss", outcome: "dismissed" });
+  const now = Date.now();
   const dropped = await ledger.prune(CRON, { maxItems: 3, retentionMs: 1, now: now + 10 });
   assert.equal(dropped, 3);
   const left = await ledger.byCron(CRON);

@@ -88,7 +88,7 @@ test("GET /v1/cron-items/events streams inbox writes as SSE frames, stamped with
       if (done) break;
       buf += new TextDecoder().decode(value);
       for (const chunk of buf.split("\n\n")) {
-        if (!chunk.includes("event: inbox_item")) continue;
+        if (!chunk.split("\n").includes("event: inbox_item")) continue;
         const data = chunk
           .split("\n")
           .find((l) => l.startsWith("data: "))
