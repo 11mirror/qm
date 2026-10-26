@@ -52,6 +52,7 @@ import {
   isWebThread,
   isOverheardEntry,
   DuplicateCallError,
+  transcriptImportScope,
 } from "./session-store.ts";
 import {
   entryFromItem,
@@ -1677,24 +1678,25 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async importTranscript(spec): Promise<TranscriptImportResult> {
+      const scope = transcriptImportScope(spec);
       return withPgTransaction(await pool(), async (client) => {
         const createdAt = spec.entries[0]?.createdAt ?? now();
         await client.query(
           "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,$5,0,0,$7,$8) ON CONFLICT (thread_ref) DO NOTHING",
           [
             randomUUID(),
-            spec.type,
-            spec.scopeId,
+            "dm",
+            scope,
             spec.threadRef,
             createdAt,
-            spec.surface,
+            "web",
             sessionOrigin(spec.threadRef),
             cronIdOf(spec.threadRef),
           ],
         );
         const found = await client.query("SELECT id, scope_id FROM sessions WHERE thread_ref = $1", [spec.threadRef]);
         const sessionId = found.rows[0]!.id as string;
-        if (found.rows[0]!.scope_id !== spec.scopeId)
+        if (found.rows[0]!.scope_id !== scope)
           throw new Error(`importTranscript: ${spec.threadRef} belongs to a different scope`);
         await lockSession(client, sessionId);
         const others = await client.query(

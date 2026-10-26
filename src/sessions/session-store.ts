@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
+import { personalScope } from "../types.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 
@@ -128,12 +129,19 @@ export interface ImportedEntry extends NewEntry {
 
 export interface TranscriptImport {
   threadRef: string;
-  type: SessionType;
-  scopeId: ScopeId;
-  surface: string;
   principalId: string;
   title?: string;
   entries: readonly ImportedEntry[];
+}
+
+export function transcriptImportScope(spec: TranscriptImport): ScopeId {
+  if (
+    !spec.principalId.trim() ||
+    !spec.threadRef.startsWith(`web:${spec.principalId}:`) ||
+    spec.threadRef.length <= spec.principalId.length + 5
+  )
+    throw new Error("importTranscript: threadRef must be a web thread owned by principalId");
+  return personalScope(spec.principalId);
 }
 
 export interface TranscriptImportResult {

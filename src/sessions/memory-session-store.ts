@@ -44,6 +44,7 @@ import {
   sessionOrigin,
   userMessagePreview,
   isWebThread,
+  transcriptImportScope,
 } from "./session-store.ts";
 import { entryFromItem, itemFromEntry } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
@@ -296,39 +297,39 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async importTranscript(spec) {
+      const scope = transcriptImportScope(spec);
       const existing = byThread.get(spec.threadRef);
       let session = existing ? sessions.get(existing) : undefined;
-      if (session && session.scopeId !== spec.scopeId)
+      if (session && session.scopeId !== scope)
         throw new Error(`importTranscript: ${spec.threadRef} belongs to a different scope`);
+      if (
+        session &&
+        [...(windows.get(session.id)?.keys() ?? [])].some((principalId) => principalId !== spec.principalId)
+      )
+        throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
+      const held = session && leases.get(session.id);
+      if (held && now() < held.expiresAt) throw new Error(`importTranscript: ${spec.threadRef} is in use`);
       if (!session) {
         session = {
           id: randomUUID(),
-          type: spec.type,
-          scopeId: spec.scopeId,
+          type: "dm",
+          scopeId: scope,
           threadRef: spec.threadRef,
           createdAt: spec.entries[0]?.createdAt ?? now(),
-          surface: spec.surface,
+          surface: "web",
         };
         sessions.set(session.id, session);
         entries.set(session.id, []);
         byThread.set(spec.threadRef, session.id);
       }
-      const target = session;
-      const refuseShared = () => {
-        if ([...(windows.get(target.id)?.keys() ?? [])].some((principalId) => principalId !== spec.principalId))
-          throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
-        const held = leases.get(target.id);
-        if (held && now() < held.expiresAt) throw new Error(`importTranscript: ${spec.threadRef} is in use`);
-      };
-      refuseShared();
-      await this.addParticipant(target.id, spec.principalId, undefined, { includeHistory: true });
-      refuseShared();
-      const log = entries.get(target.id) ?? [];
+      const log = entries.get(session.id) ?? [];
       const after = log.reduce((latest, entry) => Math.max(latest, entry.createdAt), -Infinity);
       const fresh = spec.entries.filter((entry) => entry.createdAt > after);
-      if (!log.length && fresh.length) target.createdAt = fresh[0]!.createdAt;
-      if (spec.title?.trim() && !target.title) target.title = spec.title.trim();
-      return { session: target, appended: record(target.id, fresh).length };
+      if (!log.length && fresh.length) session.createdAt = fresh[0]!.createdAt;
+      if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
+      const appended = record(session.id, fresh);
+      await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
+      return { session, appended: appended.length };
     },
 
     async deleteSessionIfEmpty(sessionId) {

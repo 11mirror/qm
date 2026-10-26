@@ -182,13 +182,22 @@ test("importing into an empty existing conversation dates it by the imported mes
   });
 });
 
-test("transcript lines are rejected unless they describe the principal's own web thread", () => {
+test("an import only targets the principal's own personal web thread", async () => {
+  await withStores(async (store) => {
+    for (const threadRef of ["web:bob@example.com:t1", "slack:ada@example.com:t1", "web:ada@example.com:"])
+      await assert.rejects(
+        store.importTranscript({ ...parseTranscriptImport(line("ada@example.com", threadRef, conversation)) }),
+        /owned by principalId/,
+      );
+    assert.deepEqual((await store.listParticipantPage("ada@example.com", { limit: 10 })).sessions, []);
+  });
+});
+
+test("transcript lines are rejected unless they are well-formed", () => {
   const ok = { principalId: "ada@example.com", threadRef: "web:ada@example.com:t1", entries: conversation };
-  assert.equal(parseTranscriptImport(JSON.stringify(ok)).scopeId, "personal:ada@example.com");
+  assert.equal(parseTranscriptImport(JSON.stringify(ok)).entries[0]!.scopeLabel, "personal:ada@example.com");
   const bad: [string, Record<string, unknown>][] = [
-    ["principalId", { ...ok, principalId: "" }],
-    ["threadRef", { ...ok, threadRef: "web:bob@example.com:t1" }],
-    ["threadRef", { ...ok, threadRef: "slack:ada@example.com:t1" }],
+    ["principalId", { ...ok, principalId: 7 }],
     ["entries", { ...ok, entries: [] }],
     ["role", { ...ok, entries: [{ role: "tool", text: "x", createdAt: T0 }] }],
     ["text", { ...ok, entries: [{ role: "user", text: " ", createdAt: T0 }] }],

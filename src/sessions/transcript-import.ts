@@ -7,15 +7,9 @@ const MAX_DATE_MS = 8_640_000_000_000_000;
 export function parseTranscriptImport(line: string): TranscriptImport {
   const raw = JSON.parse(line) as Record<string, unknown>;
   const principalId = raw.principalId;
-  if (typeof principalId !== "string" || !principalId.trim())
-    throw new Error("transcript import: principalId is required");
   const threadRef = raw.threadRef;
-  if (
-    typeof threadRef !== "string" ||
-    !threadRef.startsWith(`web:${principalId}:`) ||
-    threadRef.length <= principalId.length + 5
-  )
-    throw new Error("transcript import: threadRef must be a web thread owned by principalId");
+  if (typeof principalId !== "string" || typeof threadRef !== "string")
+    throw new Error("transcript import: principalId and threadRef are required");
   if (raw.title !== undefined && typeof raw.title !== "string")
     throw new Error("transcript import: title must be text");
   if (!Array.isArray(raw.entries) || !raw.entries.length) throw new Error("transcript import: entries are required");
@@ -48,9 +42,6 @@ export function parseTranscriptImport(line: string): TranscriptImport {
   });
   return {
     threadRef,
-    type: "dm",
-    scopeId: scope,
-    surface: "web",
     principalId,
     ...(typeof raw.title === "string" && raw.title.trim() ? { title: raw.title.trim() } : {}),
     entries,
