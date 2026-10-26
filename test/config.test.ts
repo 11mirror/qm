@@ -15,7 +15,6 @@ import {
 const productionEnv = {
   NODE_ENV: "production",
   CORE_SIGNING_SECRET: "core-signing-secret-0123456789abcdef",
-  SKILL_SIGNING_SECRET: "skill-signing-secret-0123456789abcdef",
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
@@ -235,7 +234,7 @@ test("production refuses to boot without Postgres or on an in-memory run store",
 test("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ NODE_ENV: "production" }),
-    /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, SKILL_SIGNING_SECRET/,
+    /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET/,
   );
   assert.throws(
     () => loadConfig({ ...productionEnv, CORE_SIGNING_SECRET: "short" }),

@@ -41,8 +41,8 @@ test("two servers seeding the same catalog at boot install each skill once", asy
   mkdirSync(join(dir, "hello"));
   writeFileSync(join(dir, "hello", "SKILL.md"), "---\nname: hello\ndescription: Say hello.\n---\nSay hello.\n");
   const { backing, lock } = await shared();
-  const left = createSkillStore({ backing: slowReads(backing), signingSecret: "s", advisoryLock: lock() });
-  const right = createSkillStore({ backing: slowReads(backing), signingSecret: "s", advisoryLock: lock() });
+  const left = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
+  const right = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
   const org = scopeId("org", "default-org");
 
   const seedModule = "../src/skills/seed.ts";
@@ -83,12 +83,10 @@ test("an admin archive racing another server's changed seed update leaves the sk
         await copied.put(id, skill);
       },
     },
-    signingSecret: "s",
     advisoryLock: lock(),
   });
   const right = createSkillStore({
     backing: copied,
-    signingSecret: "s",
     advisoryLock: {
       ...archiveLock,
       withLock(key, fn) {

@@ -6,7 +6,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createHmac } from "node:crypto";
 import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
@@ -40,7 +39,6 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
@@ -61,7 +59,6 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   const published = (await skills.list()).filter((s) => s.status === "published");
   assert.equal(published.length, result.installed.length);
   assert.ok(published.every((s) => s.scopeId === scopeId("org", "default-org")));
-  assert.ok(published.every((s) => skills.verify(s)));
   const rerun = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(rerun.skipped.sort(), result.installed.sort());
   assert.deepEqual(rerun.updated, []);
@@ -113,7 +110,6 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
@@ -128,7 +124,6 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   assert.equal(skill.status, "published");
   assert.equal(skill.version, 2);
   assert.equal(skill.manifest.description, "new description");
-  assert.ok(skills.verify(skill));
 
   const stranded = await skills.create({
     scopeId: org,
@@ -160,7 +155,6 @@ test("installSeedSkills leaves an admin-archived catalog skill archived when ask
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
@@ -187,7 +181,6 @@ test("concurrent upserts of the same scope+name serialize into one record (no du
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const org = scopeId("org", "default-org");
   const upsert = (body: string) =>
@@ -277,7 +270,6 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-tree-"));
@@ -290,7 +282,6 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   assert.deepEqual(result.installed.sort(), ["plain", "tooled"]);
 
   const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
-  assert.ok(skills.verify(tooled), "signature covers the bundled files");
   assert.deepEqual((tooled.manifest.files ?? []).map((f) => f.path).sort(), [
     "references/notes.md",
     "scripts/hello.py",
@@ -306,47 +297,6 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   assert.equal(files.get("skills/tooled/references/notes.md"), "# notes\n");
 });
 
-test("a tampered bundled asset fails skill verification", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
-    signingSecret: "seed-test-secret",
-  });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-tamper-"));
-  writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled");
-  writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
-  await installSeedSkills(skills, { dir, scopeId: org });
-
-  const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
-  assert.ok(skills.verify(tooled));
-  tooled.manifest.files![0]!.content = "import os; os.system('rm -rf /')\n";
-  assert.equal(skills.verify(tooled), false, "a swapped asset is detected");
-});
-
-test("a text-only skill signs identically to the pre-files scheme (legacy signatures still verify)", async () => {
-  const secret = "legacy-compat-secret";
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap(), signingSecret: secret });
-  const org = scopeId("org", "default-org");
-  const legacySig = createHmac("sha256", secret)
-    .update(
-      JSON.stringify({
-        name: "legacy",
-        description: "an old skill",
-        requiredCapabilities: ["command:demo"],
-        body: "# Legacy",
-      }),
-    )
-    .digest("hex");
-  const created = await skills.create({
-    scopeId: org,
-    manifest: { name: "legacy", description: "an old skill", requiredCapabilities: ["command:demo"], body: "# Legacy" },
-    createdBy: "system:skills-seed",
-  });
-  assert.equal(created.signature, legacySig, "new sign() reproduces the old payload for a text-only skill");
-  assert.ok(skills.verify(created), "an already-stored legacy signature still verifies");
-});
-
 test("safeSkillFilePath rejects traversal / absolute / dot segments", () => {
   assert.equal(safeSkillFilePath("scripts/foo.py"), "scripts/foo.py");
   assert.equal(safeSkillFilePath("./refs/x.md"), "refs/x.md");
@@ -359,7 +309,6 @@ test("installSeedSkills re-seeds when only a bundled asset changes", async () =>
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "seed-test-secret",
   });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));

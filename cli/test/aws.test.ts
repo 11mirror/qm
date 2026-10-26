@@ -1965,7 +1965,6 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "PORTAL_IDENTITY_SECRET",
     "PORTAL_SESSION_SECRET",
     "PUBLIC_API_URL",
-    "SKILL_SIGNING_SECRET",
     "SPRITES_TOKEN",
   ]);
   assert.throws(() => renderTaskDefinition(config, "core", "repo:latest"), /must be pinned by digest/);

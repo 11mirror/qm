@@ -34,7 +34,6 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "CORE_SIGNING_SECRET", requiredWhen: "production" },
   { name: "DEPLOYMENT_CONTROL_SECRET", requiredWhen: "background-work-control" },
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
-  { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
   { name: "OPENAI_API_KEY", requiredWhen: ["model-openai"] },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
@@ -105,7 +104,6 @@ function isInvalidSecret(name: string, value: string | undefined): boolean {
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||
       name === "DEPLOYMENT_CONTROL_SECRET" ||
-      name === "SKILL_SIGNING_SECRET" ||
       name === "AWS_DEPLOY_GATE_SECRET") &&
     !isStrongSigningSecret(candidate)
   );

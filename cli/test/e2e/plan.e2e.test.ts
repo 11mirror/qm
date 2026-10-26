@@ -70,7 +70,7 @@ test("plan reports missing required operator secrets without starting anything",
   try {
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core", "slack"] });
     const envFile = join(dir, "partial.env");
-    writeFileSync(envFile, "CORE_SIGNING_SECRET=a\nSKILL_SIGNING_SECRET=b\n");
+    writeFileSync(envFile, "CORE_SIGNING_SECRET=a\n");
     const r = runCli(["plan", "--env-file", envFile], {
       cwd: dir,
       env: { SLACK_BOT_TOKEN: undefined, SLACK_APP_TOKEN: undefined },
@@ -169,7 +169,7 @@ test("plan --env-file: a missing one errors, an existing one is accepted", () =>
     assert.match(missing.out, /--env-file not found/);
 
     const envPath = join(dir, "operator.env");
-    writeFileSync(envPath, "CORE_SIGNING_SECRET=test\nSKILL_SIGNING_SECRET=test\n");
+    writeFileSync(envPath, "CORE_SIGNING_SECRET=test\n");
     const ok = runCli(["plan", "--env-file", envPath], { cwd: dir });
     assert.equal(ok.code, 0, ok.out);
     assert.match(ok.out, /DRY RUN/);
