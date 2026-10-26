@@ -420,7 +420,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await assert.rejects(dir.forceDirectorySync(client, "C1", "kai@x.com"), /revocation was not persisted/);
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
 

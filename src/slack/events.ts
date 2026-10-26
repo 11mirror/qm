@@ -2,6 +2,7 @@ import {
   channelPrivacyChange,
   createDeduper,
   dedupeKey,
+  dedupedRun,
   isGroupMembershipMessage,
   isOwnStatusCard,
   isThreadReply,
@@ -287,8 +288,14 @@ export function registerSlackEvents(
   const lifecycle = (name: string, run: (client: any, e: ReturnType<typeof parseLifecycleEvent>) => Promise<void>) =>
     app.event(name, async ({ event, body, client }: EventArgs) => {
       const e = parseLifecycleEvent(event);
-      if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
-      await run(client, e);
+      await dedupedRun(
+        deduper,
+        dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }),
+        () => run(client, e),
+        (error) => {
+          throw error;
+        },
+      );
     });
 
   lifecycle("member_joined_channel", async (client, e) => {
