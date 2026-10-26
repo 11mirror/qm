@@ -5,7 +5,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
-import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { errMessage } from "../../chassis/src/errors.ts";
 import { adminRoutes } from "./admin-routes.ts";
 import { createUiDocuments, releaseErrorPage, uiProtocolSupported } from "./ui-releases.ts";
 import { UI_VERSION_HEADER } from "../../chassis/src/ui-release.ts";
@@ -131,6 +131,17 @@ async function brandIndexHtml(html: string): Promise<string> {
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
+
+const portalHeaders = (): Record<string, string> => {
+  const token = portalTokenStore.getStore();
+  return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+};
+
+function fetchCoreGet(path: string, init: RequestInit = {}, portal = true): Promise<Response> {
+  const signed = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
+  const headers = { ...signedHeaders(CORE_SIGNING_SECRET, "GET", signed, ""), ...(portal ? portalHeaders() : {}) };
+  return fetch(`${CORE}${signed}`, { ...init, headers });
+}
 
 const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
@@ -533,10 +544,7 @@ async function consumeCoreFeed(
   let dropped = false;
   for (;;) {
     try {
-      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const r = await fetch(`${CORE}${signedPath}`, {
-        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-      });
+      const r = await fetchCoreGet(path, {}, false);
       if (r.status === 200 && r.body) {
         if (dropped) {
           dropped = false;
@@ -625,14 +633,13 @@ async function coreFetch(
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const portalTok = portalTokenStore.getStore();
   return fetchCoreText({
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     method,
     path: pathWithQuery,
     body: rawBody,
-    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    headers: portalHeaders(),
     signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 }
@@ -668,14 +675,13 @@ async function coreFetchCap(
 }
 
 async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  const portalTok = portalTokenStore.getStore();
   return relayCoreStream(res, {
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     method,
     path: pathWithQuery,
     body: rawBody,
-    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    headers: portalHeaders(),
   });
 }
 
@@ -982,28 +988,17 @@ function scriptCapableContentType(contentType: string): boolean {
   );
 }
 
+function upstreamMissing(res: ServerResponse, status: number): void {
+  res.writeHead(status === 404 ? 404 : 502, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: status === 404 ? "not_found" : "upstream_error" }));
+}
+
 async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
-  const { res, url } = c;
-  const qs = new URLSearchParams({ principalId: c.user });
-  const ctxParam = url.searchParams.get("ctx");
-  const iParam = url.searchParams.get("i");
-  if (ctxParam) qs.set("ctx", ctxParam);
-  if (iParam) qs.set("i", iParam);
-  const corePath = withSourceAuthNonce(
-    `/v1/crons/${enc(c.params.id!)}/items/${enc(c.params.itemId!)}/image?${qs.toString()}`,
-    CORE_SIGNING_SECRET,
+  const { res } = c;
+  const r = await fetchCoreGet(
+    `${corePathFor("/api/crons/:id/items/:itemId/image", c)}?${copyParams(c, ["ctx", "i"])}`,
   );
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
+  if (!r.ok || !r.body) return upstreamMissing(res, r.status);
   const contentType = r.headers.get("content-type") ?? "application/octet-stream";
   res.writeHead(200, {
     "content-type": contentType.startsWith("image/") ? contentType : "application/octet-stream",
@@ -1017,19 +1012,8 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
 async function serveFileContent(c: WebCtx): Promise<unknown> {
   const { res, user } = c;
   const id = c.params.id!;
-  const corePath = withSourceAuthNonce(`/v1/files/${enc(id)}/content?viewer=${enc(user)}`, CORE_SIGNING_SECRET);
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    redirect: "manual",
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
+  const r = await fetchCoreGet(`/v1/files/${enc(id)}/content?viewer=${enc(user)}`, { redirect: "manual" });
+  if (!r.ok || !r.body) return upstreamMissing(res, r.status);
   const contentType = r.headers.get("content-type") ?? "application/octet-stream";
   const csp = scriptCapableContentType(contentType)
     ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
@@ -1064,33 +1048,33 @@ interface Relay {
   gate?: (c: WebCtx) => Promise<boolean>;
 }
 
+async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
+  if (o.raw) return readBody(c.req);
+  if (o.body) return JSON.stringify(o.body);
+  const head = o.principal ? { principalId: c.user } : {};
+  if (!o.pick && !o.shape && !o.read) return o.principal ? JSON.stringify(head) : "";
+  const p = o.read
+    ? await readJson<Record<string, unknown>>(c.req, c.res, o.read === "json")
+    : (JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>);
+  if (o.read && !p) return null;
+  if (o.shape) return JSON.stringify({ ...head, ...o.shape(p!, c) });
+  if (!o.pick) return JSON.stringify(p);
+  const picked = o.pick.filter((k) => !o.strings || typeof p![k] === "string").map((k) => [k, p![k]]);
+  return JSON.stringify({ ...head, ...Object.fromEntries(picked) });
+}
+
 function relayRoute(method: HttpMethod, path: string, o: Relay = {}): WebRoute {
   return {
     method,
     path,
     handle: async (c) => {
       if (o.gate && !(await o.gate(c))) return;
-      let body = o.raw ? await readBody(c.req) : o.principal ? JSON.stringify({ principalId: c.user }) : "";
-      if (o.body) body = JSON.stringify(o.body);
-      if (o.pick || o.shape || o.read) {
-        const p = o.read
-          ? await readJson<Record<string, unknown>>(c.req, c.res, o.read === "json")
-          : (JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>);
-        if (o.read && !p) return;
-        const fields: object = o.shape
-          ? o.shape(p!, c)
-          : o.pick
-            ? Object.fromEntries(o.pick.flatMap((k) => (o.strings && typeof p![k] !== "string" ? [] : [[k, p![k]]])))
-            : p!;
-        body = JSON.stringify(o.principal ? { principalId: c.user, ...fields } : fields);
-      }
+      const body = await relayBody(c, o);
+      if (body === null) return;
       if (o.noStore) c.res.setHeader("Cache-Control", "no-store");
-      const query = o.who
-        ? `?${o.who}=${enc(c.user)}`
-        : o.query
-          ? `?${new URLSearchParams(o.query(c)).toString()}`
-          : "";
-      const target = corePathFor(o.core ?? path, c) + query;
+      let target = corePathFor(o.core ?? path, c);
+      if (o.who) target += `?${o.who}=${enc(c.user)}`;
+      if (o.query) target += `?${new URLSearchParams(o.query(c)).toString()}`;
       return (o.cap ? relayCap : relayCore)(c.res, o.to ?? method, target, body);
     },
   };
@@ -1112,6 +1096,9 @@ function copyParams(
 }
 
 const withWebUrl = (d: Record<string, unknown>) => ({ ...d, webUrl: `/deployments/${enc(String(d.id))}/` });
+
+const notImpersonating = async (c: WebCtx) =>
+  !resolveIdentity(c.req)?.impersonator || (json(c.res, 403, { error: "forbidden" }), false);
 
 const managesDeployment = (c: WebCtx) => gateManageDeployment(c.res, c.user, c.params.id!);
 
@@ -1382,44 +1369,23 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "GET", `/v1/directory/resolve?q=${enc(q)}`);
     },
   },
-  {
+  ...[
+    { leaf: "", keys: ["timezone", "poll", "refresh"], timeoutMs: 60_000 },
+    { leaf: "/dismiss", keys: ["id"], timeoutMs: 15_000 },
+  ].map(({ leaf, keys, timeoutMs }): WebRoute => ({
     method: "POST",
-    path: "/api/suggested-activities",
+    path: `/api/suggested-activities${leaf}`,
     handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as {
-        timezone?: unknown;
-        poll?: unknown;
-        refresh?: unknown;
+      const input = JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>;
+      const body = {
+        principalId: c.user,
+        ...(leaf ? {} : { seeds: suggestedActivities }),
+        ...Object.fromEntries(keys.map((key) => [key, input[key]])),
       };
-      const response = await coreFetch(
-        "POST",
-        "/v1/suggested-activities",
-        JSON.stringify({
-          principalId: c.user,
-          seeds: suggestedActivities,
-          timezone: input.timezone,
-          poll: input.poll,
-          refresh: input.refresh,
-        }),
-        60_000,
-      );
+      const response = await coreFetch("POST", `/v1/suggested-activities${leaf}`, JSON.stringify(body), timeoutMs);
       return json(c.res, response.status, JSON.parse(response.text));
     },
-  },
-  {
-    method: "POST",
-    path: "/api/suggested-activities/dismiss",
-    handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as { id?: unknown };
-      const response = await coreFetch(
-        "POST",
-        "/v1/suggested-activities/dismiss",
-        JSON.stringify({ principalId: c.user, id: input.id }),
-        15_000,
-      );
-      return json(c.res, response.status, JSON.parse(response.text));
-    },
-  },
+  })),
   relayRoute("GET", "/api/ui-state", {
     query: (c) => ({ principalId: c.user, key: c.url.searchParams.get("key") ?? "" }),
   }),
@@ -1428,22 +1394,59 @@ const apiRoutes: readonly WebRoute[] = [
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     org: ORG,
-    portalHeaders: (): Record<string, string> => {
-      const token = portalTokenStore.getStore();
-      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
-    },
+    portalHeaders,
     readBody,
     stageUpload: stageUploadStream,
     refreshBranding: () => brandingCache.refreshNow(),
     json,
   }),
-  ...uiCanvasRoutes({
-    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
-    coreFetch,
-    relayCore,
-    relay,
-    json,
-    readJson,
+  relayRoute("GET", "/api/ui-canvas/:sessionId", {
+    gate: notImpersonating,
+    core: "/v1/ui/canvases/:sessionId",
+    query: (c) => ({ principalId: c.user }),
+  }),
+  {
+    method: "GET",
+    path: "/api/ui-canvas/:sessionId/script.js",
+    handle: async (c) => {
+      if (!(await notImpersonating(c))) return;
+      const { res, url, user } = c;
+      const sessionId = c.params.sessionId!;
+      const r = await coreFetch(
+        "GET",
+        `/v1/ui/canvases/${enc(sessionId)}?${new URLSearchParams({ principalId: user })}`,
+      );
+      if (r.status !== 200) return relay(res, r);
+      let canvas: { js?: unknown; rev?: unknown } | undefined;
+      try {
+        canvas = (JSON.parse(r.text) as { canvas?: { js?: unknown; rev?: unknown } }).canvas;
+      } catch (error) {
+        console.error("[web-ui] canvas script: bad core response", errMessage(error));
+        return json(res, 502, { error: "bad_core_response", message: errMessage(error) });
+      }
+      if (typeof canvas?.js !== "string") return json(res, 404, { error: "not_found" });
+      if (String(canvas.rev) !== url.searchParams.get("rev")) return json(res, 409, { error: "stale_revision" });
+      res.writeHead(200, {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(
+        `((canvas) => {\n${canvas.js}\n})(window.qmUiCanvasTake?.(${JSON.stringify(sessionId)}, ${Number(canvas.rev)}));\n`,
+      );
+    },
+  },
+  relayRoute("POST", "/api/ui-canvas/observe/:callId", {
+    gate: notImpersonating,
+    core: "/v1/ui/observe/:callId/result",
+    read: "strict",
+    shape: (p, c) => ({ snapshot: p.snapshot, principalId: c.user }),
+  }),
+  relayRoute("POST", "/api/ui-canvas/:sessionId", {
+    gate: notImpersonating,
+    core: "/v1/ui/canvases/:sessionId",
+    read: "strict",
+    shape: (p, c) => ({ pinned: p.pinned, dismiss: p.dismiss, principalId: c.user }),
   }),
   relayRoute("GET", "/api/inbox", {
     query: (c) => copyParams(c, ["cursor", "cronId", "view", "itemId", "filter"]),
@@ -1571,7 +1574,6 @@ const apiRoutes: readonly WebRoute[] = [
       const onClose = () => cancel.abort();
       res.once("close", onClose);
       try {
-        const portalTok = portalTokenStore.getStore();
         return relay(
           res,
           await fetchCoreText({
@@ -1579,7 +1581,7 @@ const apiRoutes: readonly WebRoute[] = [
             secret: CORE_SIGNING_SECRET,
             method: "GET",
             path: `/v1/sessions/${enc(id)}?${qs.toString()}`,
-            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            headers: portalHeaders(),
             signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
             retrySafeRead: true,
           }),
@@ -2037,14 +2039,8 @@ const apiRoutes: readonly WebRoute[] = [
       const id = c.params.id!;
       const controller = new AbortController();
       res.on("close", () => controller.abort());
-      const path = withSourceAuthNonce(`/v1/runs/${enc(id)}/events`, CORE_SIGNING_SECRET);
-      const portalTok = portalTokenStore.getStore();
       try {
-        const upstream = await fetch(`${CORE}${path}`, {
-          headers: {
-            ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
-            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-          },
+        const upstream = await fetchCoreGet(`/v1/runs/${enc(id)}/events`, {
           signal: controller.signal,
           redirect: "manual",
         });
@@ -2357,15 +2353,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!external && !user) return json(res, 401, { error: "sign in" });
     const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${enc(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
     if (match[3]) {
-      const signedPath = withSourceAuthNonce(corePath, CORE_SIGNING_SECRET);
-      const portalTok = external ? null : portalTokenStore.getStore();
-      const response = await fetch(`${CORE}${signedPath}`, {
-        headers: {
-          ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-          ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-        },
-        redirect: "manual",
-      });
+      const response = await fetchCoreGet(corePath, { redirect: "manual" }, !external);
       const headers: Record<string, string> = {
         "cache-control": "no-store",
         "referrer-policy": "no-referrer",
@@ -2437,11 +2425,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     const corePath = `/d/${enc(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
     const headers: Record<string, string> = {
       ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
       "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...portalHeaders(),
     };
     delete headers["content-type"];
     const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
