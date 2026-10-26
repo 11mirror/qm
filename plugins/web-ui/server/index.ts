@@ -1989,32 +1989,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return found.route.handle({ req, res, url, user, params: found.params });
   }
 
-  if (method === "GET" && path.startsWith("/deployments/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-    const rest = path.slice("/deployments/".length);
-    const slash = rest.indexOf("/");
-    const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
-    const subPath = slash === -1 ? "/" : rest.slice(slash);
-    const corePath = `/d/${enc(id)}${subPath}${url.search}`;
-    const headers: Record<string, string> = {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
-      "x-as-principal": user,
-      ...portalHeaders(),
-    };
-    delete headers["content-type"];
-    const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
-    const outHeaders = Object.fromEntries(up.headers.entries());
-    delete outHeaders["content-encoding"];
-    delete outHeaders["content-length"];
-    res.writeHead(up.status, {
-      ...outHeaders,
-      "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
-      "x-content-type-options": "nosniff",
-    });
-    return res.end(Buffer.from(await up.arrayBuffer()));
-  }
-
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;
 
   if (method === "GET") {
