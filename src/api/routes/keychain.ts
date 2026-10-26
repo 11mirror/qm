@@ -14,7 +14,7 @@ import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
-import { cronIdOf } from "../../sessions/session-store.ts";
+import { cronIdOf } from "../../sessions/thread-ref.ts";
 
 async function resolveScopeNames(
   app: ApiCtx["app"],

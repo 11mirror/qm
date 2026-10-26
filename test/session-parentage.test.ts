@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
+import { SUBAGENT_TREE_RUN_CAP } from "../src/subagents/tree.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {

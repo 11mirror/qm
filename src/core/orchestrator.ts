@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
@@ -11,7 +12,7 @@ import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import { requiresDelegation, delegatedAuthorizationOrigin } from "../subagents/delegation.ts";
 import {
   documentText,
   type ExtractedDocumentText,
@@ -576,10 +577,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
+      const delegatedSession = isSubagentThreadRef(conversation.threadRef)
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
-      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
+      if (isSubagentThreadRef(conversation.threadRef)) {
         const canWrite = createCanWriteScope({
           managedGroups: deps.managedGroups
             ? {

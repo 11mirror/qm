@@ -1,4 +1,4 @@
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import {
   type PendingApproval,
   type PendingApprovalRecord,

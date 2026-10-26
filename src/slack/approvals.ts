@@ -1,4 +1,4 @@
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";

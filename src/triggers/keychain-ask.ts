@@ -5,7 +5,7 @@ import type { Cron, Destination, ScopeId } from "../types.ts";
 import { runTrigger, destinationVisible, type TriggerDeps, type TriggerOutcome } from "./run-trigger.ts";
 import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
 import { swallow } from "../util/errors.ts";
-import { cronIdOf } from "../sessions/session-store.ts";
+import { cronIdOf } from "../sessions/thread-ref.ts";
 import { samePerson } from "../directory/person.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
