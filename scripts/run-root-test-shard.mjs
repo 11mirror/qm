@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import process from "node:process";
 import { parseArgs } from "node:util";
 
 const ROOT_TEST_DIR = new URL("../test/", import.meta.url);
-const PINNED_SLOW_TESTS = ["test/orchestrator.test.ts"];
 
 function parsePositiveInteger(value, name) {
   const parsed = Number(value);
@@ -35,33 +34,18 @@ function parseShard(value) {
 
 async function rootTestFiles() {
   const entries = await readdir(ROOT_TEST_DIR, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
-    .map((entry) => `test/${entry.name}`)
-    .sort();
-}
-
-function ensurePinnedTestsExist(allFiles) {
-  const all = new Set(allFiles);
-  const missing = PINNED_SLOW_TESTS.filter((file) => !all.has(file));
-  if (missing.length > 0) {
-    throw new Error(`Pinned slow test file(s) missing from root test suite: ${missing.join(", ")}`);
-  }
+  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"));
+  const sized = await Promise.all(
+    files.map(async (entry) => ({
+      file: `test/${entry.name}`,
+      size: (await stat(new URL(entry.name, ROOT_TEST_DIR))).size,
+    })),
+  );
+  return sized.sort((a, b) => b.size - a.size || a.file.localeCompare(b.file)).map((entry) => entry.file);
 }
 
 function filesForShard(allFiles, { index, total }) {
-  if (total === 1) return allFiles;
-
-  const pinned = new Set(PINNED_SLOW_TESTS);
-  if (index === 1) {
-    return allFiles.filter((file) => pinned.has(file));
-  }
-
-  const restShardIndex = index - 2;
-  const restShardTotal = total - 1;
-  return allFiles
-    .filter((file) => !pinned.has(file))
-    .filter((_, restIndex) => restIndex % restShardTotal === restShardIndex);
+  return allFiles.filter((_, fileIndex) => fileIndex % total === index - 1);
 }
 
 function printFiles(header, files) {
@@ -116,7 +100,6 @@ async function main() {
     },
   });
   const allFiles = await rootTestFiles();
-  ensurePinnedTestsExist(allFiles);
 
   if (flags.check) {
     const total = parsePositiveInteger(flags.shards ?? process.env.CORE_TEST_TOTAL_SHARDS ?? "5", "shards");
