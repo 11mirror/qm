@@ -114,7 +114,7 @@ const AWS_AGENTS_APPENDIX = `
    and the MicroVM roles. Set \`publicUrl\` to
    \`https://<cloudfront_hostname>\` and
    \`env.core.AWS_PUBLIC_ORIGIN_URL\` to \`http://<alb_hostname>\`.
-   A deployment with a separate \`apiUrl\` or \`AWS_DEPLOY_APPS_DOMAIN\` instead
+   A deployment with a separate \`apiUrl\` or \`DEPLOY_APPS_DOMAIN\` instead
    sets \`certificate_arn\`, points those HTTPS hostnames at \`<alb_hostname>\`,
    and uses the ALB directly; the generated security group exposes only that
    TLS listener in direct mode.

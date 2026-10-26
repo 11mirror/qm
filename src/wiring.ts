@@ -2063,7 +2063,6 @@ export function buildApp(
     runtimeFallback: fallback,
     providerKeys,
     runWaitMs: config.runWaitMs,
-    inlineTurns: config.roles.includes("harness"),
   });
   const inboxRealtime = createInboxRealtime({
     crons,

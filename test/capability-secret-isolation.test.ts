@@ -57,18 +57,12 @@ describe("loadConfig refuses enforcement that a surface could bypass", () => {
   const load = (extra: Record<string, string>) =>
     loadConfig({ CORE_SIGNING_SECRET: SOURCE, REQUIRE_SIGNED_PORTAL_IDENTITY: "1", ...extra });
 
-  it("throws when CAPABILITY_SECRET is absent (it would fall back to the source secret)", () => {
-    assert.throws(
-      () => load({ PORTAL_IDENTITY_SECRET: PORTAL }),
-      /CAPABILITY_SECRET must differ from CORE_SIGNING_SECRET/,
-    );
+  it("throws when CAPABILITY_SECRET is absent (no fallback to the source secret)", () => {
+    assert.throws(() => load({ PORTAL_IDENTITY_SECRET: PORTAL }), /CAPABILITY_SECRET is not set/);
   });
 
   it("throws when PORTAL_IDENTITY_SECRET is absent", () => {
-    assert.throws(
-      () => load({ CAPABILITY_SECRET: CAP }),
-      /PORTAL_IDENTITY_SECRET must differ from CORE_SIGNING_SECRET/,
-    );
+    assert.throws(() => load({ CAPABILITY_SECRET: CAP }), /PORTAL_IDENTITY_SECRET is not set/);
   });
 
   it("throws when a split secret equals CORE_SIGNING_SECRET", () => {
@@ -100,7 +94,8 @@ describe("loadConfig refuses enforcement that a surface could bypass", () => {
     assert.ok(load({ CAPABILITY_SECRET: CAP, PORTAL_IDENTITY_SECRET: PORTAL }));
   });
 
-  it("does not gate when enforcement is off, even with shared secrets", () => {
-    assert.ok(loadConfig({ CORE_SIGNING_SECRET: SOURCE }));
+  it("requires the split secrets whenever source signing is on, not only under enforcement", () => {
+    assert.throws(() => loadConfig({ CORE_SIGNING_SECRET: SOURCE }), /CAPABILITY_SECRET is not set/);
+    assert.ok(loadConfig({}));
   });
 });
