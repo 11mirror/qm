@@ -10,6 +10,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { selectEntries, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -19,10 +20,11 @@ function makeKeychain(
     skewMs?: number;
     refresh?: OAuthRefresh;
     creds?: DurableMap<KeychainCredential>;
+    lock?: AdvisoryLock;
   } = {},
 ) {
   const keychain = createKeychain({
-    lock: testAdvisoryLock(),
+    lock: opts.lock ?? testAdvisoryLock(),
     creds: opts.creds ?? testMap<KeychainCredential>(),
     grants: testMap(),
     asks: testMap(),
@@ -160,6 +162,36 @@ test("connector token refresh: concurrent callers single-flight; connection meta
   assert.equal(secondToken?.refreshToken, "rt-rotated");
   assert.equal(secondToken?.clientRef, "org:default-org:google");
   assert.equal(seen.length, 1);
+});
+
+test("connector token refresh: two instances sharing the store refresh a rotating token once", async () => {
+  const creds = testMap<KeychainCredential>();
+  let calls = 0;
+  let release = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const refresh: OAuthRefresh = async () => {
+    calls++;
+    await gate;
+    return { accessToken: "fresh", refreshToken: "rt-rotated", expiresAt: 1_000_000 };
+  };
+  const lock = testAdvisoryLock();
+  const first = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, creds, lock });
+  const second = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, creds, lock });
+  await first.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "rt",
+    expiresAt: 5_000,
+  });
+  const racing = [
+    first.connectorAccessToken("gmail.googleapis.com", "U1"),
+    second.connectorAccessToken("gmail.googleapis.com", "U1"),
+  ];
+  await new Promise((r) => setTimeout(r, 50));
+  release();
+  assert.deepEqual(await Promise.all(racing), ["fresh", "fresh"]);
+  assert.equal(calls, 1, "a rotating refresh token must not be spent by both instances");
 });
 
 test("connector token refresh failures are logged and never poison the stored token", async (t) => {
