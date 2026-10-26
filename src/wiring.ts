@@ -270,7 +270,8 @@ import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./harness/runt
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
-import { createMemoryStrategy } from "./memory/strategy.ts";
+import { classifiedMemory } from "./memory/classification.ts";
+import { createPerTurnStrategy } from "./memory/strategies/per-turn.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
   mintCapabilityToken,
@@ -1471,9 +1472,10 @@ export function buildApp(
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
-  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
+  const memory = classifiedMemory(baseMemory, harness.models);
+  const memoryStrategy = createPerTurnStrategy({
     harness: harness.models,
-    memory: baseMemory,
+    memory,
     captureQuietMs: config.memoryCaptureQuietMs,
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),

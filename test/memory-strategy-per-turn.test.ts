@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -77,13 +75,6 @@ test("per-turn does not capture when the model says NONE", async () => {
   const strategy = createPerTurnStrategy({ harness, memory });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
   assert.equal(await memory.read(SCOPE), "");
-});
-
-test("agent-only disables post-turn extraction; per-turn keeps it", () => {
-  const { memory } = freshMemory();
-  const harness = createMockHarness().models;
-  assert.equal(createMemoryStrategy("agent-only", { harness, memory }).strategy.onTurnEnd, undefined);
-  assert.ok(createMemoryStrategy("per-turn", { harness, memory }).strategy.onTurnEnd);
 });
 
 test("debounced: an autonomous turn is skipped and never joins the live actor's burst", async () => {

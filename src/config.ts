@@ -12,7 +12,6 @@ import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
-import { DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
@@ -147,7 +146,6 @@ interface DeploymentConfig {
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
   memoryCaptureQuietMs: number;
-  memoryStrategy: MemoryStrategyKind;
   memoryProviderConfig?: MemoryProviderConfig;
   workers: number;
   leaseTtlMs: number;
@@ -1056,7 +1054,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
     memoryRecall: DEFAULT_MEMORY_POLICY.recall,
     memoryCapture: DEFAULT_MEMORY_POLICY.capture,
-    memoryStrategy: DEFAULT_MEMORY_STRATEGY,
     memoryCaptureQuietMs: DEFAULT_CAPTURE_QUIET_MS,
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
     filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
