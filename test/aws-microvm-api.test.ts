@@ -184,6 +184,21 @@ test("readiness reuses only the supplied observation and checks again on the nex
   await assert.rejects(client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }), /another body/);
 });
 
+test("a failed resume surfaces its own error instead of waiting on the daemon", async () => {
+  const { fetchImpl, calls } = fakeFetch(() => ({ status: 200 }));
+  const api = {
+    resume: async () => {
+      throw new Error("resume refused: quota exceeded");
+    },
+  } as unknown as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, fetchImpl });
+  await assert.rejects(
+    client.ensureRunning("one", "endpoint", { microvmId: "one", state: "SUSPENDED" }),
+    /resume refused: quota exceeded/,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("control-plane reads retry throttling and outages, and failures carry the AWS request id", async () => {
   const replies = [
     { status: 429, body: { message: "Rate exceeded" }, headers: { "retry-after": "0" } },
