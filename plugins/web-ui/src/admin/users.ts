@@ -1,5 +1,7 @@
 import { html } from "lit";
 import { table, card, renderer, keepSearch, matches, subline, badge } from "./shared.ts";
+import { fmtTime, labelRole, relTime } from "./format.ts";
+import { copyText } from "./dom.ts";
 
 type Services = Record<string, any>;
 const denied = (r: any, verb: string, fallback: string) =>
@@ -206,7 +208,7 @@ export class UsersView {
       ["Email", "Role", "Expires", "Invited by", "Status", ""],
       externals.map((m: any) => [
         { text: m.email, cls: "mono" },
-        { node: subline(s.labelRole(m.role)) },
+        { node: subline(labelRole(m.role)) },
         m.expiresAt === null
           ? "No expiration"
           : (m.status === "active" ? "Ends " : "Ended ") + new Date(m.expiresAt).toISOString().slice(0, 10) + " (UTC)",
@@ -229,9 +231,9 @@ export class UsersView {
       ["Principal", "Role", "Last seen", "Sessions", "Turns", "Credentials", "Grants", "", ""],
       users.map((u: any) => [
         { text: u.principalId, cls: "mono" },
-        { node: subline(u.admin?.isAdmin ? s.labelRole(u.admin.role) : "member") },
+        { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
         u.lastSeenAt
-          ? { node: html`<span title=${s.fmtTime(u.lastSeenAt)}>${s.relTime(u.lastSeenAt)}</span>`, cls: "num" }
+          ? { node: html`<span title=${fmtTime(u.lastSeenAt)}>${relTime(u.lastSeenAt)}</span>`, cls: "num" }
           : { text: "-", cls: "num" },
         { text: String(u.sessionCount), cls: "num" },
         { text: String(u.turnCount), cls: "num" },
@@ -295,7 +297,7 @@ export class UsersView {
                       <button
                         type="button"
                         @click=${async () => {
-                          this.copyLabel = (await s.copyText(this.inviteLink)) ? "Copied" : "Copy failed";
+                          this.copyLabel = (await copyText(this.inviteLink)) ? "Copied" : "Copy failed";
                           this.draw();
                         }}
                       >

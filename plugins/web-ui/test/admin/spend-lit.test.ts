@@ -90,10 +90,7 @@ function render(data: any, services: Record<string, unknown> = {}) {
       calls.api += 1;
       return Promise.resolve({ ok: true, data: {} });
     },
-    fmtPct: (n: number) => (n * 100).toFixed(1) + "%",
-    fmtTokens: (n: number) => `${n} tokens`,
     shortName: String,
-    plural: (n: number, one: string) => `${n} ${one}`,
     openUser: (principal: string) => calls.opened.push(principal),
     setRange: (range: string) => calls.ranges.push(range),
     setCustomRange: (from: string, to: string) => calls.customs.push([from, to]),
@@ -453,8 +450,6 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
       ],
     },
     {
-      cronName: (c: { id: string; title?: string }) => c.title || `Cron ${c.id.slice(0, 6)}`,
-      shortSchedule: (schedule: { cron: string }) => schedule.cron,
       openCronRuns: (cronId: string, scope: string) => opened.push([cronId, scope]),
       downloadCsv: (breakdown?: string) => downloads.push(breakdown ?? "entity"),
     },
@@ -467,8 +462,8 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
       return [cell.textContent!.replace(where, "").trim(), where.trim()];
     });
   assert.deepEqual(labels(), [
-    ["Morning digest", "#general · 0 9 * * 1-5"],
-    ["Cron gone12", "Alice · deleted"],
+    ["Morning digest", "#general · weekdays 9:00 AM"],
+    ["Cron gone1234", "Alice · deleted"],
   ]);
   rows()[1]!.click();
   rows()[0]!.click();
@@ -480,7 +475,7 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
   assert.deepEqual(downloads, ["cron"]);
   for (const query of ["digest", "abc123", "general", "channel:C1"]) {
     calls.shell.search.onInput(query);
-    assert.deepEqual(labels(), [["Morning digest", "#general · 0 9 * * 1-5"]], query);
+    assert.deepEqual(labels(), [["Morning digest", "#general · weekdays 9:00 AM"]], query);
   }
   f.window.close();
 });

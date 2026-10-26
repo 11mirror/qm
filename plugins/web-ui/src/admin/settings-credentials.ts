@@ -1,10 +1,11 @@
+import { fmtTime } from "./format.ts";
 import { badge, mountTemplate } from "./shared.ts";
 import { textField, toggleField } from "./setting-controls.ts";
 import { SettingState } from "./setting-state.ts";
 import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-let config: any = { label: (id: string) => id, formatTime: String, edit: () => {}, remove: () => {} };
+let config: any = { label: (id: string) => id, edit: () => {}, remove: () => {} };
 type Data = Record<string, any>;
 export class CredentialState extends SettingState {
   rows: Data[] = [];
@@ -224,7 +225,7 @@ function credentialUsage(c: Data) {
   return (
     (c.usageTruncated ? "at least " : "") +
     plural(c.usageCount, "successful use") +
-    (c.usageCount ? " since " + config.formatTime(c.usageSince) : " in retained broker history")
+    (c.usageCount ? " since " + fmtTime(c.usageSince) : " in retained broker history")
   );
 }
 function credentialRows() {

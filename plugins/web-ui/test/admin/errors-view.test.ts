@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { litFixture } from "./fixture.ts";
+import { relTime } from "../../src/admin/format.ts";
 
 function fixture(all: boolean, errors: unknown[]) {
   const f = litFixture();
@@ -12,11 +13,7 @@ function fixture(all: boolean, errors: unknown[]) {
       scope: "org:acme",
       errorsPageSize: 50,
       defaultShell() {},
-      plural: String,
-      firstLine: (s: string, max: number) => s.split("\n")[0].slice(0, max),
       shortName: String,
-      relTime: String,
-      fmtTime: String,
       navLink: (label: string, target: any) => {
         const a = f.document.createElement("a");
         a.textContent = label;
@@ -52,7 +49,7 @@ test("scoped and system error tables preserve attribution, empty states and time
       { ts: 124, message: "failure" },
     ]);
     assert.equal(f.root.querySelectorAll("th").length, all ? 6 : 5);
-    assert.equal(f.root.querySelector("tbody tr")!.lastElementChild!.textContent, "123");
+    assert.equal(f.root.querySelector("tbody tr")!.lastElementChild!.textContent, relTime(123));
     assert.match(f.root.querySelector("a")!.href, /history\?scope=org:acme&session=s1/);
     assert.equal(f.root.querySelectorAll("a").length, 1);
     if (all) assert.ok(f.root.textContent!.includes("runs:reaper"));

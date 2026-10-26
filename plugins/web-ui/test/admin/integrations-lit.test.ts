@@ -18,7 +18,7 @@ function setup() {
   });
   dom.window.eval(
     bundle +
-      ';window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:{}}),orgScope:()=>"org:test",connectorName:id=>id,fmtTime:x=>x});',
+      ';window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:{}}),orgScope:()=>"org:test",connectorName:id=>id});',
   );
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   return dom;
@@ -71,7 +71,7 @@ const PICKER_CATALOG =
   '[{provider:"github",setupGuide:{url:"https://example.com",console:"GitHub",steps:["Create app"]},redirectPath:"github/callback",scopes:["repo"]},{provider:"zoom",configured:true,setupGuide:{url:"https://example.com",console:"Zoom",steps:["Create app"]},redirectPath:"zoom/callback",scopes:[]}]';
 function configurePicker(dom: JSDOM, connectors: string) {
   dom.window.eval(
-    `ui.configure({api:async(m,p)=>p==="/api/connector-catalog"?{ok:true,data:{catalog:${PICKER_CATALOG}}}:{ok:true,data:{connectors:${connectors}}},orgScope:()=>"org:test",connectorName:id=>id,fmtTime:x=>x})`,
+    `ui.configure({api:async(m,p)=>p==="/api/connector-catalog"?{ok:true,data:{catalog:${PICKER_CATALOG}}}:{ok:true,data:{connectors:${connectors}}},orgScope:()=>"org:test",connectorName:id=>id})`,
   );
 }
 test("Connector picker lists the catalog, follows the draft, and locks while editing", async () => {
@@ -126,7 +126,6 @@ test("Connector saves use captured payloads and retain edits made during a reque
   configure({
     orgScope: () => "org:test",
     connectorName: (x) => x,
-    fmtTime: (x) => x,
     api: async (method, _path, body) => {
       if (method === "PUT") {
         bodies.push(body);
@@ -153,7 +152,6 @@ test("Connector load ignores out of order responses and preserves the open edito
   configure({
     orgScope: () => "org:test",
     connectorName: (x) => x,
-    fmtTime: (x) => x,
     api: () => new Promise((r) => pending.push(r)),
   });
   const s = new ConnectorsState();
@@ -175,7 +173,6 @@ test("Slack connection validates token drafts before submitting", async () => {
   configure({
     orgScope: () => "org:test",
     connectorName: (x) => x,
-    fmtTime: (x) => x,
     api: async () => {
       called = true;
       return { ok: true, data: {} };

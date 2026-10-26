@@ -9,7 +9,6 @@ export type Context = {
   api: Api;
   orgScope: () => string;
   connectorName: (id: string) => string;
-  fmtTime: (value: string) => string;
 };
 export let context: Context;
 export const configure = (value: Context) => void (context = value);
