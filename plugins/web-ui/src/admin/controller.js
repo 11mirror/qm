@@ -65,7 +65,6 @@ export function startAdmin(host, env) {
     $("sc-dialog-actions").prepend($("st-service-credentials"));
     if (!dialog.open) dialog.showModal();
   }
-
   const fire = (target) =>
     ["input", "change"].forEach((type) => target.dispatchEvent(new Event(type, { bubbles: true })));
   document.querySelectorAll("[data-choice-for]").forEach((input) => {
@@ -94,17 +93,13 @@ export function startAdmin(host, env) {
   const orgId = env.org;
   let scope = "org:" + orgId;
   let view = DEFAULT_VIEW;
-
   let page = 1;
   let historyCursor = null;
-
   const viewLoadedAt = {};
   let cronDestinationEditId = null;
   const transcriptVisibility = { thinking: true, toolResults: true };
-
   const API_BASE = env.apiBase;
   const PAGE_BASE = env.pageBase;
-
   async function api(method, path, body) {
     try {
       const res = await fetch(API_BASE + path.replace(/^\/api(?=\/)/, ""), {
@@ -125,7 +120,6 @@ export function startAdmin(host, env) {
       return { ok: false, status: 0, data: { message: "Network request failed." } };
     }
   }
-
   const scopeUrl = (id, rest = "") => "/api/scopes/" + encodeURIComponent(id) + rest;
   const viewUrl = (id, name) => scopeUrl(id, "?view=" + encodeURIComponent(name));
   async function openWebUiAs(target) {
@@ -286,12 +280,8 @@ export function startAdmin(host, env) {
     String(s || "")
       .replace(/[_-]/g, " ")
       .replace(/\b\w/g, (m) => m.toUpperCase());
-  function labelRole(role) {
-    return role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " ");
-  }
-  function scopeKind(scopeId) {
-    return String(scopeId || "").split(":")[0] || "scope";
-  }
+  const labelRole = (role) => (role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " "));
+  const scopeKind = (scopeId) => String(scopeId || "").split(":")[0] || "scope";
   const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
   const statusBadge = (status) => badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
   const entryIsNoise = (e) => ["tool_call", "tool_result", "soul", "system"].includes(e.type);
@@ -319,7 +309,6 @@ export function startAdmin(host, env) {
       return text.trim() || fallback;
     }
   }
-
   function stateToUrl(st) {
     const p = new URLSearchParams();
     const withQuery = (path) => {
@@ -369,7 +358,6 @@ export function startAdmin(host, env) {
   }
   function urlToState() {
     const p = new URLSearchParams(location.search);
-
     const rel = location.pathname.startsWith(PAGE_BASE) ? location.pathname.slice(PAGE_BASE.length) : location.pathname;
     const segs = rel.replace(/^\/+/, "").split("/");
     const fromPath = decodePathSegment(segs[0] ?? "");
@@ -381,12 +369,10 @@ export function startAdmin(host, env) {
     }
     const slackStep = ["setup", "install", "connected"].includes(p.get("slack"));
     const raw = p.get("setup") === "slack" || slackStep ? "slack-settings" : p.get("view") || fromPath;
-
     const v = raw === "skill-packs" ? "skills" : raw;
     const session = pathSession || p.get("session") || null;
     const kindRaw = p.get("kind");
     const normalizedHistoryKind = ["conversation", "cron", "background"].includes(kindRaw) ? kindRaw : "conversation";
-
     const turnRaw = p.get("turn");
     let resolvedView = DEFAULT_VIEW;
     if (VIEWS.includes(v)) resolvedView = v;
@@ -411,7 +397,6 @@ export function startAdmin(host, env) {
       ),
     };
   }
-
   let transcriptObserver = null;
   function render(st) {
     governanceUI.transcript.cancel();
@@ -459,7 +444,6 @@ export function startAdmin(host, env) {
       return void governanceUI.transcript.show(st.session, undefined, undefined, transcriptServices());
     renderData();
   }
-
   const isGovLike = (v) => ["governance", "models", "credentials", "customize", "slack-settings"].includes(v);
   const hasGovernanceDraft = () => isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
   function governanceScopeName(scopeId = scope) {
@@ -521,7 +505,6 @@ export function startAdmin(host, env) {
     if (st.view === "history" && st.session) {
       const list = { ...st, session: null, turn: null };
       history.replaceState(list, "", stateToUrl(list));
-
       if (st.turn != null)
         history.pushState({ ...st, turn: null, deepLink: true }, "", stateToUrl({ ...st, turn: null }));
       history.pushState({ ...st, deepLink: true }, "", stateToUrl(st));
@@ -557,7 +540,6 @@ export function startAdmin(host, env) {
     event.preventDefault();
     event.returnValue = "";
   });
-
   let scopeDir = null;
   let environmentDir = [];
   async function loadScopeDirectory() {
@@ -566,19 +548,13 @@ export function startAdmin(host, env) {
     viewLoadedAt.history = Date.now();
     scopeDir = r.data.scopes || [];
     environmentDir = r.data.environments || [];
-
     if (SCOPED.has(view) && !urlToState().session) {
       const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
-
       if (!(memoryEditor && orgWideView())) defaultShell();
       if (view !== "governance" && !memoryEditor) renderData();
     }
   }
-  function dirLabel(id) {
-    const s = (scopeDir || []).find((x) => x.scopeId === id);
-    return (s && s.label) || "";
-  }
-
+  const dirLabel = (id) => (scopeDir || []).find((x) => x.scopeId === id)?.label || "";
   function shortName(scopeId) {
     if (!scopeId) return "";
     const kind = scopeKind(scopeId);
@@ -600,7 +576,6 @@ export function startAdmin(host, env) {
   const orgWideView = () => scopeKind(scope) === "org";
   function scopeRows() {
     const rows = (scopeDir || []).filter((s) => scopeKind(s.scopeId) !== "org");
-
     if (scopeKind(scope) !== "org" && !rows.some((s) => s.scopeId === scope)) rows.unshift({ scopeId: scope });
     return rows;
   }
@@ -611,7 +586,6 @@ export function startAdmin(host, env) {
       go(next);
     }
   }
-
   function pageShell(opts = {}) {
     const bar = $("shellbar");
     bar.textContent = "";
@@ -705,7 +679,6 @@ export function startAdmin(host, env) {
         entryTypes.some((type) => type === "tool_call" || type === "tool_result"))
     );
   }
-
   function linkClick(go) {
     return (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -716,7 +689,6 @@ export function startAdmin(host, env) {
   function navLink(label, target) {
     return el("a.link", { textContent: label, href: stateToUrl(target), onclick: linkClick(() => go(target)) });
   }
-
   function defaultShell(extras = {}) {
     extras = { actions: view === "credentials" ? [scAddButton] : [], ...extras };
     const title = VIEW_TITLE[view] || titleCase(view);
@@ -725,13 +697,11 @@ export function startAdmin(host, env) {
       go({ view, scope: "org:" + orgId, session: null, page: 1, ...(view === "history" && { historyKind }) });
     pageShell({ back: { label: "← " + title, onClick: back }, title: shortName(scope), ...extras });
   }
-
   const orgOwnView = () => orgWideView() && urlToState().own === "1";
   function openScopeRow(scopeId, extra = {}) {
     if (scopeKind(scopeId) === "org") return go({ view, scope: scopeId, own: "1", session: null, page: 1, ...extra });
     selectScope(scopeId);
   }
-
   window.addEventListener("focus", () => {
     if (!root.isConnected) return;
     if (view === "slack-settings") return void governanceUI.integrations.loadSlackInstallation();
@@ -744,7 +714,6 @@ export function startAdmin(host, env) {
     if (view === "slack" || (view === "crons" && cronDestinationEditId)) return;
     renderData();
   });
-
   let loadedGovernanceScope = null;
   let governanceReadyScope = null;
   let loadedCommandPolicyPresent = false;
@@ -936,7 +905,6 @@ export function startAdmin(host, env) {
     },
     save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/feature-flags"), body),
   });
-
   let scEditing = null;
   let serviceCredList = [];
   async function loadServiceCredentialUsage(requestedScope, requestId) {
@@ -1095,7 +1063,6 @@ export function startAdmin(host, env) {
         "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
     status(message, "err");
   };
-
   governanceUI.onboarding.configure({
     api,
     orgScope: () => orgScope(),
@@ -1107,7 +1074,6 @@ export function startAdmin(host, env) {
     },
     navigate: (target) => openOnboardingTarget(target),
   });
-
   settings.configureProviders({
     api,
     refresh: async () => {
@@ -1128,19 +1094,11 @@ export function startAdmin(host, env) {
   }
   function openOnboardingTarget(target) {
     setView(target === "slack" ? "slack-settings" : "connectors");
-    setTimeout(
-      () =>
-        $(target === "slack" ? "card-slack-installation" : "card-connectors")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        }),
-      100,
-    );
+    const card = target === "slack" ? "card-slack-installation" : "card-connectors";
+    setTimeout(() => $(card)?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
   }
-
   const connectorName = (id) => (id === "x" ? "X" : id.charAt(0).toUpperCase() + id.slice(1));
   const orgScope = () => "org:" + orgId;
-
   governanceUI.integrations.configure({ api, orgScope, connectorName, fmtTime });
   governanceUI.integrations.mountBuiltIns();
   $("policy-test-open").onclick = () => {
@@ -1331,7 +1289,6 @@ export function startAdmin(host, env) {
     if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
     await refreshPolicySetting("auto-flagger", requestedScope, requestedGeneration, draftBefore, "Default restored");
   };
-
   async function saveSetting(key, btn) {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
@@ -1404,7 +1361,6 @@ export function startAdmin(host, env) {
   };
   $("view-governance").addEventListener("input", credentialEdited);
   $("view-governance").addEventListener("change", credentialEdited);
-
   const DD_CHEVRON =
     '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const ddNativeValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
@@ -1556,7 +1512,6 @@ export function startAdmin(host, env) {
   new MutationObserver((muts) =>
     muts.forEach((m) => m.addedNodes.forEach((n) => n instanceof HTMLElement && initCustomDropdowns(n))),
   ).observe($("app-view"), { childList: true, subtree: true });
-
   const govFlatContent = document.querySelector("#view-governance .governance-content");
   function flattenGovernanceCards() {
     const cards = [...govFlatContent.children];
@@ -1575,12 +1530,9 @@ export function startAdmin(host, env) {
     subtree: true,
   });
   flattenGovernanceCards();
-
   resetScForm();
-
   let dataReq = 0;
   let historyKind = "conversation";
-
   const dataCache = new Map();
   function paintData(root, data) {
     root.textContent = "";
@@ -1706,14 +1658,9 @@ export function startAdmin(host, env) {
   function plural(n, one, many = one + "s") {
     return `${Number(n || 0).toLocaleString()} ${Number(n || 0) === 1 ? one : many}`;
   }
-  function historyCategory(kind) {
-    return kind === "cron" || kind === "background" ? "background" : kind;
-  }
-
+  const historyCategory = (kind) => (kind === "cron" || kind === "background" ? "background" : kind);
   const KIND_LABEL = { conversation: "Conversations", cron: "Cron runs", background: "Background" };
-  function historyModeLabel(kind) {
-    return KIND_LABEL[kind] || KIND_LABEL.conversation;
-  }
+  const historyModeLabel = (kind) => KIND_LABEL[kind] || KIND_LABEL.conversation;
   function historyKindMatches(s, kind) {
     if (kind === "conversation") return s.category !== "background";
     if (kind === "cron") return s.origin?.kind === "cron";
@@ -1791,7 +1738,6 @@ export function startAdmin(host, env) {
     if (sch.everyMs != null) return shortSchedule(sch);
     return sch.firstFireAt ? "once at " + fmtTime(sch.firstFireAt) : "Never";
   }
-
   function shortSchedule(sch) {
     if (!sch) return "Never";
     if (sch.cron) {
@@ -1805,10 +1751,7 @@ export function startAdmin(host, env) {
     }
     return sch.firstFireAt ? "once" : "Never";
   }
-  function destinationSummary(dest) {
-    if (!dest) return "None";
-    return (dest.type || "destination") + " -> " + (dest.target || "-");
-  }
+  const destinationSummary = (dest) => (dest ? (dest.type || "destination") + " -> " + (dest.target || "-") : "None");
   function destinationDetails(dest) {
     if (!dest) return "No delivery destination";
     const bits = [];
@@ -1847,7 +1790,6 @@ export function startAdmin(host, env) {
       },
     };
   }
-
   function packRepoLabel(url) {
     try {
       return (
@@ -1869,7 +1811,6 @@ export function startAdmin(host, env) {
     if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: "built-in", cls: "subline" };
     return { text: s.createdBy || "None", cls: "mono" };
   }
-
   function buildScopeMultiSelect(choices, selected, onChange) {
     const row = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
     const pick = el("div.scopepick", { style: row });
@@ -2024,7 +1965,6 @@ export function startAdmin(host, env) {
       clearCache: () => dataCache.clear(),
     });
   }
-
   const fmtBytes = (n) => {
     if (n < 1024) return n + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
@@ -2234,7 +2174,6 @@ export function startAdmin(host, env) {
       );
     return parts.join("\n\n");
   }
-
   async function copyText(text) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -2343,7 +2282,6 @@ export function startAdmin(host, env) {
     block.append(who, body);
     return { block, sync: () => {} };
   }
-
   function renderHistory(root, d) {
     governanceUI.history.history(root, d, {
       ...helpers(),
@@ -2357,7 +2295,6 @@ export function startAdmin(host, env) {
       kindLabels: KIND_LABEL,
     });
   }
-
   let userDetailRequest = 0;
   async function showUserDetail(principalId) {
     const request = ++userDetailRequest;
@@ -2370,7 +2307,6 @@ export function startAdmin(host, env) {
       reload: showUserDetail,
     });
   }
-
   let slackContainers = null;
   let slackContainersTruncated = false;
   async function loadSlackContainers() {
@@ -2381,7 +2317,6 @@ export function startAdmin(host, env) {
     }
     return r;
   }
-
   function slackContainerLabel(id) {
     const c = (slackContainers || []).find((x) => x.container === id) || {};
     const nm = c.name || null;
@@ -2391,14 +2326,12 @@ export function startAdmin(host, env) {
     if (kind === "group") return nm || ((c.members || []).length ? c.members.length + " people" : id);
     return nm ? "#" + nm : id;
   }
-
   function slackContainerScope(id) {
     const kind = ((slackContainers || []).find((x) => x.container === id) || {}).kind;
     if (kind === "channel") return "channel:" + id;
     if (kind === "group") return "group:" + id;
     return null;
   }
-
   function slackUnescape(s) {
     return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   }
@@ -2483,7 +2416,6 @@ export function startAdmin(host, env) {
     if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
     return { container: d.target.split(":")[0], ts: d.editRef };
   }
-
   function transcriptServices() {
     return {
       ...helpers(),
@@ -2681,7 +2613,6 @@ export function startAdmin(host, env) {
     });
     return a;
   }
-
   async function downloadFile(f) {
     if (!f.openable) return;
     const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
@@ -2697,7 +2628,6 @@ export function startAdmin(host, env) {
     }
     clickLink({ href, download: f.name || fileName(f.path) });
   }
-
   function helpers() {
     return {
       orgId,
