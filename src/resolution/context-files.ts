@@ -1,5 +1,6 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { GrantedHandle, ScopeId } from "../types.ts";
+import { collectBytes } from "../util/bytes.ts";
 
 const MAX_SHARED_ARTIFACT_BYTES = 10 * 1024 * 1024;
 
@@ -23,20 +24,12 @@ async function readGrantedArtifactBytes(
       `shared file ${opened.artifact.name} is ${opened.sizeBytes} bytes — larger than the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
     );
   }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of opened.stream) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-    total += buf.length;
-    if (total > MAX_SHARED_ARTIFACT_BYTES) {
-      opened.stream.destroy();
-      throw new Error(
-        `shared file ${opened.artifact.name} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
-      );
-    }
-    chunks.push(buf);
-  }
-  return Buffer.concat(chunks);
+  const collected = await collectBytes(opened.stream, {
+    maxBytes: MAX_SHARED_ARTIFACT_BYTES,
+    tooLarge: () =>
+      new Error(`shared file ${opened.artifact.name} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`),
+  });
+  return collected.data;
 }
 
 export async function readContextFile(

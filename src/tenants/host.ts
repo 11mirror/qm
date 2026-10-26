@@ -26,7 +26,6 @@ import {
   homeTenantId,
   listTenants,
   tenantSecretsKey,
-  tenantServiceEnv as tenantRecordEnv,
   type TenantRecord,
 } from "./registry.ts";
 
@@ -57,7 +56,7 @@ export function tenantTarget(t: Tenant, server: Server): HostTarget {
 }
 
 export function tenantCoreEnv(base: NodeJS.ProcessEnv, rec: TenantRecord): NodeJS.ProcessEnv {
-  return { ...tenantRecordEnv(base, rec, "core"), ORG_ID: rec.orgId };
+  return { ...tenantServiceEnv(base, rec, "core"), ORG_ID: rec.orgId };
 }
 
 function configHosts(config: Config): string[] {
