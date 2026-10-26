@@ -85,24 +85,6 @@ backend transfers them into deployment-owned ECR and records immutable digests.
 After the first successful deployment, rerun `npm exec qm -- up --yes` and
 confirm it reconciles the same stack.
 
-## Agent-computer proof
-
-Copy the exact personal scope id shown for the signed-in administrator in
-Admin, then derive the same opaque storage key as the runtime and read only the
-proof file from the deployment-owned S3 home snapshot:
-
-```bash
-scope_id='personal:<exact-admin-principal>'
-scope_key="$(npm exec qm -- proof scope-key "$scope_id")"
-bucket="$(terraform -chdir=infra output -raw object_store_bucket)"
-aws --profile <profile> --region <region> s3 cp \
-  "s3://$bucket/sandbox-home/$scope_key.tar" - |
-  tar -xOf - workspace/qm-computer-proof.txt
-```
-
-Require the output to match the UUID created in the browser. A missing or
-ambiguous scope, snapshot, or file is a failed proof.
-
 Routine operations:
 
 ```bash

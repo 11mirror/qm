@@ -214,8 +214,6 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
   `;
 }
 
-export type ArtifactPage = ReturnType<typeof artifactPage>;
-
 export function artifactPage(view: View, className: string, tool?: SessionTool) {
   let seq = 0;
   return {

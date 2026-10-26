@@ -242,9 +242,7 @@ Open `webUiUrl`, sign in as the seeded administrator, send a message, and
 receive a real model response. Use a specific request rather than a greeting,
 then confirm its generated sidebar title replaces the `Web chat` fallback. A
 missing title is one failed runtime assertion; inspect the core error log and
-rerun `check --live` before continuing. Ask the agent to create a fresh UUID in
-`/root/workspace/qm-computer-proof.txt`, then use the provider reference's
-independent proof to verify that UUID outside the model transcript.
+rerun `check --live` before continuing.
 
 ## 5. Configure connectors
 
@@ -283,7 +281,7 @@ Return:
 - the base model provider and where its key lives — the deployment `.env` or the
   Admin page — so the operator knows what to rotate and where;
 - pass/fail for health, the private live session canary, sign-in, manual web
-  chat and generated title, agent-computer proof, connector visibility, user
+  chat and generated title, connector visibility, user
   OAuth, Slack reply, conformance, and an idempotent deployment rerun;
 - `npm exec qm -- status`, logs, rollback, and teardown commands;
 - recurring cost or manual work still owned by the operator, including model

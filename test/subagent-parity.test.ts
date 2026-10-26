@@ -21,7 +21,6 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { defineHarness } from "../src/harness/harness.ts";
-import { harnessToolOptions } from "../src/harness/harness-shared.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -98,7 +97,15 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
-      const options = harnessToolOptions({}, turn);
+      const options: AgentToolsOptions = {
+        ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
+        readOnly: turn.readOnly,
+        sessionTools: Boolean(turn.tools.sessionSyscalls),
+        surfaceTools: turn.surfaceTools,
+        delegateWork: turn.delegateWork,
+        surfaceName: turn.surfaceName,
+        ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      };
       const tools = createAgentTools(ref, options);
       const record: Turn = {
         ref,
