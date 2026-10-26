@@ -48,32 +48,6 @@ const SPEND_BREAKDOWNS = ["entity", "model", "cron"] as const;
 type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
 
-interface SpendBucketTotals {
-  costUsd: number;
-  calls: number;
-  tokens: number;
-}
-
-interface SpendTotals {
-  costUsd: number;
-  calls: number;
-  tokens: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cacheHitRatio: number | null;
-  live: SpendBucketTotals;
-  background: SpendBucketTotals & { sources: Record<BackgroundSource, SpendBucketTotals> };
-}
-
-interface SpendEntity extends SpendTotals {
-  principalId: string | null;
-  scopeId: ScopeId;
-  kind: string;
-  displayName: string;
-}
-
 const EXPORT_CRON_FIELDS = ["id", "title", "owner", "ownerScopeId", "schedule", "enabled", "archived"] as const;
 const CRON_INFO_FIELDS = [
   "id",
@@ -89,32 +63,8 @@ const CRON_INFO_FIELDS = [
 type SpendExportCron = Pick<Cron, (typeof EXPORT_CRON_FIELDS)[number]>;
 type SpendCronInfo = Pick<Cron, (typeof CRON_INFO_FIELDS)[number]>;
 
-interface SpendCron extends SpendTotals {
-  cronId: string;
-  scopeId: ScopeId;
-  scopeName: string;
-  info: SpendCronInfo | null;
-}
-
-interface SpendSeriesPoint {
-  day: string;
-  costUsd: number;
-  calls: number;
-  models: { model: string | null; costUsd: number }[];
-  people: { principalId: string | null; costUsd: number }[];
-  live: { costUsd: number };
-  background: { costUsd: number; sources: Record<BackgroundSource, { costUsd: number }> };
-}
-
-export interface SpendReport {
-  window: { from: string; to: string; bucket: SpendBucket };
-  org: SpendTotals;
-  series: SpendSeriesPoint[];
-  people: SpendEntity[];
-  scopes: SpendEntity[];
-  crons: SpendCron[];
-  models: ({ model: string | null } & SpendTotals)[];
-}
+export type SpendReport = ReturnType<typeof summarizeSpend>;
+type SpendTotals = ReturnType<typeof totalsOf>;
 
 export interface SpendExportRow extends Tally {
   day: string;
@@ -193,7 +143,7 @@ function tokensOf(t: Tally): number {
   return t.input + t.output + t.cacheRead + t.cacheWrite;
 }
 
-function bucketTotals(t: Tally): SpendBucketTotals {
+function bucketTotals(t: Tally) {
   return { costUsd: t.costUsd, calls: t.calls, tokens: tokensOf(t) };
 }
 
@@ -209,7 +159,7 @@ function weekStart(day: number): number {
   return day - ((day + 3) % 7);
 }
 
-function totalsOf(bySource: Record<SpendSource, Tally>): SpendTotals {
+function totalsOf(bySource: Record<SpendSource, Tally>) {
   const background = backgroundTally(bySource);
   const total = sumTallies([bySource.live, background]);
   return {
@@ -247,7 +197,7 @@ function displayNameOf(sources: readonly ScopeId[], label: (scopeId: ScopeId) =>
   return sources.map(label).find((name) => name) ?? "";
 }
 
-function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string): SpendEntity {
+function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string) {
   return {
     principalId: acc.principalId,
     scopeId: acc.scopeId,
@@ -268,11 +218,9 @@ function byCostThen<T extends { costUsd: number }>(id: (row: T) => string | null
   return (a, b) => (a.costUsd !== b.costUsd ? b.costUsd - a.costUsd : byCodePoint(id(a), id(b)));
 }
 
-const byCostThenId = byCostThen<SpendEntity>((entity) => entity.scopeId);
 const byCostThenModel = byCostThen<{ model: string | null; costUsd: number }>((row) => row.model);
-const byCostThenCron = byCostThen<SpendCron>((row) => row.cronId);
 
-export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOptions): SpendReport {
+export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOptions) {
   const accumulators = new Map<string, EntityAccumulator>();
   const buckets = new Map<
     number,
@@ -310,6 +258,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   }
 
   const entities = [...accumulators.values()].map((acc) => entityOf(acc, opts.label));
+  const byCostThenId = byCostThen<(typeof entities)[number]>((entity) => entity.scopeId);
   const people = entities.filter((e) => e.principalId !== null).sort(byCostThenId);
   const scopes = entities.filter((e) => e.principalId === null).sort(byCostThenId);
 
@@ -321,7 +270,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
       info: opts.cron(cronId),
       ...totalsOf(bySource),
     }))
-    .sort(byCostThenCron);
+    .sort(byCostThen((row) => row.cronId));
 
   const models = [...modelBuckets.entries()]
     .map(([model, bySource]) => ({ model, ...totalsOf(bySource) }))

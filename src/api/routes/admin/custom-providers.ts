@@ -30,12 +30,10 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     apiKey?: unknown;
     validate?: unknown;
   };
-  if (typeof body.name !== "string" || typeof body.protocol !== "string" || typeof body.baseUrl !== "string") {
+  if (typeof body.name !== "string" || typeof body.protocol !== "string" || typeof body.baseUrl !== "string")
     return badRequest(ctx.res, "name, protocol, and baseUrl are required");
-  }
-  if (!(CUSTOM_PROVIDER_PROTOCOLS as readonly string[]).includes(body.protocol)) {
+  if (!(CUSTOM_PROVIDER_PROTOCOLS as readonly string[]).includes(body.protocol))
     return badRequest(ctx.res, `protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
-  }
   const spec: CustomProviderSpec = {
     id,
     name: body.name,

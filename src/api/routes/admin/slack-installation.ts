@@ -23,11 +23,11 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   authz.audit("slack-installation.read", "slack-installation");
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
   const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
+  const status = await ctx.deps.slackInstallation.status();
+  const fromEnvironment = () =>
+    sendJson(ctx.res, 200, { configured: true, managed: false, source: "environment", createUrl });
   if (ctx.deps.managedSlack) {
-    const status = await ctx.deps.slackInstallation.status();
-    if (!status.managed && ctx.deps.slackEnvironmentState === "configured") {
-      return sendJson(ctx.res, 200, { configured: true, managed: false, source: "environment", createUrl });
-    }
+    if (!status.managed && ctx.deps.slackEnvironmentState === "configured") return fromEnvironment();
     const installation = await ctx.deps.slackInstallation.get();
     let setup;
     let setupUnavailable = false;
@@ -55,11 +55,8 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
       createUrl,
     });
   }
-  const stored = await ctx.deps.slackInstallation.status();
-  if (stored.managed) return sendJson(ctx.res, 200, { ...stored, source: "admin", createUrl });
-  if (ctx.deps.slackEnvironmentState === "configured") {
-    return sendJson(ctx.res, 200, { configured: true, managed: false, source: "environment", createUrl });
-  }
+  if (status.managed) return sendJson(ctx.res, 200, { ...status, source: "admin", createUrl });
+  if (ctx.deps.slackEnvironmentState === "configured") return fromEnvironment();
   return sendJson(ctx.res, 200, {
     configured: false,
     managed: false,
@@ -109,9 +106,8 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
   if (!botToken) {
     const cached = await ctx.deps.config?.getSlackEmojiCatalogDurable(scope);
-    if (cached && Object.keys(cached.emoji).length) {
+    if (cached && Object.keys(cached.emoji).length)
       return sendJson(ctx.res, 200, { emoji: cached.emoji, standard: standardEmoji() });
-    }
     return sendJson(ctx.res, 404, { error: "not_configured" });
   }
   const doFetch = ctx.deps.slackInstallationFetch ?? fetch;

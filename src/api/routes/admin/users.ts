@@ -96,13 +96,9 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
   return participants.some((participant) => samePerson(participant.principalId, email));
 }
 
-export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
-  return inviteUser(ctx, false);
-}
+export const inviteExternalUser = (ctx: ApiCtx): Promise<void> => inviteUser(ctx, false);
 
-export async function inviteTeammate(ctx: ApiCtx): Promise<void> {
-  return inviteUser(ctx, true);
-}
+export const inviteTeammate = (ctx: ApiCtx): Promise<void> => inviteUser(ctx, true);
 
 async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const { res, deps, body } = ctx;
@@ -142,9 +138,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
-  if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant)) {
+  if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant))
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
-  }
   if (!teammate && role === "member" && holdsGrant && !ownsGrant)
     return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   let grantChange: "grant.create" | "grant.revoke" | null = null;
@@ -236,9 +231,8 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
-  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
+  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant))
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
-  }
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   if (holdsGrant) {
     try {
@@ -424,9 +418,8 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   if (!deps.memory) return notFound(res);
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const status = (body as { status?: unknown }).status;
-  if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
+  if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus))
     return badRequest(res, "onboarding requires { status: not_started|pending|completed|dismissed }");
-  }
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
   await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, today, actor.id);

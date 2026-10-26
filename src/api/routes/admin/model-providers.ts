@@ -52,9 +52,8 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   if (!store || !isModelProvider(provider)) return notFound(ctx.res);
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
   if (typeof apiKey !== "string" || !apiKey.trim()) return badRequest(ctx.res, "API key is required");
-  if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
+  if (!(await validateProviderApiKey(ctx, provider, apiKey.trim())))
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
-  }
   await store.set(provider, apiKey.trim(), authz.actor.id);
   authz.audit("model-providers.update", provider);
   const status = (await store.statuses()).find((item) => item.provider === provider);

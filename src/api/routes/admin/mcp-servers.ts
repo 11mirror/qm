@@ -44,9 +44,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!authz) return;
   if (!ctx.deps.mcpServers) return notFound(ctx.res);
   const id = ctx.params.id ?? "";
-  if (!isValidMcpServerId(id)) {
+  if (!isValidMcpServerId(id))
     return badRequest(ctx.res, "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter");
-  }
   const b = ctx.body as Partial<McpServer> & { validate?: boolean };
   const url = typeof b.url === "string" ? b.url.trim() : "";
   let parsed: URL;
@@ -55,34 +54,24 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   } catch {
     return badRequest(ctx.res, "url must be a valid URL");
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return badRequest(ctx.res, "url must be http(s)");
-  }
-  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return badRequest(ctx.res, "url must be http(s)");
+  if (parsed.username || parsed.password || parsed.search || parsed.hash)
     return badRequest(ctx.res, "url must not carry credentials, query, or fragment");
-  }
   const auth = (b.auth ?? "none") as McpServerAuthMode;
-  if (!AUTH_MODES.includes(auth)) {
-    return badRequest(ctx.res, `auth must be one of ${AUTH_MODES.join(", ")}`);
-  }
+  if (!AUTH_MODES.includes(auth)) return badRequest(ctx.res, `auth must be one of ${AUTH_MODES.join(", ")}`);
   const existing = await ctx.deps.mcpServers.get(id);
   const approval = b.approval ?? existing?.approval ?? "annotations";
-  if (!APPROVAL_POLICIES.includes(approval)) {
+  if (!APPROVAL_POLICIES.includes(approval))
     return badRequest(ctx.res, `approval must be one of ${APPROVAL_POLICIES.join(", ")}`);
-  }
   const oauthUser = auth === "oauth-user";
   const catalog = (b.catalog ?? existing?.catalog) === true;
   const attestActor = (b.attestActor ?? existing?.attestActor) === true;
-  if ((catalog || attestActor) && oauthUser) {
+  if ((catalog || attestActor) && oauthUser)
     return badRequest(ctx.res, "catalog and attestActor are not available with oauth-user auth");
-  }
-  if (oauthUser && PROVIDERS[id]) {
-    return badRequest(ctx.res, `id ${id} is reserved by a built-in connector`);
-  }
+  if (oauthUser && PROVIDERS[id]) return badRequest(ctx.res, `id ${id} is reserved by a built-in connector`);
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
-  if (credentialScope !== "shared" && credentialScope !== "per-user") {
+  if (credentialScope !== "shared" && credentialScope !== "per-user")
     return badRequest(ctx.res, "credentialScope must be shared or per-user");
-  }
   if (
     attestActor &&
     (!catalog || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials"))
@@ -103,16 +92,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return badRequest(ctx.res, "credentialHost is already used by another connector");
   }
   for (const field of ["oauthAuthorizeUrl", "oauthTokenUrl"] as const) {
-    if (oauthUser && b[field] !== undefined && !httpsUrl(b[field])) {
+    if (oauthUser && b[field] !== undefined && !httpsUrl(b[field]))
       return badRequest(ctx.res, `${field} must be an HTTPS URL`);
-    }
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
-  if (!isAccountType(credentialAccountType)) {
+  if (!isAccountType(credentialAccountType))
     return badRequest(ctx.res, "credentialAccountType must be default, personal, or company");
-  }
   if (
     credentialScope === "per-user" &&
     (typeof credentialHost !== "string" ||
@@ -168,12 +155,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     updatedAt: Date.now(),
     updatedBy: authz.actor.id,
   };
-  if (auth === "bearer" && !server.bearerToken) {
-    return badRequest(ctx.res, "bearer auth requires bearerToken");
-  }
-  if (auth === "client-credentials" && (!server.clientId || !server.clientSecret)) {
+  if (auth === "bearer" && !server.bearerToken) return badRequest(ctx.res, "bearer auth requires bearerToken");
+  if (auth === "client-credentials" && (!server.clientId || !server.clientSecret))
     return badRequest(ctx.res, "client-credentials auth requires clientId and clientSecret");
-  }
   if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl)) {
     return badRequest(
       ctx.res,

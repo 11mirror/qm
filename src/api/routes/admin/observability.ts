@@ -90,9 +90,8 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   };
   const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
-  if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
+  if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0)
     return badRequest(res, "limit must be a positive integer and offset a non-negative integer.");
-  }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
   const total = (await deps.errors?.count(filters)) ?? 0;
   if (url.searchParams.get("count")) return sendJson(res, 200, { scopeId: scope, total });
@@ -112,8 +111,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const filtered = action !== undefined || resourceContains !== undefined;
   const cap = filtered ? AUDIT_FILTERED_LIMIT : AUDIT_TAIL_LIMIT;
   const requested = Math.floor(Number(ctx.url.searchParams.get("limit")));
-  const fallback = filtered ? cap : AUDIT_TAIL_LIMIT;
-  const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : fallback;
+  const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : cap;
   const events = (
     (await deps.auditLog?.tail({
       limit,

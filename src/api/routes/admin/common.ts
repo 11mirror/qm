@@ -15,13 +15,15 @@ export interface AdminAuthz {
   audit: (action: string, resource: string, scopeLabel?: string) => void;
 }
 
+export const auditAs = (deps: ServerDeps, principalId: string, action: string, resource: string, scopeLabel: string) =>
+  audit(deps, { principalId, action, resource, scopeLabel });
+
 function authorized(ctx: ApiCtx, actor: Principal, scope: string, read?: string): AdminAuthz {
   const authz: AdminAuthz = {
     actor,
     scope,
     orgWide: parseScopeId(scope).kind === "org",
-    audit: (action, resource, scopeLabel = scope) =>
-      audit(ctx.deps, { principalId: actor.id, action, resource, scopeLabel }),
+    audit: (action, resource, scopeLabel = scope) => auditAs(ctx.deps, actor.id, action, resource, scopeLabel),
   };
   if (read) authz.audit(`${read}.read`, read);
   return authz;

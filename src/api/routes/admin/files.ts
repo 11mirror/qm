@@ -2,9 +2,8 @@ import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId, type FileArtifact } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { badRequest, discoverScopes, notFound, scopedAdmin } from "./common.ts";
+import { adminAt, badRequest, discoverScopes, notFound, scopedAdmin } from "./common.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
 const FILES_PAGE_SIZE = 200;
@@ -29,17 +28,17 @@ async function adminFile(ctx: ApiCtx) {
   if (!deps.files) return notFound(res);
   const art = await deps.files.get(id);
   if (!art) return notFound(res);
-  const actor = await authorizeAdmin(ctx, art.ownerScopeId);
-  if (!actor) return;
-  return { files: deps.files, id, art, actor };
+  const authz = await adminAt(ctx, art.ownerScopeId);
+  if (!authz) return;
+  return { files: deps.files, id, art, authz };
 }
 
 export async function readAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+  const { res } = ctx;
   const found = await adminFile(ctx);
   if (!found) return;
-  const { files, id, art, actor } = found;
-  audit(deps, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
+  const { files, id, art, authz } = found;
+  authz.audit("file.read", art.path);
   const opened = await files.open(id);
   if (!opened) return notFound(res);
   const chunks: Buffer[] = [];
@@ -62,14 +61,13 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
 }
 
 export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+  const { res } = ctx;
   const found = await adminFile(ctx);
   if (!found) return;
-  const { files, id, art, actor } = found;
+  const { files, id, art, authz } = found;
   const mime = art.mimetype.split(";")[0]!.trim().toLowerCase();
   const inline = /^(image\/(png|jpeg|gif|webp|avif|bmp)|application\/pdf|text\/plain)$/.test(mime);
-  const action = inline ? "file.view" : "file.download";
-  audit(deps, { principalId: actor.id, action, resource: art.path, scopeLabel: art.ownerScopeId });
+  authz.audit(inline ? "file.view" : "file.download", art.path);
   const opened = await files.open(id);
   if (!opened) return notFound(res);
   res.writeHead(200, {

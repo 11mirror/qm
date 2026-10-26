@@ -18,7 +18,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin } from "../shared.ts";
+import { activePrincipal, adminActorFrom, authorizeAdmin } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
   ADMIN_RESOURCE_BY_ID,
@@ -33,7 +33,7 @@ import {
   parseCommandPolicy,
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
-import { adminAt, badRequest, discoverScopes, modelKeys, orgAdmin } from "./common.ts";
+import { adminAt, auditAs, badRequest, discoverScopes, modelKeys, orgAdmin } from "./common.ts";
 import { scopeActivity } from "./scope-activity.ts";
 import { tenant } from "../../../tenant.ts";
 
@@ -86,9 +86,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, authz.actor, targetScope);
-      if ("error" in result) {
+      if ("error" in result)
         return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
-      }
     } catch (err) {
       await deps.config!.refreshScope(targetScope);
       throw err;
@@ -114,12 +113,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { isAdmin: false, permissions: [] });
   const status = await deps.admin.adminStatusOf(actor);
   const permissions = status.isAdmin ? ["admin"] : [];
-  audit(deps, {
-    principalId: actor.id,
-    action: "admin.whoami",
-    resource: "whoami",
-    scopeLabel: status.scopeId ?? actor.id,
-  });
+  auditAs(deps, actor.id, "admin.whoami", "whoami", status.scopeId ?? actor.id);
   return sendJson(res, 200, { ...status, permissions });
 }
 
@@ -384,7 +378,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
     needsModels ? read("models", () => deps.refreshModels?.()) : undefined,
   ]);
-  audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
+  auditAs(deps, actor.id, "config.read", "config", targetScope);
   const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];
   const resources = ADMIN_RESOURCES.filter(
     (r) => r.readKey && r.get && (!selectedKeys || selectedKeys.includes(r.readKey)),

@@ -34,7 +34,6 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
-import { audit } from "./shared.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -47,7 +46,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { tenant } from "../../tenant.ts";
-import { modelKeys } from "./admin/common.ts";
+import { auditAs, modelKeys } from "./admin/common.ts";
 
 export interface AutoFlaggerDraft {
   modelId: string;
@@ -64,21 +63,16 @@ export async function parseAutoFlaggerDraft(
   deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
   body: { modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
-  if (typeof body.modelId !== "string" || !body.modelId.trim()) {
-    return { error: "auto-flagger requires a modelId" };
-  }
+  if (typeof body.modelId !== "string" || !body.modelId.trim()) return { error: "auto-flagger requires a modelId" };
   const modelId = body.modelId.trim();
-  if (!modelSupported(modelId)) {
-    return { error: `model ${modelId} is not supported` };
-  }
+  if (!modelSupported(modelId)) return { error: `model ${modelId} is not supported` };
   if (typeof body.rubric !== "string" || !body.rubric.trim() || body.rubric.length > AUTO_FLAGGER_MAX_RUBRIC_CHARS) {
     return {
       error: `auto-flagger requires a non-empty rubric of at most ${AUTO_FLAGGER_MAX_RUBRIC_CHARS} characters`,
     };
   }
-  if (!modelServiceable(modelId, await modelKeys(deps))) {
+  if (!modelServiceable(modelId, await modelKeys(deps)))
     return { error: `model ${modelId} isn't serviceable on this deployment` };
-  }
   return { value: { modelId, rubric: body.rubric.trim() } };
 }
 
@@ -103,14 +97,11 @@ export interface AdminResource {
 }
 
 function generic<V>(
-  parse: (
-    body: unknown,
-    ctx: { scope: string; deps: ServerDeps },
-  ) => { value: V } | { error: string; code?: string; status?: number },
+  parse: (body: unknown) => { value: V } | { error: string },
   set: (deps: ServerDeps, scope: string, value: V) => Promise<void>,
 ): AdminResource["apply"] {
   return async (ctx, _actor, scope) => {
-    const parsed = parse(ctx.body, { scope, deps: ctx.deps });
+    const parsed = parse(ctx.body);
     if ("error" in parsed) return parsed;
     await set(ctx.deps, scope, parsed.value);
     return { ok: true };
@@ -277,7 +268,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       } catch (error) {
         return { error: errMessage(error) };
       }
-      audit(ctx.deps, { principalId: actor.id, action: change[0], resource: change[1], scopeLabel: scope });
+      auditAs(ctx.deps, actor.id, change[0], change[1], scope);
       return { ok: true };
     }),
   },
@@ -292,9 +283,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: generic<ApprovalGrantModes>(
       (body) => {
         const b = body as { session?: unknown; always?: unknown };
-        if (typeof b.session !== "boolean" || typeof b.always !== "boolean") {
+        if (typeof b.session !== "boolean" || typeof b.always !== "boolean")
           return { error: "approval-grant-modes requires { session: boolean, always: boolean }" };
-        }
         return { value: { session: b.session, always: b.always } };
       },
       (deps, scope, modes) => deps.config!.setApprovalGrantModes(scope, modes),
@@ -388,7 +378,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         bots: parsed.bots,
         ambientEnabled: b.ambientEnabled as boolean | null | undefined,
       });
-      audit(ctx.deps, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
+      auditAs(ctx.deps, actor.id, "surface.policy.set", ref, scope);
       return { ok: true };
     },
   },
@@ -422,12 +412,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
       const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
-      if (typeof body.featureName !== "string" || !(FEATURE_NAMES as readonly string[]).includes(body.featureName)) {
+      if (typeof body.featureName !== "string" || !(FEATURE_NAMES as readonly string[]).includes(body.featureName))
         return { error: `feature-flags requires featureName: ${FEATURE_NAMES.join(" | ")}` };
-      }
-      if (typeof body.scopeId !== "string" || !body.scopeId.trim()) {
-        return { error: "feature-flags requires scopeId" };
-      }
+      if (typeof body.scopeId !== "string" || !body.scopeId.trim()) return { error: "feature-flags requires scopeId" };
       const before = await ctx.deps.featureFlags.enabled(body.featureName as FeatureName, body.scopeId as ScopeId);
       await ctx.deps.featureFlags.setEnabled(
         body.featureName as FeatureName,
@@ -435,12 +422,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         body.on === true,
         actor.id,
       );
-      audit(ctx.deps, {
-        principalId: actor.id,
-        action: "feature-flag.update",
-        resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
-        scopeLabel: scope,
-      });
+      auditAs(
+        ctx.deps,
+        actor.id,
+        "feature-flag.update",
+        `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
+        scope,
+      );
       return { ok: true };
     },
   },
@@ -457,12 +445,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const change = parseTeamChange(ctx.body);
       if ("error" in change) return change;
       await ctx.deps.teams.apply(change, actor.id);
-      audit(ctx.deps, {
-        principalId: actor.id,
-        action: change.remove ? "team.remove" : "team.update",
-        resource: `team:${change.id}`,
-        scopeLabel: scope,
-      });
+      auditAs(ctx.deps, actor.id, change.remove ? "team.remove" : "team.update", `team:${change.id}`, scope);
       return { ok: true };
     },
   },
@@ -633,9 +616,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       generic<string[] | null>(
         (body) => {
           const raw = (body as { ids?: unknown }).ids;
-          if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+          if (raw !== undefined && raw !== null && !Array.isArray(raw))
             return { error: "webui-models requires { ids: string[] } (empty list restores the default picker)" };
-          }
           const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
           for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
           const seen = new Set<string>();
@@ -660,15 +642,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       generic<string[] | null>(
         (body) => {
           const raw = (body as { names?: unknown }).names;
-          if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+          if (raw !== undefined && raw !== null && !Array.isArray(raw))
             return { error: "ack-emoji requires { names: string[] } (empty list restores the default rotation)" };
-          }
           const input = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v : "")).join(",") : "";
           const names = parseAckEmoji(input);
           const supplied = Array.isArray(raw) ? raw.filter((v) => typeof v === "string" && v.trim()).length : 0;
-          if (supplied && names.length !== supplied) {
+          if (supplied && names.length !== supplied)
             return { error: "ack-emoji names must be Slack emoji names (lowercase letters, digits, _ + -)" };
-          }
           return { value: names.length ? names : null };
         },
         (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
@@ -693,12 +673,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const accentInput = typeof body.accent === "string" ? body.accent.trim() : "";
       const markUrlInput = typeof body.markUrl === "string" ? body.markUrl.trim() : "";
       const value = sanitizeBranding(body);
-      if (accentInput && !value?.accent) {
-        return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
-      }
-      if (markUrlInput && !value?.markUrl) {
-        return { error: "branding mark image must be an https URL" };
-      }
+      if (accentInput && !value?.accent) return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
+      if (markUrlInput && !value?.markUrl) return { error: "branding mark image must be an https URL" };
       await ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
     }),
@@ -718,9 +694,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: (deps, scope) => deps.config!.getBrowseModel(scope),
     apply: orgWide("the browse model is org-wide", async (ctx, _actor, scope) => {
       const raw = (ctx.body as { modelId?: unknown }).modelId;
-      if (raw !== undefined && raw !== null && typeof raw !== "string") {
+      if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
-      }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
       const unavailable = modelId ? await unserviceable(ctx.deps, modelId) : null;
@@ -746,9 +721,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           let steps = NaN;
           if (typeof raw === "number") steps = raw;
           else if (typeof raw === "string") steps = Number(raw.trim());
-          if (!Number.isInteger(steps) || steps < 1 || steps > 500) {
+          if (!Number.isInteger(steps) || steps < 1 || steps > 500)
             return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
-          }
           return { value: steps };
         },
         (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
@@ -779,9 +753,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         await deps.config!.deleteConnectorClient(scope, provider);
         return { ok: true };
       }
-      if (typeof b.clientId !== "string" || typeof b.clientSecret !== "string") {
+      if (typeof b.clientId !== "string" || typeof b.clientSecret !== "string")
         return { error: "connectors requires { provider, clientId, clientSecret }" };
-      }
       await deps.config!.setConnectorClient(scope, provider, {
         clientId: b.clientId,
         clientSecret: b.clientSecret,
@@ -974,12 +947,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       };
       const auditGrantChanges = (changes: Array<{ action: "share" | "unshare"; grantee: string }>) => {
         for (const change of changes)
-          audit(deps, {
-            principalId: actor.id,
-            action: `service_credential.${change.action}`,
-            resource: ref,
-            scopeLabel: change.grantee,
-          });
+          auditAs(deps, actor.id, `service_credential.${change.action}`, ref, change.grantee);
       };
       const writeGrants = async (replacement: Grant[], operation: string): Promise<ApplyResult> => {
         grantsWritten = replacement;
@@ -1023,13 +991,11 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const host = typeof b.host === "string" ? b.host.trim().toLowerCase() : "";
       if (!name) return { error: "service-credentials requires { slug, name }" };
-      if (delivery === "broker" && !isValidBrokerHost(host)) {
+      if (delivery === "broker" && !isValidBrokerHost(host))
         return { error: "broker delivery requires { host } (a bare hostname)" };
-      }
       if (delivery === "env" && host) return { error: "a pinned host only applies to broker delivery" };
-      if (!existing && (typeof b.secret !== "string" || !b.secret)) {
+      if (!existing && (typeof b.secret !== "string" || !b.secret))
         return { error: "a new credential requires a secret" };
-      }
       const methods = trimmedList(b.allowedMethods)?.map((method) => method.toUpperCase());
       if (methods?.some((method) => !isValidBrokerMethod(method)))
         return { error: "allowed methods must be comma-separated HTTP method names" };
