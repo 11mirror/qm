@@ -1,6 +1,5 @@
 import { swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { createInFlightThreadMap } from "./message-gating.ts";
 import { type GoalNoticeView } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
@@ -31,7 +30,6 @@ interface TurnHooks {
 export interface TurnFlow {
   callCore(body: CoreTurnBody, hooks?: TurnHooks): Promise<TurnResult>;
   inFlightRuns: { add(runId: string): void; delete(runId: string): void; has(runId: string): boolean };
-  inFlightRunByThread: ReturnType<typeof createInFlightThreadMap>;
   ackRunDelivery(runId: string): void;
 }
 
@@ -48,8 +46,6 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     },
     has: (runId: string): boolean => inFlightRunPins.has(runId),
   };
-
-  const inFlightRunByThread = createInFlightThreadMap();
 
   function ackRunDelivery(runId: string): void {
     void (async () => {
@@ -116,5 +112,5 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     }
   }
 
-  return { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery };
+  return { callCore, inFlightRuns, ackRunDelivery };
 }

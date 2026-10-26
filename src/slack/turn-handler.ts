@@ -52,7 +52,7 @@ import {
   channelThreadRef,
   dmThreadRef,
   hasContent,
-  maybeInterceptStop,
+  isBareStop,
   threadHasBotStake,
 } from "./message-gating.ts";
 import { decodeSlackEntities, toSlackMrkdwn } from "./mrkdwn.ts";
@@ -136,7 +136,7 @@ export function createTurnHandler(deps: {
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
-  const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
+  const { callCore, inFlightRuns, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
 
@@ -289,19 +289,12 @@ export function createTurnHandler(deps: {
     const finishTaskAck = async () => {
       if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
-    if (!inc.unprompted) {
-      const intercepted = await maybeInterceptStop({
-        text,
-        botHandle: ids.botHandle,
-        threadRef,
-        getInFlightRun: async (ref) =>
-          (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
-          inFlightRunByThread.get(ref),
-        signalAbort: (runId) => core.signalRunAbort(runId),
-        stopConversation: (ref) => core.stopConversation(ref),
-      }).catch(swallowAs("slack: abort signal", true));
-      if (intercepted) return;
-    }
+    if (
+      !inc.unprompted &&
+      isBareStop(text, ids.botHandle) &&
+      (await core.stopConversation(threadRef).catch(swallowAs("slack: abort signal", true)))
+    )
+      return;
 
     let ack: AckPresenter | undefined;
     const startAck = (): AckPresenter =>
@@ -480,7 +473,6 @@ export function createTurnHandler(deps: {
               },
           onQueued: async (runId: string) => {
             queuedRunId = runId;
-            inFlightRunByThread.set(threadRef, runId);
             accepted = true;
             inc.ackGate?.persisted();
             await moveTaskAck(runId, inc.ts, true);
@@ -518,10 +510,7 @@ export function createTurnHandler(deps: {
       }
       return;
     } finally {
-      if (queuedRunId) {
-        inFlightRunByThread.clear(threadRef, queuedRunId);
-        deps.onSettled?.();
-      }
+      if (queuedRunId) deps.onSettled?.();
     }
 
     const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
