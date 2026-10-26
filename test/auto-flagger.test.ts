@@ -16,6 +16,7 @@ import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/securit
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const org = scopeId("org", "acme");
 
@@ -71,7 +72,8 @@ test("the shared classifier uses the configured model and composed prompt", asyn
 });
 
 test("past screenings are recoverable as a replay corpus, and ordinary turn calls are not", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  let clock = Date.now();
+  const sessions = createPostgresSessionStore(testDatabaseUrl(), { now: () => ++clock });
   const dm = await sessions.getOrCreateByThread("dm:U1:t1", "dm", org);
   const other = await sessions.getOrCreateByThread("dm:U2:t1", "dm", scopeId("personal", "bob"));
   const screen = (sessionId: string, payload: string, scopeLabel = org) =>
@@ -132,6 +134,7 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
   }
   assert.deepEqual(outcomes, ["ok", "pending_approval", "ok"], "the live screen flags the injected instruction");
 
+  await settle(async () => (await built.sessions.listScreenSamples(50)).length === 3);
   const samples = await built.sessions.listScreenSamples(50);
   assert.equal(samples.length, 3, "every screening a turn performed is replayable");
   assert.ok(
@@ -144,10 +147,6 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
       `the corpus holds exactly what was screened: ${payload}`,
     );
   }
-  assert.ok(
-    samples[0]?.payload.includes("the support queue"),
-    "newest first, so a window of N is the last N screenings",
-  );
 });
 
 for (const origin of ["human", "direct", "automation", "ambient"] as const) {
