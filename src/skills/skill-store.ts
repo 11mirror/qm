@@ -72,9 +72,11 @@ export interface SkillStoreOptions {
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
-  withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
+  withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
+  /** Skills owned by any of these scopes. */
+  listInScopes(scopeIds: readonly ScopeId[]): Promise<Skill[]>;
   review(id: string, reviewer: string, grantCapabilities: string[]): Promise<Skill>;
   publish(id: string): Promise<Skill>;
   archive(id: string): Promise<Skill>;
@@ -159,6 +161,12 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
   const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
+  const listInScopes = async (scopeIds: readonly ScopeId[]): Promise<Skill[]> => {
+    const wanted = new Set(scopeIds);
+    if (!wanted.size) return [];
+    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
+    return rows.filter((skill) => wanted.has(skill.scopeId));
+  };
 
   return {
     withNameLock,
@@ -196,6 +204,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
 
     get: (id) => skills.get(id),
     list: () => skills.all(),
+    listInScopes,
 
     async review(id, reviewer, grantCapabilities) {
       const s = await skills.get(id);
@@ -250,11 +259,11 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async resolve(name, orderedScopes) {
-      return resolveFromIndex(publishedByScopeAndName(await skills.all()), name, orderedScopes);
+      return resolveFromIndex(publishedByScopeAndName(await listInScopes(orderedScopes)), name, orderedScopes);
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await skills.all();
+      const all = await listInScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
       return visibleSkillRows(all, orderedScopes, granted);
     },
 
@@ -263,7 +272,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
-      const existing = (await skills.all()).find(
+      const existing = (await listInScopes([targetScopeId])).find(
         (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
       );
       const at = Date.now();

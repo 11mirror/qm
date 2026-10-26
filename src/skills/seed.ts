@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
-import { createKeyedQueue } from "../util/async.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
 import { safeSkillFilePath, type Skill, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
 
@@ -81,8 +80,6 @@ export function foreignSkillCollision(
   return all.find((s) => s.scopeId === scopeId && s.manifest.name === name && !isOwn(s) && s.status !== "archived");
 }
 
-const upsertQueue = createKeyedQueue<string>();
-
 export function upsertSeedSkill(
   skills: SkillStore,
   input: {
@@ -94,10 +91,7 @@ export function upsertSeedSkill(
     respectArchived?: boolean;
   },
 ): Promise<UpsertOutcome> {
-  const run = () => upsertSeedSkillUnsafe(skills, input);
-  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
-    skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
-  );
+  return skills.withNameLock(input.scopeId, input.manifest.name, () => upsertSeedSkillUnsafe(skills, input));
 }
 
 async function upsertSeedSkillUnsafe(
@@ -112,7 +106,7 @@ async function upsertSeedSkillUnsafe(
   },
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
-  const all = await skills.list();
+  const all = await skills.listInScopes([scopeId]);
   const isOwn = (s: Skill) => (pack ? s.pack?.packId === pack.packId : s.createdBy === createdBy);
   const existing = all.find((s) => s.scopeId === scopeId && s.manifest.name === manifest.name && isOwn(s));
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";

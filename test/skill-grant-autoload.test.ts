@@ -121,6 +121,7 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
 test("visibleFor takes one snapshot instead of one per published name", async () => {
   const backing = testMap<Skill>();
   let allCalls = 0;
+  let selectCalls = 0;
   let getCalls = 0;
   const counted: DurableMap<Skill> = {
     ...backing,
@@ -128,6 +129,10 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
       allCalls += 1;
       return backing.all();
     },
+    select: ((query) => {
+      selectCalls += 1;
+      return backing.select(query);
+    }) as DurableMap<Skill>["select"],
     get: (id) => {
       getCalls += 1;
       return backing.get(id);
@@ -143,9 +148,11 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
   const granted = await publishedSkill(store, JOSH, "delta-skill");
 
   allCalls = 0;
+  selectCalls = 0;
   getCalls = 0;
   const rows = await store.visibleFor([ERIC, ORG], [{ id: granted.id, ownerScopeId: JOSH }]);
-  assert.equal(allCalls, 1);
+  assert.equal(selectCalls, 1, "one scoped read covers the asked scopes and the granted skill's owner");
+  assert.equal(allCalls, 0);
   assert.equal(getCalls, 0);
 
   const byName = new Map(rows.map((r) => [r.skill!.manifest.name, r]));
