@@ -174,20 +174,14 @@ function scopeName(scope: string): string {
   if (resolved) return resolved;
   const [kind, ...rest] = scope.split(":");
   const ref = rest.join(":");
-  switch (kind) {
-    case "personal":
-      return ref || "a personal DM";
-    case "channel":
-      return ref ? `a Slack channel (${ref})` : "a Slack channel";
-    case "group":
-      return "a group DM";
-    case "team":
-      return ref ? `a team (${ref})` : "a team";
-    case "org":
-      return "the whole org";
-    default:
-      return scope;
-  }
+  const labels: Record<string, string> = {
+    personal: ref || "a personal DM",
+    channel: ref ? `a Slack channel (${ref})` : "a Slack channel",
+    group: "a group DM",
+    team: ref ? `a team (${ref})` : "a team",
+    org: "the whole org",
+  };
+  return Object.hasOwn(labels, kind!) ? labels[kind!]! : scope;
 }
 
 function setAdding(draft: typeof kc.adding): void {
@@ -326,8 +320,7 @@ function drawConnectors(): void {
   const entries = Object.entries(kc.providers);
   const connectorCards = entries.map(([id, p]) => {
     const meta = CONNECTOR_LABELS[id] ?? { name: p.mcpLabel ?? id, hosts: "" };
-    const connected = Boolean(p.connected);
-    const needsReconnect = Boolean(p.needsReconnect);
+    const { connected, needsReconnect } = p;
     let connectionState: TemplateResult | string = html`<span class="kc-state neutral">Not connected</span>`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">Reconnect needed</span>`;
     else if (connected) connectionState = "";
@@ -371,13 +364,7 @@ function drawConnectors(): void {
       html`<button class="btn" type="button" @click=${startAdding}>Add credential</button>`,
     );
   if (!appState.mainEl) return;
-  const section = (
-    id: string,
-    heading: string,
-    count: number,
-    content: TemplateResult | TemplateResult[],
-    sectionLoading: boolean,
-  ) =>
+  const section = (id: string, heading: string, count: number, content: unknown, sectionLoading: boolean) =>
     html`<section class="kc-section" aria-labelledby=${id}>
       <div class="kc-section-head">
         <div class="kc-section-title">
@@ -584,16 +571,13 @@ async function startConnector(provider: string): Promise<void> {
       method: "POST",
     });
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
-    if (r.authorizeUrl) {
-      location.href = r.authorizeUrl;
-      return;
-    }
-    kc.notice = "No authorization URL was returned.";
+    if (!r.authorizeUrl) throw new Error("No authorization URL was returned.");
+    location.href = r.authorizeUrl;
   } catch (e) {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
     kc.notice = errMessage(e, "Could not start the connector.");
+    drawConnectors();
   }
-  drawConnectors();
 }
 
 function providerGrants(p: ConnectorProvider | undefined): KeychainGrant[] {

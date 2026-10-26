@@ -156,17 +156,18 @@ export class ConnectApps extends LitElement {
     connectionError: { state: true },
     workspaceConnected: { state: true },
     workspaceError: { state: true },
+    disconnecting: { state: true },
   };
-  declare me: Me | null;
+  me: Me | null = null;
   declare onConnected: ((name: string) => void) | undefined;
-  declare widget: "apps" | "slack" | "slack-account";
-  declare toolkit: string;
-  declare returnKey: string;
-  declare base: string;
-  declare loading: boolean;
-  declare error: string;
-  declare authorizing: string;
-  declare authorizationError: string;
+  widget: "apps" | "slack" | "slack-account" = "apps";
+  toolkit = "";
+  returnKey = "settings";
+  base = "/";
+  loading = true;
+  error = "";
+  authorizing = "";
+  authorizationError = "";
   private connections: ConnectedAccount[] = [];
   private disconnecting = "";
   private connectionError = "";
@@ -183,23 +184,10 @@ export class ConnectApps extends LitElement {
   };
   private pickerState: PickerState = { query: "", expanded: false };
   private retryService: ConnectionAttempt["service"] | null = null;
-  declare connectionOutcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired";
+  connectionOutcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired" = "";
   private controller?: AbortController;
   private services: ConnectionService[] = [];
 
-  constructor() {
-    super();
-    this.me = null;
-    this.widget = "apps";
-    this.toolkit = "";
-    this.returnKey = "settings";
-    this.base = "/";
-    this.loading = true;
-    this.error = "";
-    this.authorizing = "";
-    this.authorizationError = "";
-    this.connectionOutcome = "";
-  }
   protected createRenderRoot(): HTMLElement {
     return this;
   }
@@ -249,18 +237,22 @@ export class ConnectApps extends LitElement {
   private drawPicker(): void {
     const target = this.querySelector<HTMLElement>(".connect-apps-picker");
     const connected = this.connections.map((account) => account.toolkit);
-    const stale = this.staleToolkits();
+    const healthy = new Set(this.connections.filter((a) => !a.missingScopes?.length).map((a) => a.toolkit));
     const services = this.services.map((service) => ({
       ...service,
       connected: connected.includes(service.id),
-      stale: stale.has(service.id),
+      stale: connected.includes(service.id) && !healthy.has(service.id),
     }));
     const requested = services.find((service) => service.id === this.requestedToolkit());
     if (target && !this.error && !this.loading)
       mountConnectionPicker(
         target,
         requested ? [requested] : services,
-        (service) => this.authorize(service, this.staleAccount(service.id)),
+        (service) =>
+          this.authorize(
+            service,
+            service.stale ? this.connections.find((a) => a.toolkit === service.id)?.id : undefined,
+          ),
         requested ? { query: "", expanded: false } : this.pickerState,
         requested,
       );
@@ -272,23 +264,9 @@ export class ConnectApps extends LitElement {
     window.removeEventListener("focus", this.refreshConnections);
     document.removeEventListener("visibilitychange", this.refreshConnections);
   }
-  private staleToolkits(): Set<string> {
-    const toolkits = new Set(this.connections.map((account) => account.toolkit));
-    return new Set(
-      [...toolkits].filter((toolkit) =>
-        this.connections.every((account) => account.toolkit !== toolkit || account.missingScopes?.length),
-      ),
-    );
-  }
-  private staleAccount(toolkit: string): string | undefined {
-    return this.staleToolkits().has(toolkit)
-      ? this.connections.find((account) => account.toolkit === toolkit)?.id
-      : undefined;
-  }
   private async disconnect(account: ConnectedAccount, name: string): Promise<boolean> {
     this.disconnecting = account.id;
     this.connectionError = "";
-    this.requestUpdate();
     try {
       const response = await webFetch(`${this.base}api/composio/disconnect`, {
         method: "POST",
@@ -303,7 +281,6 @@ export class ConnectApps extends LitElement {
       return false;
     } finally {
       this.disconnecting = "";
-      this.requestUpdate();
       await this.updateComplete;
       this.drawPicker();
     }
@@ -351,16 +328,14 @@ export class ConnectApps extends LitElement {
           }
         }
       }
-      await this.updateComplete;
-      this.drawPicker();
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
       this.connections = [];
       this.connectionOutcome = "";
       this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
-      await this.updateComplete;
-      this.drawPicker();
     }
+    await this.updateComplete;
+    this.drawPicker();
   }
   private async loadCatalog(): Promise<void> {
     this.controller?.abort();
