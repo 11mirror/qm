@@ -285,6 +285,12 @@ export interface ToolContext extends SurfaceToolDeps {
     | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">
     | ControlUnavailable
   >;
+  cronNote(
+    id: string,
+    note: string,
+  ): Promise<
+    ControlOk<{ applied: boolean }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
+  >;
   cronDelete(
     id: string,
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
@@ -1360,6 +1366,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronPatch: (id, req) =>
       controlOp(
         (c, cl) => c.patchCron(id, req, cl),
+        (r) => r.ok,
+      ),
+    cronNote: (id, note) =>
+      controlOp(
+        (c, cl) => c.noteCron(id, note, cl),
         (r) => r.ok,
       ),
     cronDelete: (id) =>

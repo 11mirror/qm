@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { isCronRuntime } from "../../../cron/runtime.ts";
+import { errMessage } from "../../../util/errors.ts";
 import { type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
@@ -17,6 +19,7 @@ const CRON_FIELDS = [
   "enabled",
   "archived",
   "schedule",
+  "runtime",
   "inbox",
   "unattendedGrants",
   "destination",
@@ -84,6 +87,29 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
       };
     });
   return sendJson(res, 200, { scopeId: scope, skills });
+}
+
+export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, body } = ctx;
+  const id = params.id!;
+  const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
+  if (!scoped) return;
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("runtime" in body) ||
+    Object.keys(body).some((key) => key !== "runtime") ||
+    body.runtime === undefined ||
+    !isCronRuntime(body.runtime)
+  )
+    return badRequest(res, "runtime is required; use null to inherit");
+  try {
+    const updated = await app.setCronRuntime(id, body.runtime);
+    scoped.audit("cron.runtime.update", id, scoped.record.ownerScopeId);
+    return sendJson(res, 200, { cron: updated ? { id: updated.id, runtime: updated.runtime } : null });
+  } catch (error) {
+    return badRequest(res, errMessage(error));
+  }
 }
 
 export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {

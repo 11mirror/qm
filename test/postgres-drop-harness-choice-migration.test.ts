@@ -91,8 +91,8 @@ test("stored harness choices are dropped while their runtime selections stay rec
       rubric: "r",
     });
     const crons = await rows(admin, "crons");
-    assert.deepEqual(crons.c1, { id: "c1" }, "per-cron runtime overrides are gone entirely");
-    assert.deepEqual(crons.c2, { id: "c2" });
+    assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
+    assert.equal(crons.c2?.runtime, null);
     assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, null);
   });
 });

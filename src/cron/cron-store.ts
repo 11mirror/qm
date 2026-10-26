@@ -1,4 +1,4 @@
-import type { Cron, CronFireLogEntry, CronSchedule, Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
@@ -8,11 +8,13 @@ import {
   createDeduped,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
+import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
 import { renderSourceInboxTask } from "../inbox/sync-task.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
+  runtime?: Cron["runtime"];
   enabled?: boolean;
   schedule: Cron["schedule"];
   title?: string;
@@ -24,6 +26,7 @@ export interface CreateCronInput extends CreateTriggerInput {
 }
 
 export interface CronPatch {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   message?: string;
@@ -57,7 +60,9 @@ export interface CronStore {
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   backfillFires(): Promise<number>;
+  setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
@@ -95,6 +100,7 @@ export function createCronStore(
   return {
     async create(input) {
       assertNoEscalation(input);
+      assertCronRuntime(input);
       const now = Date.now();
       const title = normalizeTitle(input.title);
       const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
@@ -108,6 +114,7 @@ export function createCronStore(
         contentPart(input.unattendedGrants),
         contentPart(title),
         ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
+        ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -120,6 +127,7 @@ export function createCronStore(
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.inbox ? { inbox: input.inbox } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -127,7 +135,9 @@ export function createCronStore(
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
+      assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
+      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
       if (patch.action !== undefined) fields.action = patch.action;
       if (patch.message !== undefined) fields.message = patch.message;
@@ -168,6 +178,7 @@ export function createCronStore(
     },
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
+    latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
     async backfillFires() {
       let backfilled = 0;
       for (const [id, cron] of await backing.entries()) {
@@ -187,6 +198,22 @@ export function createCronStore(
         }
       }
       return backfilled;
+    },
+    async setFireNote(id, note) {
+      let applied = false;
+      const apply = (cron: Cron): Cron => {
+        applied = !(cron.lastFireNote && cron.lastFireNote.at > note.at);
+        return applied ? { ...cron, lastFireNote: note } : cron;
+      };
+      if (backing.update) {
+        if ((await backing.update(id, apply)) === null) return "missing";
+        return applied ? "applied" : "superseded";
+      }
+      const cron = await backing.get(id);
+      if (!cron) return "missing";
+      apply(cron);
+      if (applied) await backing.merge(id, { lastFireNote: note });
+      return applied ? "applied" : "superseded";
     },
     async markFired(id, at, scheduledAt) {
       const cron = await backing.get(id);
@@ -319,13 +346,5 @@ export const LOOPS_TO_CRONS_MIGRATION = {
      END
      $loops_to_crons$`,
     "DELETE FROM crons WHERE json ? 'loopId'",
-  ],
-};
-
-export const DROP_CRON_RUNTIME_AND_NOTE_MIGRATION = {
-  id: "durable-map/crons/0003-drop-runtime-and-note",
-  statements: [
-    "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-    "UPDATE crons SET json = json - 'runtime' - 'lastFireNote' WHERE json ?| array['runtime', 'lastFireNote']",
   ],
 };

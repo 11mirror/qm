@@ -1,6 +1,6 @@
 import { adminOperations } from "../tools/admin.ts";
 
-export const CRON_ACTIONS = ["create", "list", "get", "runs", "patch", "delete", "run", "disable"] as const;
+export const CRON_ACTIONS = ["create", "list", "get", "runs", "patch", "delete", "run", "disable", "note"] as const;
 
 const READ_ONLY_TOOLS = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 
