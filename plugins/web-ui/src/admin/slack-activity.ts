@@ -163,7 +163,7 @@ export class SlackActivity {
       const containers = context.containers() || [];
       context.pageShell({
         title: "Slack",
-        count: (context.truncated() ? containers.length.toLocaleString() + "+" : containers.length) + " conversations",
+        tally: [context.truncated() ? containers.length + "+" : containers.length, "conversations"],
         search: this.searchBox(null),
       });
       return this.draw(

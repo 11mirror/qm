@@ -405,7 +405,7 @@ function builtIns() {
 }
 function emojiChanged(s: SlackSetting, names: string[]) {
   s.change({ names });
-  (document.querySelector('[data-save="ack-emoji"]') as HTMLButtonElement | null)?.click();
+  context.save(s.key);
 }
 function emojiChips(s: SlackSetting) {
   return repeat(

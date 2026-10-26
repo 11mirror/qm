@@ -152,7 +152,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ${s.warnings.map((warning) => html`<div>${warning}</div>`)}
         </div>
       </div>
-      <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s, "st-policy")}</div>
+      <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s)}</div>
     </section>`,
   "card-ambient-policy": (s) =>
     html`<section class=${govClass(s)} id="card-ambient-policy">
@@ -342,8 +342,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         >${saveButton(s, "Save policy", s.disabled)}${settingStatus(s)}
       </div>
     </section>`,
-  "card-governance-org-ambient": (s) =>
-    html`<section class=${govClass(s)} id="card-governance-org-ambient">
+  "card-org-ambient": (s) =>
+    html`<section class=${govClass(s)} id="card-org-ambient">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p>
@@ -382,14 +382,14 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ?disabled=${!s.dirty || s.saving}
         >
           Apply</button
-        >${settingStatus(s, "st-governance-org-ambient")}
+        >${settingStatus(s)}
       </div>
     </section>`,
 };
 
 export function mountCards(): void {
   for (const [id, template] of Object.entries(cards)) {
-    const state = states.get(id === "card-governance-org-ambient" ? "org-ambient" : id.slice(5))!;
+    const state = states.get(id.slice(5))!;
     state.render = mountTemplate(`template[data-governance-card="${id}"]`, () => template(state));
   }
 }

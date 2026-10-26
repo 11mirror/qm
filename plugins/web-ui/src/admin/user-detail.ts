@@ -1,6 +1,7 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { card, table, badge, renderer, stacked, subline as muted } from "./shared.ts";
 import { fmtTime, labelRole, plural, scopeKind } from "./format.ts";
+const USAGE_LIMIT = 2000;
 
 export async function detail(root: HTMLElement, principal: string, s: Record<string, any>) {
   const paint = renderer(root);
@@ -74,11 +75,26 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     const resource = encodeURIComponent("grant " + grant.id);
     const result = await s.api(
       "GET",
-      `/api/audit?scope=org:${encodeURIComponent(s.orgId)}&action=keychain.materialize&resource=${resource}&limit=2000`,
+      `/api/audit?scope=org:${encodeURIComponent(s.orgId)}&action=keychain.materialize&resource=${resource}&limit=${USAGE_LIMIT}`,
     );
     if (request !== usageRequest) return;
-    usage = result.ok ? result.data?.events || [] : [];
+    usage = result.ok
+      ? result.data?.events || []
+      : { error: result.data?.message || "Failed (" + result.status + ")." };
     draw();
+  }
+  function usageView() {
+    if (usage === null) return html`<p class="empty">Loading usage…</p>`;
+    if (usage.error) return html`<p class="empty">${"Couldn't load usage: " + usage.error}</p>`;
+    return html`${usage.length >= USAGE_LIMIT ? html`<p class="hint">Showing the ${USAGE_LIMIT.toLocaleString()} most recent uses.</p>` : nothing}${table(
+      ["When", "Used by", "Scope"],
+      usage.map((e: any) => [
+        { text: fmtTime(e.ts), cls: "num" },
+        { node: stacked(e.principalId, "") },
+        { node: muted(e.scopeLabel || "-") },
+      ]),
+      "No recorded uses of this grant.",
+    )}`;
   }
   function keychain() {
     if (credentialError) return credentialError;
@@ -133,19 +149,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                   <p class="hint">
                     ${credName(selectedGrant.credentialId) + " · " + (selectedGrant.mode || "?") + " · " + (selectedGrant.status || "?") + " · grant " + selectedGrant.id}
                   </p>
-                  ${
-                    usage === null
-                      ? html`<p class="empty">Loading usage…</p>`
-                      : table(
-                          ["When", "Used by", "Scope"],
-                          usage.map((e: any) => [
-                            { text: fmtTime(e.ts), cls: "num" },
-                            { node: stacked(e.principalId, "") },
-                            { node: muted(e.scopeLabel || "-") },
-                          ]),
-                          "No recorded uses of this grant.",
-                        )
-                  }`
+                  ${usageView()}`
               : html`<p class="kc-sortbar">
                     Sort:
                     ${Object.entries({ default: "status group", mode: "mode", status: "status A-Z" }).map(

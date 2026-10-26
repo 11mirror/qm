@@ -3350,7 +3350,7 @@
 #app-view #view-governance #card-security-posture .choice-stack,
 #app-view #view-governance #card-sharing-posture .choice-stack,
 #app-view #view-governance #card-external-slack .choice-stack,
-#app-view #view-governance #card-governance-org-ambient .choice-stack {
+#app-view #view-governance #card-org-ambient .choice-stack {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3359,7 +3359,7 @@
 #app-view #view-governance #card-security-posture .posture-choice,
 #app-view #view-governance #card-sharing-posture .posture-choice,
 #app-view #view-governance #card-external-slack .posture-choice,
-#app-view #view-governance #card-governance-org-ambient .posture-choice {
+#app-view #view-governance #card-org-ambient .posture-choice {
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
 }
@@ -3369,7 +3369,7 @@
 #app-view #view-governance #card-security-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-external-slack .posture-choice:has(input:checked),
-#app-view #view-governance #card-governance-org-ambient .posture-choice:has(input:checked) {
+#app-view #view-governance #card-org-ambient .posture-choice:has(input:checked) {
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 #app-view #view-governance .governance-layout,
@@ -3378,13 +3378,13 @@
 #app-view #view-governance #card-security-posture .posture-choice > span,
 #app-view #view-governance #card-sharing-posture .posture-choice > span,
 #app-view #view-governance #card-external-slack .posture-choice > span,
-#app-view #view-governance #card-governance-org-ambient .posture-choice > span,
-#app-view #view-governance #card-governance-org-ambient > .head,
+#app-view #view-governance #card-org-ambient .posture-choice > span,
+#app-view #view-governance #card-org-ambient > .head,
 #app-view[data-subview="credentials"] #view-governance section.card.sv-credentials,
 :where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice small {
   display: block;
 }
-#app-view #view-governance #card-governance-org-ambient .head .viewlink {
+#app-view #view-governance #card-org-ambient .head .viewlink {
   display: block;
   margin: 8px 0 0;
 }
@@ -3614,7 +3614,7 @@
 #app-view #view-governance #card-security-posture .posture-choice:hover,
 #app-view #view-governance #card-sharing-posture .posture-choice:hover,
 #app-view #view-governance #card-external-slack .posture-choice:hover,
-#app-view #view-governance #card-governance-org-ambient .posture-choice:hover,
+#app-view #view-governance #card-org-ambient .posture-choice:hover,
 #app-view[data-subview="credentials"] #view-governance .credential-actions button:hover {
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }

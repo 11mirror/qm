@@ -326,12 +326,8 @@ export function startAdmin(host, env) {
         counts.appendChild(countText(noun, active.count));
       }
       bar.appendChild(wrap);
-    } else if (opts.count != null && opts.count !== "") {
-      const c = el("span.shell-count", String(opts.count));
-      const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
-      if (!logView) bar.appendChild(c);
-      else counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
-    }
+    } else if (opts.tally) counts.appendChild(countText(opts.tally[1], opts.tally[0]));
+    else if (opts.count != null && opts.count !== "") bar.appendChild(el("span.shell-count", String(opts.count)));
     if (logView) (opts.stats || []).forEach(([value, label]) => counts.appendChild(countText(label, value)));
     bar.appendChild(el("span.shell-spacer"));
     if (!logView && opts.stats && opts.stats.length) bar.appendChild(kpis(opts.stats, "shell-stats"));
@@ -410,7 +406,7 @@ export function startAdmin(host, env) {
   }
   const connectorName = (id) => (id === "x" ? "X" : id.charAt(0).toUpperCase() + id.slice(1));
   const orgScope = () => "org:" + orgId;
-  governanceUI.integrations.configure({ api, orgScope, connectorName });
+  governanceUI.integrations.configure({ api, orgScope, connectorName, save: (key) => settingsUi.save(key) });
   governanceUI.integrations.mountBuiltIns();
   watchCustomDropdowns($("app-view"));
   let dataReq = 0;
@@ -488,11 +484,11 @@ export function startAdmin(host, env) {
   }
   async function adminErrors(query) {
     const r = await api("GET", "/api/errors?" + query);
-    return r.ok ? r.data?.errors || [] : [];
+    return r.ok ? r.data?.errors || [] : null;
   }
   async function adminErrorCount(query) {
     const r = await api("GET", "/api/errors?count=1&" + query);
-    return r.ok ? Number(r.data?.total || 0) : 0;
+    return r.ok ? Number(r.data?.total || 0) : null;
   }
   let artifactRenderGeneration = 0;
   function artifactContext() {
