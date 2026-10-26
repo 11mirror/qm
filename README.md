@@ -237,7 +237,6 @@ upstream source history to merge.
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
 - [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
-- [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, portal)

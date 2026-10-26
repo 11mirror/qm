@@ -10,7 +10,7 @@ import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError, SandboxError } from "porter-sandbox";
-import { createPorterClient } from "../src/sandbox/porter-client.ts";
+import { createPorterClient } from "../src/deploy/porter-client.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

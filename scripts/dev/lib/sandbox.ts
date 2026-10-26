@@ -117,28 +117,12 @@ const REMOTE_BACKENDS: Record<
     hint: "create an API key in the smolmachines console",
     detail: "smolmachines (api.smolmachines.com)",
   },
-  agent37: {
-    required: ["AGENT37_API_KEY"],
-    hint: "mint one at https://agent37.com/dashboard/cloud/api-keys",
-    detail: "Agent37 (api.agent37.com)",
-  },
-  superserve: {
-    required: ["SUPERSERVE_API_KEY", "SUPERSERVE_TEMPLATE"],
-    hint: "an API key from the Superserve console and the ready qm-agent-<release> template",
-    detail: "Superserve",
-  },
+
   "do-managed-agents": {
     required: ["DO_AGENTS_API_TOKEN"],
     optional: ["DO_AGENTS_TEMPLATE"],
     hint: "a DigitalOcean API token for a team with Managed Agents access",
     detail: "Managed Agents (api.digitalocean.com)",
-  },
-  porter: {
-    required: ["PORTER_DEPLOY_API_TOKEN", "PORTER_DEPLOY_PROJECT_ID", "PORTER_DEPLOY_CLUSTER_ID"],
-    optional: ["PORTER_DEPLOY_URL", "PORTER_DEPLOY_VISIBILITY"],
-    defaults: { PORTER_DEPLOY_VISIBILITY: "private" },
-    hint: "create an API token in the Porter dashboard",
-    detail: "Porter",
   },
 };
 

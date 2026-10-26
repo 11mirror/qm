@@ -646,20 +646,20 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
     "channel:room",
     "personal:existing",
   ]);
-  await routes.put("personal:existing", { backend: "aws" });
+  await routes.put("personal:existing", { backend: "e2b" });
   const scopeDefaults = { personal: "modal", channel: "sprites" } as const;
   const resources = createSandboxResources({
     ...options,
     upgrade: upgrade({
-      availableBackends: ["aws", "modal", "sprites"],
+      availableBackends: ["e2b", "modal", "sprites"],
       legacyBackend: (scope) => legacySandboxBackendForScope(scope, "sprites", scopeDefaults),
     }),
-    backends: { modal: backend, sprites: backend, aws: backend },
+    backends: { modal: backend, sprites: backend, e2b: backend },
     defaultBackend: "sprites",
   });
   assert.equal((await resources.resolve("personal:alice"))?.backend, "modal");
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
-  assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
+  assert.equal((await resources.resolve("personal:existing"))?.backend, "e2b");
   assert.equal(await resources.resolve("personal:new"), null);
   assert.equal(resources.defaultBackend(), "sprites");
   assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
