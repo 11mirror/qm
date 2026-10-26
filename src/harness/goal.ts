@@ -32,7 +32,7 @@ import { outermostJsonObject } from "../util/text.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
-import { isUserMessage, itemFields, type Item, type NewItem } from "../sessions/items.ts";
+import type { NewItem } from "../sessions/items.ts";
 import { swallowAs } from "../util/errors.ts";
 
 type GoalStatus = "active" | "paused" | "complete" | "cancelled";
@@ -290,18 +290,6 @@ const GOAL_GOVERNOR_SYSTEM_PROMPT = [
   "Judge the objective given here. An earlier objective that the recent work shows being replaced is settled; do not hold it against completion.",
   'Reply with ONLY JSON: {"verdict": "continue" | "complete" | "step_back" | "pause", "reasons": "<one short paragraph; for pause, the exact question for the user>"}.',
 ].join("\n");
-
-export function goalWorkFromItems(items: ReadonlyArray<Item>): string {
-  const lines: string[] = [];
-  for (const e of items) {
-    if (isUserMessage(e) || (e.kind === "AgentMessage" && e.variant !== "files_delivered")) {
-      if (e.text !== null) lines.push(`${e.kind}: ${e.text}`);
-    } else if (e.kind === "ToolCall" || e.kind === "ToolResult") {
-      lines.push(`${e.kind}: ${JSON.stringify(itemFields(e))}`);
-    }
-  }
-  return goalWorkDigest(lines);
-}
 
 /** Fit the newest work lines into the governor's budget. */
 export function goalWorkDigest(lines: ReadonlyArray<string>, maxChars = GOAL_WORK_DIGEST_CHARS): string {

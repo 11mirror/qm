@@ -84,7 +84,6 @@ interface DeploymentConfig {
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: SandboxBackendName;
-  sandboxSecondaryBackend?: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
   modelId?: string;
   /** Keychain credential id holding the Codex ChatGPT OAuth auth.json (production path). */

@@ -272,34 +272,31 @@ test("OS junk files inside a skill dir pass check (push skips them too)", () => 
   }
 });
 
-test("secret-looking literals in plugin and sandbox env fail config.no-secret-values", () => {
+test("secret-looking literals in plugin env fail config.no-secret-values", () => {
   const viaPlugin = deployment(() => {}, {
     plugins: [{ name: "linear", image: "ghcr.io/x:1", env: { LINEAR_API_KEY: "lin_x" } }],
   });
-  const viaSandbox = deployment(() => {}, {
-    sandbox: { env: { GH_TOKEN: "ghp_x" } },
-  });
   const viaKey = deployment(() => {}, { env: { core: { AWS_SECRET_ACCESS_KEY: "aws_x" } } });
   const viaCred = deployment(() => {}, {
-    sandbox: {
-      env: { PGPASSWORD: "pg_x", GOOGLE_CREDENTIALS: "{}" },
-    },
+    plugins: [{ name: "linear", image: "ghcr.io/x:1", env: { PGPASSWORD: "pg_x", GOOGLE_CREDENTIALS: "{}" } }],
   });
   const benign = deployment(() => {}, {
-    sandbox: {
-      env: { JWT_PUBLIC_KEY: "MFkw...", GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/gcp.json" },
-    },
+    plugins: [
+      {
+        name: "linear",
+        image: "ghcr.io/x:1",
+        env: { JWT_PUBLIC_KEY: "MFkw...", GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/gcp.json" },
+      },
+    ],
   });
   try {
     assert.throws(() => check(viaPlugin), /plugins\.linear\.LINEAR_API_KEY belongs in the target secret store/);
-    assert.throws(() => check(viaSandbox), /sandbox\.GH_TOKEN belongs in the target secret store/);
     assert.throws(() => check(viaKey), /core\.AWS_SECRET_ACCESS_KEY belongs in the target secret store/);
-    assert.throws(() => check(viaCred), /sandbox\.PGPASSWORD belongs in the target secret store/);
-    assert.throws(() => check(viaCred), /sandbox\.GOOGLE_CREDENTIALS belongs in the target secret store/);
+    assert.throws(() => check(viaCred), /plugins\.linear\.PGPASSWORD belongs in the target secret store/);
+    assert.throws(() => check(viaCred), /plugins\.linear\.GOOGLE_CREDENTIALS belongs in the target secret store/);
     check(benign);
   } finally {
     rmSync(viaPlugin.dir, { recursive: true, force: true });
-    rmSync(viaSandbox.dir, { recursive: true, force: true });
     rmSync(viaKey.dir, { recursive: true, force: true });
     rmSync(viaCred.dir, { recursive: true, force: true });
     rmSync(benign.dir, { recursive: true, force: true });
