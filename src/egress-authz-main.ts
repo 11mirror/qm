@@ -168,7 +168,8 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
       res
         .writeHead(result.status, result.upstream ? { "x-egress-upstream-address": result.upstream } : undefined)
         .end();
-    } catch {
+    } catch (e) {
+      swallow("egress-authz: request check failed, denying", e);
       if (!res.headersSent) res.writeHead(403);
       res.end();
     }
