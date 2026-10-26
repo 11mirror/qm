@@ -373,7 +373,7 @@ export function createDirectory(deps: {
     }
   });
 
-  function forceDirectorySync(
+  async function forceDirectorySync(
     client: any,
     invalidateChannelId?: string,
     invalidatePrincipalId?: string,
@@ -388,7 +388,13 @@ export function createDirectory(deps: {
       }
       targetedChannelIds.add(invalidateChannelId);
     }
-    return coalescedDirectorySync();
+    await coalescedDirectorySync();
+    if (
+      invalidateChannelId &&
+      invalidatePrincipalId &&
+      invalidatedChannelMembers.get(invalidateChannelId)?.has(invalidatePrincipalId)
+    )
+      throw new Error("Slack channel membership revocation was not persisted");
   }
 
   function syncForUnseenGroup(client: any, groupId: string): void {

@@ -38,6 +38,7 @@ import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
 const { App } = bolt;
+const HANDLED_EVENT_TTL_MS = 24 * 60 * 60_000;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
@@ -167,7 +168,12 @@ export async function startSlackPlugin(
     cfg.devIntrospection ? { enabled: true, port: cfg.devIntrospection.port } : {},
   );
 
-  const deduper = createDeduper(1000);
+  const deduper = createDeduper(1000, core.handledEvents);
+  const handledPrune = core.handledEvents
+    ? createSweeper(() => core.handledEvents!.deleteBelow("at", Date.now() - HANDLED_EVENT_TTL_MS), 60 * 60_000, {
+        label: "slack handled events",
+      })
+    : undefined;
   const threads = createThreadTracker();
 
   const flow = createTurnFlow(core);
@@ -401,6 +407,7 @@ export async function startSlackPlugin(
     });
     await app.start();
     replaySweeper?.start();
+    handledPrune?.start();
   } catch (err) {
     releaseAccount();
     stopped = true;
@@ -422,31 +429,31 @@ export async function startSlackPlugin(
   ackEmoji.refreshAckEmoji(app.client);
   ackEmojiOverride();
 
-  const publishEmojiCatalog = (): void => {
-    if (stopped) return;
-    void Promise.resolve(app.client.emoji.list())
-      .then((res: { emoji?: Record<string, string> }) =>
-        core.publishEmojiCatalog(
-          Object.fromEntries(
-            Object.entries(res.emoji ?? {}).filter(([, url]) => typeof url === "string" && !url.startsWith("alias:")),
+  const emojiCatalogSweep = createSweeper(
+    () =>
+      Promise.resolve(app.client.emoji.list())
+        .then((res: { emoji?: Record<string, string> }) =>
+          core.publishEmojiCatalog(
+            Object.fromEntries(
+              Object.entries(res.emoji ?? {}).filter(([, url]) => typeof url === "string" && !url.startsWith("alias:")),
+            ),
           ),
-        ),
-      )
-      .catch(swallowAs("slack: emoji catalog publish", undefined));
-  };
-  if (CORE_SINGLETON) publishEmojiCatalog();
-  const emojiCatalogTimer = CORE_SINGLETON ? setInterval(publishEmojiCatalog, 6 * 60 * 60_000) : undefined;
+        )
+        .catch(swallowAs("slack: emoji catalog publish", undefined)),
+    6 * 60 * 60_000,
+    { label: "slack emoji catalog", immediate: true },
+  );
+  if (CORE_SINGLETON) emojiCatalogSweep.start();
 
   statusSweep.start();
   const unregisterSender = core.slack.attach(sendToSlack);
-  const reconcileTaskAcks = (): void => {
-    if (!stopped)
-      void core.taskAcknowledgements
-        ?.reconcile(app.client)
-        .catch(swallowAs("slack: task ack reconciliation", undefined));
-  };
-  const taskAckTimer = CORE_SINGLETON ? setInterval(reconcileTaskAcks, 60_000) : undefined;
-  taskAckTimer?.unref?.();
+  const taskAckSweep = createSweeper(
+    () =>
+      core.taskAcknowledgements?.reconcile(app.client).catch(swallowAs("slack: task ack reconciliation", undefined)),
+    60_000,
+    { label: "slack task ack reconciliation" },
+  );
+  if (CORE_SINGLETON) taskAckSweep.start();
 
   const contextRequestsInFlight = new Set<string>();
 
@@ -469,6 +476,7 @@ export async function startSlackPlugin(
     async stop(): Promise<void> {
       if (stopped) {
         await replaySweeper?.stop();
+        await handledPrune?.stop();
         await app.stop();
         return;
       }
@@ -476,8 +484,9 @@ export async function startSlackPlugin(
       releaseAccount();
       await statusSweep.stop();
       await replaySweeper?.stop();
-      if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (taskAckTimer) clearInterval(taskAckTimer);
+      await emojiCatalogSweep.stop();
+      await taskAckSweep.stop();
+      await handledPrune?.stop();
       unregisterSender();
       unsubscribeContextRequests();
       try {

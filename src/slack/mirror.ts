@@ -1,4 +1,5 @@
 import { isOwnStatusCard, mentionsBot } from "./message-gating.ts";
+import { LRUCache } from "lru-cache";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionedUserIds } from "./mrkdwn.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
@@ -72,7 +73,7 @@ export function createMirror(deps: {
   externalParticipantsEnabled(): Promise<boolean>;
 }): Mirror {
   const { core, ids, directory, externalParticipantsEnabled } = deps;
-  const ambientRoomGate = new Map<string, { allowed: boolean; at: number }>();
+  const ambientRoomGate = new LRUCache<string, { allowed: boolean; at: number }>({ max: 1000 });
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
