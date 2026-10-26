@@ -767,7 +767,7 @@ test("two stores serialize the durable head and shared skill projection under on
   let tail = Promise.resolve();
   let active = 0;
   let maxActive = 0;
-  const advisoryLock: AdvisoryLock = {
+  const serial = {
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
       const previous = tail;
       let release!: () => void;
@@ -785,6 +785,13 @@ test("two stores serialize the durable head and shared skill projection under on
       }
     },
   };
+  const advisoryLock: AdvisoryLock = {
+    withLock: serial.withLock,
+    withSharedLock: serial.withLock,
+    tryWithLock: serial.withLock,
+    tryWithLocks: (_keys, fn) => fn(),
+  };
+
   const backing = testMap<StoredDeploymentLayer>();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),

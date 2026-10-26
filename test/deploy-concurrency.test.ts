@@ -47,11 +47,15 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
 
 function spyLock(): { lock: AdvisoryLock; keys: string[] } {
   const keys: string[] = [];
+  const withLock = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    keys.push(key);
+    return fn();
+  };
   const lock: AdvisoryLock = {
-    async withLock(key, fn) {
-      keys.push(key);
-      return fn();
-    },
+    withLock,
+    withSharedLock: withLock,
+    tryWithLock: withLock,
+    tryWithLocks: (_keys, fn) => fn(),
   };
   return { lock, keys };
 }
