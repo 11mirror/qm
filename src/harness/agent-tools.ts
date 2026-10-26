@@ -22,7 +22,7 @@ import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
-import { errMessage, reportFailure } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
@@ -31,7 +31,7 @@ import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
-import { headSlice, tailSlice } from "../util/text.ts";
+import { headTailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
   cancelGoal,
@@ -154,14 +154,12 @@ const PRESSURE_WARN_FULL60 = 50;
 const TRUNCATED_TAIL_CHARS = 10_000;
 
 function capResultText(t: string): string {
-  if (t.length <= MAX_TOOL_RESULT_CHARS) return t;
-  const notice =
+  return headTailSlice(
+    t,
+    MAX_TOOL_RESULT_CHARS,
+    TRUNCATED_TAIL_CHARS,
     `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
-    `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`;
-  return (
-    headSlice(t, MAX_TOOL_RESULT_CHARS - TRUNCATED_TAIL_CHARS - notice.length) +
-    notice +
-    tailSlice(t, TRUNCATED_TAIL_CHARS)
+      `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`,
   );
 }
 
@@ -221,6 +219,18 @@ interface CronLike {
   unattendedGrants?: string[];
 }
 
+const SURFACE_ACTIONS = [
+  "post",
+  "reach",
+  "react",
+  "edit",
+  "delete",
+  "read_thread",
+  "whats_new",
+  "search",
+  "read_members",
+  "read_file",
+] as const;
 const LIST_PAGE_SIZE = 25;
 const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note", "retarget"]);
 const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
@@ -484,7 +494,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(sourceScopeId ? { sourceScopeId } : {}),
             ...(screenAs?.source ? { source: screenAs.source } : {}),
           })
-          .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
+          .catch(reportFailureAs<ToolResultScreen>("security screen: tool result", { outcome: "unscreened" }, tool));
         if (screen.outcome === "quarantine") {
           const releaseRequested = !!ref.pendingApprovals;
           const from = screenAs?.source ? ` (${screenAs.source})` : "";
@@ -532,7 +542,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
       }
       const delivered: string[] = [];
-      const mailbox = await ref.current?.sessionSyscalls?.receive?.().catch(() => []);
+      const mailbox = await ref.current?.sessionSyscalls
+        ?.receive?.()
+        .catch(reportFailureAs("session mailbox: receive", []));
       for (const message of mailbox ?? []) {
         if (quarantinedMessages.has(message.id)) continue;
         const messageTool = `session_message_${message.id}`;
@@ -544,7 +556,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             provenance: "external",
             source: "session-delegation",
           })
-          .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
+          .catch(reportFailureAs<ToolResultScreen>("security screen: agent message", { outcome: "unscreened" }));
         if (screen?.outcome === "quarantine") {
           quarantinedMessages.add(message.id);
           ref.pausedOnApproval = true;
@@ -568,7 +580,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result,
         ...(output ? { output } : {}),
       });
-      if (delivered.length) await ref.current?.sessionSyscalls?.acknowledge?.(delivered).catch(() => undefined);
+      if (delivered.length)
+        await ref.current?.sessionSyscalls
+          ?.acknowledge?.(delivered)
+          .catch(reportFailureAs("session mailbox: acknowledge", undefined));
       return ret;
     });
 
@@ -777,16 +792,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
+  const scopedBullet =
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
+  const scratchBullet = scratchExec
+    ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
+    : "";
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
     '"owner" | ' +
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
-    (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-      : "") +
+    scopedBullet +
+    scratchBullet +
     '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
@@ -797,11 +815,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
+    scopedBullet +
     '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
-    (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-      : "") +
+    scratchBullet +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
@@ -862,40 +878,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
   ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
 
-  let execute: ToolDefinition;
-  if (reachExec) {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: reachDescription,
-      parameters: Type.Object({
-        ...executeBaseParams,
-        scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        durable: optionalBoolean(`${DURABLE_PARAM_DESC} Ignored when reaching a room.`),
-      }),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
-  } else {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: scopeDescription,
-      parameters: Type.Object({
-        ...executeBaseParams,
-        scope: Type.Optional(
-          Type.Union(
-            [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
-            {
-              description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
-            },
+  const execute = defineTool({
+    name: "execute",
+    label: "execute",
+    description: reachExec ? reachDescription : scopeDescription,
+    parameters: Type.Object({
+      ...executeBaseParams,
+      scope: reachExec
+        ? Type.Optional(Type.String({ description: reachScopeDescription }))
+        : Type.Optional(
+            Type.Union(
+              [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
+              {
+                description:
+                  'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
+              },
+            ),
           ),
-        ),
-        durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })),
-      }),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
-  }
+      durable: optionalBoolean(reachExec ? `${DURABLE_PARAM_DESC} Ignored when reaching a room.` : DURABLE_PARAM_DESC),
+    }),
+    execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
+  });
 
   const sandboxActions = Object.keys(SANDBOX_TOOL_ARGS.sandbox!);
   const sandboxManagement = defineTool({
@@ -3000,18 +3003,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
-        [
-          Type.Literal("post"),
-          Type.Literal("reach"),
-          Type.Literal("react"),
-          Type.Literal("edit"),
-          Type.Literal("delete"),
-          Type.Literal("read_thread"),
-          Type.Literal("whats_new"),
-          Type.Literal("search"),
-          Type.Literal("read_members"),
-          Type.Literal("read_file"),
-        ],
+        SURFACE_ACTIONS.map((action) => Type.Literal(action)),
         {
           description:
             "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
@@ -3231,7 +3223,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(r.message ? { note: r.message } : {}),
             },
             text(
-              [messages.length ? JSON.stringify(messages, null, 2) : "[no messages in this thread]", r.message]
+              [messages.length ? JSON.stringify(messages) : "[no messages in this thread]", r.message]
                 .filter(Boolean)
                 .join("\n"),
             ),
@@ -3365,7 +3357,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordFail(
             callId,
             { tool: surfaceName, error: "unknown_action" },
-            `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members, read_file.`,
+            `[error] unknown action "${(params as { action?: string }).action}" — valid actions: ${SURFACE_ACTIONS.join(", ")}.`,
           );
       }
     },
@@ -4223,7 +4215,7 @@ function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         try {
           ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
         } catch (error) {
-          void error;
+          swallow("tool body timing sink", error);
         }
       }
     },
