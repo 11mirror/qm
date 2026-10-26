@@ -3,7 +3,7 @@ import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
-import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { readRawBody, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -16,18 +16,12 @@ function isCreateWebhook(b: unknown): b is CreateWebhookInput {
     typeof b.createdBy === "string" &&
     typeof b.action === "string" &&
     isObj(v) &&
-    isWebhookVerification(v) &&
+    typeof v.scheme === "string" &&
+    (WEBHOOK_SCHEMES as readonly string[]).includes(v.scheme) &&
+    typeof v.secret === "string" &&
+    v.secret.length > 0 &&
     (b.filters === undefined || isWebhookFilters(b.filters)) &&
     (b.destination === undefined || isObj(b.destination))
-  );
-}
-
-function isWebhookVerification(value: Record<string, unknown>): boolean {
-  return (
-    typeof value.scheme === "string" &&
-    (WEBHOOK_SCHEMES as readonly string[]).includes(value.scheme) &&
-    typeof value.secret === "string" &&
-    value.secret.length > 0
   );
 }
 
@@ -57,16 +51,7 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     req.resume();
     return sendJson(res, 404, { error: "not_found" });
   }
-  const id = params.id!;
-  let rawBody: string;
-  try {
-    rawBody = await readRawBody(req);
-  } catch (e) {
-    if (e instanceof PayloadTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
-    throw e;
-  }
-  const out = await deps.webhookReceiver.deliver(id, { headers: req.headers, rawBody });
+  const out = await deps.webhookReceiver.deliver(params.id!, { headers: req.headers, rawBody: await readRawBody(req) });
   if (out.status === 200) {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end(out.body);
@@ -77,12 +62,6 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
   return sendJson(res, 404, { error: "not_found" });
 }
-
-const WEBHOOK_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  forbidden: 403,
-  not_found: 404,
-};
 
 async function createWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body } = ctx;
@@ -95,6 +74,8 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "webhook_create_failed", message: errMessage(e) });
   }
 }
+
+const WEBHOOK_ERROR_STATUS: Record<string, number> = { bad_request: 400, forbidden: 403, not_found: 404 };
 
 function inboundUrl(publicBase: string | undefined, id: string): string {
   const incomingPath = `/v1/webhooks/incoming/${id}`;
@@ -125,22 +106,24 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
 }
 
-async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
-  const { res, app, params, actor, url } = ctx;
-  const id = params.id!;
-  const webhook = await app.getWebhook(id);
-  if (!webhook) return sendJson(res, 404, { error: "not_found" });
-  const principalId = actor?.p ?? url.searchParams.get("principalId");
-  if (principalId && !(await canAdministerWebhook(app, webhook, principalId))) {
-    const portalCaller = Boolean(actor);
-    return sendJson(res, portalCaller ? 403 : 404, {
-      error: portalCaller ? "forbidden" : "not_found",
-      ...(portalCaller ? { message: "not your webhook" } : {}),
-    });
-  }
-  await app.setWebhookEnabled(id, enabled);
-  return sendJson(res, 200, { ok: true });
-}
+const setWebhookEnabled =
+  (enabled: boolean) =>
+  async (ctx: ApiCtx): Promise<void> => {
+    const { res, app, params, actor, url } = ctx;
+    const id = params.id!;
+    const webhook = await app.getWebhook(id);
+    if (!webhook) return sendJson(res, 404, { error: "not_found" });
+    const principalId = actor?.p ?? url.searchParams.get("principalId");
+    if (principalId && !(await canAdministerWebhook(app, webhook, principalId))) {
+      const portalCaller = Boolean(actor);
+      return sendJson(res, portalCaller ? 403 : 404, {
+        error: portalCaller ? "forbidden" : "not_found",
+        ...(portalCaller ? { message: "not your webhook" } : {}),
+      });
+    }
+    await app.setWebhookEnabled(id, enabled);
+    return sendJson(res, 200, { ok: true });
+  };
 
 async function updateWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, params, actor, url, body } = ctx;
@@ -151,9 +134,6 @@ async function updateWebhook(ctx: ApiCtx): Promise<void> {
   if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
 }
-
-const disableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, false);
-const enableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, true);
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", handle: incomingWebhook },
@@ -175,7 +155,7 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/webhooks/:id/disable",
     actor: "query.principalId",
     auth: "source",
-    handle: disableWebhook,
+    handle: setWebhookEnabled(false),
   },
-  { method: "POST", path: "/v1/webhooks/:id/enable", auth: "source", handle: enableWebhook },
+  { method: "POST", path: "/v1/webhooks/:id/enable", auth: "source", handle: setWebhookEnabled(true) },
 ];
