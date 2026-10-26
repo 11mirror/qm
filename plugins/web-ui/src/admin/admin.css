@@ -209,7 +209,7 @@
   outline-offset: 2px;
 }
 #app-view h1 {
-  font-size: 24px;
+  font-size: var(--font-22);
   line-height: 1.2;
   font-weight: 650;
   letter-spacing: 0;
@@ -251,7 +251,7 @@
 #app-view .shell-title {
   flex: none;
   margin: 0;
-  font-size: 17px;
+  font-size: var(--font-20);
   line-height: 1.25;
   font-weight: 650;
 }
@@ -3679,7 +3679,7 @@
     display: none;
   }
   #app-view h1 {
-    font-size: 21px;
+    font-size: var(--font-22);
   }
   #app-view .who {
     gap: 8px;
@@ -3807,7 +3807,7 @@
   padding: 0;
 }
 #app-view .admin-main .shell-title {
-  font-size: 22px;
+  font-size: var(--font-20);
   font-weight: 600;
   letter-spacing: -0.025em;
 }
@@ -5605,7 +5605,7 @@
 }
 
 :where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .shell-title {
-  font-size: 22px;
+  font-size: var(--font-20);
   font-weight: 500;
   line-height: 1.4;
   letter-spacing: -0.025em;
@@ -6064,7 +6064,7 @@
 }
 
 #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
-  font-size: 22px;
+  font-size: var(--font-20);
   font-weight: 500;
   line-height: 1.4;
 }

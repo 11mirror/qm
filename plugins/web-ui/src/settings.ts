@@ -632,6 +632,7 @@ function settingsNav(): TemplateResult {
 
 function generalPane(): TemplateResult {
   return html`
+    ${can("admin") ? html`<h2 class="settings-section-title">General</h2>` : nothing}
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
       ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}

@@ -364,3 +364,24 @@ test("pack registration preserves newer edits after its request completes", asyn
   assert.match(root.querySelector(".status")!.textContent!, /newer changes/);
   dom.window.close();
 });
+
+test("file uploads post through the admin relay with the hash and name in the query", async () => {
+  const { dom, c, ui } = fixture();
+  c.apiBase = "/api/admin";
+  const sent: Array<{ url: string; init: any }> = [];
+  dom.window.fetch = (async (url: string, init: any) => {
+    sent.push({ url, init });
+    return new dom.window.Response("{}", { status: 200 });
+  }) as any;
+  const box = ui.uploadBox(c);
+  const input = box.querySelector("input[type=file]");
+  const file = new dom.window.File(["hello"], "notes é.txt", { type: "text/plain" });
+  Object.defineProperty(input, "files", { value: [file] });
+  input.dispatchEvent(new dom.window.Event("change"));
+  for (let i = 0; i < 5 && !sent.length; i++) await tick();
+  assert.equal(sent.length, 1);
+  const url = new URL(sent[0]!.url, "http://localhost");
+  assert.equal(url.pathname, "/api/admin/files/upload");
+  assert.deepEqual(Object.fromEntries(url.searchParams), { scope: "personal:alice", sha: "hash", name: "notes é.txt" });
+  assert.deepEqual({ ...sent[0]!.init.headers }, { "content-type": "text/plain" });
+});

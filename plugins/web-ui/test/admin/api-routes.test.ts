@@ -308,14 +308,10 @@ test("an upload stages the bytes as a blob, then registers the file as the admin
   const bytes = Buffer.from("hello, file");
   const sha = createHash("sha256").update(bytes).digest("hex");
   const before = calls.length;
-  const response = await fetch(`${base}/api/admin/files/upload?scope=${encodeURIComponent("personal:U1")}`, {
+  const query = new URLSearchParams({ scope: "personal:U1", sha, name: "notes é.txt" });
+  const response = await fetch(`${base}/api/admin/files/upload?${query}`, {
     method: "POST",
-    headers: {
-      ...identity(),
-      "content-type": "text/plain",
-      "x-content-sha256": sha,
-      "x-file-name": encodeURIComponent("notes é.txt"),
-    },
+    headers: { ...identity(), "content-type": "text/plain" },
     body: bytes,
   });
   assert.equal(response.status, 200);
@@ -328,9 +324,9 @@ test("an upload stages the bytes as a blob, then registers the file as the admin
   assert.deepEqual(JSON.parse(register!.body), { name: "notes é.txt", mimetype: "text/plain", blobId: "blob-1" });
   assert.equal(register!.actor, "admin@example.com@acme");
   assert.equal(register!.signed, true);
-  const missing = await fetch(`${base}/api/admin/files/upload`, {
+  const missing = await fetch(`${base}/api/admin/files/upload?sha=${sha}`, {
     method: "POST",
-    headers: { ...identity(), "x-content-sha256": sha },
+    headers: identity(),
     body: bytes,
   });
   assert.equal(missing.status, 400);

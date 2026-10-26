@@ -118,12 +118,12 @@ export function adminRoutes(d: AdminRouteDeps) {
 
   const upload = async (c: AdminCtx) => {
     const scope = c.url.searchParams.get("scope") ?? "";
-    const sha256 = typeof c.req.headers["x-content-sha256"] === "string" ? c.req.headers["x-content-sha256"] : "";
+    const sha256 = c.url.searchParams.get("sha") ?? "";
     if (!scope || !/^[0-9a-f]{64}$/.test(sha256)) {
       c.req.resume();
       return d.json(c.res, 400, {
         error: "bad_request",
-        message: scope ? "x-content-sha256 required" : "scope required",
+        message: scope ? "sha (hex sha-256) required" : "scope required",
       });
     }
     const staged = await d.stageUpload(c.req, sha256);
@@ -132,15 +132,8 @@ export function adminRoutes(d: AdminRouteDeps) {
       c.res.writeHead(staged.status, { "content-type": staged.headers.get("content-type") ?? "application/json" });
       return c.res.end(stagedText);
     }
-    const rawName = typeof c.req.headers["x-file-name"] === "string" ? c.req.headers["x-file-name"] : "";
-    let name: string;
-    try {
-      name = decodeURIComponent(rawName) || "file";
-    } catch {
-      name = rawName || "file";
-    }
     const body = JSON.stringify({
-      name,
+      name: c.url.searchParams.get("name")?.trim() || "file",
       mimetype:
         typeof c.req.headers["content-type"] === "string" ? c.req.headers["content-type"] : "application/octet-stream",
       blobId: (JSON.parse(stagedText) as { blobId: string }).blobId,

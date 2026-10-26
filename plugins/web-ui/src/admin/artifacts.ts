@@ -146,7 +146,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
                 loading="lazy"
                 decoding="async"
                 alt=""
-                src=${c.apiBase + "/api/files/download?id=" + encodeURIComponent(f.id)}
+                src=${c.apiBase + "/files/download?id=" + encodeURIComponent(f.id)}
                 @error=${() => {
                   failedImages.add(f.id);
                   draw();
@@ -218,13 +218,14 @@ export function uploadBox(c: Context) {
     let uploaded = 0;
     try {
       for (const file of picked) {
-        const response = await fetch(c.apiBase + "/api/files/upload?scope=" + encodeURIComponent(c.scope), {
+        const query = new URLSearchParams({
+          scope: c.scope,
+          sha: await c.fileSha256(file),
+          name: file.name || "file",
+        });
+        const response = await fetch(c.apiBase + "/files/upload?" + query.toString(), {
           method: "POST",
-          headers: {
-            "content-type": file.type || "application/octet-stream",
-            "x-file-name": encodeURIComponent(file.name || "file"),
-            "x-content-sha256": await c.fileSha256(file),
-          },
+          headers: { "content-type": file.type || "application/octet-stream" },
           body: file,
         });
         if (!response.ok)

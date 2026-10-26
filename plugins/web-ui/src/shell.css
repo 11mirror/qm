@@ -1151,6 +1151,11 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+.settings-section-title {
+  margin: 0 0 4px;
+  font-size: var(--font-20);
+  font-weight: 600;
+}
 .settings-content > .settings-group {
   margin-top: 0;
 }

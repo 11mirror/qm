@@ -879,7 +879,7 @@ export function startAdmin(host, env) {
       bar.appendChild(row);
     }
     if (opts.title) {
-      const h = document.createElement("h1");
+      const h = document.createElement("h2");
       h.className = "shell-title";
       h.textContent = opts.title;
       bar.appendChild(h);
