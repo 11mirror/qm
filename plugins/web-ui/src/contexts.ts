@@ -26,21 +26,16 @@ import { startNewChat } from "./sessions";
 import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import { restoreDialogFocus } from "./dialog-focus";
-import { listPageTpl, listSelect } from "./list-page";
+import { iconBtn, listPageTpl, listSelect } from "./list-page";
 import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
 
-interface ScopeResourcesView {
-  files: unknown[];
-  webhooks: unknown[];
-  crons: unknown[];
-  deployments: unknown[];
-  skills: unknown[];
-}
+const RESOURCE_KEYS = ["files", "webhooks", "crons", "deployments", "skills"] as const;
+type ScopeResourcesView = Record<(typeof RESOURCE_KEYS)[number], unknown[]>;
 
-export const contextsState = {
+const freshContextsState = () => ({
   list: [] as CoreContext[],
   loaded: false,
   loadedAt: 0,
@@ -64,7 +59,14 @@ export const contextsState = {
   slackValue: "",
   slackBusy: false,
   slackError: "",
-};
+});
+
+export const contextsState = freshContextsState();
+
+function setContexts(patch: Partial<typeof contextsState>, draw = true): void {
+  Object.assign(contextsState, patch);
+  if (draw) drawContexts();
+}
 
 let contextsLoading = false;
 let contextsNotice = "";
@@ -73,10 +75,8 @@ const MEMBER_SEARCH_DEBOUNCE_MS = 300;
 let memberSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
 function cancelMemberSearchTimer(): void {
-  if (memberSearchTimer !== undefined) {
-    clearTimeout(memberSearchTimer);
-    memberSearchTimer = undefined;
-  }
+  clearTimeout(memberSearchTimer);
+  memberSearchTimer = undefined;
 }
 let createProjectOpener: HTMLElement | null = null;
 let createProjectSeq = 0;
@@ -99,29 +99,7 @@ async function fetchContexts(): Promise<CoreContext[]> {
 }
 
 export function resetContextsState(): void {
-  contextsState.list = [];
-  contextsState.loaded = false;
-  contextsState.loadedAt = 0;
-  contextsState.selected = null;
-  contextsState.resources = null;
-  contextsState.resourcesScope = null;
-  contextsState.resourcesLoading = false;
-  contextsState.resourcesNotice = "";
-  contextsState.createOpen = false;
-  contextsState.createName = "";
-  contextsState.createSaving = false;
-  contextsState.createError = "";
-  contextsState.memberProjectId = null;
-  contextsState.memberQuery = "";
-  contextsState.memberMatches = [];
-  contextsState.memberSearching = false;
-  contextsState.memberBusy = false;
-  contextsState.memberError = "";
-  contextsState.memberSearchedQuery = "";
-  contextsState.slackEditing = false;
-  contextsState.slackValue = "";
-  contextsState.slackBusy = false;
-  contextsState.slackError = "";
+  Object.assign(contextsState, freshContextsState());
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -136,6 +114,7 @@ export function resetContextsState(): void {
 export async function renderContexts(): Promise<void> {
   if (appState.currentView !== "contexts") return;
   const seq = appState.viewRenderSeq;
+  const stale = () => seq !== appState.viewRenderSeq || appState.currentView !== "contexts";
   contextsNotice = "";
   contextsLoading = true;
   drawContexts();
@@ -145,58 +124,43 @@ export async function renderContexts(): Promise<void> {
       refreshSessions({ silent: true }),
       contextsState.selected ? loadScopeSessions(contextsState.selected) : null,
     ]);
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
   } catch (e) {
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
-    contextsNotice = errMessage(e, "Failed to load contexts.");
+    if (!stale()) contextsNotice = errMessage(e, "Failed to load contexts.");
   }
+  if (stale()) return;
   contextsLoading = false;
   if (
     contextsState.selected &&
     contextsState.list.some((c) => c.scopeId === contextsState.selected) &&
     contextsState.resourcesScope !== contextsState.selected
-  ) {
-    void loadScopeResources(contextsState.selected);
-    void loadAmbientPolicy(contextsState.selected, drawContexts);
-    void loadContextModel(contextsState.selected, drawContexts);
-    void loadChannelHeader(contextsState.selected, drawContexts);
-  }
+  )
+    loadPanels(contextsState.selected);
   drawContexts();
+}
+
+function loadPanels(scopeId: string): void {
+  void loadScopeResources(scopeId);
+  for (const load of [loadAmbientPolicy, loadContextModel, loadChannelHeader]) void load(scopeId, drawContexts);
 }
 
 function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconNode } {
   if (c.project) {
-    const memberCount = projectPeople(c).length;
-    return {
-      title: c.project.name,
-      sub: `${memberCount} ${memberCount === 1 ? "member" : "members"}`,
-      glyph: Folder,
-    };
+    const count = projectPeople(c).length;
+    return { title: c.project.name, sub: `${count} ${count === 1 ? "member" : "members"}`, glyph: Folder };
   }
-  if (c.kind === "personal") {
+  if (c.kind === "personal")
     return { title: "Personal", sub: "Just you. Your web chats and DMs with the agent live here.", glyph: User };
-  }
-  if (c.kind === "group") {
-    return {
-      title: sharedContextLabel(c.scopeId, c.name) ?? "Group DM",
-      sub: "Shared with everyone in this group conversation.",
-      glyph: Users,
-    };
-  }
+  const [fallback, where, glyph] =
+    c.kind === "group" ? ["Group DM", "group conversation", Users] : ["Channel", "channel", Hash];
   return {
-    title: sharedContextLabel(c.scopeId, c.name) ?? "Channel",
-    sub: "Shared with everyone in this channel.",
-    glyph: Hash,
+    title: sharedContextLabel(c.scopeId, c.name) ?? fallback,
+    sub: `Shared with everyone in this ${where}.`,
+    glyph,
   };
 }
 
 export async function ensureContexts(force = false): Promise<CoreContext[]> {
-  if (contextsState.loaded && !force) return contextsState.list;
-  try {
-    await fetchContexts();
-  } catch {
-    void 0;
-  }
+  if (!contextsState.loaded || force) await fetchContexts().catch(() => null);
   return contextsState.list;
 }
 
@@ -218,10 +182,7 @@ export function resolveProjectScope(contexts: readonly CoreContext[], slug: stri
 
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
   const c = scopeId ? contextsState.list.find((x) => x.scopeId === scopeId) : undefined;
-  if (c) {
-    const { title, glyph } = contextMeta(c);
-    return { title, glyph };
-  }
+  if (c) return contextMeta(c);
   const shared = sharedContextLabel(scopeId, fallbackName ?? null);
   if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
@@ -293,15 +254,11 @@ function gridTpl(): TemplateResult {
   let empty = q ? "No projects match your search." : "No projects yet.";
   if (contextsLoading && contextsState.list.length === 0) empty = "Loading projects…";
   const groupOf = (context: CoreContext) => {
-    if (context.kind === "personal") return "personal";
-    return context.project ? "web" : "slack";
+    if (context.kind === "personal") return "Personal";
+    return context.project ? "Web" : "Slack";
   };
-  const groups = [
-    { key: "personal", label: "Personal" },
-    { key: "web", label: "Web" },
-    { key: "slack", label: "Slack" },
-  ]
-    .map((g) => ({ ...g, items: projects.filter((context) => groupOf(context) === g.key) }))
+  const groups = ["Personal", "Web", "Slack"]
+    .map((label) => ({ label, items: projects.filter((context) => groupOf(context) === label) }))
     .filter((g) => g.items.length > 0);
   return html`
     <div class="project-grid-content">
@@ -384,7 +341,11 @@ function detailTpl(c: CoreContext): TemplateResult {
                 </button>`
               : nothing
           }
-          <button class="btn primary context-new-chat" type="button" @click=${() => startChatIn(c)}>
+          <button
+            class="btn primary context-new-chat"
+            type="button"
+            @click=${() => startNewChat(c.kind === "personal" ? null : c.scopeId, c.name)}
+          >
             ${icon(Plus, 15)}<span>New chat</span>
           </button>
         </div>
@@ -430,23 +391,11 @@ function detailTpl(c: CoreContext): TemplateResult {
 
 function scopeResourcesEmpty(scopeId: string): boolean {
   const r = contextsState.resourcesScope === scopeId ? contextsState.resources : null;
-  return Boolean(
-    r &&
-    r.files.length === 0 &&
-    r.webhooks.length === 0 &&
-    r.crons.length === 0 &&
-    r.deployments.length === 0 &&
-    r.skills.length === 0,
-  );
+  return Boolean(r && Object.values(r).every((items) => items.length === 0));
 }
 
 function projectPeople(context: CoreContext): string[] {
-  if (!context.project) return [];
-  return [...new Set([context.project.ownerId, ...context.project.memberIds].filter(Boolean))];
-}
-
-function isProjectOwner(context: CoreContext): boolean {
-  return context.project?.ownerId === appState.me?.user;
+  return context.project ? [...new Set([context.project.ownerId, ...context.project.memberIds].filter(Boolean))] : [];
 }
 
 function memberLabel(context: CoreContext, principalId: string): string {
@@ -454,8 +403,61 @@ function memberLabel(context: CoreContext, principalId: string): string {
   return context.project?.members.find((member) => member.principalId === principalId)?.displayName || principalId;
 }
 
-function channelNameOptions(): string[] {
-  return [
+async function linkProjectSlackChannel(context: CoreContext): Promise<void> {
+  const channel = contextsState.slackValue.trim().replace(/^#/, "");
+  if (!channel || contextsState.slackBusy) return;
+  await mutateProject(
+    context,
+    "slack",
+    "/slack-channel",
+    { method: "PUT", body: JSON.stringify({ channel }) },
+    "Couldn't link that channel. You must be a member of it.",
+    () => {
+      contextsState.slackEditing = false;
+      contextsState.slackValue = "";
+    },
+  );
+}
+
+async function unlinkProjectSlackChannel(context: CoreContext): Promise<void> {
+  const linked = context.project?.slackChannel;
+  if (!linked || contextsState.slackBusy) return;
+  if (!window.confirm(`Unlink #${linked.channelName} from ${context.name || "this project"}?`)) return;
+  await mutateProject(context, "slack", "/slack-channel", { method: "DELETE" }, "Couldn't unlink the channel.");
+}
+
+async function mutateProject(
+  context: CoreContext,
+  kind: "member" | "slack",
+  path: string,
+  init: RequestInit,
+  failure: string,
+  onOk = () => {},
+): Promise<void> {
+  if (!context.project) return;
+  const busy = kind === "member" ? "memberBusy" : "slackBusy";
+  const error = kind === "member" ? "memberError" : "slackError";
+  const resetSeq = contextsResetSeq;
+  setContexts({ [busy]: true, [error]: "" });
+  try {
+    const project = projectFromResponse(
+      await api(`/api/projects/${encodeURIComponent(context.project.id)}${path}`, init),
+    );
+    if (resetSeq !== contextsResetSeq) return;
+    if (!project) throw new Error("Core returned an invalid project");
+    upsertProject(project);
+    onOk();
+  } catch (e) {
+    if (resetSeq !== contextsResetSeq) return;
+    contextsState[error] = errMessage(e, failure);
+  } finally {
+    if (resetSeq === contextsResetSeq) setContexts({ [busy]: false });
+  }
+}
+
+function projectSlackSection(context: CoreContext): TemplateResult {
+  const linked = context.project!.slackChannel;
+  const channels = [
     ...new Set(
       contextsState.list
         .filter((c) => c.kind === "channel" && c.name)
@@ -463,146 +465,12 @@ function channelNameOptions(): string[] {
         .sort(),
     ),
   ];
-}
-
-async function linkProjectSlackChannel(context: CoreContext): Promise<void> {
-  const channel = contextsState.slackValue.trim().replace(/^#/, "");
-  if (!context.project || contextsState.slackBusy || !channel) return;
-  const resetSeq = contextsResetSeq;
-  contextsState.slackBusy = true;
-  contextsState.slackError = "";
-  drawContexts();
-  try {
-    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/slack-channel`, {
-      method: "PUT",
-      body: JSON.stringify({ channel }),
-    });
-    if (resetSeq !== contextsResetSeq) return;
-    const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
-    upsertProject(project);
-    contextsState.slackEditing = false;
-    contextsState.slackValue = "";
-  } catch (error) {
-    if (resetSeq !== contextsResetSeq) return;
-    contextsState.slackError = errMessage(error, "Couldn't link that channel. You must be a member of it.");
-  } finally {
-    if (resetSeq === contextsResetSeq) {
-      contextsState.slackBusy = false;
-      drawContexts();
-    }
-  }
-}
-
-async function unlinkProjectSlackChannel(context: CoreContext): Promise<void> {
-  const linked = context.project?.slackChannel;
-  if (!context.project || !linked || contextsState.slackBusy) return;
-  if (!window.confirm(`Unlink #${linked.channelName} from ${context.name || "this project"}?`)) return;
-  const resetSeq = contextsResetSeq;
-  contextsState.slackBusy = true;
-  contextsState.slackError = "";
-  drawContexts();
-  try {
-    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/slack-channel`, {
-      method: "DELETE",
-    });
-    if (resetSeq !== contextsResetSeq) return;
-    const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
-    upsertProject(project);
-  } catch (error) {
-    if (resetSeq !== contextsResetSeq) return;
-    contextsState.slackError = errMessage(error, "Couldn't unlink the channel.");
-  } finally {
-    if (resetSeq === contextsResetSeq) {
-      contextsState.slackBusy = false;
-      drawContexts();
-    }
-  }
-}
-
-function projectSlackLinked(context: CoreContext): TemplateResult {
-  const linked = context.project!.slackChannel!;
-  return html`
-    <div class="project-member-row">
-      <span class="context-glyph" aria-hidden="true">${icon(Hash, 15)}</span>
-      <span class="project-member-name" dir="auto">${linked.channelName}</span>
-      <button
-        class="project-icon-button danger"
-        type="button"
-        aria-label=${`Unlink #${linked.channelName}`}
-        ${tip(`Unlink #${linked.channelName}`)}
-        ?disabled=${contextsState.slackBusy}
-        @click=${() => void unlinkProjectSlackChannel(context)}
-      >
-        ${icon(X, 15)}
-      </button>
-    </div>
-    <p class="context-hint">
-      The agent posts this project's updates to #${linked.channelName}, and everyone in the channel is in the project.
-    </p>
-  `;
-}
-
-function projectSlackEditor(context: CoreContext): TemplateResult {
-  const options = channelNameOptions();
-  return html`
-    <form
-      class="project-slack-form"
-      @submit=${(e: Event) => {
-        e.preventDefault();
-        void linkProjectSlackChannel(context);
-      }}
-    >
-      <div class="project-member-search-row">
-        ${icon(Hash, 16)}
-        <input
-          type="text"
-          data-focus-key="project-slack-channel"
-          autocomplete="off"
-          maxlength="200"
-          placeholder="channel name"
-          list="project-slack-channels"
-          aria-label="Slack channel to link"
-          .value=${contextsState.slackValue}
-          ?disabled=${contextsState.slackBusy}
-          @input=${(e: Event) => {
-            contextsState.slackValue = (e.target as HTMLInputElement).value;
-          }}
-        />
-      </div>
-      <datalist id="project-slack-channels">${options.map((name) => html`<option value=${name}></option>`)}</datalist>
-      <div class="project-slack-actions">
-        <button class="btn primary" type="submit" ?disabled=${contextsState.slackBusy}>Link</button>
-        <button
-          class="btn"
-          type="button"
-          ?disabled=${contextsState.slackBusy}
-          @click=${() => {
-            contextsState.slackEditing = false;
-            contextsState.slackValue = "";
-            contextsState.slackError = "";
-            drawContexts();
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  `;
-}
-
-function projectSlackIdle(): TemplateResult {
-  return html`
+  let body = html`
     <button
       class="btn project-slack-link"
       type="button"
       ?disabled=${contextsState.slackBusy}
-      @click=${() => {
-        contextsState.slackEditing = true;
-        contextsState.slackError = "";
-        drawContexts();
-      }}
+      @click=${() => setContexts({ slackEditing: true, slackError: "" })}
     >
       ${icon(Hash, 15)}<span>Link a channel</span>
     </button>
@@ -611,14 +479,59 @@ function projectSlackIdle(): TemplateResult {
       the project.
     </p>
   `;
-}
-
-function projectSlackSection(context: CoreContext): TemplateResult {
-  const project = context.project!;
-  let body: TemplateResult;
-  if (project.slackChannel) body = projectSlackLinked(context);
-  else if (contextsState.slackEditing) body = projectSlackEditor(context);
-  else body = projectSlackIdle();
+  if (linked)
+    body = html`
+      <div class="project-member-row">
+        <span class="context-glyph" aria-hidden="true">${icon(Hash, 15)}</span>
+        <span class="project-member-name" dir="auto">${linked.channelName}</span>
+        ${projectBtn(`Unlink #${linked.channelName}`, X, () => void unlinkProjectSlackChannel(context), contextsState.slackBusy, "project-icon-button danger")}
+      </div>
+      <p class="context-hint">
+        The agent posts this project's updates to #${linked.channelName}, and everyone in the channel is in the project.
+      </p>
+    `;
+  else if (contextsState.slackEditing)
+    body = html`
+      <form
+        class="project-slack-form"
+        @submit=${(e: Event) => {
+          e.preventDefault();
+          void linkProjectSlackChannel(context);
+        }}
+      >
+        <div class="project-member-search-row">
+          ${icon(Hash, 16)}
+          <input
+            type="text"
+            data-focus-key="project-slack-channel"
+            autocomplete="off"
+            maxlength="200"
+            placeholder="channel name"
+            list="project-slack-channels"
+            aria-label="Slack channel to link"
+            .value=${contextsState.slackValue}
+            ?disabled=${contextsState.slackBusy}
+            @input=${(e: Event) => {
+              contextsState.slackValue = (e.target as HTMLInputElement).value;
+            }}
+          />
+        </div>
+        <datalist id="project-slack-channels">
+          ${channels.map((name) => html`<option value=${name}></option>`)}
+        </datalist>
+        <div class="project-slack-actions">
+          <button class="btn primary" type="submit" ?disabled=${contextsState.slackBusy}>Link</button>
+          <button
+            class="btn"
+            type="button"
+            ?disabled=${contextsState.slackBusy}
+            @click=${() => setContexts({ slackEditing: false, slackValue: "", slackError: "" })}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    `;
   return html`
     <section class="context-panel project-slack" aria-labelledby="project-slack-title">
       <div class="context-panel-heading">
@@ -633,6 +546,7 @@ function projectSlackSection(context: CoreContext): TemplateResult {
 function projectMembersSection(context: CoreContext): TemplateResult {
   const project = context.project!;
   const pickerOpen = contextsState.memberProjectId === project.id;
+  const searchingOrBusy = contextsState.memberSearching || contextsState.memberBusy;
   return html`
     <section class="context-panel project-members" aria-labelledby="project-people-title">
       <div class="context-panel-heading">
@@ -657,17 +571,14 @@ function projectMembersSection(context: CoreContext): TemplateResult {
                   : nothing
               }
               ${
-                isProjectOwner(context) && principalId !== project.ownerId && !viaChannel
-                  ? html`<button
-                      class="project-icon-button danger"
-                      type="button"
-                      aria-label=${`Remove ${label}`}
-                      ${tip(`Remove ${label}`)}
-                      ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
-                      @click=${() => void removeProjectMember(context, principalId)}
-                    >
-                      ${icon(X, 15)}
-                    </button>`
+                project.ownerId === appState.me?.user && principalId !== project.ownerId && !viaChannel
+                  ? projectBtn(
+                      `Remove ${label}`,
+                      X,
+                      () => void removeProjectMember(context, principalId),
+                      searchingOrBusy,
+                      "project-icon-button danger",
+                    )
                   : nothing
               }
             </div>
@@ -680,19 +591,25 @@ function projectMembersSection(context: CoreContext): TemplateResult {
   `;
 }
 
+const projectBtn = (
+  label: string,
+  glyph: IconNode,
+  onClick: () => void,
+  disabled: boolean,
+  cls = "project-icon-button",
+) => iconBtn(label, glyph, onClick, { cls, size: 15, disabled });
+
 function memberPicker(context: CoreContext): TemplateResult {
   const members = new Set(projectPeople(context));
   const matches = contextsState.memberMatches.filter((match) => !members.has(match.principalId)).slice(0, 8);
-  const idle = !contextsState.memberSearching && !contextsState.memberBusy && !contextsState.memberError;
-  let emptyNote = "";
-  if (idle && contextsState.memberSearchedQuery && matches.length === 0) {
-    emptyNote = contextsState.memberMatches.length
-      ? "Everyone matching is already in this project."
-      : `No matches for “${contextsState.memberSearchedQuery}”.`;
-  }
-  let memberStatus = emptyNote;
+  const searchingOrBusy = contextsState.memberSearching || contextsState.memberBusy;
+  let memberStatus = "";
   if (contextsState.memberSearching) memberStatus = "Searching…";
   else if (contextsState.memberBusy) memberStatus = "Working…";
+  else if (!contextsState.memberError && contextsState.memberSearchedQuery && matches.length === 0)
+    memberStatus = contextsState.memberMatches.length
+      ? "Everyone matching is already in this project."
+      : `No matches for “${contextsState.memberSearchedQuery}”.`;
   return html`
     <form class="project-member-picker" @submit=${(event: SubmitEvent) => void searchProjectMembers(event, context)}>
       <label for="project-member-search">Add people</label>
@@ -713,27 +630,10 @@ function memberPicker(context: CoreContext): TemplateResult {
             scheduleMemberSearch(context);
           }}
         />
-        <button
-          class="project-icon-button"
-          type="submit"
-          aria-label="Search"
-          ${tip("Search")}
-          ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
-        >
-          ${icon(Search, 15)}
-        </button>
-        <button
-          class="project-icon-button"
-          type="button"
-          aria-label="Close"
-          ${tip("Close")}
-          ?disabled=${contextsState.memberBusy}
-          @click=${closeMemberPicker}
-        >
-          ${icon(X, 15)}
-        </button>
+        ${iconBtn("Search", Search, undefined, { cls: "project-icon-button", size: 15, submit: true, disabled: searchingOrBusy })}
+        ${projectBtn("Close", X, () => resetMemberPicker(null, true), contextsState.memberBusy)}
       </div>
-      ${peopleResults(matches, contextsState.memberSearching || contextsState.memberBusy, (match) => void addProjectMember(context, match))}
+      ${peopleResults(matches, searchingOrBusy, (match) => void addProjectMember(context, match))}
       <div class="project-member-status" aria-live="polite">${memberStatus}</div>
     </form>
   `;
@@ -778,20 +678,13 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
 
 function openCreateProject(): void {
   createProjectOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  contextsState.createOpen = true;
-  contextsState.createName = "";
-  contextsState.createError = "";
-  drawContexts();
+  setContexts({ createOpen: true, createName: "", createError: "" });
   queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-name")?.focus());
 }
 
 function closeCreateProject(): void {
   createProjectSeq++;
-  contextsState.createOpen = false;
-  contextsState.createSaving = false;
-  contextsState.createName = "";
-  contextsState.createError = "";
-  drawContexts();
+  setContexts({ createOpen: false, createSaving: false, createName: "", createError: "" });
   queueMicrotask(() => {
     const target = createProjectOpener;
     createProjectOpener = null;
@@ -812,15 +705,7 @@ function createProjectDialog(): TemplateResult | typeof nothing {
         <div class="project-dialog-head">
           <span class="context-glyph large">${icon(FolderPlus, 21)}</span>
           <div><h2 id="project-dialog-title">New project</h2></div>
-          <button
-            class="project-icon-button"
-            type="button"
-            aria-label="Close new project"
-            ${tip("Close")}
-            @click=${closeCreateProject}
-          >
-            ${icon(X, 16)}
-          </button>
+          ${iconBtn("Close", X, closeCreateProject, { aria: "Close new project", cls: "project-icon-button", size: 16 })}
         </div>
         <label class="project-name-field" for="project-name">
           <span>Name</span>
@@ -889,7 +774,6 @@ function projectFromResponse(response: unknown): CoreProject | null {
 }
 
 function upsertProject(project: CoreProject): CoreContext {
-  const loaded = contextsState.loaded;
   contextsFetchSeq++;
   const scopeId = project.scopeId;
   const current = contextsState.list.find((context) => context.scopeId === scopeId);
@@ -903,8 +787,7 @@ function upsertProject(project: CoreProject): CoreContext {
     project,
   };
   contextsState.list = [next, ...contextsState.list.filter((context) => context.scopeId !== scopeId)];
-  contextsState.loaded = loaded;
-  if (loaded) contextsState.loadedAt = Date.now();
+  if (contextsState.loaded) contextsState.loadedAt = Date.now();
   return next;
 }
 
@@ -913,15 +796,13 @@ async function createProject(event: SubmitEvent): Promise<void> {
   if (contextsState.createSaving) return;
   const name = contextsState.createName.trim();
   if (!name) {
-    contextsState.createError = "Enter a project name.";
-    drawContexts();
+    setContexts({ createError: "Enter a project name." });
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-name")?.focus());
     return;
   }
   const seq = ++createProjectSeq;
   const resetSeq = contextsResetSeq;
-  contextsState.createSaving = true;
-  drawContexts();
+  setContexts({ createSaving: true });
   try {
     const project = projectFromResponse(await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) }));
     if (resetSeq !== contextsResetSeq) return;
@@ -937,72 +818,42 @@ async function createProject(event: SubmitEvent): Promise<void> {
       if (appState.currentView === "contexts") drawContexts();
       return;
     }
-    contextsState.createOpen = false;
-    contextsState.createSaving = false;
-    contextsState.createName = "";
+    setContexts({ createOpen: false, createSaving: false, createName: "" }, false);
     selectContext(context.scopeId);
   } catch (error) {
     if (seq !== createProjectSeq || resetSeq !== contextsResetSeq) return;
-    contextsState.createSaving = false;
-    contextsState.createError = errMessage(error, "Couldn't create that project.");
-    drawContexts();
+    setContexts({ createSaving: false, createError: errMessage(error, "Couldn't create that project.") });
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-name")?.focus());
   }
 }
 
-function toggleMemberPicker(context: CoreContext): void {
-  memberSearchSeq++;
-  cancelMemberSearchTimer();
-  contextsState.memberProjectId =
-    contextsState.memberProjectId === context.project?.id ? null : (context.project?.id ?? null);
-  contextsState.memberQuery = "";
-  contextsState.memberMatches = [];
-  contextsState.memberSearching = false;
-  contextsState.memberError = "";
+function resetMemberPicker(projectId: string | null, draw = false): void {
+  stopMemberSearch();
+  setContexts({ memberProjectId: projectId, memberQuery: "", memberMatches: [], memberError: "" }, false);
   contextsState.memberSearchedQuery = "";
-  contextsState.slackEditing = false;
-  contextsState.slackValue = "";
-  contextsState.slackBusy = false;
-  contextsState.slackError = "";
-  drawContexts();
+  clearSlackDraft();
+  if (draw) drawContexts();
+}
+
+function clearSlackDraft(): void {
+  setContexts({ slackEditing: false, slackValue: "", slackBusy: false, slackError: "" }, false);
+}
+
+function toggleMemberPicker(context: CoreContext): void {
+  resetMemberPicker(contextsState.memberProjectId === context.project?.id ? null : (context.project?.id ?? null), true);
   if (contextsState.memberProjectId)
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-member-search")?.focus());
 }
 
-function closeMemberPicker(): void {
-  memberSearchSeq++;
-  cancelMemberSearchTimer();
-  contextsState.memberProjectId = null;
-  contextsState.memberQuery = "";
-  contextsState.memberMatches = [];
-  contextsState.memberSearching = false;
-  contextsState.memberError = "";
-  contextsState.memberSearchedQuery = "";
-  contextsState.slackEditing = false;
-  contextsState.slackValue = "";
-  contextsState.slackBusy = false;
-  contextsState.slackError = "";
-  drawContexts();
-}
-
 function scheduleMemberSearch(context: CoreContext): void {
-  cancelMemberSearchTimer();
-  memberSearchSeq++;
   const hadVisibleState =
     contextsState.memberSearching || contextsState.memberError !== "" || contextsState.memberSearchedQuery !== "";
-  contextsState.memberSearching = false;
-  contextsState.memberError = "";
-  contextsState.memberSearchedQuery = "";
-  contextsState.slackEditing = false;
-  contextsState.slackValue = "";
-  contextsState.slackBusy = false;
-  contextsState.slackError = "";
+  stopMemberSearch();
+  setContexts({ memberError: "", memberSearchedQuery: "" }, false);
+  clearSlackDraft();
   const query = contextsState.memberQuery.trim();
   if (query.length < 2) {
-    if (hadVisibleState || contextsState.memberMatches.length) {
-      contextsState.memberMatches = [];
-      drawContexts();
-    }
+    if (hadVisibleState || contextsState.memberMatches.length) setContexts({ memberMatches: [] });
     return;
   }
   memberSearchTimer = setTimeout(() => {
@@ -1018,15 +869,9 @@ async function searchProjectMembers(event: SubmitEvent, context: CoreContext): P
   cancelMemberSearchTimer();
   const input = (event.currentTarget as HTMLFormElement).elements.namedItem("query") as HTMLInputElement | null;
   const query = input?.value.trim() ?? "";
-  contextsState.memberQuery = query;
-  contextsState.memberError = "";
-  if (query.length < 2) {
-    contextsState.memberMatches = [];
-    contextsState.memberSearchedQuery = "";
-    contextsState.memberError = "Enter at least two characters.";
-    drawContexts();
-    return;
-  }
+  setContexts({ memberQuery: query, memberError: "" }, false);
+  if (query.length < 2)
+    return setContexts({ memberMatches: [], memberSearchedQuery: "", memberError: "Enter at least two characters." });
   await runMemberSearch(context, query);
 }
 
@@ -1035,8 +880,7 @@ async function runMemberSearch(context: CoreContext, query: string): Promise<voi
   if (contextsState.memberProjectId !== context.project.id) return;
   const projectId = context.project.id;
   const searchSeq = ++memberSearchSeq;
-  contextsState.memberSearching = true;
-  drawContexts();
+  setContexts({ memberSearching: true });
   try {
     const response = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(query)}`);
     if (searchSeq !== memberSearchSeq || contextsState.memberProjectId !== projectId) return;
@@ -1047,115 +891,72 @@ async function runMemberSearch(context: CoreContext, query: string): Promise<voi
     contextsState.memberSearchedQuery = "";
     contextsState.memberError = errMessage(error, "Couldn't search for people.");
   } finally {
-    if (searchSeq === memberSearchSeq) {
-      contextsState.memberSearching = false;
-      drawContexts();
-    }
+    if (searchSeq === memberSearchSeq) setContexts({ memberSearching: false });
   }
+}
+
+function stopMemberSearch(): void {
+  memberSearchSeq++;
+  cancelMemberSearchTimer();
+  contextsState.memberSearching = false;
 }
 
 async function addProjectMember(context: CoreContext, member: DirectoryMatch): Promise<void> {
   if (!context.project || contextsState.memberBusy) return;
-  const resetSeq = contextsResetSeq;
-  memberSearchSeq++;
-  cancelMemberSearchTimer();
-  contextsState.memberSearching = false;
-  contextsState.memberBusy = true;
-  contextsState.memberError = "";
-  drawContexts();
-  try {
-    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/members`, {
-      method: "POST",
-      body: JSON.stringify({ memberId: member.principalId }),
-    });
-    if (resetSeq !== contextsResetSeq) return;
-    const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
-    upsertProject(project);
-    contextsState.memberQuery = "";
-    contextsState.memberMatches = [];
-    contextsState.memberSearchedQuery = "";
-  } catch (error) {
-    if (resetSeq !== contextsResetSeq) return;
-    contextsState.memberError = errMessage(error, "Couldn't add that person.");
-  } finally {
-    if (resetSeq === contextsResetSeq) {
-      contextsState.memberBusy = false;
-      drawContexts();
-    }
-  }
+  stopMemberSearch();
+  await mutateProject(
+    context,
+    "member",
+    "/members",
+    { method: "POST", body: JSON.stringify({ memberId: member.principalId }) },
+    "Couldn't add that person.",
+    () => {
+      setContexts({ memberQuery: "", memberMatches: [], memberSearchedQuery: "" }, false);
+    },
+  );
 }
 
 async function removeProjectMember(context: CoreContext, principalId: string): Promise<void> {
   if (!context.project || contextsState.memberBusy) return;
   const label = memberLabel(context, principalId);
   if (!window.confirm(`Remove ${label} from ${context.name || "this project"}?`)) return;
-  const resetSeq = contextsResetSeq;
-  memberSearchSeq++;
-  cancelMemberSearchTimer();
-  contextsState.memberSearching = false;
-  contextsState.memberBusy = true;
-  contextsState.memberError = "";
-  drawContexts();
-  try {
-    const response = await api(
-      `/api/projects/${encodeURIComponent(context.project.id)}/members/${encodeURIComponent(principalId)}`,
-      { method: "DELETE" },
-    );
-    if (resetSeq !== contextsResetSeq) return;
-    const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
-    upsertProject(project);
-  } catch (error) {
-    if (resetSeq !== contextsResetSeq) return;
-    contextsState.memberError = errMessage(error, "Couldn't remove that person.");
-  } finally {
-    if (resetSeq === contextsResetSeq) {
-      contextsState.memberBusy = false;
-      drawContexts();
-    }
-  }
+  stopMemberSearch();
+  await mutateProject(
+    context,
+    "member",
+    `/members/${encodeURIComponent(principalId)}`,
+    { method: "DELETE" },
+    "Couldn't remove that person.",
+  );
 }
 
 async function loadScopeResources(scopeId: string): Promise<void> {
-  contextsState.resources = null;
-  contextsState.resourcesScope = scopeId;
-  contextsState.resourcesLoading = true;
-  contextsState.resourcesNotice = "";
-  drawContexts();
+  setContexts({ resources: null, resourcesScope: scopeId, resourcesLoading: true, resourcesNotice: "" });
   const seq = appState.viewRenderSeq;
   const stale = () =>
     seq !== appState.viewRenderSeq || appState.currentView !== "contexts" || contextsState.selected !== scopeId;
   try {
     const r = await api<ScopeResourcesView>(`/api/scope-resources?scope=${encodeURIComponent(scopeId)}`);
     if (stale()) return;
-    contextsState.resources = {
-      files: r.files ?? [],
-      webhooks: r.webhooks ?? [],
-      crons: r.crons ?? [],
-      deployments: r.deployments ?? [],
-      skills: r.skills ?? [],
-    };
+    const resources = {} as ScopeResourcesView;
+    for (const key of RESOURCE_KEYS) resources[key] = r[key] ?? [];
+    contextsState.resources = resources;
   } catch (e) {
     if (stale()) return;
     contextsState.resourcesNotice = errMessage(e, "Failed to load this context's resources.");
   } finally {
-    if (!stale()) {
-      contextsState.resourcesLoading = false;
-      drawContexts();
-    }
+    if (!stale()) setContexts({ resourcesLoading: false });
   }
 }
 
 function contextSessionRow(s: CoreSession): TemplateResult {
   const surface = surfaceOf(s);
-  const readOnly = !s.canContinue;
   return html`
-    <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
+    <button class="context-session-row" type="button" @click=${() => void openSession(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
         ${surface === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : html`<span class="badge">${surface}</span>`}
-        ${readOnly ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
+        ${!s.canContinue ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>
     </button>
@@ -1163,23 +964,9 @@ function contextSessionRow(s: CoreSession): TemplateResult {
 }
 
 function selectContext(scopeId: string | null): void {
-  memberSearchSeq++;
-  cancelMemberSearchTimer();
-  contextsState.memberProjectId = null;
-  contextsState.memberQuery = "";
-  contextsState.memberMatches = [];
-  contextsState.memberSearching = false;
-  contextsState.memberError = "";
-  contextsState.memberSearchedQuery = "";
-  contextsState.slackEditing = false;
-  contextsState.slackValue = "";
-  contextsState.slackBusy = false;
-  contextsState.slackError = "";
+  resetMemberPicker(null);
   contextsState.selected = scopeId;
-  contextsState.resources = null;
-  contextsState.resourcesScope = null;
-  contextsState.resourcesNotice = "";
-  contextsState.resourcesLoading = false;
+  setContexts({ resources: null, resourcesScope: null, resourcesNotice: "", resourcesLoading: false }, false);
   resetAmbientPolicy();
   resetContextModel();
   resetChannelHeader();
@@ -1187,17 +974,6 @@ function selectContext(scopeId: string | null): void {
   drawContexts();
   if (scopeId) {
     void loadScopeSessions(scopeId).then(drawContexts).catch(swallowAs("web-ui: load context chats", undefined));
-    void loadScopeResources(scopeId);
-    void loadAmbientPolicy(scopeId, drawContexts);
-    void loadContextModel(scopeId, drawContexts);
-    void loadChannelHeader(scopeId, drawContexts);
+    loadPanels(scopeId);
   }
-}
-
-function startChatIn(c: CoreContext): void {
-  startNewChat(c.kind === "personal" ? null : c.scopeId, c.name);
-}
-
-async function openFromContext(s: CoreSession): Promise<void> {
-  await openSession(s);
 }

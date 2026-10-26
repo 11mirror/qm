@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createFileDragState } from "../src/file-drag.ts";
+import { createFileDragState } from "../src/file-open.ts";
 
 function fixture() {
   const dom = new JSDOM(

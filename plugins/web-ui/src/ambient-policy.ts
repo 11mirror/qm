@@ -4,23 +4,20 @@ import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { tip } from "./tooltip";
 
-const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
-type BotMode = (typeof BOT_MODES)[number];
-interface BotPolicyView {
-  name: string;
-  mode: BotMode;
-  rollupHours?: number;
-}
+const BOT_MODES = {
+  ignore: "Ignore",
+  rollup: "Batch updates",
+  action: "Act immediately",
+  user: "Treat like a person",
+};
+type BotMode = keyof typeof BOT_MODES;
+type BotPolicy = { mode: BotMode; rollupHours?: number };
+type BotPolicyView = BotPolicy & { name: string };
 interface PolicyWire {
-  policy: {
-    orders: string;
-    bots: Record<string, { mode: BotMode; rollupHours?: number }>;
-    ambientEnabled?: boolean | null;
-    updatedAt: number;
-  };
+  policy: { orders: string; bots: Record<string, BotPolicy>; ambientEnabled?: boolean | null; updatedAt: number };
 }
 
-const ambientPolicyState = {
+const freshPolicyState = () => ({
   scope: null as string | null,
   loading: false,
   orders: "",
@@ -32,7 +29,8 @@ const ambientPolicyState = {
   notice: "",
   noticeKind: "" as "" | "saved" | "error",
   newBotName: "",
-};
+});
+const ambientPolicyState = freshPolicyState();
 
 let loadSeq = 0;
 let redraw: () => void = () => {};
@@ -43,17 +41,18 @@ function ambientPolicyApplies(scopeId: string): boolean {
 
 export function resetAmbientPolicy(): void {
   loadSeq += 1;
-  ambientPolicyState.scope = null;
-  ambientPolicyState.loading = false;
-  ambientPolicyState.orders = "";
-  ambientPolicyState.ambientEnabled = null;
-  ambientPolicyState.bots = [];
-  ambientPolicyState.baseUpdatedAt = 0;
-  ambientPolicyState.dirty = false;
-  ambientPolicyState.saving = false;
-  ambientPolicyState.notice = "";
-  ambientPolicyState.noticeKind = "";
-  ambientPolicyState.newBotName = "";
+  Object.assign(ambientPolicyState, freshPolicyState());
+}
+
+function applyPolicy({ policy }: PolicyWire): void {
+  ambientPolicyState.orders = policy.orders;
+  ambientPolicyState.ambientEnabled = policy.ambientEnabled ?? null;
+  ambientPolicyState.bots = Object.entries(policy.bots).map(([name, p]) => ({ name, ...p }));
+  ambientPolicyState.baseUpdatedAt = policy.updatedAt;
+}
+
+function note(notice: string, noticeKind: "" | "saved" | "error" = "error"): void {
+  Object.assign(ambientPolicyState, { notice, noticeKind });
 }
 
 export async function loadAmbientPolicy(scopeId: string, onChange: () => void): Promise<void> {
@@ -66,18 +65,10 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
   try {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scopeId)}/ambient-policy`);
     if (seq !== loadSeq) return;
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
   } catch (e) {
     if (seq !== loadSeq) return;
-    ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
-    ambientPolicyState.noticeKind = "error";
+    note(errMessage(e, "Couldn't load this scope's standing orders."));
   } finally {
     if (seq === loadSeq) {
       ambientPolicyState.loading = false;
@@ -88,15 +79,19 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
 
 function markDirty(): void {
   ambientPolicyState.dirty = true;
-  ambientPolicyState.notice = "";
-  ambientPolicyState.noticeKind = "";
+  note("", "");
   redraw();
+}
+
+function updateBots(bots: BotPolicyView[]): void {
+  ambientPolicyState.bots = bots;
+  markDirty();
 }
 
 async function save(): Promise<void> {
   const scope = ambientPolicyState.scope;
   if (!scope || ambientPolicyState.saving) return;
-  const bots: Record<string, { mode: BotMode; rollupHours?: number }> = {};
+  const bots: Record<string, BotPolicy> = {};
   for (const b of ambientPolicyState.bots) {
     const name = b.name.trim();
     if (!name) continue;
@@ -114,20 +109,11 @@ async function save(): Promise<void> {
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
       }),
     });
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
     ambientPolicyState.dirty = false;
-    ambientPolicyState.notice = "Saved.";
-    ambientPolicyState.noticeKind = "saved";
+    note("Saved.", "saved");
   } catch (e) {
-    ambientPolicyState.notice = errMessage(e, "Couldn't save. Try again.");
-    ambientPolicyState.noticeKind = "error";
+    note(errMessage(e, "Couldn't save. Try again."));
   } finally {
     ambientPolicyState.saving = false;
     redraw();
@@ -138,26 +124,11 @@ function addBot(): void {
   const name = ambientPolicyState.newBotName.trim();
   if (!name) return;
   if (ambientPolicyState.bots.some((b) => b.name.toLowerCase() === name.toLowerCase())) {
-    ambientPolicyState.notice = `“${name}” is already in the ledger.`;
-    ambientPolicyState.noticeKind = "error";
-    redraw();
-    return;
+    note(`“${name}” is already in the ledger.`);
+    return redraw();
   }
-  ambientPolicyState.bots = [...ambientPolicyState.bots, { name, mode: "ignore" }];
   ambientPolicyState.newBotName = "";
-  markDirty();
-}
-
-const BOT_MODE_LABELS: Record<BotMode, string> = {
-  ignore: "Ignore",
-  rollup: "Batch updates",
-  action: "Act immediately",
-  user: "Treat like a person",
-};
-
-function ambientValue(enabled: boolean | null): string {
-  if (enabled === null) return "default";
-  return enabled ? "on" : "off";
+  updateBots([...ambientPolicyState.bots, { name, mode: "ignore" }]);
 }
 
 function botRow(b: BotPolicyView, i: number): TemplateResult {
@@ -171,11 +142,9 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
         disabled: ambientPolicyState.saving,
         value: b.mode,
         onChange: (value) => {
-          const mode = value as BotMode;
-          ambientPolicyState.bots = ambientPolicyState.bots.map((x, j) => (j === i ? { ...x, mode } : x));
-          markDirty();
+          updateBots(ambientPolicyState.bots.map((x, j) => (j === i ? { ...x, mode: value as BotMode } : x)));
         },
-        options: BOT_MODES.map((m) => html`<option value=${m}>${BOT_MODE_LABELS[m]}</option>`),
+        options: Object.entries(BOT_MODES).map(([m, label]) => html`<option value=${m}>${label}</option>`),
       })}
       ${
         b.mode === "rollup"
@@ -191,10 +160,8 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
                 ?disabled=${ambientPolicyState.saving}
                 @input=${(e: InputEvent) => {
                   const v = Number((e.currentTarget as HTMLInputElement).value);
-                  ambientPolicyState.bots = ambientPolicyState.bots.map((x, j) =>
-                    j === i ? { ...x, rollupHours: Number.isFinite(v) && v > 0 ? v : undefined } : x,
-                  );
-                  markDirty();
+                  const rollupHours = Number.isFinite(v) && v > 0 ? v : undefined;
+                  updateBots(ambientPolicyState.bots.map((x, j) => (j === i ? { ...x, rollupHours } : x)));
                 }}
               />
               h</label
@@ -208,8 +175,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
         ${tip("Remove")}
         ?disabled=${ambientPolicyState.saving}
         @click=${() => {
-          ambientPolicyState.bots = ambientPolicyState.bots.filter((_, j) => j !== i);
-          markDirty();
+          updateBots(ambientPolicyState.bots.filter((_, j) => j !== i));
         }}
       >
         ✕
@@ -221,16 +187,17 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
 export function ambientPolicySection(scopeId: string): TemplateResult | typeof nothing {
   if (!ambientPolicyApplies(scopeId)) return nothing;
   if (ambientPolicyState.scope !== scopeId) return nothing;
+  const title = html`<h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>`;
   if (ambientPolicyState.loading)
     return html`<section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
-      <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
+      ${title}
       <div class="context-panel-loading">Loading…</div>
     </section>`;
   return html`
     <section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
       <div class="context-panel-heading">
         <div>
-          <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
+          ${title}
           <p class="context-panel-copy">Choose what this project should notice and act on.</p>
         </div>
       </div>
@@ -242,7 +209,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           focusKey: "ambient-enabled",
           describedBy: "ambient-enabled-hint",
           disabled: ambientPolicyState.saving,
-          value: ambientValue(ambientPolicyState.ambientEnabled),
+          value: { true: "on", false: "off", null: "default" }[`${ambientPolicyState.ambientEnabled}`],
           onChange: (v) => {
             ambientPolicyState.ambientEnabled = v === "default" ? null : v === "on";
             markDirty();

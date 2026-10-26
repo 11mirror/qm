@@ -84,9 +84,7 @@ class InboxChat extends LitElement {
 
 if (!customElements.get("qm-inbox-chat")) customElements.define("qm-inbox-chat", InboxChat);
 
-export function inboxChat(
-  context: AssistantSidebarContext = { kind: "inbox", hasEmail: false, hasSlack: false, hasDrafts: false },
-): TemplateResult {
+export function inboxChat(context: AssistantSidebarContext): TemplateResult {
   return html`<qm-inbox-chat
     .context=${context}
     class="inbox-index-chat"

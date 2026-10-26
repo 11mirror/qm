@@ -11,7 +11,7 @@ import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
-type RecentGroupKind = "personal" | "project" | "channel" | "group";
+export type RecentGroupKind = "personal" | "project" | "channel" | "group";
 
 export interface RecentProjectSeed {
   scopeId: string;
@@ -124,7 +124,6 @@ export function withPendingSession(list: CoreSession[], pending: CoreSession): C
   return [pending, ...list.filter((s) => s.threadRef !== pending.threadRef)];
 }
 
-/** An unsent new chat the user walked away from, with nothing worth keeping. */
 export function isAbandonedNewChat(state: {
   threadRef: string | null;
   nextThreadRef: string | null;

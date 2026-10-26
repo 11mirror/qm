@@ -98,20 +98,12 @@ export function toolCategory(tool: string | null, payload: ToolPayload): string 
   if (tool === "sessions" || tool === "subagents") return "session";
   if (tool !== "sandbox") return tool ?? "unknown";
   if (payload.action === "exec") return "execute";
-  if (
-    [
-      "start_process",
-      "read_process",
-      "write_stdin",
-      "signal_process",
-      "list_processes",
-      "watch_process",
-      "unwatch_process",
-    ].includes(payload.action ?? "")
-  )
-    return "background";
-  return "sandbox";
+  return PROCESS_ACTIONS.has(payload.action ?? "") ? "background" : "sandbox";
 }
+
+const PROCESS_ACTIONS = new Set(
+  "start_process read_process write_stdin signal_process list_processes watch_process unwatch_process".split(" "),
+);
 
 export function toolExecutionOutput(result: Item | null): string | null {
   return result && typeof result.body.code === "number" ? result.text : null;
@@ -150,61 +142,23 @@ export function postSpeechText(row: ToolRowModel, allowInFlight = false): string
 function orphanCallSignature(row: ToolRowModel): string | null {
   if (!row.call || row.result || row.approval) return null;
   const p = toolBody(row.call);
-  return [
-    row.call.tool ?? "unknown",
-    p.action ?? "",
-    p.sandbox_id ?? "",
-    p.process_id ?? "",
-    p.monitor_id ?? "",
-    p.command ?? "",
-    p.path ?? "",
-    p.name ?? "",
-    p.url ?? "",
-    p.query ?? "",
-    p.seq !== undefined ? String(p.seq) : "",
-  ].join("");
+  const keys = ["action", "sandbox_id", "process_id", "monitor_id", "command", "path", "name", "url", "query", "seq"];
+  return [row.call.tool ?? "unknown", ...keys.map((key) => String(p[key as keyof ToolPayload] ?? ""))].join("");
 }
 
-const timelineMemo = new WeakMap<
-  WorkBlock,
-  {
-    activity: WorkBlock["activity"];
-    reasoning: WorkBlock["reasoning"];
-    status: WorkBlock["status"];
-    approvals: WorkBlock["pendingApprovals"];
-    items: TimelineItem[];
-  }
->();
+const timelineMemo = new WeakMap<WorkBlock, { key: unknown[]; items: TimelineItem[] }>();
 
 export function buildTimeline(work: WorkBlock): TimelineItem[] {
+  const key = [work.activity, work.reasoning, work.status, work.pendingApprovals];
   const hit = timelineMemo.get(work);
-  if (
-    hit &&
-    hit.activity === work.activity &&
-    hit.reasoning === work.reasoning &&
-    hit.status === work.status &&
-    hit.approvals === work.pendingApprovals
-  ) {
-    return hit.items;
-  }
+  if (hit && hit.key.every((value, i) => value === key[i])) return hit.items;
   const items = buildTimelineUncached(work);
-  timelineMemo.set(work, {
-    activity: work.activity,
-    reasoning: work.reasoning,
-    status: work.status,
-    approvals: work.pendingApprovals,
-    items,
-  });
+  timelineMemo.set(work, { key, items });
   return items;
 }
 
 function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
-  const pendingByCmd = new Map<string, PendingApproval[]>();
-  for (const a of work.pendingApprovals ?? []) {
-    const list = pendingByCmd.get(a.command);
-    if (list) list.push(a);
-    else pendingByCmd.set(a.command, [a]);
-  }
+  const pendingByCmd = Map.groupBy(work.pendingApprovals ?? [], (a) => a.command);
   const items: TimelineItem[] = [];
   const rowByCallId = new Map<string, ToolRowModel>();
   let open: ToolRowModel | null = null;
@@ -212,14 +166,10 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
     if (isUserMessage(a)) {
       if (a.kind === "SteeringMessage" && !isHidden(a)) items.push({ kind: "steer", item: a });
       open = null;
-    } else if (a.kind === "Reasoning") {
-      if (a.body.redacted !== true)
+    } else if (a.kind === "Reasoning" || a.kind === "AgentMessage" || a.kind === "ElicitationResponse") {
+      if (a.kind === "AgentMessage") items.push({ kind: "text", item: a });
+      else if (a.kind === "Reasoning" && a.body.redacted !== true)
         items.push({ kind: "thinking", seq: a.seq, step: reasoningStepKey(a), text: a.text ?? "" });
-      open = null;
-    } else if (a.kind === "AgentMessage") {
-      items.push({ kind: "text", item: a });
-      open = null;
-    } else if (a.kind === "ElicitationResponse") {
       open = null;
     } else if (a.kind === "ToolCall") {
       const row: ToolRowModel = { call: a, result: null };
@@ -243,11 +193,9 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   }
   const collapsed = collapseToolItems(items, work.status);
   for (const item of collapsed) {
-    if (item.kind !== "tool") continue;
+    if (item.kind !== "tool" || toolBody(item.row.result).blocked !== "needs_approval") continue;
     const cmd = toolBody(item.row.call).command;
-    const blocked = toolBody(item.row.result).blocked === "needs_approval";
-    if (!cmd || !blocked) continue;
-    const queue = pendingByCmd.get(cmd);
+    const queue = cmd ? pendingByCmd.get(cmd) : undefined;
     if (queue?.length) item.row.pending = queue.shift();
   }
   for (const queue of pendingByCmd.values()) for (const a of queue) collapsed.push({ kind: "approval", approval: a });

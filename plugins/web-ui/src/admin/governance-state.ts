@@ -10,7 +10,6 @@ const fieldNames: Record<string, Record<string, string>> = {
     "auto-flagger-model": "modelId",
     "auto-flagger-rubric": "rubric",
   },
-  "approval-grant-modes": { "approval-grant-session": "session", "approval-grant-always": "always" },
   "ambient-policy": { "ambient-enabled": "ambientEnabled", "ambient-orders": "orders" },
   egress: { egress: "allowedHosts", "egress-deny": "deniedHosts" },
   "command-policy": {},
@@ -70,11 +69,7 @@ export class GovernanceState extends SettingState {
       this.denyEditor = !!this.draft.deniedHosts;
     }
     this.expanded = false;
-    this.baseline = JSON.stringify(this.collect(false));
-    this.message = "";
-    this.tone = "";
-    this.saving = false;
-    this.render();
+    this.loaded();
   }
   collect(validate = true): Record<string, any> {
     if (this.key === "command-policy") {
@@ -187,7 +182,6 @@ export function load(data: Record<string, any>, scope: string, only?: string) {
       scope.startsWith("org:") && "autoFlagger" in data,
       data.autoFlagger || data.autoFlaggerDefault || {},
     ],
-    "approval-grant-modes": ["approvalGrantModes" in data, data.approvalGrantModes || { session: true, always: true }],
     "command-policy": [true, data.commandPolicy || { mode: "denylist", rules: [] }],
     "org-ambient": [scope.startsWith("org:") && "orgAmbient" in data, { on: data.orgAmbient !== false }],
     "ambient-policy": [

@@ -55,83 +55,35 @@ export const ADMIN_MARKUP = `
       </div>
       <button type="button" id="environment-notice-open">Open environment</button>
     </aside>
-    <section class="governance-overview" id="governance-overview" aria-labelledby="governance-overview-title">
-      <div class="governance-overview-head">
-        <h2 id="governance-overview-title">Effective state</h2>
-        <p>Resolved for this scope now</p>
-      </div>
-      <div class="governance-status-grid">
-        <div class="governance-status" id="governance-status-posture">
-          <span class="k">Autonomy</span><span class="v">Loading</span
-          ><span class="detail">Security posture</span>
-        </div>
-        <div class="governance-status" id="governance-status-sharing">
-          <span class="k">Sharing</span><span class="v">Loading</span
-          ><span class="detail">Cross-context reads</span>
-        </div>
-        <div class="governance-status" id="governance-status-egress">
-          <span class="k">Network</span><span class="v">Loading</span
-          ><span class="detail">Outbound enforcement</span>
-        </div>
-        <div class="governance-status" id="governance-status-audience">
-          <span class="k">Slack audience</span><span class="v">Loading</span
-          ><span class="detail">External participants</span>
-        </div>
-        <div class="governance-status" id="governance-status-model">
-          <span class="k">Intelligence</span><span class="v">Loading</span
-          ><span class="detail">Base model</span>
-        </div>
-      </div>
-    </section>
     <div class="governance-layout">
-      <nav class="governance-sections" aria-label="Governance sections">
-        <a href="#governance-autonomy" aria-current="true">Autonomy</a>
-        <a href="#governance-boundaries">Data boundaries</a>
-        <a href="#governance-intelligence">Models &amp; browsing</a>
-        <a href="#governance-credentials">Credentials</a>
-      </nav>
       <div class="governance-content">
-        <div class="governance-group" id="governance-autonomy">
-          <h2>Autonomy</h2>
-          <p>How agents reason, act, and respond without supervision.</p>
-        </div>
-        <template data-governance-card="card-security-posture"></template>
-        <template data-governance-card="card-auto-flagger"></template>
-        <template data-governance-card="card-approval-grant-modes"></template>
-        <template data-governance-card="card-command-policy"></template>
-        <template data-settings-card="card-soul"></template>
-        <template data-governance-card="card-ambient-policy"></template>
-        <div class="governance-group" id="governance-boundaries">
-          <h2>Data boundaries</h2>
-          <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
-        </div>
-        <template data-governance-card="card-sharing-posture"></template>
-        <template data-governance-card="card-egress"></template>
-        <template data-integrations-card="card-external-slack"></template>
-        <template data-integrations-card="card-channel-header-pin-default"></template>
-        <template data-integrations-card="card-ack-emoji"></template>
-        <div class="governance-group" id="governance-intelligence">
-          <h2>Models &amp; browsing</h2>
-          <p>The models, browser runtime, and organization context available on future turns.</p>
-        </div>
-        <template data-settings-card="card-runtimes"></template>
-        <template data-settings-card="card-webui-models"></template>
-        <template data-settings-card="card-branding"></template>
-        <template data-settings-card="card-feature-flags"></template>
-        <template data-settings-card="card-decisions"></template>
-        <div class="governance-group" id="governance-credentials">
-          <h2>Credentials</h2>
-          <p>Shared server-side authority available to agents in this organization.</p>
-        </div>
-        <template data-settings-card="card-service-credentials"></template>
-      </div>
+        <template data-governance-card="card-ambient-policy"></template
+        ><template data-settings-card="card-runtimes"></template
+        ><section class="card sv-models" id="card-custom-providers"><div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div></section
+        ><template data-settings-card="card-webui-models"></template
+        ><template data-settings-card="card-soul"></template
+        ><template data-settings-card="card-branding"></template
+        ><template data-settings-card="card-feature-flags"></template
+        ><template data-settings-card="card-decisions"></template
+        ><template data-settings-card="card-service-credentials"></template
+        ><section class="card sv-credentials" id="card-personal-keychains"><div class="head"><h2>Personal keychains</h2></div><div class="body"><div class="keychain-summary"><strong id="keychain-user-count">—</strong> users with keychain entries · <strong id="keychain-standing-count">—</strong> standing grants</div></div><div class="foot"><button type="button" class="viewlink" data-viewlink="users">View users ›</button></div></section
+        ><template data-governance-card="card-security-posture"></template
+        ><template data-governance-card="card-auto-flagger"></template
+        ><template data-governance-card="card-sharing-posture"></template
+        ><template data-governance-card="card-governance-org-ambient"></template
+        ><template data-governance-card="card-command-policy"></template
+        ><template data-governance-card="card-egress"></template
+        ><template data-integrations-card="card-slack-installation"></template
+        ><template data-integrations-card="card-external-slack"></template
+        ><template data-integrations-card="card-channel-header-pin-default"></template
+        ><template data-integrations-card="card-ack-emoji"></template></div>
     </div>
   </div>
 
-  <div id="view-connectors" class="hidden">
+  <aside class="connector-dm-tip admin-notice hidden" id="connector-dm-tip" role="note"><p></p></aside
+  ><div id="view-connectors" class="hidden">
     <template data-integrations-card="card-connectors"></template>
-    <template data-integrations-card="card-slack-installation"></template>
-  </div>
+    <template data-integrations-card="card-built-in-connectors"></template></div>
 
   <div id="view-data" class="hidden"></div>
 </div>

@@ -1,6 +1,6 @@
 import "./connect-apps";
 import "./slack-account";
-import { openModelConnectManager, type StatusResponse } from "./model-connect";
+import { openModelConnectManager, syncModelAccount, type StatusResponse } from "./model-connect";
 import {
   alwaysSteer,
   api,
@@ -35,6 +35,14 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode 
   { value: "system", label: "System", glyph: Monitor },
 ];
 
+const THEME_VARS = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
+
+const AI_ACCOUNTS = [
+  ["company", "Company"],
+  ["anthropic", "Claude"],
+  ["openai", "ChatGPT / Codex"],
+] as const;
+
 let settingsHost: HTMLElement | null = null;
 
 function storedTheme(): ThemeChoice {
@@ -53,12 +61,7 @@ function publishTheme(): void {
   if (!themeParentOrigin) return;
   const root = document.documentElement;
   const style = getComputedStyle(root);
-  const colors = Object.fromEntries(
-    ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"].map((key) => [
-      key,
-      style.getPropertyValue(key).trim(),
-    ]),
-  );
+  const colors = Object.fromEntries(THEME_VARS.map((key) => [key, style.getPropertyValue(key).trim()]));
   window.parent.postMessage({ type: "qm:theme", dark: root.classList.contains("dark"), colors }, themeParentOrigin);
 }
 
@@ -78,7 +81,6 @@ function setTheme(choice: ThemeChoice): void {
     void 0;
   }
   applyTheme();
-  drawSettings();
 }
 
 export function watchSystemTheme(): void {
@@ -94,35 +96,6 @@ export function watchSystemTheme(): void {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (storedTheme() === "system") applyTheme();
   });
-}
-
-function themeOption(value: ThemeChoice, current: ThemeChoice, label: string, glyph: TemplateResult): TemplateResult {
-  return html`
-    <button
-      class="settings-choice-option ${current === value ? "selected" : ""}"
-      type="button"
-      role="radio"
-      aria-checked=${current === value ? "true" : "false"}
-      @click=${() => setTheme(value)}
-    >
-      ${glyph}<span>${label}</span>
-    </button>
-  `;
-}
-
-function themeRow(): TemplateResult {
-  const current = storedTheme();
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Theme</div>
-        <div class="settings-row-note">System follows your device's light or dark setting.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="Theme">
-        ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
-      </div>
-    </div>
-  `;
 }
 
 const OPEN_NEW_CHAT_KEY = "open-new-chat";
@@ -154,49 +127,19 @@ export async function loadOpenNewChat(timeoutMs = 2000): Promise<boolean> {
 function setOpenNewChat(value: boolean): void {
   openNewChatTouched = true;
   openNewChat = value;
-  drawSettings();
   void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(
     swallowAs("web-ui: save open-new-chat setting", undefined),
   );
 }
 
-const OPEN_OPTIONS: Array<{ newChat: boolean; label: string }> = [
-  { newChat: false, label: "Last session" },
-  { newChat: true, label: "New chat" },
-];
+const toggle = (...pairs: Array<[boolean, string]>) => pairs.map(([value, label]) => ({ value, label }));
 
-function openBehaviorRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">When QM opens</div>
-        <div class="settings-row-note">Reopen the conversations you had open last time, or start on a new chat.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="When QM opens">
-        ${OPEN_OPTIONS.map(
-          (option) => html`
-            <button
-              class="settings-choice-option ${openNewChat === option.newChat ? "selected" : ""}"
-              type="button"
-              role="radio"
-              aria-checked=${openNewChat === option.newChat ? "true" : "false"}
-              @click=${() => setOpenNewChat(option.newChat)}
-            >
-              <span>${option.label}</span>
-            </button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
-}
-
-function choiceRow(
+function choiceRow<T>(
   title: string,
   note: string,
-  options: Array<{ value: boolean; label: string }>,
-  current: boolean,
-  choose: (value: boolean) => void,
+  options: Array<{ value: T; label: string; glyph?: IconNode }>,
+  current: T,
+  choose: (value: T) => void,
 ): TemplateResult {
   return html`
     <div class="settings-row">
@@ -217,67 +160,7 @@ function choiceRow(
                 drawSettings();
               }}
             >
-              <span>${option.label}</span>
-            </button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
-}
-
-function pinPromptRow(): TemplateResult {
-  return choiceRow(
-    "Pin my last message",
-    "Keeps your latest message at the top of the chat while you scroll its reply.",
-    [
-      { value: true, label: "Pinned" },
-      { value: false, label: "Off" },
-    ],
-    pinLatestPrompt(),
-    setPinLatestPrompt,
-  );
-}
-
-function sendWhileWorkingRow(): TemplateResult {
-  return choiceRow(
-    "Sending while QM is working",
-    "Steer folds your message into the running task instead of waiting for it to finish.",
-    [
-      { value: false, label: "Queue" },
-      { value: true, label: "Steer" },
-    ],
-    alwaysSteer(),
-    setAlwaysSteer,
-  );
-}
-
-const SURFACE_OPTIONS: Array<{ webOnly: boolean; label: string }> = [
-  { webOnly: false, label: "All conversations" },
-  { webOnly: true, label: "Web only" },
-];
-
-function sidebarSurfaceRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Sidebar conversations</div>
-        <div class="settings-row-note">Web only hides the Slack channels and DMs the agent also works in.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="Sidebar conversations">
-        ${SURFACE_OPTIONS.map(
-          (option) => html`
-            <button
-              class="settings-choice-option ${sessionsState.webOnly === option.webOnly ? "selected" : ""}"
-              type="button"
-              role="radio"
-              aria-checked=${sessionsState.webOnly === option.webOnly ? "true" : "false"}
-              @click=${() => {
-                setWebOnly(option.webOnly);
-                drawSettings();
-              }}
-            >
-              <span>${option.label}</span>
+              ${option.glyph ? icon(option.glyph, 15) : nothing}<span>${option.label}</span>
             </button>
           `,
         )}
@@ -295,12 +178,7 @@ let aiRevision = 0;
 function acceptAiStatus(status: StatusResponse): void {
   aiRevision++;
   aiStatus = status;
-  if (appState.me) {
-    appState.me.individualModelAuth = status.individualModelAuth;
-    appState.me.modelAuthConnected = status.connections.some(
-      (c) => status.account === "personal" || status.account === c.provider,
-    );
-  }
+  syncModelAccount(status);
   drawSettings();
 }
 
@@ -331,27 +209,17 @@ async function loadAiStatus(): Promise<void> {
 
 async function chooseAiAccount(account: "company" | "anthropic" | "openai"): Promise<void> {
   if (aiBusy || aiSaving) return;
-  if (
-    account === aiStatus?.account &&
-    (account === "company" || aiStatus.connections.some((c) => c.provider === account))
-  )
-    return;
-  if (account !== "company" && !aiStatus?.connections.some((c) => c.provider === account)) {
-    openModelConnectManager(account);
-    return;
-  }
+  if (account !== "company" && !aiStatus?.connections.some((c) => c.provider === account))
+    return openModelConnectManager(account);
+  if (account === aiStatus?.account) return;
   aiSaving = true;
   aiError = "";
   drawSettings();
   try {
     const status = await api<StatusResponse>("/api/user-model-auth/account", {
       method: "POST",
-      body: JSON.stringify({
-        account: account === "company" ? "company" : "personal",
-        provider: account === "company" ? undefined : account,
-      }),
+      body: JSON.stringify(account === "company" ? { account } : { account: "personal", provider: account }),
     });
-    acceptAiStatus(status);
     window.dispatchEvent(new CustomEvent("model-account-changed", { detail: status }));
   } catch (error) {
     aiError = errMessage(error);
@@ -370,13 +238,7 @@ function aiAccountsRow(): TemplateResult {
       </div>
       <div class="settings-ai-controls">
         <div class="settings-choice" role="group" aria-label="AI access">
-          ${(
-            [
-              ["company", "Company"],
-              ["anthropic", "Claude"],
-              ["openai", "ChatGPT / Codex"],
-            ] as const
-          ).map(
+          ${AI_ACCOUNTS.map(
             ([value, label]) => html`
               <button
                 type="button"
@@ -516,8 +378,37 @@ function generalPane(): TemplateResult {
   return html`
     ${can("admin") ? html`<h2 class="settings-section-title">General</h2>` : nothing}
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
+      ${aiAccountsRow()}
+      ${choiceRow("Theme", "System follows your device's light or dark setting.", THEME_OPTIONS, storedTheme(), setTheme)}
+      ${choiceRow(
+        "When QM opens",
+        "Reopen the conversations you had open last time, or start on a new chat.",
+        toggle([false, "Last session"], [true, "New chat"]),
+        openNewChat,
+        setOpenNewChat,
+      )}
+      ${choiceRow(
+        "Pin my last message",
+        "Keeps your latest message at the top of the chat while you scroll its reply.",
+        toggle([true, "Pinned"], [false, "Off"]),
+        pinLatestPrompt(),
+        setPinLatestPrompt,
+      )}
+      ${choiceRow(
+        "Sending while QM is working",
+        "Steer folds your message into the running task instead of waiting for it to finish.",
+        toggle([false, "Queue"], [true, "Steer"]),
+        alwaysSteer(),
+        setAlwaysSteer,
+      )}
+      ${choiceRow(
+        "Sidebar conversations",
+        "Web only hides the Slack channels and DMs the agent also works in.",
+        toggle([false, "All conversations"], [true, "Web only"]),
+        sessionsState.webOnly,
+        setWebOnly,
+      )}
+      ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>

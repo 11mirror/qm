@@ -1,22 +1,43 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { ArrowLeft, Plus, Search } from "lucide";
+import { ArrowLeft, Plus, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { contextsState, scopeFilterControl } from "./contexts";
+import { contextsState, ensureContexts, scopeFilterControl } from "./contexts";
 import { fieldSelect } from "./ui";
 import { appState, type View } from "./shell-state";
 import { scopedSession, scopedViewTopbar, type SessionTool } from "./session-scope";
-import { deepLinkPath, UI_BASE } from "./deep-link";
+import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { trapDialogFocus } from "./dialog-focus";
 import { errMessage } from "../../chassis/src/errors";
+import { tip } from "./tooltip";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {
-  return html`<button class="context-back" type="button" @click=${onBack}>
-    ${icon(ArrowLeft, 15)}<span>${label}</span>
+  return textBtn(label, ArrowLeft, onBack, "context-back");
+}
+
+export function iconBtn(
+  label: string,
+  node: IconNode,
+  onClick?: () => void,
+  o: { aria?: string; size?: number; cls?: string; disabled?: boolean; submit?: boolean } = {},
+): TemplateResult {
+  return html`<button
+    class=${o.cls ?? "icon-btn"}
+    type=${o.submit ? "submit" : "button"}
+    aria-label=${o.aria ?? label}
+    ${tip(label)}
+    ?disabled=${Boolean(o.disabled)}
+    @click=${onClick}
+  >
+    ${icon(node, o.size ?? 14)}
   </button>`;
 }
 
-export function listRowsTpl(rows: TemplateResult[], className = ""): TemplateResult {
+export function textBtn(label: string, node: IconNode, onClick: () => void, cls = "btn", size = 15): TemplateResult {
+  return html`<button class=${cls} type="button" @click=${onClick}>${icon(node, size)}<span>${label}</span></button>`;
+}
+
+function listRowsTpl(rows: TemplateResult[], className = ""): TemplateResult {
   return html`<div class="list-rows ${className}">
     ${rows.flatMap((row, i) => (i ? [html`<div class="list-divider" role="presentation"></div>`, row] : row))}
   </div>`;
@@ -48,6 +69,25 @@ export function listTabs<T extends string>(
         </button>`,
     )}
   </div>`;
+}
+
+export type OwnershipTab = "yours" | "shared" | "archived";
+
+export function ownershipTabs(
+  label: string,
+  counts: Record<OwnershipTab, number>,
+  active: OwnershipTab,
+  onSelect: (value: OwnershipTab) => void,
+  show: (tab: OwnershipTab) => boolean = () => false,
+): TemplateResult {
+  return listTabs(
+    label,
+    (["yours", "shared", "archived"] as const)
+      .filter((value) => value === "yours" || show(value) || counts[value] > 0 || value === active)
+      .map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1), count: counts[value] })),
+    active,
+    onSelect,
+  );
 }
 
 export function listSelect(
@@ -186,13 +226,7 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
       </div>
       <div class="list-page-actions">
         ${o.controls ?? nothing} ${o.onScope ? scopeFilterControl(o.scope ?? null, o.onScope) : nothing}
-        ${
-          o.action
-            ? html`<button class="btn primary list-page-action" type="button" @click=${o.action.onClick}>
-                ${icon(Plus, 15)}<span>${o.action.label}</span>
-              </button>`
-            : nothing
-        }
+        ${o.action ? textBtn(o.action.label, Plus, o.action.onClick, "btn primary list-page-action") : nothing}
       </div>
       ${
         o.search
@@ -253,10 +287,51 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       else history.replaceState(null, "", next);
     },
 
+    link(id: string | null, cls: string, open: () => void, content: TemplateResult, label?: string): TemplateResult {
+      return html`<a
+        class=${cls}
+        href=${deepLinkPath(UI_BASE, view, null, null, id)}
+        aria-label=${label ?? nothing}
+        @click=${(event: MouseEvent) => {
+          if (!isPlainLeftClick(event)) return;
+          event.preventDefault();
+          open();
+        }}
+        >${content}</a
+      >`;
+    },
+
     takeFlash(): string {
       const flash = this.flash;
       this.flash = "";
       return flash;
+    },
+
+    flashRows(): TemplateResult[] {
+      const flash = this.takeFlash();
+      return flash ? [html`<div class="action-notice">${flash}</div>`] : [];
+    },
+
+    search(placeholder: string, redraw: () => void): NonNullable<ListPageOpts["search"]> {
+      return {
+        value: this.query,
+        placeholder,
+        onInput: (value) => {
+          this.query = value;
+          redraw();
+        },
+      };
+    },
+
+    async attempt(run: () => Promise<unknown>, failure: string, ok?: string): Promise<boolean> {
+      try {
+        await run();
+        if (ok) this.flash = ok;
+        return true;
+      } catch (e) {
+        this.flash = errMessage(e, failure);
+        return false;
+      }
     },
 
     async refresh(run: () => Promise<void>, failure: string, showLoading = false): Promise<boolean> {
@@ -302,16 +377,17 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       draw: () => void;
       missing: string;
     }): Promise<void> {
+      if (appState.currentView !== view) return;
+      this.adoptScope();
+      await ensureContexts();
       o.draw();
       const loaded = await o.load();
       const wanted = this.pending;
       this.pending = null;
       if (appState.currentView !== view) return;
       if (!loaded) return o.draw();
-      const item = wanted ? o.find(wanted) : undefined;
-      if (wanted && !item) this.flash = o.missing;
-      if (item) o.open(item);
-      else o.draw();
+      if (wanted && !o.find(wanted)) this.flash = o.missing;
+      this.route(wanted, o.find, o.open, o.draw);
     },
 
     route<T>(id: string | null, find: (id: string) => T | undefined, open: (item: T) => void, draw: () => void): void {

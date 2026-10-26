@@ -6,8 +6,6 @@ import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./connect-apps";
-import { setupContent } from "./setup-widget";
-import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
   activityLabel,
@@ -109,6 +107,7 @@ import {
   type SessionBackgroundView,
   type SubagentMailRef,
   type TurnOptions,
+  type TranscriptPage,
   type TurnRuntime,
   type WorkBlock,
   fileContentUrl,
@@ -135,7 +134,8 @@ import {
 } from "./timeline";
 import { activityItems, type Item } from "./items";
 import "./slack-setup";
-import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
+import { connectorCard, connectorLinksIn, setupContent, stripConnectorLinks } from "./connector-link";
+import type { ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -213,25 +213,7 @@ import { uiCanvasPanel } from "./ui-canvas";
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
-interface SettledRowKey {
-  day: string;
-  index: number;
-  activity: WorkBlock["activity"] | undefined;
-  status: WorkBlock["status"] | undefined;
-  stale: boolean | undefined;
-  deliveredFiles: unknown;
-  stopReason: unknown;
-  errorMessage: unknown;
-  approvalDecision: unknown;
-  sendFailure: unknown;
-  forkable: boolean;
-  forking: boolean;
-  speakerLabel: string | undefined;
-  edited: boolean;
-  deleted: boolean;
-  tpl: TemplateResult | typeof nothing;
-}
-const settledRowCache = new WeakMap<object, SettledRowKey>();
+const settledRowCache = new WeakMap<object, { key: unknown[]; tpl: TemplateResult | typeof nothing }>();
 const CHAT_CTAS = [
   "What can I help with?",
   "Ahoy, what are we after?",
@@ -240,6 +222,29 @@ const CHAT_CTAS = [
   "What's the heading, captain?",
 ];
 const CTA_INDEX_KEY = "web-ui:chat-cta";
+const APPROVED_LABELS: Record<string, string> = {
+  once: "Approved once",
+  session: "Approved for this session",
+  always: "Approved always",
+};
+type JobOutput = { text: string; cursor: number; state: "running" | "exited"; exitCode?: number };
+type MessageFields = Partial<{
+  role: string;
+  opener: boolean;
+  resumeAnchor: boolean;
+  steered: boolean;
+  subagentMail: SubagentMailRef;
+  sendFailure: string;
+  edited: boolean;
+  deleted: boolean;
+  approvalDecision: string;
+  speaker: string;
+  speakerId: string;
+  timestamp: number;
+  entrySeq: number;
+}>;
+const GENERIC_DETAIL_KEYS =
+  "command path query pattern glob url name action file filename database filter repository resource title".split(" ");
 
 function nextChatCta(): string {
   let index = 0;
@@ -256,6 +261,7 @@ const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
 
+const toMessages = (items: Item[]): AgentMessage[] => itemsToMessages(items, transcriptModel());
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function markConnectorConnected(provider: string): void {
@@ -280,6 +286,8 @@ export function createChatSurface(
   const sessionOpener = dependencies.openSession ?? openSession;
 
   const goalCancels = new Map<string, "pending" | "done">();
+  const freshWindow = () => ({ transcriptAnchorSeq: null, earlierCount: 0, loadingEarlier: false });
+  const freshView = () => ({ ...freshWindow(), inheritedExpanded: false, pins: [], goal: null, turnRuntime: null });
   const chatState = {
     agent: null as Agent | null,
     host: null as HTMLElement | null,
@@ -302,7 +310,7 @@ export function createChatSurface(
     earlierCount: 0,
     loadingEarlier: false,
     forkSession: null as CoreSession | null,
-    inheritedMessages: [] as ReturnType<typeof itemsToMessages>,
+    inheritedMessages: [] as AgentMessage[],
     inheritedExpanded: false,
     inheritedLoaded: false,
     pins: [] as SessionPin[],
@@ -316,9 +324,7 @@ export function createChatSurface(
 
   function prepareMessageRows(messages: AgentMessage[]): void {
     inlineSteers.clear();
-    const messageIndices = new Map(
-      messages.map((message, index) => [(message as { entrySeq?: number }).entrySeq, index]),
-    );
+    const messageIndices = new Map(messages.map((message, index) => [(message as MessageFields).entrySeq, index]));
     for (const message of messages) {
       const activity = (message as AssistantWork).work?.activity;
       if (!activity) continue;
@@ -346,9 +352,8 @@ export function createChatSurface(
   function updateSpeakerLabels(messages: AgentMessage[]): void {
     const names = new Set<string>();
     for (const m of messages) {
-      const speaker = (m as { role?: string; speaker?: string }).speaker;
-      if ((m as { role?: string }).role === "user" && typeof speaker === "string" && speaker.trim())
-        names.add(speaker.trim());
+      const { role, speaker } = m as MessageFields;
+      if (role === "user" && typeof speaker === "string" && speaker.trim()) names.add(speaker.trim());
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
     chatState.labelSpeakers = names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
@@ -357,12 +362,12 @@ export function createChatSurface(
 
   function speakerLabelFor(message: AgentMessage): string | undefined {
     if (!chatState.labelSpeakers) return undefined;
-    const speaker = (message as { speaker?: string }).speaker;
+    const speaker = (message as MessageFields).speaker;
     return typeof speaker === "string" && speaker.trim() ? speaker.trim() : undefined;
   }
 
   function speakerMember(message: AgentMessage): { principalId: string; avatarUrl?: string } | undefined {
-    const speakerId = (message as { speakerId?: string }).speakerId;
+    const speakerId = (message as MessageFields).speakerId;
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     return project?.members.find((m) => m.principalId === speakerId);
@@ -386,34 +391,30 @@ export function createChatSurface(
       const session = chatState.forkSession;
       if (!session) return [];
       const entries = await loadInheritedTranscript(session, [], transcriptFetcher);
-      return itemsToMessages(entries, transcriptModel());
+      return toMessages(entries);
     },
     navigate: async () => {
       const sourceId = chatState.forkSession?.forkedFrom?.sessionId;
-      if (!sourceId) return;
-      const listed = sessionsState.list.find((session) => session.id === sourceId);
-      const page = await transcriptFetcher(sourceId, { tailTurns: TAIL_TURNS });
-      const source = listed ?? page.session;
-      if (!source) throw new Error("missing source session");
-      await sessionOpener(source, Promise.resolve(page));
+      if (sourceId) await openSessionPage(sourceId);
     },
     current: () => Boolean(chatState.forkSession && chatState.sessionId === chatState.forkSession.id),
-    redraw: () => {
-      if (chatState.agent) drawActiveChat();
-      else readonlyRedraw?.();
-    },
+    redraw: redrawTranscript,
     setError: (error) => {
       ctx.composer.state.error = error;
     },
   });
 
-  async function openSessionById(sourceId: string): Promise<void> {
+  async function openSessionPage(id: string): Promise<void> {
+    const listed = sessionsState.list.find((session) => session.id === id);
+    const page = await transcriptFetcher(id, { tailTurns: TAIL_TURNS });
+    const source = listed ?? page.session;
+    if (!source) throw new Error("missing session");
+    await sessionOpener(source, Promise.resolve(page));
+  }
+
+  async function openSessionById(id: string): Promise<void> {
     try {
-      const listed = sessionsState.list.find((session) => session.id === sourceId);
-      const page = await transcriptFetcher(sourceId, { tailTurns: TAIL_TURNS });
-      const source = listed ?? page.session;
-      if (!source) throw new Error("missing session");
-      await sessionOpener(source, Promise.resolve(page));
+      await openSessionPage(id);
     } catch {
       ctx.composer.state.error = "Couldn't open that session.";
       redrawTranscript();
@@ -447,28 +448,28 @@ export function createChatSurface(
     chatState.agent = null;
     clearLiveWork();
     resetBackgroundPanel();
-    chatState.host = null;
-    chatState.threadRef = null;
-    chatState.sessionId = null;
-    chatState.scopeId = null;
-    chatState.contextName = null;
-    chatState.normalStreamFn = null;
-    chatState.onWork = null;
+    setChat({ host: null, threadRef: null, sessionId: null, scopeId: null, contextName: null });
+    setChat({ normalStreamFn: null, onWork: null, ...freshWindow() });
     chatState.resolvingApprovals.clear();
-    chatState.transcriptAnchorSeq = null;
-    chatState.earlierCount = 0;
-    chatState.loadingEarlier = false;
   }
 
   function resetChatState(): void {
     dropAbandonedNewChat(null);
     teardownActiveChat();
     proactiveOpenerStarted = false;
-    chatState.rememberedThreadRef = null;
-    chatState.rememberedSessionId = null;
-    chatState.rememberedScopeId = null;
-    chatState.rememberedContextName = null;
+    remember();
     connectedConnectors.clear();
+  }
+
+  function setChat(patch: Partial<typeof chatState>): void {
+    Object.assign(chatState, patch);
+  }
+
+  function remember(): void {
+    chatState.rememberedThreadRef = chatState.threadRef;
+    chatState.rememberedSessionId = chatState.sessionId;
+    chatState.rememberedScopeId = chatState.scopeId;
+    chatState.rememberedContextName = chatState.contextName;
   }
 
   function newChat(context?: { scopeId: string; name: string | null }): string {
@@ -494,7 +495,7 @@ export function createChatSurface(
         nextThreadRef,
         sessionId: chatState.sessionId,
         pendingSend: chatState.pendingSend,
-        hasHumanMessage: (chatState.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener),
+        hasHumanMessage: (chatState.agent?.state.messages ?? []).some((m) => !(m as MessageFields).opener),
         draft: ctx.composer.state.draft || storedDraft(ref ?? ""),
         attachments: ctx.composer.state.attachments.length,
       })
@@ -502,12 +503,16 @@ export function createChatSurface(
       dropPendingSession(ref!);
   }
 
-  function preserveOutgoingWorkingDot(nextThreadRef: string | null): void {
-    const live = liveTurnThreadRef({
+  function liveThreadRef(): string | null {
+    return liveTurnThreadRef({
       mountedThreadRef: chatState.threadRef,
       isStreaming: Boolean(chatState.agent?.state.isStreaming),
       pendingSend: chatState.pendingSend,
     });
+  }
+
+  function preserveOutgoingWorkingDot(nextThreadRef: string | null): void {
+    const live = liveThreadRef();
     if (!live || live === nextThreadRef) return;
     sessionsState.list = markWorking(sessionsState.list, live);
   }
@@ -522,10 +527,10 @@ export function createChatSurface(
     threadRef: string,
     sessionId: string | null,
     scopeId: string | null,
-    messages: ReturnType<typeof itemsToMessages>,
+    messages: AgentMessage[],
     contextName: string | null = null,
     session?: CoreSession,
-    inheritedMessages: ReturnType<typeof itemsToMessages> = [],
+    inheritedMessages: AgentMessage[] = [],
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
@@ -535,26 +540,11 @@ export function createChatSurface(
     detachActiveAgent();
     ctx.composer.resetComposer();
     forkOriginController.reset();
-    chatState.threadRef = threadRef;
-    chatState.sessionId = sessionId;
-    chatState.scopeId = scopeId;
-    chatState.contextName = contextName;
-    chatState.forkSession = session ?? null;
-    chatState.inheritedMessages = inheritedMessages;
-    chatState.inheritedExpanded = false;
-    chatState.inheritedLoaded = !session?.forkedFrom;
-    chatState.rememberedThreadRef = threadRef;
-    chatState.rememberedSessionId = sessionId;
-    chatState.rememberedScopeId = scopeId;
-    chatState.rememberedContextName = contextName;
+    setChat({ threadRef, sessionId, scopeId, contextName, forkSession: session ?? null, inheritedMessages });
+    setChat({ ...freshView(), inheritedLoaded: !session?.forkedFrom });
+    remember();
     ctx.composer.state.draft = storedDraft(threadRef);
     syncLocation();
-    chatState.transcriptAnchorSeq = null;
-    chatState.earlierCount = 0;
-    chatState.loadingEarlier = false;
-    chatState.pins = [];
-    chatState.goal = null;
-    chatState.turnRuntime = null;
     chatState.host = document.createElement("div");
     chatState.host.className = "custom-chat";
 
@@ -609,11 +599,7 @@ export function createChatSurface(
       void agent.waitForIdle().then(async () => {
         if (agent === chatState.agent) clearLiveWork();
         const wasUnsaved = agent === chatState.agent && chatState.sessionId === null;
-        try {
-          await refreshSessions({ silent: true });
-        } catch {
-          void 0;
-        }
+        await refreshSessions({ silent: true }).catch(() => {});
         if (!detachedAgents.has(agent)) {
           sessionsState.list = clearWorking(sessionsState.list, threadRef);
           renderList();
@@ -649,7 +635,7 @@ export function createChatSurface(
     onWork: (work: WorkBlock) => void,
     sessionId: string | null,
     scopeId: string | null,
-    messages: ReturnType<typeof itemsToMessages>,
+    messages: AgentMessage[],
   ): boolean {
     if (ctx.inbox || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
@@ -701,10 +687,6 @@ export function createChatSurface(
     };
   }
 
-  function turnRuntime(): TurnRuntime | null {
-    return chatState.turnRuntime;
-  }
-
   function inheritedHeader(): TemplateResult | typeof nothing {
     const origin = chatState.forkSession
       ? forkOriginDetails(chatState.forkSession, chatState.inheritedLoaded ? chatState.inheritedMessages.length : 0)
@@ -728,17 +710,7 @@ export function createChatSurface(
     if (ro && threadRef === ro.threadRef) {
       void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
         .then((page) => {
-          if (readOnlyView?.id !== ro.id) return;
-          const split = inheritedTranscript(ro.session, page.items ?? []);
-          const rawEarlier = page.earlierItems ?? 0;
-          const earlier = currentEarlierCount(ro.session, rawEarlier);
-          mountReadOnly(
-            readOnlyView.session,
-            itemsToMessages(split.current, transcriptModel()),
-            earlier,
-            rawEarlier > 0 ? (page.items?.[0]?.seq ?? null) : null,
-            itemsToMessages(split.inherited, transcriptModel()),
-          );
+          if (readOnlyView?.id === ro.id) mountReadOnlyPage(readOnlyView.session, page);
         })
         .catch(() => {});
       return;
@@ -819,11 +791,7 @@ export function createChatSurface(
       releaseSubmission();
       if (agent === chatState.agent) {
         clearLiveWork();
-        try {
-          await refreshSessions({ silent: true });
-        } catch {
-          void 0;
-        }
+        await refreshSessions({ silent: true }).catch(() => {});
         await refreshTranscriptFromItems(agent);
       }
       const active = chatState.agent;
@@ -835,17 +803,12 @@ export function createChatSurface(
     }
   }
 
-  function resolveCommandApproval(decision: ApprovalDecision): void {
-    const agent = chatState.agent;
-    if (agent) void approveCommand(agent, decision);
-  }
-
   function activePendingApprovals(): PendingApproval[] {
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming) return [];
     const byId = new Map<string, PendingApproval>();
     for (const m of agent.state.messages) {
-      if ((m as { role?: string }).role !== "assistant") continue;
+      if ((m as MessageFields).role !== "assistant") continue;
       for (const approval of (m as AssistantWork).work?.pendingApprovals ?? []) {
         if (!chatState.resolvingApprovals.has(approval.requestId)) byId.set(approval.requestId, approval);
       }
@@ -948,7 +911,7 @@ export function createChatSurface(
       chatState.goal = page.goal ?? null;
       if (page.runtime) chatState.turnRuntime = page.runtime;
       const split = inheritedTranscript(chatState.forkSession ?? {}, page.items ?? []);
-      const messages = itemsToMessages(split.current, transcriptModel());
+      const messages = toMessages(split.current);
       const refreshedInherited = inheritedRefreshItems(
         chatState.forkSession ?? {},
         page.items ?? [],
@@ -956,12 +919,11 @@ export function createChatSurface(
       );
       await syncPendingApprovals(agent, messages);
       if (!isCurrent()) return;
-      if (refreshedInherited) chatState.inheritedMessages = itemsToMessages(refreshedInherited, transcriptModel());
+      if (refreshedInherited) chatState.inheritedMessages = toMessages(refreshedInherited);
       agent.state.messages = messages;
       approvalsEpoch++;
-      const rawEarlier = page.earlierItems ?? 0;
-      chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawEarlier);
-      chatState.transcriptAnchorSeq = rawEarlier > 0 ? (page.items?.[0]?.seq ?? null) : null;
+      chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, page.earlierItems ?? 0);
+      chatState.transcriptAnchorSeq = pageAnchor(page);
     } catch (error) {
       reportHandledError("web:transcript_refresh", error);
     }
@@ -988,13 +950,10 @@ export function createChatSurface(
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
   ): Promise<void> {
-    let active: Awaited<ReturnType<typeof activeRunForThread>>;
-    try {
-      active = await activeRunForThread(threadRef);
-    } catch (error) {
+    const active = await activeRunForThread(threadRef).catch((error: unknown) => {
       reportHandledError("web:reattach_active_run", error);
-      return;
-    }
+    });
+    if (!active) return;
     if (agent !== chatState.agent || threadRef !== chatState.threadRef || agent.state.isStreaming) return;
     const next = ctx.composer.queuedRunsFor(threadRef).find((r) => r.runId === active.runId);
     ctx.composer.setQueuedRuns(threadRef, active.queued);
@@ -1021,13 +980,10 @@ export function createChatSurface(
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
   ): Promise<boolean> {
-    let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
-    try {
-      activeRun = await activeRunForThread(threadRef);
-    } catch (error) {
+    const activeRun = await activeRunForThread(threadRef).catch((error: unknown) => {
       reportHandledError("web:resume_active_run", error);
-      return false;
-    }
+    });
+    if (!activeRun) return false;
     if (agent === chatState.agent && threadRef === chatState.threadRef)
       ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
     if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
@@ -1080,26 +1036,17 @@ export function createChatSurface(
     if (agent !== chatState.agent || chatState.sessionId !== null || chatState.threadRef === null) return;
     const match = sessionsState.list.find((s) => s.id && s.threadRef === chatState.threadRef);
     if (!match) return;
-    chatState.sessionId = match.id;
-    chatState.scopeId = match.scopeId;
-    if (match.channelName) chatState.contextName = match.channelName;
-    chatState.rememberedSessionId = match.id;
-    chatState.rememberedScopeId = match.scopeId;
-    chatState.rememberedContextName = chatState.contextName;
+    setChat({ sessionId: match.id, scopeId: match.scopeId, contextName: match.channelName || chatState.contextName });
+    remember();
     syncLocation();
   }
 
   function postCurrentPaneState(): void {
     if (!ctx.pane) return;
-    const live = liveTurnThreadRef({
-      mountedThreadRef: chatState.threadRef,
-      isStreaming: Boolean(chatState.agent?.state.isStreaming),
-      pendingSend: chatState.pendingSend,
-    });
     ctx.onState?.({
       threadRef: chatState.threadRef ?? chatState.rememberedThreadRef,
       sessionId: chatState.sessionId ?? chatState.rememberedSessionId,
-      working: live !== null,
+      working: liveThreadRef() !== null,
     });
   }
 
@@ -1112,51 +1059,46 @@ export function createChatSurface(
     for (const delay of [1200, 1800, 2400, 3600, 4800, 6400, 8000, 8000]) {
       await sleep(delay);
       if (agent !== chatState.agent || chatState.threadRef !== threadRef) return;
-      try {
-        await refreshSessions({ silent: true });
-      } catch {
-        void 0;
-      }
+      await refreshSessions({ silent: true }).catch(() => {});
       if (titled()) return;
     }
+  }
+
+  function mountPane(className: string, content: TemplateResult): () => boolean {
+    const container = ctx.container();
+    if (!container) return () => false;
+    const host = document.createElement("div");
+    host.className = className;
+    render(content, host);
+    container.replaceChildren(host);
+    return () => container.contains(host);
   }
 
   function mountLoadingPane(): () => boolean {
     dropAbandonedNewChat(null);
     teardownActiveChat();
-    const container = ctx.container();
-    if (!container) return () => false;
-    const host = document.createElement("div");
-    host.className = "custom-chat";
-    render(
+    return mountPane(
+      "custom-chat",
       html`<div class="custom-chat-shell">
         <div class="chat-loading">${waveLoader()}</div>
       </div>`,
-      host,
     );
-    container.replaceChildren(host);
-    return () => container.contains(host);
   }
 
   function mountLoadError(retry: () => void): void {
-    const container = ctx.container();
-    if (!container) return;
-    const host = document.createElement("div");
-    host.className = "empty compact";
-    render(
+    mountPane(
+      "empty compact",
       html`<p role="alert">Couldn't load this conversation.</p>
         <button class="btn" @click=${retry}>Retry</button>`,
-      host,
     );
-    container.replaceChildren(host);
   }
 
   function mountReadOnly(
     s: CoreSession,
-    messages: ReturnType<typeof itemsToMessages>,
+    messages: AgentMessage[],
     earlierCount = 0,
     anchorSeq: number | null = null,
-    inheritedMessages: ReturnType<typeof itemsToMessages> = [],
+    inheritedMessages: AgentMessage[] = [],
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
@@ -1177,12 +1119,7 @@ export function createChatSurface(
       chatState.inheritedMessages = inheritedMessages;
       chatState.inheritedLoaded = !s.forkedFrom;
     }
-    if (!sameSession) {
-      chatState.inheritedExpanded = false;
-      chatState.pins = [];
-      chatState.goal = null;
-      chatState.turnRuntime = null;
-    }
+    if (!sameSession) setChat(freshView());
     syncLocation();
 
     resetBackgroundPanel();
@@ -1202,7 +1139,12 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack")}
+            <header class="chat-topbar">
+              <div class="chat-heading">
+                <div class="chat-title" dir="auto">${groupDmTitle(s)}</div>
+                <div class="chat-subtitle">${surfaceOf(s) === "slack" ? "slack" : "Read-only"}</div>
+              </div>
+            </header>
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1226,56 +1168,7 @@ export function createChatSurface(
               ${pinnedStrip()}
               <div class="message-stack">
                 ${inheritedHeader()}
-                ${
-                  earlierCount > 0
-                    ? html`<div class="earlier-messages">
-                        <button
-                          class="earlier-messages-btn"
-                          @click=${async (e: Event) => {
-                            const btn = e.currentTarget as HTMLButtonElement;
-                            btn.disabled = true;
-                            btn.textContent = "Loading earlier messages\u2026";
-                            try {
-                              const page = await fetchTranscript(
-                                s.id,
-                                anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
-                              );
-                              if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
-                              const rawRemaining = page.earlierItems ?? 0;
-                              const remaining = currentEarlierCount(s, rawRemaining);
-                              const split = inheritedTranscript(s, page.items ?? []);
-                              mountReadOnly(
-                                s,
-                                [...itemsToMessages(split.current, transcriptModel()), ...messages],
-                                remaining,
-                                rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null,
-                                [
-                                  ...itemsToMessages(split.inherited, transcriptModel()),
-                                  ...chatState.inheritedMessages,
-                                ],
-                              );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
-                              });
-                            } catch {
-                              btn.disabled = false;
-                              btn.textContent = "Show earlier messages";
-                            }
-                          }}
-                        >
-                          Show earlier messages
-                        </button>
-                      </div>`
-                    : nothing
-                }
+                ${earlierCount > 0 ? earlierNotice(() => loadEarlierReadOnly(s, messages, anchorSeq)) : nothing}
                 ${
                   shownMessages.length
                     ? shownMessages.map((m, i) => chatMessage(m, i))
@@ -1297,33 +1190,31 @@ export function createChatSurface(
     readonlyRedraw = draw;
     draw();
     container.replaceChildren(host);
-    if (!sameSession) scrollToBottom();
+    if (!sameSession) scrollTranscript(true);
     readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
     ctx.ensureDeliveryStream();
     consumeBackgroundPanelRequest();
   }
 
-  function setTurnRuntime(runtime: TurnRuntime | null): void {
-    chatState.turnRuntime = runtime;
-    if (chatState.agent) drawActiveChat(chatState.agent);
+  function setTurnRuntime(turnRuntime: TurnRuntime | null): void {
+    setChat({ turnRuntime });
+    drawActiveChat();
   }
 
   function setGoal(goal: GoalStripState | null): void {
-    chatState.goal = goal;
-    if (chatState.agent) drawActiveChat(chatState.agent);
+    setChat({ goal });
+    drawActiveChat();
   }
 
   function setPins(pins: SessionPin[]): void {
-    chatState.pins = pins;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readonlyRedraw?.();
+    setChat({ pins });
+    redrawTranscript();
   }
 
   function togglePins(e: Event): void {
     if ((e.target as Element | null)?.closest("a")) return;
     chatState.pinsExpanded = !chatState.pinsExpanded;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readonlyRedraw?.();
+    redrawTranscript();
   }
 
   function linkifiedText(text: string): TemplateResult {
@@ -1332,6 +1223,10 @@ export function createChatSurface(
         ? html`<a href=${seg.href} target="_blank" rel="noreferrer noopener">${seg.href}</a>`
         : seg.text,
     )}`;
+  }
+
+  function pinText(pin: SessionPin): TemplateResult {
+    return linkifiedText(pin.text ?? pin.preview ?? `entry #${pin.entrySeq}`);
   }
 
   function pinnedStrip(): TemplateResult | typeof nothing {
@@ -1345,9 +1240,7 @@ export function createChatSurface(
         ${
           expanded
             ? html`<span class="pinned-strip-label">Pinned</span>`
-            : html`<span class="pinned-strip-peek"
-                >${linkifiedText(first.text ?? first.preview ?? `entry #${first.entrySeq}`)}</span
-              >`
+            : html`<span class="pinned-strip-peek">${pinText(first)}</span>`
         }
         <button class="pinned-strip-toggle" aria-expanded=${expanded} title=${expanded ? "Collapse pins" : "Show pins"}>
           ${icon(expanded ? ChevronUp : ChevronDown, 13)}
@@ -1358,7 +1251,7 @@ export function createChatSurface(
           ? pins.map(
               (p) =>
                 html`<div class="pinned-item">
-                  <span class="pinned-item-text">${linkifiedText(p.text ?? p.preview ?? `entry #${p.entrySeq}`)}</span>
+                  <span class="pinned-item-text">${pinText(p)}</span>
                   ${p.text && p.preview ? html`<span class="pinned-item-preview">${linkifiedText(p.preview)}</span>` : nothing}
                 </div>`,
             )
@@ -1381,16 +1274,76 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat(chatState.agent);
   }
 
-  function earlierNotice(): TemplateResult {
+  function earlierNotice(load: () => Promise<void> = loadEarlierMessages): TemplateResult {
     return html`<div class="earlier-messages">
-      <button
-        class="earlier-messages-btn"
-        ?disabled=${chatState.loadingEarlier}
-        @click=${() => void loadEarlierMessages()}
-      >
+      <button class="earlier-messages-btn" ?disabled=${chatState.loadingEarlier} @click=${() => void load()}>
         ${chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages"}
       </button>
     </div>`;
+  }
+
+  function keepScrollAfterPrepend(
+    scroller: () => HTMLElement | null | undefined,
+    prepend: () => void,
+    current: (scroller: HTMLElement) => boolean = () => true,
+  ): void {
+    const before = scroller();
+    const priorHeight = before?.scrollHeight ?? 0;
+    const priorTop = before?.scrollTop ?? 0;
+    prepend();
+    requestAnimationFrame(() => {
+      const now = scroller();
+      if (!now || !current(now)) return;
+      const prev = now.style.scrollBehavior;
+      now.style.scrollBehavior = "auto";
+      now.scrollTop = priorTop + (now.scrollHeight - priorHeight);
+      now.style.scrollBehavior = prev;
+    });
+  }
+
+  function pageAnchor(page: TranscriptPage): number | null {
+    return (page.earlierItems ?? 0) > 0 ? (page.items?.[0]?.seq ?? null) : null;
+  }
+
+  function mountReadOnlyPage(
+    s: CoreSession,
+    page: TranscriptPage,
+    messages: AgentMessage[] = [],
+    inherited: AgentMessage[] = [],
+  ): void {
+    const split = inheritedTranscript(s, page.items ?? []);
+    mountReadOnly(
+      s,
+      [...toMessages(split.current), ...messages],
+      currentEarlierCount(s, page.earlierItems ?? 0),
+      pageAnchor(page),
+      [...toMessages(split.inherited), ...inherited],
+    );
+  }
+
+  async function loadEarlierReadOnly(
+    s: CoreSession,
+    messages: AgentMessage[],
+    anchorSeq: number | null,
+  ): Promise<void> {
+    if (chatState.loadingEarlier) return;
+    chatState.loadingEarlier = true;
+    readonlyRedraw?.();
+    try {
+      const page = await fetchTranscript(
+        s.id,
+        anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
+      );
+      if (chatState.sessionId !== s.id) return;
+      chatState.loadingEarlier = false;
+      keepScrollAfterPrepend(
+        () => ctx.container()?.querySelector<HTMLElement>(".chat-scroll"),
+        () => mountReadOnlyPage(s, page, messages, chatState.inheritedMessages),
+      );
+    } catch {
+      chatState.loadingEarlier = false;
+      readonlyRedraw?.();
+    }
   }
 
   async function loadEarlierMessages(): Promise<void> {
@@ -1406,30 +1359,22 @@ export function createChatSurface(
       if (agent !== chatState.agent || sessionId !== chatState.sessionId || anchor !== chatState.transcriptAnchorSeq)
         return;
       const split = inheritedTranscript(chatState.forkSession ?? {}, page.items ?? []);
-      const earlierMessages = itemsToMessages(split.current, transcriptModel());
+      const earlierMessages = toMessages(split.current);
       if (!chatState.inheritedLoaded)
-        chatState.inheritedMessages = [
-          ...itemsToMessages(split.inherited, transcriptModel()),
-          ...chatState.inheritedMessages,
-        ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
-      agent.state.messages = [...earlierMessages, ...agent.state.messages];
-      const rawRemaining = page.earlierItems ?? 0;
-      chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
-      chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
-      chatState.loadingEarlier = false;
-      drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (agent !== chatState.agent || sessionId !== chatState.sessionId || scrollerNow !== scroller || !scrollerNow)
-          return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
-      });
+        chatState.inheritedMessages = [...toMessages(split.inherited), ...chatState.inheritedMessages];
+      const scroller = (): HTMLElement | null | undefined => chatState.host?.querySelector<HTMLElement>(".chat-scroll");
+      const before = scroller();
+      keepScrollAfterPrepend(
+        scroller,
+        () => {
+          agent.state.messages = [...earlierMessages, ...agent.state.messages];
+          chatState.transcriptAnchorSeq = pageAnchor(page);
+          chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, page.earlierItems ?? 0);
+          chatState.loadingEarlier = false;
+          drawActiveChat(agent);
+        },
+        (now) => agent === chatState.agent && sessionId === chatState.sessionId && now === before,
+      );
     } catch (error) {
       reportHandledError("web:load_earlier", error);
     } finally {
@@ -1440,14 +1385,12 @@ export function createChatSurface(
     }
   }
 
-  let streamDrawScheduled = false;
   let streamDrawAgent: Agent | null = null;
   function scheduleStreamDraw(agent: Agent): void {
+    const scheduled = streamDrawAgent !== null;
     streamDrawAgent = agent;
-    if (streamDrawScheduled) return;
-    streamDrawScheduled = true;
+    if (scheduled) return;
     requestAnimationFrame(() => {
-      streamDrawScheduled = false;
       const target = streamDrawAgent;
       streamDrawAgent = null;
       if (target) drawActiveChat(target);
@@ -1513,13 +1456,10 @@ export function createChatSurface(
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
-    let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
-    if (messages.length) {
-      messageContent = messages.map((m, i) =>
-        settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage),
-      );
-    }
+    const messageContent = messages.map((m, i) =>
+      settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage),
+    );
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && !chatState.forkSession;
@@ -1548,6 +1488,11 @@ export function createChatSurface(
           ),
         })
       : nothing;
+    const dropOverlay = ctx.composer.state.dragging
+      ? html`<div class="drop-overlay">
+          <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
+        </div>`
+      : nothing;
     let content: TemplateResult;
     if (ctx.inbox) {
       content = assistantSidebar({
@@ -1566,11 +1511,7 @@ export function createChatSurface(
         onDragOver: (event) => ctx.composer.onDragOver(event),
         onDragLeave: (event) => ctx.composer.onDragLeave(event),
         onDrop: (event) => void ctx.composer.onDrop(event, agent),
-        overlay: ctx.composer.state.dragging
-          ? html`<div class="drop-overlay">
-              <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
-            </div>`
-          : nothing,
+        overlay: dropOverlay,
       });
     } else {
       content = html`
@@ -1583,14 +1524,7 @@ export function createChatSurface(
           @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
           @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
         >
-          ${
-            ctx.composer.state.dragging
-              ? html`<div class="drop-overlay">
-                  <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
-                </div>`
-              : nothing
-          }
-          ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+          ${dropOverlay} ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
@@ -1666,21 +1600,10 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
-    return html`
-      <header class="chat-topbar">
-        <div class="chat-heading">
-          <div class="chat-title" dir="auto">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
-        </div>
-      </header>
-    `;
-  }
-
   async function retryFailedSend(message: AgentMessage, index: number): Promise<void> {
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || agent.state.messages[index] !== message) return;
-    const failed = message as AgentMessage & { sendFailure?: string };
+    const failed = message as MessageFields;
     const error = agent.state.messages[index + 1] as AssistantWork | undefined;
     if (!failed.sendFailure || !error?.retryableSend) return;
     delete failed.sendFailure;
@@ -1703,17 +1626,12 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
-    if ((message as { steered?: boolean }).steered) return nothing;
-    const msg = message as AssistantWork & {
-      stopReason?: string;
-      errorMessage?: string;
-      approvalDecision?: string;
-      sendFailure?: string;
-    };
+    const msg = message as AssistantWork & MessageFields;
+    if (msg.steered) return nothing;
     const work = msg.work;
     const cacheable =
       !isStreaming &&
-      !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
+      !msg.subagentMail &&
       !activityItems(work?.activity ?? []).some(
         (item) => item.kind === "SteeringMessage" || ["session", "sessions", "subagents"].includes(item.tool ?? ""),
       ) &&
@@ -1726,50 +1644,34 @@ export function createChatSurface(
       message.role === "assistant" && chatState.labelSpeakers
         ? chatState.assistantSpeakerLabel
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
-    const edited = Boolean((message as { edited?: boolean }).edited);
-    const deleted = Boolean((message as { deleted?: boolean }).deleted);
-    const day = new Date().toDateString();
-    const hit = settledRowCache.get(message as object);
-    if (
-      hit &&
-      hit.day === day &&
-      hit.index === index &&
-      hit.activity === work?.activity &&
-      hit.status === work?.status &&
-      hit.stale === work?.stale &&
-      hit.deliveredFiles === msg.deliveredFiles &&
-      hit.stopReason === msg.stopReason &&
-      hit.errorMessage === msg.errorMessage &&
-      hit.approvalDecision === msg.approvalDecision &&
-      hit.sendFailure === msg.sendFailure &&
-      hit.forkable === forkable &&
-      hit.forking === forking &&
-      hit.speakerLabel === speakerLabel &&
-      hit.edited === edited &&
-      hit.deleted === deleted
-    ) {
-      return hit.tpl;
-    }
-    const tpl = chatMessage(message, index, isStreaming);
-    settledRowCache.set(message as object, {
-      day,
+    const key = [
+      new Date().toDateString(),
       index,
-      activity: work?.activity,
-      status: work?.status,
-      stale: work?.stale,
-      deliveredFiles: msg.deliveredFiles,
-      stopReason: msg.stopReason,
-      errorMessage: msg.errorMessage,
-      approvalDecision: msg.approvalDecision,
-      sendFailure: msg.sendFailure,
+      work?.activity,
+      work?.status,
+      work?.stale,
+      msg.deliveredFiles,
+      msg.stopReason,
+      msg.errorMessage,
+      msg.approvalDecision,
+      msg.sendFailure,
       forkable,
       forking,
       speakerLabel,
-      edited,
-      deleted,
-      tpl,
-    });
+      Boolean(msg.edited),
+      Boolean(msg.deleted),
+    ];
+    const hit = settledRowCache.get(message as object);
+    if (hit?.key.every((value, i) => value === key[i])) return hit.tpl;
+    const tpl = chatMessage(message, index, isStreaming);
+    settledRowCache.set(message as object, { key, tpl });
     return tpl;
+  }
+
+  function messageRow(cls: string, index: number, seqs: number[], body: TemplateResult): TemplateResult {
+    return html`<article class="message-row ${cls}" data-index=${index} data-entry-seqs=${seqs.join(" ")}>
+      ${body}
+    </article>`;
   }
 
   function chatMessage(
@@ -1778,190 +1680,135 @@ export function createChatSurface(
     isStreaming = false,
     inline = false,
   ): TemplateResult | typeof nothing {
-    const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
-    if (hidden.opener || hidden.resumeAnchor) return nothing;
-    const role = (message as { role?: string }).role;
-    if (!inline && (message as { steered?: boolean }).steered) return nothing;
-    if (role === "user" || role === "user-with-attachments") {
-      const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
-      if (mail) {
-        return html`
-          <article
-            class="message-row subagent-mail-row"
-            data-index=${index}
-            data-entry-seqs=${messageEntrySeqs(message).join(" ")}
-          >
-            ${subagentChip(mail.title, mail.sessionId)}
-            <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
-          </article>
-        `;
-      }
-
-      const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
-      const sendFailure = (message as { sendFailure?: string }).sendFailure;
-      const steered = Boolean((message as { steered?: boolean }).steered);
+    const m = message as MessageFields;
+    if (m.opener || m.resumeAnchor || (!inline && m.steered)) return nothing;
+    const seqs = messageEntrySeqs(message);
+    if (m.role === "user" || m.role === "user-with-attachments") {
+      const mail = m.subagentMail;
+      if (mail)
+        return messageRow(
+          "subagent-mail-row",
+          index,
+          seqs,
+          html`${subagentChip(mail.title, mail.sessionId)}
+            <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>`,
+        );
+      const text = messageText(message);
       const speaker = speakerLabelFor(message);
-      const deleted = Boolean((message as { deleted?: boolean }).deleted);
-      const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
+      let revision = m.edited ? "edited" : "";
+      if (m.deleted) revision = "deleted";
+      const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
+      const before = html`${speakerLabelTpl(speaker, message)}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`;
+      const failure = m.sendFailure
+        ? html`<div class="send-failure">
+            <span>${m.sendFailure}</span>
+            <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
+              ${icon(RefreshCw, 12)} Retry
+            </button>
+          </div>`
+        : nothing;
       if (ctx.inbox)
         return assistantMessage({
           role: "human",
-          text: `${messageText(message)}${edited || deleted ? ` (${deleted ? "deleted" : "edited"})` : ""}`,
+          text: `${text}${revision ? ` (${revision})` : ""}`,
           index,
-          entrySeqs: messageEntrySeqs(message).join(" "),
-          before: html`${speakerLabelTpl(speaker, message)}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
-          after: sendFailure
-            ? html`<div class="send-failure">
-                <span>${sendFailure}</span
-                ><button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
-                  ${icon(RefreshCw, 12)} Retry
-                </button>
-              </div>`
-            : nothing,
+          entrySeqs: seqs.join(" "),
+          before,
+          after: failure,
           meta: messageMeta(message, index),
         });
-      return html`
-        <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${steered ? "steered-row" : ""}"
-          data-index=${index}
-          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
-        >
-          ${speakerLabelTpl(speaker, message)}
-          ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+      return messageRow(
+        `user-row ${speaker ? "named-user-row" : ""} ${m.steered ? "steered-row" : ""}`,
+        index,
+        seqs,
+        html`${before}
           <div
-            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            ?hidden=${!messageText(message).trim() && !edited && !deleted}
+            class="message-bubble user-bubble ${m.deleted ? "deleted-bubble" : ""}"
+            ?hidden=${!text.trim() && !revision}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+              ${isReadOnlySlackView() ? slackWireBubble(text) : markdown(text)}
+              ${revision ? html`<span class="revision-badge">(${revision})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
               <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
             </button>
           </div>
-          ${
-            sendFailure
-              ? html`<div class="send-failure">
-                  <span>${sendFailure}</span>
-                  <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
-                    ${icon(RefreshCw, 12)} Retry
-                  </button>
-                </div>`
-              : nothing
-          }
-          ${messageMeta(message, index)}
-        </article>
-      `;
-    }
-    if (role === "approval-decision") {
-      const decision = message as unknown as HistoryApprovalDecision;
-      let label = "Approval denied";
-      if (decision.approved) {
-        const labels: Record<string, string> = {
-          once: "Approved once",
-          session: "Approved for this session",
-          always: "Approved always",
-        };
-        label = labels[decision.scope ?? "once"] ?? "Approved";
-      }
-      return html`<article
-        class="message-row system-note-row"
-        data-index=${index}
-        data-entry-seqs=${messageEntrySeqs(message).join(" ")}
-      >
-        <div class="system-note approval-decision">
-          ${label}<code class="approval-cmd approval-cmd-full">${decision.command}</code>
-        </div>
-      </article>`;
-    }
-    if (role === "system-note") {
-      const note = message as unknown as HistorySystemNote;
-      const row = (body: TemplateResult) => html`
-        <article
-          class="message-row system-note-row"
-          data-index=${index}
-          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
-        >
-          <div class="system-note">${body}</div>
-        </article>
-      `;
-      if (note.note === "goal_cancelled")
-        return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
-      const who = note.speaker ?? "The user";
-      return row(
-        note.action === "deleted"
-          ? html`${who} deleted their message`
-          : html`${who} edited their message: <span class="system-note-text">${note.content}</span>`,
+          ${failure} ${messageMeta(message, index)}`,
       );
     }
-    if (role === "assistant") {
-      const msg = message as AssistantMessage;
-      if ((msg as AssistantWork).retryableSend) return nothing;
-      const work = (msg as AssistantWork).work;
-      const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
-      const hasText = Boolean(text);
-      const showWork =
-        (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
-        shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
-      const steeringOnly =
-        !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
-      let workView: TemplateResult | typeof nothing =
-        work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
-      if (showWork) {
-        const workText = isStreaming ? messageText(msg) : text;
-        workView = workBlock(
-          work,
-          isStreaming,
-          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : workText,
-          (msg as AssistantWork).streamingBaseline ?? "",
-        );
-      }
-      if (msg.stopReason === "aborted") {
-        workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
-      }
-      const deliveredFiles = (msg as AssistantWork).deliveredFiles;
-      const hasVisibleContent =
-        showWork ||
-        steeringOnly.length > 0 ||
-        hasText ||
-        Boolean(deliveredFiles?.length) ||
-        msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
-      if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
-      if (ctx.inbox)
-        return assistantMessage({
-          role: "agent",
-          index,
-          entrySeqs: messageEntrySeqs(message)
-            .filter((seq) => !inlineSteers.has(seq))
-            .join(" "),
-          streaming: isStreaming,
-          content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
-          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
-          meta: isStreaming ? nothing : messageMeta(msg, index),
-        });
-      return html`
-        <article
-          class="message-row assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
-          data-index=${index}
-          data-entry-seqs=${messageEntrySeqs(message)
-            .filter((seq) => !inlineSteers.has(seq))
-            .join(" ")}
-        >
-          ${
-            chatState.labelSpeakers
-              ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
-              : nothing
-          }
-          <div class="assistant-body">
-            ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
-            ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-            ${isStreaming ? nothing : messageMeta(msg, index)}
-          </div>
-        </article>
-      `;
+    if (m.role === "approval-decision") {
+      const decision = message as unknown as HistoryApprovalDecision;
+      const label = decision.approved ? (APPROVED_LABELS[decision.scope ?? "once"] ?? "Approved") : "Approval denied";
+      return messageRow(
+        "system-note-row",
+        index,
+        seqs,
+        html`<div class="system-note approval-decision">
+          ${label}<code class="approval-cmd approval-cmd-full">${decision.command}</code>
+        </div>`,
+      );
     }
-    return nothing;
+    if (m.role === "system-note") {
+      const note = message as unknown as HistorySystemNote;
+      let body = html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`;
+      if (note.note !== "goal_cancelled")
+        body =
+          note.action === "deleted"
+            ? html`${note.speaker ?? "The user"} deleted their message`
+            : html`${note.speaker ?? "The user"} edited their message:
+                <span class="system-note-text">${note.content}</span>`;
+      return messageRow("system-note-row", index, seqs, html`<div class="system-note">${body}</div>`);
+    }
+    if (m.role !== "assistant") return nothing;
+    const msg = message as AssistantWork;
+    if (msg.retryableSend) return nothing;
+    const work = msg.work;
+    const stoppedEarly = msg.stopReason === "error" || msg.stopReason === "aborted";
+    const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
+    const showWork = m.approvalDecision !== "denied" && shouldShowWork(work, isStreaming || stoppedEarly ? "" : text);
+    const steeringOnly =
+      !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
+    let workView: TemplateResult | typeof nothing =
+      work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
+    if (showWork) {
+      const workText = isStreaming ? messageText(msg) : text;
+      workView = workBlock(work, isStreaming, stoppedEarly ? "" : workText, msg.streamingBaseline ?? "");
+    }
+    if (msg.stopReason === "aborted")
+      workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
+    const hasVisibleContent =
+      showWork ||
+      steeringOnly.length > 0 ||
+      Boolean(text) ||
+      Boolean(msg.deliveredFiles?.length) ||
+      msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
+    if (!hasVisibleContent && !stoppedEarly) return nothing;
+    const shownSeqs = seqs.filter((seq) => !inlineSteers.has(seq));
+    const body = html`${workView} ${assistantContent(msg, isStreaming, showWork)}
+    ${assistantFileList(msg.deliveredFiles)}
+    ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`;
+    const meta = isStreaming ? nothing : messageMeta(msg, index);
+    if (ctx.inbox)
+      return assistantMessage({
+        role: "agent",
+        index,
+        entrySeqs: shownSeqs.join(" "),
+        streaming: isStreaming,
+        content: body,
+        meta,
+      });
+    return messageRow(
+      `assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}`,
+      index,
+      shownSeqs,
+      html`${
+          chatState.labelSpeakers
+            ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
+            : nothing
+        }
+        <div class="assistant-body">${body} ${meta}</div>`,
+    );
   }
 
   function copyableText(message: AgentMessage): string {
@@ -1970,42 +1817,25 @@ export function createChatSurface(
         ? assistantDisplayText(messageText(message), (message as AssistantMessage).stopReason)
         : messageText(message);
     if (!isReadOnlySlackView()) return raw;
-    const role = (message as { role?: string }).role;
+    const role = (message as MessageFields).role;
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
   }
 
   function messageMeta(message: AgentMessage, index: number): TemplateResult | typeof nothing {
     const text = copyableText(message).trim();
-    const ts = (message as { timestamp?: number }).timestamp;
+    const ts = (message as MessageFields).timestamp;
     if (!text && ts === undefined) return nothing;
     const forkable = Boolean(index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent);
+    const seqs = messageEntrySeqs(message);
     return html`
       <div class="message-meta">
         ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
+        ${text ? copyButton("Copy", "Copy message", Copy, () => text) : nothing}
         ${
-          text
-            ? html`<button
-                class="msg-copy"
-                type="button"
-                ${tip("Copy")}
-                aria-label="Copy message"
-                @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}
-              >
-                ${icon(Copy, 13)}${icon(Check, 13)}
-              </button>`
-            : nothing
-        }
-        ${
-          chatState.sessionId && messageEntrySeqs(message).length
-            ? html`<button
-                class="msg-copy"
-                type="button"
-                ${tip("Copy message link")}
-                aria-label="Copy message link"
-                @click=${(e: Event) => void copyText(sessionLink(location.origin, UI_BASE, chatState.sessionId!, messageEntrySeqs(message)[0]), e.currentTarget as HTMLButtonElement)}
-              >
-                ${icon(Link2, 13)}${icon(Check, 13)}
-              </button>`
+          chatState.sessionId && seqs.length
+            ? copyButton("Copy message link", "Copy message link", Link2, () =>
+                sessionLink(location.origin, UI_BASE, chatState.sessionId!, seqs[0]),
+              )
             : nothing
         }
         ${
@@ -2025,6 +1855,18 @@ export function createChatSurface(
         }
       </div>
     `;
+  }
+
+  function copyButton(tipText: string, label: string, glyph: IconNode, text: () => string): TemplateResult {
+    return html`<button
+      class="msg-copy"
+      type="button"
+      ${tip(tipText)}
+      aria-label=${label}
+      @click=${(e: Event) => void copyText(text(), e.currentTarget as HTMLButtonElement)}
+    >
+      ${icon(glyph, 13)}${icon(Check, 13)}
+    </button>`;
   }
 
   async function forkFromMessage(index: number): Promise<void> {
@@ -2055,10 +1897,10 @@ export function createChatSurface(
         forked.session.threadRef,
         forked.session.id,
         forked.session.scopeId,
-        itemsToMessages(split.current, transcriptModel()),
+        toMessages(split.current),
         forked.session.channelName ?? null,
         forked.session,
-        itemsToMessages(split.inherited, transcriptModel()),
+        toMessages(split.inherited),
       );
       renderList();
     } catch (err) {
@@ -2220,7 +2062,7 @@ export function createChatSurface(
     error: "",
     detail: null as SessionBackgroundView | null,
     openJob: null as string | null,
-    output: new Map<string, { text: string; cursor: number; state: "running" | "exited"; exitCode?: number }>(),
+    output: new Map<string, JobOutput>(),
     timer: null as ReturnType<typeof setInterval> | null,
     fetchSeq: 0,
     epoch: 0,
@@ -2236,13 +2078,8 @@ export function createChatSurface(
   }
 
   function resetBackgroundPanel(): void {
-    if (bgPanel.timer) clearInterval(bgPanel.timer);
-    bgPanel.timer = null;
-    bgPanel.open = false;
-    bgPanel.loading = false;
-    bgPanel.error = "";
-    bgPanel.detail = null;
-    bgPanel.openJob = null;
+    stopBackgroundPanel();
+    Object.assign(bgPanel, { loading: false, error: "", detail: null });
     bgPanel.output.clear();
     bgPanel.fetchSeq++;
     bgPanel.epoch++;
@@ -2262,25 +2099,18 @@ export function createChatSurface(
     bgPanel.open = true;
     void refreshBackgroundDetail();
     bgPanel.timer = setInterval(() => void backgroundPanelTick(), 2_500);
-    redrawBackgroundPanel();
+    redrawTranscript();
   }
 
-  function closeBackgroundPanel(): void {
+  function stopBackgroundPanel(): void {
     if (bgPanel.timer) clearInterval(bgPanel.timer);
-    bgPanel.timer = null;
-    bgPanel.open = false;
-    bgPanel.openJob = null;
-    redrawBackgroundPanel();
+    Object.assign(bgPanel, { timer: null, open: false, openJob: null });
   }
 
   function toggleBackgroundPanel(): void {
-    if (bgPanel.open) closeBackgroundPanel();
-    else openBackgroundPanel();
-  }
-
-  function redrawBackgroundPanel(): void {
-    if (readonlyRedraw) readonlyRedraw();
-    else drawActiveChat();
+    if (!bgPanel.open) return openBackgroundPanel();
+    stopBackgroundPanel();
+    redrawTranscript();
   }
 
   async function refreshBackgroundDetail(): Promise<void> {
@@ -2302,7 +2132,7 @@ export function createChatSurface(
     } finally {
       if (seq === bgPanel.fetchSeq) {
         bgPanel.loading = false;
-        redrawBackgroundPanel();
+        redrawTranscript();
       }
     }
   }
@@ -2322,7 +2152,7 @@ export function createChatSurface(
           (row.crons ?? 0) !== d.crons.length)
       ) {
         await refreshSessions({ silent: true });
-        redrawBackgroundPanel();
+        redrawTranscript();
       }
     }
   }
@@ -2330,36 +2160,30 @@ export function createChatSurface(
   function toggleJobOutput(processId: string): void {
     bgPanel.openJob = bgPanel.openJob === processId ? null : processId;
     if (bgPanel.openJob && !bgPanel.output.has(processId)) void pollJobOutput(processId);
-    redrawBackgroundPanel();
+    redrawTranscript();
   }
 
   async function pollJobOutput(processId: string): Promise<void> {
     const id = chatState.sessionId;
     if (!id) return;
     const epoch = bgPanel.epoch;
-    const prev = bgPanel.output.get(processId);
-    let text = prev?.text ?? "";
-    let cursor = prev?.cursor ?? 0;
-    let state: "running" | "exited" = prev?.state ?? "running";
-    let exitCode = prev?.exitCode;
+    const out: JobOutput = { text: "", cursor: 0, state: "running", ...bgPanel.output.get(processId) };
     try {
       for (let i = 0; i < 8; i++) {
         const read = await api<SessionBackgroundOutput>(
-          `/api/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(processId)}/output?sinceCursor=${cursor}`,
+          `/api/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(processId)}/output?sinceCursor=${out.cursor}`,
         );
-        cursor = read.cursor;
-        text = (text + read.chunk).slice(-16_384);
-        state = read.state;
-        exitCode = read.exitCode;
+        const text = (out.text + read.chunk).slice(-16_384);
+        Object.assign(out, { text, cursor: read.cursor, state: read.state, exitCode: read.exitCode });
         if (read.chunk.length < 60_000) break;
       }
       if (epoch !== bgPanel.epoch) return;
-      bgPanel.output.set(processId, { text, cursor, state, ...(exitCode !== undefined ? { exitCode } : {}) });
+      bgPanel.output.set(processId, out);
     } catch (e) {
       swallow("web-ui: background job output read", e);
     }
     if (epoch !== bgPanel.epoch) return;
-    redrawBackgroundPanel();
+    redrawTranscript();
   }
 
   function timeLeft(expiresAt: number): string {
@@ -2557,13 +2381,6 @@ export function createChatSurface(
       });
   }
 
-  const SUBAGENT_STATE_LABEL: Record<SubagentRow["state"], string> = {
-    working: "working",
-    waiting: "waiting",
-    done: "done",
-    failed: "failed",
-  };
-
   function subagentRowTpl(row: SubagentRow): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
@@ -2584,7 +2401,7 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
+        <span class="subagent-row-meta">${row.state} · ${elapsed}</span>
       </button>
       ${
         row.state === "failed"
@@ -2727,7 +2544,10 @@ export function createChatSurface(
           ?disabled=${!expandable}
           aria-expanded=${expandable ? String(liveWorkExpanded) : nothing}
           ${tip(title)}
-          @click=${toggleLiveWorkExpanded}
+          @click=${() => {
+            liveWorkExpanded = !liveWorkExpanded;
+            drawActiveChat();
+          }}
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
@@ -2738,11 +2558,6 @@ export function createChatSurface(
         </button>
       </section>
     `;
-  }
-
-  function toggleLiveWorkExpanded(): void {
-    liveWorkExpanded = !liveWorkExpanded;
-    drawActiveChat();
   }
 
   function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
@@ -2995,38 +2810,29 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.item);
+    if (item.kind === "text") return html`<div class="work-message">${markdown(item.item.text ?? "")}</div>`;
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function messageRow(item: Item): TemplateResult {
-    const text = item.text ?? "";
-    return html`<div class="work-message">${markdown(text)}</div>`;
-  }
-
-  const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-    execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-    read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
-    write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-    publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-    recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-    memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
-    history: {
-      icon: ScrollText,
-      active: "Searching history",
-      done: "Searched history",
-      attempted: "Tried searching history",
-    },
-    background: {
-      icon: Terminal,
-      active: "Managing process",
-      done: "Managed process",
-      attempted: "Tried managing process",
-    },
+  const toolMeta = (icon: IconNode, active: string, done: string, attempted: string) => ({
+    icon,
+    active,
+    done,
+    attempted,
+  });
+  const TOOL_META: Record<string, ReturnType<typeof toolMeta>> = {
+    execute: toolMeta(Terminal, "Running command", "Ran command", "Tried command"),
+    read: toolMeta(BookOpen, "Reading file", "Read file", "Tried reading file"),
+    skill: toolMeta(BookOpen, "Loading skill", "Loaded skill", "Tried loading skill"),
+    write: toolMeta(Pencil, "Writing file", "Wrote file", "Tried writing file"),
+    publish: toolMeta(Rocket, "Publishing", "Published", "Tried publishing"),
+    recall: toolMeta(Brain, "Searching memory", "Searched memory", "Tried searching memory"),
+    memory: toolMeta(Brain, "Using memory", "Used memory", "Tried using memory"),
+    history: toolMeta(ScrollText, "Searching history", "Searched history", "Tried searching history"),
+    background: toolMeta(Terminal, "Managing process", "Managed process", "Tried managing process"),
   };
-  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+  const UNKNOWN_TOOL = toolMeta(Wrench, "Working", "Finished step", "Tried step");
 
   function toolName(tool: string): string {
     const parts = tool.split(/__|[/:.]/).filter(Boolean);
@@ -3078,6 +2884,9 @@ export function createChatSurface(
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
     if (typeof call.purpose === "string" && call.purpose.trim()) return call.purpose.trim();
+    const query = call.query ?? result.query ?? "";
+    const counted =
+      result.count === undefined ? query : `${query} · ${result.count} result${result.count === 1 ? "" : "s"}`;
     switch (toolCategory(tool, { ...result, ...call })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
@@ -3099,19 +2908,11 @@ export function createChatSurface(
       case "history": {
         const seq = call.seq ?? result.seq;
         if (seq !== undefined) return result.found === false ? `entry #${seq} · not found` : `entry #${seq}`;
-        const q = call.query ?? result.query ?? "";
-        return result.count !== undefined ? `${q} · ${result.count} result${result.count === 1 ? "" : "s"}` : q;
+        return counted;
       }
       case "memory": {
-        const action = call.action ?? result.action ?? "";
-        const q = call.query ?? result.query ?? "";
-        let detail = q;
-        if (result.count !== undefined) {
-          detail = `${q} · ${result.count} result${result.count === 1 ? "" : "s"}`;
-        } else if (result.added !== undefined) {
-          detail = `${result.added} saved`;
-        }
-        return [action, detail].filter(Boolean).join(" ");
+        const detail = result.count === undefined && result.added !== undefined ? `${result.added} saved` : counted;
+        return [call.action ?? result.action ?? "", detail].filter(Boolean).join(" ");
       }
       case "background": {
         const action = call.action ?? result.action ?? "";
@@ -3124,25 +2925,8 @@ export function createChatSurface(
   }
 
   function genericToolDetail(call: ToolPayload, result: ToolPayload): string {
-    const keys = [
-      "command",
-      "path",
-      "query",
-      "pattern",
-      "glob",
-      "url",
-      "name",
-      "action",
-      "file",
-      "filename",
-      "database",
-      "filter",
-      "repository",
-      "resource",
-      "title",
-    ];
     for (const source of [call, nestedToolInput(call), result, nestedToolInput(result)]) {
-      for (const key of keys) {
+      for (const key of GENERIC_DETAIL_KEYS) {
         const value = (source as Record<string, unknown>)[key];
         if (typeof value === "string" && value.trim()) return firstLine(value.trim());
       }
@@ -3278,10 +3062,6 @@ export function createChatSurface(
     redrawTranscript();
   }
 
-  function fileChip(name: string, size?: number, href?: string, mimetype?: string): TemplateResult {
-    return chipBadge(Paperclip, name, size, href, false, mimetype);
-  }
-
   function inlineHtmlName(name?: string, mimeType?: string): boolean {
     if (mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "text/html") return true;
     return /\.html?$/i.test(name ?? "");
@@ -3291,7 +3071,7 @@ export function createChatSurface(
 
   function inlineHtmlFrame(name: string, src: string, size?: number, href?: string): TemplateResult {
     const key = `${chatState.sessionId ?? "new"}:${href ?? src}:${name}`;
-    const chip = fileChip(name, size, href);
+    const chip = chipBadge(Paperclip, name, size, href, false);
     if (dismissedHtmlPreviews.has(key)) return chip;
     return html`<span class="file-html-unfurl"
       ><span class="file-html-header"
@@ -3309,10 +3089,6 @@ export function createChatSurface(
         </button></span
       ><iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>${chip}</span
     >`;
-  }
-
-  function imageChip(name: string, size?: number, href?: string): TemplateResult {
-    return chipBadge(FileImage, name, size, href, true);
   }
 
   interface UserAttachmentView {
@@ -3364,21 +3140,16 @@ export function createChatSurface(
     const scale = Math.min(maxW / natural.w, maxH / natural.h, 1);
     const w = Math.round(natural.w * scale);
     const h = Math.round(natural.h * scale);
-    const peek = document.createElement("div");
-    peek.className = "attachment-peek";
+    const copy = Object.assign(document.createElement("img"), { src: img.currentSrc || img.src, alt: "" });
+    Object.assign(copy.style, { width: `${w}px`, height: `${h}px` });
+    const peek = Object.assign(document.createElement("div"), { className: "attachment-peek" });
     peek.setAttribute("aria-hidden", "true");
-    const copy = document.createElement("img");
-    copy.src = img.currentSrc || img.src;
-    copy.alt = "";
-    copy.style.width = `${w}px`;
-    copy.style.height = `${h}px`;
     peek.append(copy);
     const below = anchor.bottom + 8;
     const top =
       below + h + chrome <= bounds.bottom - pad ? below : Math.max(bounds.top + pad, anchor.top - 8 - h - chrome);
     const left = Math.max(bounds.left + pad, Math.min(anchor.right - w - chrome, bounds.right - pad - w - chrome));
-    peek.style.top = `${top}px`;
-    peek.style.left = `${left}px`;
+    Object.assign(peek.style, { top: `${top}px`, left: `${left}px` });
     document.body.append(peek);
     attachmentPeek = peek;
     document.addEventListener("scroll", unpeekAttachment, true);
@@ -3415,24 +3186,20 @@ export function createChatSurface(
       }
       if (src) return inlineHtmlFrame(a.fileName, src, a.size, artifactHref);
     }
-    return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
+    return chipBadge(Paperclip, a.fileName, a.size, artifactHref ?? localContentUrl(a), false, a.mimeType);
   }
 
   function deliveredFileBadge(file: DeliveredFile): TemplateResult {
-    if (!file.artifactId) return fileChip(file.name, file.sizeBytes);
+    if (!file.artifactId) return chipBadge(Paperclip, file.name, file.sizeBytes, undefined, false);
     const href = fileContentUrl(file.artifactId, file.name);
     if (file.mimetype?.startsWith("image/")) {
-      if (!browserRenderableImage(file.mimetype)) return imageChip(file.name, file.sizeBytes, href);
+      if (!browserRenderableImage(file.mimetype)) return chipBadge(FileImage, file.name, file.sizeBytes, href, true);
       return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(file.name)}
         ><img src=${href} alt=${file.name} loading="lazy"
       /></a>`;
     }
     if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
-    return fileChip(file.name, file.sizeBytes, href, file.mimetype);
-  }
-
-  function scrollToBottom(): void {
-    scrollTranscript(true);
+    return chipBadge(Paperclip, file.name, file.sizeBytes, href, false, file.mimetype);
   }
 
   function scrollTranscript(force = false): void {
@@ -3464,7 +3231,7 @@ export function createChatSurface(
     stopLiveRun,
     isStopping: () => runSlot.stopGeneration === runSlot.generation,
     currentTurnOptions,
-    turnRuntime,
+    turnRuntime: () => chatState.turnRuntime,
     newChat,
     teardown: teardownActiveChat,
     resetChatState,
@@ -3473,20 +3240,18 @@ export function createChatSurface(
     attachApprovalsWhenLoaded,
     mountLoadingPane,
     mountLoadError,
-    scrollToBottom,
+    scrollToBottom: () => scrollTranscript(true),
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
         chatState.inheritedExpanded = true;
-        if (readonlyRedraw) readonlyRedraw();
-        else drawActiveChat();
+        redrawTranscript();
       }
       const host = chatState.host ?? ctx.container()?.querySelector<HTMLElement>(".custom-chat");
       transcriptViewport.cancelFollow();
       const found = host ? highlightMessage(host, seq) : false;
       if (!found) {
         ctx.composer.state.error = "The linked message is unavailable or isn't visible in this conversation.";
-        if (readonlyRedraw) readonlyRedraw();
-        else drawActiveChat();
+        redrawTranscript();
       }
       return found;
     },
@@ -3498,7 +3263,9 @@ export function createChatSurface(
     requestBackgroundPanel,
     activePendingApprovals,
     hasUnresolvedApproval,
-    resolveCommandApproval,
+    resolveCommandApproval: (decision) => {
+      if (chatState.agent) void approveCommand(chatState.agent, decision);
+    },
     approvalSummaryView,
     notePendingSessionOnSend,
     syncPaneState: postCurrentPaneState,

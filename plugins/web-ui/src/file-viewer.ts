@@ -37,15 +37,9 @@ export function openFileViewer(
     if (opener?.isConnected) opener.focus();
   });
   dialog.addEventListener("click", (event) => {
-    if (event.target !== dialog) return;
-    const rect = dialog.getBoundingClientRect();
-    if (
-      event.clientX < rect.left ||
-      event.clientX > rect.right ||
-      event.clientY < rect.top ||
-      event.clientY > rect.bottom
-    )
-      close();
+    const { left, right, top, bottom } = dialog.getBoundingClientRect();
+    const outside = event.clientX < left || event.clientX > right || event.clientY < top || event.clientY > bottom;
+    if (event.target === dialog && outside) close();
   });
   const copy = async () => {
     try {
