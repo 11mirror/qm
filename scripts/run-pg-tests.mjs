@@ -121,7 +121,32 @@ function migrateTemplate() {
   });
 }
 
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+async function dropAbandonedRuns() {
+  const { rows } = await admin.query(
+    `SELECT DISTINCT substring(d.datname from '^(qmt_[0-9]+_[0-9a-f]+)') AS run
+       FROM pg_database d
+      WHERE d.datname ~ '^qmt_[0-9]+_[0-9a-f]+'
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_stat_activity a
+           WHERE starts_with(a.datname, substring(d.datname from '^(qmt_[0-9]+_[0-9a-f]+)'))
+        )`,
+  );
+  const abandoned = rows.map((row) => row.run).filter((run) => !alive(Number(run.split("_")[1])));
+  for (const run of abandoned) await dropDatabase(run);
+  if (abandoned.length > 0) process.stdout.write(`# dropped databases left by ${abandoned.length} killed runs\n`);
+}
+
 const started = Date.now();
+await dropAbandonedRuns();
 await admin.query(`CREATE DATABASE ${templateName}`);
 await migrateTemplate().catch(async (error) => {
   await dropDatabase(templateName);
