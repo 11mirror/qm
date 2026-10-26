@@ -81,7 +81,7 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
 });
 
-test("visibleFor reads the full skills table once, not once per skill name", async () => {
+test("visibleFor reads the asked scopes' skills once, not once per skill name", async () => {
   const backing = testMap<Skill>();
   let allReads = 0;
   const originalAll = backing.all.bind(backing);
@@ -89,6 +89,12 @@ test("visibleFor reads the full skills table once, not once per skill name", asy
     allReads += 1;
     return originalAll();
   };
+  let scopedReads = 0;
+  const originalSelect = backing.select.bind(backing);
+  backing.select = ((query) => {
+    scopedReads += 1;
+    return originalSelect(query);
+  }) as typeof backing.select;
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing });
 
   const org = scopeId("org", "default-org");
@@ -112,9 +118,11 @@ test("visibleFor reads the full skills table once, not once per skill name", asy
   await skills.publish(shadowing.id);
 
   allReads = 0;
+  scopedReads = 0;
   const visible = await skills.visibleFor([personal, org]);
 
-  assert.equal(allReads, 1, "one full skills read per visibleFor call");
+  assert.equal(scopedReads, 1, "one scoped skills read per visibleFor call");
+  assert.equal(allReads, 0, "visibleFor never reads the whole table");
   assert.equal(visible.length, 200);
   const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
   assert.equal(shadowed.skill!.scopeId, personal);

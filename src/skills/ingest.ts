@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { isOrgEligibleScope, normalizeSkill, type NormalizedSkill, type PackConfig } from "./normalize.ts";
 import { upsertSeedSkill, type UpsertOutcome } from "./seed.ts";
 import { safeSkillFilePath, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
@@ -31,20 +32,8 @@ export interface IngestPlan {
   counts: Record<string, number>;
 }
 
-function globToRegExp(glob: string): RegExp {
-  const re = glob
-    .split("**")
-    .map((seg) =>
-      seg
-        .split("*")
-        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join("[^/]*"),
-    )
-    .join(".*");
-  return new RegExp(`^${re}$`);
-}
 function matchesAny(path: string, globs: string[] | undefined): boolean {
-  return !!globs && globs.some((g) => globToRegExp(g).test(path));
+  return !!globs && globs.some((glob) => posix.matchesGlob(path, glob));
 }
 
 function skillDirOf(skillMdPath: string): string {
