@@ -91,6 +91,11 @@ export function effortLevelsForModel(model?: Model<Api>): Array<{ value: EffortL
   return [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels];
 }
 
+export function supportedEffort(model: Model<Api> | undefined, ...wanted: EffortLevel[]): EffortLevel {
+  const levels = effortLevelsForModel(model);
+  return wanted.find((effort) => levels.some((level) => level.value === effort)) ?? levels[0]!.value;
+}
+
 export function modelLoadoutOptions(options: readonly ModelOption[], entries: readonly LoadoutEntry[]): ModelOption[] {
   const saved = new Map(uniqueLoadout(entries).map((entry) => [presetModelId(entry.value), entry.value]));
   return [...new Set(options.map((option) => presetModelId(option.value)))].flatMap((modelId) => {
@@ -122,10 +127,9 @@ export function loadoutActions(
   const apply = (entry: LoadoutEntry) => {
     const option = options().find((candidate) => candidate.value === entry.value);
     if (!option) return;
-    const levels = effortLevelsForModel(option.model);
     choose(option, {
       value: option.value,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
+      effort: supportedEffort(option.model, entry.effort),
       fast: entry.fast && supportsFast(option.model.id),
     });
   };

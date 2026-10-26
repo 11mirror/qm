@@ -64,6 +64,7 @@ import {
   upsertLoadout,
   effortLevelsForModel,
   modelLoadoutOptions,
+  supportedEffort,
   type LoadoutEntry,
 } from "./composer-loadout";
 
@@ -169,14 +170,15 @@ export interface ComposerOptions {
 export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {}): ComposerSurface {
   let submitting = false;
   const loadoutKey = options.preferenceKey ? `web-ui:loadout:${options.preferenceKey}` : undefined;
+  const reloadRuntime = (agent = ctx.chat.state.agent ?? undefined) =>
+    refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true);
   const refreshAccount = () => {
     loadoutRestored = false;
-    void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
+    void reloadRuntime();
   };
   window.addEventListener("model-account-changed", refreshAccount);
   const revalidateRuntime = () => {
-    if (document.visibilityState === "visible")
-      void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
+    if (document.visibilityState === "visible") void reloadRuntime();
   };
   document.addEventListener("visibilitychange", revalidateRuntime);
   let runtimeRequest = 0;
@@ -223,8 +225,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForModel(selected?.model);
-      return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
+      return supportedEffort(selected?.model, effort);
     },
     set effortLevel(value: EffortLevel) {
       ++revision.effort;
@@ -315,9 +316,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return runtimeConfigKey(runtimeScopeKey(ctx.chat.state.scopeId), options.runtimeAccount);
   }
 
+  function threadPick(): ModelOptionValue | undefined {
+    return ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined;
+  }
+
   function currentModelOption(): ModelOption | undefined {
-    const picked = ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined;
-    return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
+    return modelOptionFor(threadPick() ?? defaultModelValue(scopeKey()), scopeKey());
   }
 
   function followsDefault(): boolean {
@@ -376,7 +380,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function followDefault(previous: { modelId: string } | undefined): void {
     const threadRef = ctx.chat.state.threadRef;
-    const pick = threadRef ? threadModelPicks.get(threadRef) : undefined;
+    const pick = threadPick();
     const picked = pick ? modelOptionFor(pick, scopeKey()) : undefined;
     if (!threadRef || !previous || !picked) return;
     if (picked.model.id !== previous.modelId) return;
@@ -466,9 +470,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
     if (!selectedModel) {
-      const selected =
-        (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
-        defaultModelValue(scopeKey());
+      const selected = threadPick() ?? defaultModelValue(scopeKey());
       return html`<div class="composer-wrap">
         ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
         <p role="status">
@@ -490,16 +492,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             },
           })}
         </label>
-        <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true)}>
-          Refresh models
-        </button>
+        <button type="button" @click=${() => void reloadRuntime(agent)}>Refresh models</button>
       </div>`;
     }
     const approvalPauses = ctx.chat.activePendingApprovals();
     const blockingPauses = approvalPauses.filter(approvalBlocksComposer);
     const runtimePending = activeRuntimeConfig === null;
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || blockingPauses.length > 0;
-    const attachingDisabled = inputBlocked;
     let placeholder =
       options.placeholder ??
       (appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? "Describe a change…" : "Ask anything");
@@ -512,9 +511,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       composerNotice = composerState.error
         ? html`<div class="composer-error">
             ${composerState.error}
-            <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true)}>
-              Retry
-            </button>
+            <button type="button" @click=${() => void reloadRuntime(agent)}>Retry</button>
           </div>`
         : html`<div class="composer-note">Loading runtime settings…</div>`;
     } else if (composerState.error) {
@@ -638,7 +635,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               type="file"
               multiple
               hidden
-              ?disabled=${attachingDisabled}
+              ?disabled=${inputBlocked}
               @change=${(e: Event) => void onFilesSelected(e, agent)}
             />
             <button
@@ -646,7 +643,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               type="button"
               aria-label="Attach files"
               ${tip("Attach files")}
-              ?disabled=${attachingDisabled}
+              ?disabled=${inputBlocked}
               @click=${() => pickFiles()}
             >
               ${icon(Paperclip, 18)}
@@ -778,10 +775,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
     if (!queued.length) return nothing;
     const steerable = canSteer(agent);
-    const steerTip = (): string => {
-      if (steerable) return "Steer the running task with this instead of waiting";
-      return "Nothing running can take this. It will go out as its own turn";
-    };
     return html`
       <div class="queued-strip" role="list" aria-label="Queued messages">
         ${queued.map((q) =>
@@ -798,16 +791,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                     if (queuedEdit) queuedEdit.text = (event.target as HTMLTextAreaElement).value;
                   }}
                   @keydown=${(event: KeyboardEvent) => {
-                    if (event.isComposing || queuedEdit?.saving) return;
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      cancelQueuedEdit(agent);
-                    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void saveQueuedEdit(agent);
-                    }
+                    const save = event.key === "Enter" && (event.metaKey || event.ctrlKey);
+                    if (event.isComposing || queuedEdit?.saving || (!save && event.key !== "Escape")) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (save) void saveQueuedEdit(agent);
+                    else cancelQueuedEdit(agent);
                   }}
                 ></textarea>
                 <button
@@ -838,7 +827,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                     type="button"
                     class="queued-steer"
                     ?disabled=${!steerable}
-                    ${tip(steerTip())}
+                    ${tip(
+                      steerable
+                        ? "Steer the running task with this instead of waiting"
+                        : "Nothing running can take this. It will go out as its own turn",
+                    )}
                     @click=${() => void steerQueued(agent, q)}
                   >
                     ${icon(CornerDownRight, 13)}<span>Steer</span>
@@ -956,12 +949,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForModel(option.model);
-    const defaultEffort = defaultEffortForModel(option.model);
-    const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
       value: option.value,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : fallbackEffort,
+      effort: supportedEffort(option.model, entry.effort, defaultEffortForModel(option.model)),
       fast: entry.fast && modelSupportsFastMode(scopeKey(), option.model.id),
     };
   }
@@ -1100,11 +1090,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
-  function closeSlashMenu(agent: Agent): void {
-    composerState.slashDismissed = true;
-    ctx.chat.drawActiveChat(agent);
-  }
-
   function slashMenu(agent: Agent): TemplateResult | typeof nothing {
     const slash = currentSlashMenu();
     if (!slash.open) return nothing;
@@ -1221,7 +1206,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (slash.open) {
       if (e.key === "Escape") {
         e.preventDefault();
-        return closeSlashMenu(agent);
+        composerState.slashDismissed = true;
+        return ctx.chat.drawActiveChat(agent);
       }
       if (slash.matches.length) {
         const count = slash.matches.length;
@@ -1414,6 +1400,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     markSteering(threadRef, queued);
     let steered = false;
     let fallBackToQueue = fresh;
+    const here = (): boolean => agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef;
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
       steered = outcome.ok;
@@ -1421,40 +1408,25 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
         bumpSessionActivity(threadRef);
-        if (
-          !outcome.ok &&
-          outcome.replayed &&
-          agent === ctx.chat.state.agent &&
-          threadRef === ctx.chat.state.threadRef
-        ) {
-          agent.state.messages.push({
-            role: "user",
-            content: queued.text,
-            timestamp: Date.now(),
-          } as unknown as AgentMessage);
-        }
+        if (!outcome.ok && here())
+          agent.state.messages.push({ role: "user", content: queued.text, timestamp: Date.now() } as AgentMessage);
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
         fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
       } else {
         reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
-        if (
-          outcome.reason === "queued_changed" &&
-          agent === ctx.chat.state.agent &&
-          threadRef === ctx.chat.state.threadRef
-        )
+        if (outcome.reason === "queued_changed" && here())
           composerState.error = "The queued message changed. Try steering it again.";
       }
     } catch (err) {
       reportHandledError("web:steer_queued", err);
-      if (agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef)
-        composerState.error = errMessage(err, "Could not confirm steering. Try again.");
+      if (here()) composerState.error = errMessage(err, "Could not confirm steering. Try again.");
     } finally {
       pendingSteers.delete(queued.runId);
       if (!steered) unmarkSteering(threadRef, queued.runId);
     }
     if (fallBackToQueue) addQueuedRun(threadRef, queued);
-    if (agent !== ctx.chat.state.agent || threadRef !== ctx.chat.state.threadRef) return;
+    if (!here()) return;
     ctx.chat.drawActiveChat(agent);
     ctx.chat.resumeIfIdle();
   }
@@ -1639,10 +1611,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     await addFiles(files, agent);
   }
 
-  async function fileToBase64(file: File): Promise<string> {
-    return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
-  }
-
   async function loadAnyAttachment(file: File): Promise<Attachment> {
     try {
       const { loadAttachment } = await import("@earendil-works/pi-web-ui");
@@ -1654,7 +1622,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
         size: file.size,
-        content: await fileToBase64(file),
+        content: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
       };
     }
   }
@@ -1738,10 +1706,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
   }
 
-  function onDragLeave(e: DragEvent): void {
-    fileDrag.leave(e);
-  }
-
   async function onDrop(e: DragEvent, agent: Agent): Promise<void> {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
@@ -1811,7 +1775,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   async function followScopeDefault(agent: Agent): Promise<void> {
     clearChatSelection();
-    await refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true);
+    await reloadRuntime(agent);
   }
 
   function selectModel(value: string, agent: Agent): void {
@@ -1972,7 +1936,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     refreshRuntimeSelection,
     onDragEnter,
     onDragOver,
-    onDragLeave,
+    onDragLeave: fileDrag.leave,
     onDrop,
     closeMenus,
     dispose,

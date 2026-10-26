@@ -108,21 +108,18 @@ export interface InboxItem {
   cronId: string;
   source: InboxSource;
   sourceKey: string;
-  reviewState?: string;
   attention?: boolean;
   proposalData?: Record<string, unknown>;
   detailLoaded?: boolean;
   status: "open" | "sent" | "dismissed" | "replied";
   title: string;
   from: string;
-  fromDetail?: string;
   snippet: string;
   context?: InboxContextMessage[];
   participants?: Participant[];
   receivedAt: number;
   externalUrl?: string;
   draft?: InboxDraft;
-  draftEdited?: boolean;
   draftAt?: number;
   draftSessionId?: string;
   thread: LedgerThreadMessage[];
@@ -146,7 +143,6 @@ export interface InboxItem {
 export interface InboxView {
   id: string;
   name: string;
-  sources: InboxSource[];
 }
 
 export interface InboxSyncCron {
@@ -156,10 +152,10 @@ export interface InboxSyncCron {
 }
 
 const DEFAULT_VIEWS: InboxView[] = [
-  { id: "all", name: "All", sources: ["gmail", "slack"] },
-  { id: "gmail", name: "Email", sources: ["gmail"] },
-  { id: "slack", name: "Slack", sources: ["slack"] },
-  { id: "sent", name: "Sent", sources: [] },
+  { id: "all", name: "All" },
+  { id: "gmail", name: "Email" },
+  { id: "slack", name: "Slack" },
+  { id: "sent", name: "Sent" },
 ];
 
 function isInboxViewId(value: string | null): value is string {
@@ -320,10 +316,7 @@ export function resetInboxState(): void {
 }
 
 export function inboxViews(): InboxView[] {
-  return [
-    { id: "all", name: "All", sources: ["gmail", "slack", "generic"] },
-    ...inboxState.selected.map((cron) => ({ id: cron.id, name: cron.name, sources: [] as InboxSource[] })),
-  ];
+  return [{ id: "all", name: "All" }, ...inboxState.selected.map((cron) => ({ id: cron.id, name: cron.name }))];
 }
 
 export function inboxViewName(viewId: string): string {
@@ -375,21 +368,18 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
   const payload = entry.sourcePayload;
   const sourceId = entry.source ?? payload.source;
   const source: InboxSource = sourceId === "gmail" || sourceId === "slack" ? sourceId : "generic";
-  const draft = draftOf(entry);
-  const resolved = resolvedStatus(entry);
-  const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : undefined;
+  const status = resolvedStatus(entry);
+  const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : [];
+  const actedAt = (when: InboxItem["status"]) => (status === when ? entry.actedAt : undefined);
   return {
     id: entry.id,
     cronId: entry.cronId,
     source,
     sourceKey: entry.dedupeKey,
-    status: resolved,
+    status,
     sentChat: payload.sentChat === true,
-    ...(payload.sentChat === true ? { detailLoaded: true } : {}),
+    detailLoaded: payload.sentChat === true,
     title: str(payload.title) ?? entry.summary ?? "Review item",
-    reviewState: entry.parkedReason
-      ? "Needs input"
-      : (({ held: "Needs review" } as Record<string, string>)[entry.state] ?? "Work in progress"),
     attention: entry.state === "held" || (entry.state === "failed" && Boolean(entry.parkedReason)),
     proposalData: entry.proposal?.data,
     from: str(payload.from) ?? "",
@@ -397,40 +387,35 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     receivedAt: entry.sourceAt ?? (typeof payload.receivedAt === "number" ? payload.receivedAt : entry.updatedAt),
     thread: entry.thread,
     updatedAt: entry.updatedAt,
-    ...(str(payload.fromDetail) ? { fromDetail: payload.fromDetail as string } : {}),
     sourceContextFetched: payload.sourceContextFetched === true,
     sourceContextPartial: payload.sourceContextPartial === true,
-    ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
-    ...(source === "slack" && Array.isArray(payload.participants)
-      ? {
-          participants: payload.participants.flatMap((person) =>
+    sourceRefreshError: typeof payload.sourceRefreshError === "string" ? payload.sourceRefreshError : undefined,
+    participants:
+      source === "slack" && Array.isArray(payload.participants)
+        ? payload.participants.flatMap((person) =>
             person && typeof person.id === "string" && typeof person.name === "string"
               ? [{ key: person.id, name: person.name, avatarUrl: str(person.avatarUrl) }]
               : [],
-          ),
-        }
-      : {}),
-    ...(Array.isArray(payload.context) ? { context: payload.context as InboxContextMessage[] } : {}),
-    ...(str(payload.externalUrl) ? { externalUrl: payload.externalUrl as string } : {}),
-    ...(draft ? { draft } : {}),
-    ...(entry.proposal?.by === "human" ? { draftEdited: true } : {}),
-    ...(entry.proposal ? { draftAt: entry.proposal.at } : {}),
-    ...(entry.proposal?.sessionId ? { draftSessionId: entry.proposal.sessionId } : {}),
-    ...(payload.gmail ? { gmail: payload.gmail as InboxItem["gmail"] } : {}),
-    ...(payload.slack ? { slack: payload.slack as InboxItem["slack"] } : {}),
-    ...(reactions?.length ? { reactions } : {}),
-    ...(payload.probablyResolved === true ? { probablyResolved: true } : {}),
-    ...(payload.automated === true ? { automated: true } : {}),
-    ...(Array.isArray(payload.images)
-      ? { images: (payload.images as unknown[]).filter((u): u is string => typeof u === "string") }
-      : {}),
-    ...(resolved === "sent" && entry.actedAt !== undefined ? { sentAt: entry.actedAt } : {}),
-    ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
-    ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
-    ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
-    ...(entry.actionKind === "no_reply_needed"
-      ? { noReplyNeeded: entry.actionResult ? { reason: entry.actionResult } : {} }
-      : {}),
+          )
+        : undefined,
+    context: Array.isArray(payload.context) ? (payload.context as InboxContextMessage[]) : undefined,
+    externalUrl: str(payload.externalUrl),
+    draft: draftOf(entry),
+    draftAt: entry.proposal?.at,
+    draftSessionId: entry.proposal?.sessionId,
+    gmail: payload.gmail as InboxItem["gmail"],
+    slack: payload.slack as InboxItem["slack"],
+    reactions: reactions.length ? reactions : undefined,
+    probablyResolved: payload.probablyResolved === true,
+    automated: payload.automated === true,
+    images: Array.isArray(payload.images)
+      ? (payload.images as unknown[]).filter((u): u is string => typeof u === "string")
+      : undefined,
+    sentAt: actedAt("sent"),
+    dismissedAt: actedAt("dismissed"),
+    repliedAt: actedAt("replied"),
+    externalReplyText: status === "replied" && entry.actionResult ? entry.actionResult : undefined,
+    noReplyNeeded: entry.actionKind === "no_reply_needed" ? { reason: entry.actionResult } : undefined,
   };
 }
 
@@ -550,9 +535,9 @@ export async function refreshInbox(
 
 async function loadDetail(itemId: string, cronId: string): Promise<void> {
   try {
-    const result = await api<{ item: LedgerItem }>(itemPath(cronId, itemId));
+    const detail = await fetchItem({ id: itemId, cronId }, "");
     if (!inboxState.selected.some((cron) => cron.id === cronId)) return;
-    upsertItem({ ...toInboxItem(result.item), detailLoaded: true });
+    upsertItem(detail);
     drawAll();
   } catch (error) {
     inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
@@ -608,10 +593,6 @@ async function toggleSelection(id: string): Promise<void> {
     },
     (error) => errMessage(error, "Could not update Inbox"),
   );
-}
-
-function isGenericItem(item: InboxItem): boolean {
-  return item.source === "generic";
 }
 
 function subjectTpl(item: InboxItem): TemplateResult {
@@ -711,12 +692,6 @@ function draftSubject(item: InboxItem, draft: InboxDraft): string {
   return item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "";
 }
 
-function headerPeek(item: InboxItem, draft: InboxDraft): string {
-  const to = (draft.to ?? []).join(", ");
-  const subject = draftSubject(item, draft);
-  return [to, subject].filter(Boolean).join(" · ") || "Recipients and subject";
-}
-
 function effectiveDraft(item: InboxItem): InboxDraft {
   const edited = draftEdits.get(item.id);
   if (edited) {
@@ -783,24 +758,28 @@ function ensureItemSource(item: InboxItem): void {
 
 async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
   try {
-    const { item: fresh } = await api<{ item: LedgerItem }>(
-      itemPath(item.cronId, item.id, refreshSource ? "?refreshSource=1" : ""),
-    );
-    updateSentChat(fresh);
-    replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
+    replaceItem(await fetchItem(item, refreshSource ? "?refreshSource=1" : ""));
     drawAll();
   } catch {
     void refreshInbox({ silent: true });
   }
 }
 
-async function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
-  const { item: next } = await api<{ item: LedgerItem }>(itemPath(item.cronId, item.id, "/action"), {
-    method: "POST",
-    body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
-  });
+async function fetchItem(
+  item: Pick<InboxItem, "id" | "cronId">,
+  leaf: string,
+  body?: Record<string, unknown>,
+): Promise<InboxItem> {
+  const { item: next } = await api<{ item: LedgerItem }>(
+    itemPath(item.cronId, item.id, leaf),
+    body ? { method: "POST", body: JSON.stringify(body) } : undefined,
+  );
   updateSentChat(next);
   return { ...toInboxItem(next), detailLoaded: true };
+}
+
+function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
+  return fetchItem(item, "/action", { kind, ...(args ? { args } : {}) });
 }
 
 const persistQueue = new Map<string, Promise<void>>();
@@ -890,16 +869,13 @@ export async function askAgent(
       if (!sameDraft(effectiveDraft(current), draft)) {
         throw new Error("The draft changed. Review it before continuing.");
       }
-      const { item: next } = await api<{ item: LedgerItem }>(itemPath(item.cronId, item.id, "/followup"), {
-        method: "POST",
-        body: JSON.stringify({
+      replaceItem(
+        await fetchItem(item, "/followup", {
           message: text,
           ...options,
           ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
         }),
-      });
-      updateSentChat(next);
-      replaceItem({ ...toInboxItem(next), detailLoaded: true });
+      );
     });
     return true;
   } catch (e) {
@@ -1015,14 +991,10 @@ export function participantsTpl(item: InboxItem): TemplateResult | typeof nothin
   </span>`;
 }
 
-function selfHandle(): string {
-  const me = appState.me?.user ?? "";
-  return (me.split("@")[0] || me).trim().toLowerCase();
-}
-
 export function slackTextTpl(item: InboxItem, text: string, opts: { links?: boolean } = {}): TemplateResult {
   if (item.source !== "slack") return html`${text}`;
-  const self = selfHandle();
+  const me = appState.me?.user ?? "";
+  const self = (me.split("@")[0] || me).trim().toLowerCase();
   const mentionChip = (handle: string): TemplateResult =>
     html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
   const withMentions = (str: string): Array<TemplateResult | string> =>
@@ -1156,7 +1128,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
     status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
     showPrompts: item.status === "open" && item.thread.length === 0,
     send:
-      item.status === "open" && !isGenericItem(item) && (!item.sentChat || item.draft)
+      item.status === "open" && item.source !== "generic" && (!item.sentChat || item.draft)
         ? { disabled: busy || acting.has(item.id), run: (event) => submit(event, "Send it") }
         : undefined,
     onPrompt: (prompt, event) => submit(event, prompt),
@@ -1181,10 +1153,11 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
 }
 
 export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (item.status !== "open" || isGenericItem(item) || (item.sentChat && !item.draft)) return nothing;
+  if (item.status !== "open" || item.source === "generic" || (item.sentChat && !item.draft)) return nothing;
   const busy = chatting.has(item.id);
   const draft = effectiveDraft(item);
   const gmail = item.source === "gmail";
+  const peek = [(draft.to ?? []).join(", "), draftSubject(item, draft)].filter(Boolean).join(" · ");
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
   const field = (label: string, value: string, patch: (value: string) => Partial<InboxDraft>, placeholder?: string) =>
     html`<label class="inbox-field">
@@ -1226,7 +1199,7 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
         gmail
           ? html`
               <details class="inbox-draft-headers">
-                <summary><span class="inbox-draft-headers-peek">${headerPeek(item, draft)}</span></summary>
+                <summary><span class="inbox-draft-headers-peek">${peek || "Recipients and subject"}</span></summary>
                 <div class="inbox-draft-headers-fields">
                   ${field("To", (draft.to ?? []).join(", "), (v) => ({ to: addressHeaderList(v) }), "who@example.com")}
                   ${showCc ? field("Cc", (draft.cc ?? []).join(", "), (v) => ({ cc: addressHeaderList(v) })) : nothing}
@@ -1250,7 +1223,7 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
       </div>
       ${
         !gmail && item.reactions?.length
-          ? html`<div class="inbox-reactions">${item.reactions.map((name) => reactionChipTpl(name))}</div>`
+          ? html`<div class="inbox-reactions">${item.reactions.map(reactionChipTpl)}</div>`
           : nothing
       }
     </div>
@@ -1258,8 +1231,7 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
 }
 
 function reactionChipTpl(name: string): TemplateResult {
-  const char = charForName(name);
-  return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
+  return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${charForName(name) ?? `:${name}:`}</span>`;
 }
 
 function handledStateLabel(item: InboxItem): string {
@@ -1398,7 +1370,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
         expanded
           ? html`<div class="inbox-item-detail">
               ${
-                isGenericItem(item)
+                item.source === "generic"
                   ? reviewTpl(item)
                   : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
                     ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
@@ -1755,7 +1727,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
   const sub = gmail ? item.title : "";
   let detail: TemplateResult;
   if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
-  else if (isGenericItem(item)) detail = reviewTpl(item, false);
+  else if (item.source === "generic") detail = reviewTpl(item, false);
   else detail = html`${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
   return html`
     <div class="pane-head inbox-item-head src-${item.source}">
