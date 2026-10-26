@@ -6,7 +6,7 @@ import { destinationSource, type ActorAssertion } from "../types.ts";
 import { parseSurfaceDeliveryTarget, surfaceContainerRef } from "./refs.ts";
 import type { IngestEvent } from "../surface-cache/types.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { InboundMessage, InboundOutcome, Surface, SurfaceUser } from "./surface.ts";
+import type { InboundMessage, InboundOutcome, InboundSurface, SurfaceUser } from "./surface.ts";
 
 const RESERVED_SURFACES = new Set([
   "slack",
@@ -111,7 +111,7 @@ function permanent(message: string): Error {
 export function createHttpChatSurface(
   config: HttpChatConfig,
   opts: { fetch?: typeof fetch; now?: () => number; mirror?: (events: IngestEvent[]) => Promise<unknown> } = {},
-): Surface {
+): InboundSurface {
   const doFetch = opts.fetch ?? fetch;
   const now = opts.now ?? Date.now;
   const apiBase = config.apiUrl.replace(/\/+$/, "");
