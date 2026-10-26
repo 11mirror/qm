@@ -239,8 +239,15 @@ export function createSandboxResources(opts: {
       await initialize();
       const route = await opts.defaults.get(scopeId);
       const sandboxes: SandboxResource[] = [];
-      for (const record of await opts.records.all()) {
-        if (!(await opts.canUseScope(actorId, record.ownerScopeId))) continue;
+      const records = await opts.records.all();
+      const allowed = new Set<string>();
+      await Promise.all(
+        [...new Set(records.map((record) => record.ownerScopeId))].map(async (owner) => {
+          if (await opts.canUseScope(actorId, owner)) allowed.add(owner);
+        }),
+      );
+      for (const record of records) {
+        if (!allowed.has(record.ownerScopeId)) continue;
         const backend = opts.backends[record.backend];
         let availableActions = actionsFor(backend).filter((action) => action !== "create");
         if (record.state === "retired")

@@ -141,6 +141,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
       const r = await io.run(handle, script, { timeoutMs: waitMs + 20_000 });
       const out = r.stdout;
       if (/MISSING=1/.test(out)) throw new ProcessSessionGoneError(processId);
+      if (r.code !== 0) throw new Error(`readProcess failed (code ${r.code}): ${r.stderr.trim() || out.trim()}`);
       const cur = /CURSOR=(\d+)/.exec(out);
       const st = /STATUS=(running|exited:-?\d+)/.exec(out);
       const dataIdx = out.indexOf("DATA=");

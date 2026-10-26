@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { shq } from "../util/shell.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface LayerToolInstallIo {
   exec(script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
@@ -65,8 +66,15 @@ export function createLayerToolInstaller(files: () => readonly LayerInstallFile[
       .join(" && ");
     const verify = await io.exec(`${commit} && ${probe}`, STEP_TIMEOUT_SEC);
     if (verify.code !== 0) {
-      await io.exec(`rm -f ${plan.map((file) => shq(file.stagedPath)).join(" ")}`, STEP_TIMEOUT_SEC).catch(() => {});
-      throw new Error(`layer tool install: verification failed (rc=${verify.code}): ${verify.stderr.slice(0, 200)}`);
+      const cleanup = await io
+        .exec(`rm -f ${plan.map((file) => shq(file.stagedPath)).join(" ")}`, STEP_TIMEOUT_SEC)
+        .then(
+          (r) => (r.code === 0 ? "" : `; staged-file cleanup failed (rc=${r.code})`),
+          (e: unknown) => `; staged-file cleanup failed: ${errMessage(e)}`,
+        );
+      throw new Error(
+        `layer tool install: verification failed (rc=${verify.code}): ${verify.stderr.slice(0, 200)}${cleanup}`,
+      );
     }
   };
 }

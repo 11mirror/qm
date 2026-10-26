@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
-import { readFile as fsReadFile } from "node:fs/promises";
+import { readFile as fsReadFile, stat } from "node:fs/promises";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { shq } from "../util/shell.ts";
@@ -27,27 +27,22 @@ export async function materializeRoLayers(
   io: RoLayerIo,
   names: RoLayerNames,
 ): Promise<void> {
-  const roEntries: Array<{ path: string; data: Uint8Array }> = [];
+  const roFiles: Array<{ path: string; abs: string }> = [];
   for (const layer of layers) {
     if (layer.mode === "rw") continue;
     const dir = workspace.scopeDir(layer.scopeId);
     for (const abs of await workspace.list(layer.scopeId)) {
       const rel = relative(dir, abs);
-      const destRel = layer.mountPath ? `${layer.mountPath}/${rel}` : rel;
-      roEntries.push({ path: destRel, data: await fsReadFile(abs) });
+      roFiles.push({ path: layer.mountPath ? `${layer.mountPath}/${rel}` : rel, abs });
     }
   }
-  if (!roEntries.length) return;
+  if (!roFiles.length) return;
+  roFiles.sort((a, b) => Number(a.path > b.path) - Number(a.path < b.path));
+  // Fingerprint by path, size and mtime so an unchanged layer is never read just to be compared.
   const fp = createHash("sha256");
-  for (const e of [...roEntries].sort((a, b) => {
-    if (a.path < b.path) return -1;
-    if (a.path > b.path) return 1;
-    return 0;
-  })) {
-    fp.update(e.path);
-    fp.update("\0");
-    fp.update(createHash("sha256").update(e.data).digest());
-    fp.update("\n");
+  for (const f of roFiles) {
+    const st = await stat(f.abs);
+    fp.update(`${f.path}\0${st.size}\0${st.mtimeMs}\n`);
   }
   const want = fp.digest("hex");
   let have: string | null = null;
@@ -57,6 +52,8 @@ export async function materializeRoLayers(
     swallow(`${names.label}: ro-layers manifest probe`, err);
   }
   if (have === want) return;
+  const roEntries: Array<{ path: string; data: Uint8Array }> = [];
+  for (const f of roFiles) roEntries.push({ path: f.path, data: await fsReadFile(f.abs) });
   const tar = await makeTar([...roEntries, { path: names.manifest, data: Buffer.from(want) }]);
   await io.writeFileBytes(handle, names.tar, tar);
   const extract = await io.exec(
