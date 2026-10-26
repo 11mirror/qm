@@ -216,6 +216,7 @@ interface CronLike {
 }
 
 const LIST_PAGE_SIZE = 25;
+const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note", "retarget"]);
 const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
@@ -638,7 +639,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
   };
 
-  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {
+  const blockOnApproval = (
+    callId: string,
+    e: NeedsApproval,
+    purpose?: string,
+    tool = "execute",
+    extra: Record<string, unknown> = {},
+  ) => {
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -651,7 +658,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ref.pausedOnApproval = true;
     return recordResult(
       callId,
-      { tool, blocked: "needs_approval", reason: e.approvalReason },
+      { tool, ...extra, blocked: "needs_approval", reason: e.approvalReason },
       { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
       true,
     );
@@ -2011,6 +2018,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         process_id: params.process_id,
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
       });
+      const pid = params.process_id ?? "";
+      if (["poll", "stop", "watch", "send_input"].includes(params.action) && !pid)
+        return recordFail(
+          callId,
+          { tool: "background", action: params.action, error: `${params.action} requires process_id` },
+          `[error] background ${params.action} requires \`process_id\`.`,
+        );
       try {
         switch (params.action) {
           default:
@@ -2020,13 +2034,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               "[error] unsupported background action",
             );
           case "poll": {
-            if (!params.process_id)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "poll requires process_id" },
-                "[error] background poll requires `process_id`.",
-              );
-            const r = await tc.backgroundPoll(params.process_id, {
+            const r = await tc.backgroundPoll(pid, {
               ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
@@ -2035,24 +2043,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...pollMeta },
-              {
-                content: [
-                  { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
-                ],
-                details: r,
-              },
+              { ...text(`${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`), details: r },
               false,
               { screenAs: { provenance: "external" } },
             );
           }
           case "stop": {
-            if (!params.process_id)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "stop requires process_id" },
-                "[error] background stop requires `process_id`.",
-              );
-            const r = await tc.backgroundStop(params.process_id, params.signal);
+            const r = await tc.backgroundStop(pid, params.signal);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
@@ -2060,14 +2057,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             );
           }
           case "watch": {
-            if (!params.process_id)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "watch requires process_id" },
-                "[error] background watch requires `process_id`.",
-              );
             try {
-              const r = await tc.backgroundWatch(params.process_id, {
+              const r = await tc.backgroundWatch(pid, {
                 ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
                 ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
                 ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
@@ -2080,10 +2071,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 return recordResult(
                   callId,
                   { tool: "background", action: params.action, ...r },
-                  {
-                    content: [{ type: "text" as const, text: result }],
-                    details: r,
-                  },
+                  { ...text(result), details: r },
                   false,
                   { screenAs: { provenance: "external", source: "finished job output" } },
                 );
@@ -2135,19 +2123,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             }
           }
           case "send_input": {
-            if (!params.process_id)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "send_input requires process_id" },
-                "[error] background send_input requires `process_id`.",
-              );
             if (params.data === undefined)
               return recordFail(
                 callId,
                 { tool: "background", action: params.action, error: "send_input requires data" },
                 "[error] background send_input requires `data` (the text to send to the job's stdin).",
               );
-            const r = await tc.backgroundWrite(params.process_id, params.data);
+            const r = await tc.backgroundWrite(pid, params.data);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
@@ -2176,24 +2158,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
         }
       } catch (e) {
-        if (e instanceof NeedsApproval) {
-          ref.pendingApprovals?.push({
-            command: e.command,
-            reason: e.approvalReason,
-            kind: e.kind,
-            matched: e.matched,
-            ...(params.purpose ? { purpose: params.purpose } : {}),
-            ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
-            ...(e.grantModes ? { grantModes: e.grantModes } : {}),
-          });
-          ref.pausedOnApproval = true;
-          return recordResult(
-            callId,
-            { tool: "background", action: params.action, blocked: "needs_approval", reason: e.approvalReason },
-            { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
-            true,
-          );
-        }
+        if (e instanceof NeedsApproval)
+          return blockOnApproval(callId, e, params.purpose, "background", { action: params.action });
         if (e instanceof CommandDenied) {
           return recordFail(
             callId,
@@ -2214,6 +2180,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     );
   const isUnavailable = (r: unknown): r is { ok: false; code: "control_unavailable" } =>
     isObj(r) && r.code === "control_unavailable";
+  const refused = (callId: string, tool: string, r: { code: string; message?: string }) =>
+    isUnavailable(r) ? unavailable(callId, tool) : recordFail(callId, { tool, error: r.code }, `[error] ${r.message}`);
 
   const cron = defineTool({
     name: "cron",
@@ -2421,21 +2389,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
-      const needId = (): string | null => (typeof params.id === "string" && params.id ? params.id : null);
+      const id = typeof params.id === "string" ? params.id : "";
+      const fail = (error: string, message: string) =>
+        recordFail(callId, { tool: "cron", error }, `[error] ${message}`);
+      if (CRON_ID_ACTIONS.has(params.action) && !id)
+        return fail("id required", `cron ${params.action} requires \`id\`.`);
       switch (params.action) {
         case "create": {
           if (!params.schedule)
-            return recordFail(
-              callId,
-              { tool: "cron", error: "schedule required" },
-              "[error] cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt}).",
+            return fail(
+              "schedule required",
+              "cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt}).",
             );
           if (params.task === undefined && params.text === undefined) {
-            return recordFail(
-              callId,
-              { tool: "cron", error: "task or text required" },
-              "[error] cron create requires `task` (a prompt) or `text` (exact words).",
-            );
+            return fail("task or text required", "cron create requires `task` (a prompt) or `text` (exact words).");
           }
           const r = await tc.cronCreate({
             schedule: params.schedule,
@@ -2458,7 +2425,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             const cand = r.candidates?.length
               ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
               : "";
-            return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}${cand}`);
+            return fail(r.code, `${r.message}${cand}`);
           }
           return recordText(
             callId,
@@ -2503,11 +2470,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         case "get": {
-          const id = needId();
-          if (!id) return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron get requires `id`.");
           const r = await tc.cronGet(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)), false, {
             screenAs: {
               provenance: "external",
@@ -2516,12 +2480,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           });
         }
         case "runs": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron runs requires `id`.");
           const r = await tc.cronRuns(id, params.limit !== undefined ? { limit: params.limit } : undefined);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           const lines = r.runs.map(fmtCronRunLine);
           const suffix =
             r.runs.length === r.total
@@ -2540,9 +2500,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         case "patch": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron patch requires `id`.");
           const r = await tc.cronPatch(id, {
             ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
@@ -2555,34 +2512,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
           });
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(callId, { tool: "cron", id }, `Updated cron ${fmtCronLine(r.cron)}`);
         }
         case "delete": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron delete requires `id`.");
           const r = await tc.cronDelete(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(callId, { tool: "cron", id, deleted: true }, `Deleted cron ${id}.`);
         }
         case "disable": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron disable requires `id`.");
           const r = await tc.cronSetEnabled(id, false);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(callId, { tool: "cron", id, enabled: false }, `Paused cron ${id}.`);
         }
         case "run": {
-          const id = needId();
-          if (!id) return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron run requires `id`.");
           const r = await tc.cronRun(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(
             callId,
             { tool: "cron", id, ran: true },
@@ -2590,19 +2535,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         case "note": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron note requires `id`.");
           if (typeof params.note !== "string" || !params.note.trim()) {
-            return recordFail(
-              callId,
-              { tool: "cron", error: "note required" },
-              "[error] cron note requires `note` (the short message the next fire reads).",
-            );
+            return fail("note required", "cron note requires `note` (the short message the next fire reads).");
           }
           const r = await tc.cronNote(id, params.note);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(
             callId,
             { tool: "cron", id, noted: r.applied },
@@ -2612,19 +2549,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         case "retarget": {
-          const id = needId();
-          if (!id)
-            return recordFail(callId, { tool: "cron", error: "id required" }, "[error] cron retarget requires `id`.");
           if (typeof params.destinationKey !== "string" || !params.destinationKey) {
-            return recordFail(
-              callId,
-              { tool: "cron", error: "destinationKey required" },
-              "[error] cron retarget requires `destinationKey` (a key from the delivery menu).",
+            return fail(
+              "destinationKey required",
+              "cron retarget requires `destinationKey` (a key from the delivery menu).",
             );
           }
           const r = await tc.cronRetarget(id, params.destinationKey);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordFail(callId, { tool: "cron", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "cron", r);
           return recordText(callId, { tool: "cron", id }, `Retargeted cron ${fmtCronLine(r.cron)}`);
         }
       }
@@ -2718,8 +2650,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.filters?.length ? { filters: params.filters } : {}),
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
           });
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok) return recordFail(callId, { tool: "webhook", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "webhook", r);
 
           const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
           return recordText(
@@ -2752,8 +2683,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               "[error] webhook disable requires `id`.",
             );
           const r = await tc.webhookDisable(id);
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok) return recordFail(callId, { tool: "webhook", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "webhook", r);
           return recordText(callId, { tool: "webhook", id, enabled: false }, `Disabled webhook ${id}.`);
         }
         case "update": {
@@ -2766,8 +2696,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               "[error] webhook update requires `id` and the new `task`.",
             );
           const r = await tc.webhookUpdate(id, task);
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok) return recordFail(callId, { tool: "webhook", error: r.code }, `[error] ${r.message}`);
+          if (!r.ok) return refused(callId, "webhook", r);
           return recordText(
             callId,
             { tool: "webhook", id, updated: true },
@@ -3282,6 +3211,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { tool: surfaceName, action: params.action, error: `missing_${field}` },
           `[error] the "${params.action}" action requires \`${field}\`.`,
         );
+      const couldnt = (what: string, message?: string) =>
+        recordFail(
+          callId,
+          { tool: surfaceName, action: params.action, ok: false },
+          `[couldn't ${what}] ${message ?? "unavailable"}`,
+        );
+      const settled = (r: { ok: boolean; message?: string }, done: string, verb: string, failure: string) =>
+        recordResult(
+          callId,
+          { tool: surfaceName, action: params.action, ok: r.ok },
+          text(r.ok ? done : `[not ${verb}] ${r.message ?? failure}`),
+          !r.ok,
+        );
       const routing = {
         ...(params.channel !== undefined ? { channel: params.channel } : {}),
         ...(params.participants !== undefined ? { participants: params.participants } : {}),
@@ -3374,12 +3316,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...routing,
           });
           const r = await tc.react({ ts: params.ts, emoji: params.emoji, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "react", ok: r.ok },
-            text(r.ok ? "[reacted]" : `[not reacted] ${r.message ?? "reaction failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[reacted]", "reacted", "reaction failed");
         }
         case "edit": {
           if (params.ref === undefined) return missing("ref");
@@ -3392,23 +3329,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...routing,
           });
           const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "edit", ok: r.ok },
-            text(r.ok ? "[edited]" : `[not edited] ${r.message ?? "edit failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[edited]", "edited", "edit failed");
         }
         case "delete": {
           if (params.ref === undefined) return missing("ref");
           await recordCall(callId, { tool: surfaceName, action: "delete", ref: params.ref, ...routing });
           const r = await tc.delete({ ref: params.ref, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "delete", ok: r.ok },
-            text(r.ok ? "[deleted]" : `[not deleted] ${r.message ?? "delete failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[deleted]", "deleted", "delete failed");
         }
         case "read_thread": {
           await recordCall(callId, {
@@ -3417,12 +3344,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
           });
           const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
-          if (!r.ok)
-            return recordFail(
-              callId,
-              { tool: surfaceName, action: "read_thread", ok: false },
-              `[couldn't read the thread] ${r.message ?? "unavailable"}`,
-            );
+          if (!r.ok) return couldnt("read the thread", r.message);
           const messages = r.messages ?? [];
           return recordExternalResult(
             callId,
@@ -3448,12 +3370,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.since !== undefined ? { since: params.since } : {}),
           });
           const r = await tc.whatsNew(params.since !== undefined ? { since: params.since } : undefined);
-          if (!r.ok)
-            return recordFail(
-              callId,
-              { tool: surfaceName, action: "whats_new", ok: false },
-              `[couldn't check what's new] ${r.message ?? "unavailable"}`,
-            );
+          if (!r.ok) return couldnt("check what's new", r.message);
           const here = r.hereNew ?? 0;
           const others = r.activeSubConversations ?? 0;
           const line =
@@ -3489,12 +3406,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
             ...(params.source !== undefined ? { source: params.source } : {}),
           });
-          if (!r.ok)
-            return recordFail(
-              callId,
-              { tool: surfaceName, action: "search", ok: false },
-              `[couldn't search] ${r.message ?? "unavailable"}`,
-            );
+          if (!r.ok) return couldnt("search", r.message);
           const hits = r.hits ?? [];
           const coverage = r.coverageSince ? ` (mirror covers this channel since ${r.coverageSince})` : "";
           let body = `[nothing here matches "${params.query}"]`;
@@ -3528,12 +3440,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         case "read_members": {
           await recordCall(callId, { tool: surfaceName, action: "read_members" });
           const r = await tc.readMembers();
-          if (!r.ok)
-            return recordFail(
-              callId,
-              { tool: surfaceName, action: "read_members", ok: false },
-              `[couldn't read the members] ${r.message ?? "unavailable"}`,
-            );
+          if (!r.ok) return couldnt("read the members", r.message);
           const members = r.members ?? [];
           const body = members.length
             ? members.map((m) => `- ${m.displayName}`).join("\n")
@@ -3548,12 +3455,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           if (params.ref === undefined) return missing("ref");
           await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref });
           const r = await tc.readFile(params.ref);
-          if (!r.ok)
-            return recordFail(
-              callId,
-              { tool: surfaceName, action: "read_file", ok: false },
-              `[couldn't read that file] ${r.message ?? "unavailable"}`,
-            );
+          if (!r.ok) return couldnt("read that file", r.message);
           if (r.content !== undefined) {
             return recordExternalResult(
               callId,
