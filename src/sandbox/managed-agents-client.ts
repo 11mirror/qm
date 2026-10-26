@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { egressProxyHost } from "./sandbox-env.ts";
 import { fetchWithRetry } from "../util/async.ts";
 import { errMessage, swallowAs, withRequestId } from "../util/errors.ts";
 import { openManagedAgentsTunnel, SANDBOX_AGENT_PORT, type ManagedAgentsTunnel } from "./managed-agents-tunnel.ts";
@@ -148,7 +149,7 @@ export const managedAgentsSessionState = (wire: string | undefined): ManagedAgen
   STATE_BY_WIRE[wire ?? ""] ?? "unspecified";
 
 export function managedAgentsEgressAllow(egressProxyUrl: string): string[] {
-  const host = new URL(egressProxyUrl).hostname.replace(/^\[|\]$/g, "");
+  const host = egressProxyHost(egressProxyUrl);
   if (!host) throw new Error(`SANDBOX_EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
   return [host];
 }

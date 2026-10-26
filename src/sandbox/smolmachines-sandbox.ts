@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { egressProxyHost } from "./sandbox-env.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
@@ -60,8 +61,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
     ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
   };
-  const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
-  const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
+  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : undefined;
+  const network: MachineNetwork = proxyHost ? { mode: "allowCidrs", hosts: [proxyHost] } : { mode: "open" };
 
   const idByName = new Map<string, string>();
   const egressVerified = new Set<string>();
@@ -269,7 +270,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     const got = info.network;
     const hosts = got?.mode === "allowCidrs" ? (got.hosts ?? []).map((h) => h.toLowerCase()) : [];
     const cidrs = got?.mode === "allowCidrs" ? (got.cidrs ?? []) : [];
-    const bound = hosts.length === 1 && hosts[0] === egressProxyHost!.toLowerCase() && cidrs.length === 0;
+    const bound = hosts.length === 1 && hosts[0] === proxyHost && cidrs.length === 0;
     if (!bound) {
       throw new Error(
         `smolmachines egress ${name}: machine network is ${JSON.stringify(got)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
@@ -288,7 +289,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       cpus: opts.cpus ?? DEFAULT_CPUS,
       memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
       ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
-      egressEnforcement: egressProxyHost ? "domain" : "none",
+      egressEnforcement: proxyHost ? "domain" : "none",
       exec: execRaw,
       writeAbsBytes,
       readAbsBytes,
@@ -309,7 +310,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       destroy: deleteMachine,
       isLive: (name) => idByName.has(name),
       forget: (name) => idByName.delete(name),
-      ...(egressProxyHost ? { ensureEgress } : {}),
+      ...(proxyHost ? { ensureEgress } : {}),
     },
     opts,
     opts.store,

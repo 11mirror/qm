@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { egressProxyHost } from "./sandbox-env.ts";
 import type { ExecResult } from "./sandbox.ts";
 import { shq } from "../util/shell.ts";
 
@@ -125,7 +126,7 @@ const HOSTNAME_MATCHED_PORTS: Record<string, string> = { "http:": "80", "https:"
 
 export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
   const url = new URL(egressProxyUrl);
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const host = egressProxyHost(egressProxyUrl);
   const port = url.port || HOSTNAME_MATCHED_PORTS[url.protocol] || "";
   const ipLiteral = /^[\d.]+$/.test(host) || host.includes(":");
   if (!ipLiteral && port !== "80" && port !== "443")
