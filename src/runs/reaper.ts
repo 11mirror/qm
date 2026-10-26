@@ -30,6 +30,9 @@ async function releaseStrandedSessionLeases(sessions: SessionStore, sessionIds: 
   }
 }
 
+/** A running run older than this is reaped; crons treat a fire that old as stale. */
+export const RUN_MAX_AGE_MS = 24 * 60 * 60_000;
+
 export interface ReaperOptions {
   intervalMs: number;
   leaderLease: LeaderLease;
