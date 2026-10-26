@@ -11,7 +11,7 @@ npm test
 ```
 
 They load the repo's `./.env` into the child environment (so `ANTHROPIC_API_KEY` /
-`CORE_SIGNING_SECRET` / `SKILL_SIGNING_SECRET` are present, as an operator's shell would have them).
+`CORE_SIGNING_SECRET` is present, as an operator's shell would have them).
 
 ## What each file covers
 

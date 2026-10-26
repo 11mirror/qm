@@ -15,6 +15,4 @@ export function externalMemberActive(m: ExternalMember, now = Date.now()): boole
   return (m.kind === "teammate" && m.expiresAt === null) || (typeof m.expiresAt === "number" && m.expiresAt > now);
 }
 
-export function validEmail(value: string): boolean {
-  return value.length <= 254 && /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(value);
-}
+export { validEmail } from "../../plugins/chassis/src/email.ts";

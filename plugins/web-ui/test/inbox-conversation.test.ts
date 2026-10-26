@@ -8,8 +8,9 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
-    const { chatTpl, draftMessageTpl, toInboxItem, inboxState, resetInboxState } =
-      await vite.ssrLoadModule("/src/inbox.ts");
+    const { resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { chatTpl, draftMessageTpl } = await vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const { toInboxItem, inboxState } = await vite.ssrLoadModule("/src/inbox-model.ts");
     const { render, html } = await vite.ssrLoadModule("lit");
     for (const source of ["gmail", "slack"]) {
       for (const instruction of ["", "Make it shorter"]) {

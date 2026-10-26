@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Conversation } from "../src/conv-types.ts";
-import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/transcript-messages.ts";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 async function settle(): Promise<void> {

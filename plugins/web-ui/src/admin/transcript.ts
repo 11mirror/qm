@@ -4,6 +4,28 @@ import { repeat } from "lit/directives/repeat.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { node, renderer, scroller } from "./shared.ts";
 import { isUserMessage, itemFields, type Item } from "../items.ts";
+import { firstLine, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
+import { copyButton, errorStripBox, metaChip } from "./dom.ts";
+import { isXmlishText, renderMarkdown, renderXmlish } from "./rich-text.ts";
+import {
+  renderToolEntry,
+  stepDurEl,
+  toolCopyText,
+  toolLabelText,
+  toolName,
+  toolPrimaryText,
+  toolStatusMeta,
+} from "./tool-entry.ts";
+import {
+  type ContextSection,
+  cacheMetaItems,
+  contextSections,
+  fmtContextSize,
+  isStablePrefixMiss,
+  rawJsonLink,
+  requestBody,
+  sumCacheUsage,
+} from "./llm-context.ts";
 type Row = Record<string, any>;
 let generation = 0;
 export function cancel() {
@@ -107,11 +129,11 @@ export function prepare(data: Row, requests: Row[]) {
     originPromptSeq: data.origin && !data.hasMore ? items.find(isOriginPrompt)?.seq : null,
   };
 }
-function contextStats(requests: Row[], s: Row, sections?: Row[]) {
+function contextStats(requests: Row[], s: Row, sections?: ContextSection[]) {
   const latest = requests.at(-1) || { request: {} };
-  sections ??= s.contextSections(s.requestBody(latest), latest.transport);
+  sections ??= contextSections(requestBody(latest), latest.transport);
   return html`<div class="context-stats">
-    ${s.metaChip((latest.model || "?") + " · " + s.fmtContextSize(latest, sections))}${s.cacheMetaItems(s.sumCacheUsage(requests))}${s.rawJsonLink(requests)}
+    ${metaChip((latest.model || "?") + " · " + fmtContextSize(latest, sections))}${cacheMetaItems(sumCacheUsage(requests))}${rawJsonLink(requests)}
   </div>`;
 }
 function begin(s: Row, shell: Row) {
@@ -130,32 +152,32 @@ const failed = (result: Row, what: string) =>
 export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
   const host = document.createDocumentFragment(),
     draw = renderer(host as unknown as HTMLElement),
-    sections: Row[][] = requests.map((q) => s.contextSections(s.requestBody(q), q.transport)),
+    sections: ContextSection[][] = requests.map((q) => contextSections(requestBody(q), q.transport)),
     selected = sections.map((list) =>
       opts.selectLargest && list.length ? list.reduce((a, b) => (b.tokens > a.tokens ? b : a)).key : null,
     ),
-    cache = s.sumCacheUsage(requests);
+    cache = sumCacheUsage(requests);
   function paint() {
     draw(
       html`<div
-        class=${classMap({ llm: true, "context-turn": true, "context-page": !!opts.page, "cache-miss": !!cache && s.isStablePrefixMiss(cache) })}
+        class=${classMap({ llm: true, "context-turn": true, "context-page": !!opts.page, "cache-miss": !!cache && isStablePrefixMiss(cache) })}
       >
         ${opts.page ? nothing : html`<div class="who">${contextStats(requests, s, sections.at(-1) || [])}</div>`}
         <div class="context-details">
           ${requests.map((q, index) => {
-            const list: Row[] = sections[index],
+            const list: ContextSection[] = sections[index],
               total = list.reduce((n, section) => n + section.tokens, 0),
               chosen = list.find((section) => section.key === selected[index]);
             return html`<div class="context-request">
-              ${requests.length > 1 ? html`<div class="context-request-head"><strong>${"Request " + (index + 1)}</strong><span>${(q.model || "?") + " · " + s.fmtContextSize(q, list)}</span></div>` : nothing}${q.truncated ? html`<p class="context-note">Stored payload was truncated.</p>` : nothing}
+              ${requests.length > 1 ? html`<div class="context-request-head"><strong>${"Request " + (index + 1)}</strong><span>${(q.model || "?") + " · " + fmtContextSize(q, list)}</span></div>` : nothing}${q.truncated ? html`<p class="context-note">Stored payload was truncated.</p>` : nothing}
               <div class="context-overview">
                 <div class="context-stack" role="group" aria-label="request context">
                   ${list.map((section) => {
                     const title =
-                      section.label + " · " + s.fmtTokens(section.tokens) + (section.note ? " · " + section.note : "");
+                      section.label + " · " + fmtTokens(section.tokens) + (section.note ? " · " + section.note : "");
                     return html`<button
                       type="button"
-                      class=${"context-segment ctx-" + (section.colorKey || section.key) + (chosen === section ? " active" : "")}
+                      class=${"context-segment ctx-" + section.key + (chosen === section ? " active" : "")}
                       style=${"flex-grow:" + Math.max(section.tokens, 1) + ";flex-basis:" + (total ? Math.max(2, Math.round((section.tokens / total) * 100)) + "%" : "1%")}
                       data-tiny=${total && section.tokens / total < 0.12 ? "true" : "false"}
                       title=${title}
@@ -166,7 +188,7 @@ export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
                         paint();
                       }}
                     >
-                      <span>${section.label}</span><small>${"~" + s.fmtTokens(section.tokens)}</small>
+                      <span>${section.label}</span><small>${"~" + fmtTokens(section.tokens)}</small>
                     </button>`;
                   })}
                 </div>
@@ -177,7 +199,7 @@ export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
                     ? html`<div class="context-section-view">
                         <div class="context-section-head">
                           <strong>${chosen.label}</strong
-                          ><span>${s.fmtTokens(chosen.tokens) + (chosen.note ? " · " + chosen.note : "")}</span>
+                          ><span>${fmtTokens(chosen.tokens) + (chosen.note ? " · " + chosen.note : "")}</span>
                         </div>
                         <pre>${chosen.text || "(empty)"}</pre>
                       </div>`
@@ -261,7 +283,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     back: { label: "← Conversations", onClick: back(session.scopeId) },
     title: origin?.label || "Conversation",
     context:
-      s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + s.relTime(session.createdAt) : ""),
+      s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + relTime(session.createdAt) : ""),
     actions: owner ? [s.webUiAsButton(owner)] : [],
   });
   const requests: Row[] = await llmPromise.then((llm: Row) => (llm.ok ? llm.data.requests || [] : [])).catch(() => []);
@@ -309,11 +331,11 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   };
   function fullTool(unit: Row) {
     const built = memo(toolNodes, unit, () =>
-      s.renderToolEntry(
+      renderToolEntry(
         unit.call,
         unit.result,
         unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
-        s.stepDurEl(timing(unit)),
+        stepDurEl(timing(unit)),
       ),
     );
     built.sync?.();
@@ -334,8 +356,8 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       const text = itemText(item),
         user = isUserMessage(item);
       let value: Node;
-      if (user && s.isXmlishText(text)) value = s.renderXmlish(text);
-      else if (user || item.kind === "AgentMessage") value = s.renderMarkdown(text);
+      if (user && isXmlishText(text)) value = renderXmlish(text);
+      else if (user || item.kind === "AgentMessage") value = renderMarkdown(text);
       else value = node(html`<pre>${text}</pre>`);
       if ((value as Element).tagName === "PRE") value.textContent = text;
       return value;
@@ -355,7 +377,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       if (unit.llmReqs?.length) return full;
       const cp = call ? itemFields(call) : {},
         rp = res ? itemFields(res) : {},
-        name = s.toolName(cp, rp);
+        name = toolName(cp, rp);
       return html`<div
         class=${classMap({ entry: true, "tool-entry": true, "tool-line-entry": true, open: open.has(unit), filtered: hidden })}
       >
@@ -371,13 +393,13 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           @keydown=${activate(toggle(unit))}
         >
           <span class="tool-line-caret">${open.has(unit) ? "▾" : "▸"}</span
-          ><span class="tool-label">${s.toolLabelText(name, cp, rp)}</span
-          ><span class="tool-line-preview">${s.firstLine(s.toolPrimaryText(cp, rp, !!call, !!res) || "", 240)}</span
-          >${s.stepDurEl(timing(unit))}<span class="when"
-            >${call && res ? `#${call.seq}→#${res.seq} · ${s.fmtTime(call.createdAt)}` : `#${e.seq} · ${s.fmtTime(e.createdAt)}`}</span
+          ><span class="tool-label">${toolLabelText(name, cp, rp)}</span
+          ><span class="tool-line-preview">${firstLine(toolPrimaryText(cp, rp, !!call, !!res) || "", 240)}</span
+          >${stepDurEl(timing(unit))}<span class="when"
+            >${call && res ? `#${call.seq}→#${res.seq} · ${fmtTime(call.createdAt)}` : `#${e.seq} · ${fmtTime(e.createdAt)}`}</span
           >
-          <div class="meta-row">${s.toolStatusMeta(name, rp, !!res)}</div>
-          ${s.copyButton("Copy", () => s.toolCopyText(call, res))}
+          <div class="meta-row">${toolStatusMeta(name, rp, !!res)}</div>
+          ${copyButton("Copy", () => toolCopyText(call, res))}
         </div>
         ${full}
       </div>`;
@@ -391,7 +413,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     if (e.kind === "AgentMessage") label = s.brandSelfLabel();
     else if (e.kind === "Reasoning") label = "Thinking";
     else if (user) label = (typeof e.body.name === "string" && e.body.name.trim()) || e.author || "User";
-    if (isOrigin) label = origin.label || s.wakeOriginLabel(origin.trigger);
+    if (isOrigin) label = origin.label || wakeOriginLabel(origin.trigger);
     const files =
       e.kind === "AgentMessage" && Array.isArray(e.body.files) ? s.deliveryFileBadges(e.body.files) : nothing;
     return html`<div
@@ -401,10 +423,10 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle(unit)}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
           class=${"entry-label" + (isOrigin ? " important" : "")}
           >${label}</span
-        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${!user ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span
+        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${!user ? stepDurEl([[dur.get(e.seq)]]) : nothing}<span
           class="when"
-          >${"#" + e.seq + " · " + s.fmtTime(e.createdAt)}</span
-        >${s.copyButton("Copy", () => text)}
+          >${"#" + e.seq + " · " + fmtTime(e.createdAt)}</span
+        >${copyButton("Copy", () => text)}
       </div>
       ${body(e)}${files}
     </div>`;
@@ -420,7 +442,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     draw(
       html`<div class="detail">
         <div>
-          ${errors.length ? s.errorStripBox(errors, s.plural(errors.length, "error") + " logged in this session", 5) : nothing}
+          ${errors.length ? errorStripBox(errors, plural(errors.length, "error") + " logged in this session", 5) : nothing}
         </div>
         ${
           units.length

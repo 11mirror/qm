@@ -24,7 +24,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   calculateCost,
+  clampThinkingLevel,
   InMemoryCredentialStore,
+  retryAssistantCall,
   type Api,
   type AssistantMessage,
   type Context,
@@ -38,7 +40,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
-type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const TURN_EFFORT_LEVELS = new Set<string>([
   "off",
   "minimal",
@@ -364,46 +365,6 @@ const ACK_EMOJI_PROMPT = [
   'Output STRICT JSON only: {"emoji":"<name>"}. Nothing else.',
 ].join("\n");
 
-async function directAnthropicJson(
-  model: Model<Api>,
-  apiKey: string,
-  systemPrompt: string,
-  userPrompt: string,
-  modelGateway?: ModelGatewayTransportConfig,
-): Promise<string | undefined> {
-  if (
-    !String(model.provider ?? "")
-      .toLowerCase()
-      .includes("anthropic")
-  )
-    return undefined;
-  await modelGateway?.refresh?.();
-  const gateway = modelGatewayRequest(modelGateway, model);
-  const requestModel = gateway?.model ?? model;
-  const requestKey = gateway?.apiKey ?? apiKey;
-  const res = await fetch(`${requestModel.baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": requestKey,
-      "anthropic-version": "2023-06-01",
-      ...gateway?.headers,
-    },
-    body: JSON.stringify({
-      model: gateway?.target ?? requestModel.id,
-      max_tokens: 64,
-      // Haiku 5.5 thinks by default; a 64-token budget would go entirely to thinking.
-      thinking: { type: "disabled" },
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-    signal: AbortSignal.timeout(2_000),
-  });
-  if (!res.ok) return undefined;
-  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-  return json.content?.find((block) => block.type === "text")?.text;
-}
-
 const APPROVAL_SUMMARY_PROMPT = [
   "A command hit a human-approval gate. Explain, in ONE plain-English sentence, what running THIS",
   "specific command would actually do — concrete enough that a non-expert can decide whether to allow it.",
@@ -702,6 +663,8 @@ export function seedRawMessagesIntoSession(session: unknown, messages: readonly 
 }
 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
+/** Request-body cap for model-gateway calls, kept under the gateway's ~10 MB HTTP body limit. */
+const GATEWAY_REQUEST_MAX_BYTES = 9_000_000;
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;
   let listKey: "messages" | "input" | "contents" | undefined;
@@ -1169,13 +1132,12 @@ function customModelsPath(): string | null {
 }
 
 export async function buildModelRuntime(
-  keys: ProviderKeys | string,
+  keys: ProviderKeys,
   modelGateway?: ModelGatewayTransportConfig,
   cacheRetention?: "long",
 ): Promise<ModelRuntime> {
   await modelGateway?.refresh?.();
-  const { [CODEX_SUBSCRIPTION_PROVIDER]: subscriptionToken, ...apiKeys }: ProviderKeys =
-    typeof keys === "string" ? { anthropic: keys } : keys;
+  const { [CODEX_SUBSCRIPTION_PROVIDER]: subscriptionToken, ...apiKeys } = keys;
   const credentials = new InMemoryCredentialStore();
   if (subscriptionToken)
     await credentials.modify(CODEX_SUBSCRIPTION_PROVIDER, async () => ({
@@ -1294,44 +1256,48 @@ export async function buildModelRuntime(
   return runtime;
 }
 
-export async function oneShot(
-  prefix: string,
+/** pi-coding-agent's session retry defaults, kept for one-shot calls that used to run in a session. */
+const ONE_SHOT_RETRY = { enabled: true, maxRetries: 3, baseDelayMs: 2_000 };
+
+/**
+ * One stateless completion: a system prompt and one user message, no tools and no session.
+ * Transient provider errors retry with backoff unless `retry` is false; a provider failure
+ * throws a ProviderTurnError. Returns the trimmed reply text, or undefined when there is none.
+ */
+export async function complete(
   model: Model<Api>,
-  keys: ProviderKeys | string,
+  keys: ProviderKeys,
   systemPrompt: string,
   prompt: string,
-  opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig; thinkingLevel?: LegacyThinkingLevel },
+  opts?: {
+    signal?: AbortSignal;
+    modelGateway?: ModelGatewayTransportConfig;
+    thinkingLevel?: ModelThinkingLevel;
+    maxTokens?: number;
+    retry?: false;
+  },
 ): Promise<string | undefined> {
-  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { session, dirs } = await openAgentSession(prefix, systemPrompt, {
-    model,
-    modelRuntime,
-    customTools: [],
-    sessionManager: SessionManager.inMemory(),
-    ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
-  });
-  try {
-    const messagesBefore = session.messages.length;
-    if (opts?.signal?.aborted) return undefined;
-    const onAbort = () => {
-      void session.abort().catch(() => undefined);
-    };
-    opts?.signal?.addEventListener("abort", onAbort, { once: true });
-    const unsubscribe = session.agent.subscribe((event) => {
-      if (event.type === "agent_start" && opts?.signal?.aborted) session.agent.abort();
-    });
-    try {
-      await session.prompt(prompt);
-    } catch (err) {
-      throw piTurnError(session, err, messagesBefore);
-    } finally {
-      unsubscribe();
-      opts?.signal?.removeEventListener("abort", onAbort);
-    }
-    return piLastAssistantTextOrThrow(session);
-  } finally {
-    removeIsolatedDirs(dirs);
+  if (opts?.signal?.aborted) return undefined;
+  const runtime = await buildModelRuntime(keys, opts?.modelGateway);
+  const reasoning = clampThinkingLevel(model, opts?.thinkingLevel ?? "medium");
+  const context: Context = { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] };
+  const message = await retryAssistantCall(
+    () =>
+      runtime.completeSimple(model, context, {
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(reasoning !== "off" ? { reasoning } : {}),
+        ...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+      }),
+    opts?.retry === false ? undefined : ONE_SHOT_RETRY,
+    opts?.signal,
+  );
+  if (message.stopReason === "error") {
+    const contextWindow = (resolveModel(message.model) as { contextWindow?: number } | undefined)?.contextWindow;
+    throw providerTurnError(message, { contextWindow, lastInputTokens: undefined });
   }
+  if (message.stopReason === "aborted" && message.content.length === 0) return undefined;
+  const text = message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+  return text.trim() || undefined;
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
@@ -1458,21 +1424,23 @@ export function resolveConfiguredModelId(configured: string | undefined, default
 
 const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
 
-function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
-  const prior = model.headers?.["anthropic-beta"];
-  if (!prior || !apiKey?.includes("sk-ant-oat")) return model;
-  const beta = [...new Set([...CLAUDE_SUBSCRIPTION_BETAS, ...prior.split(",").map((value) => value.trim())])].join(",");
+/** The model with `before` and `after` merged around its existing anthropic-beta values, deduplicated. */
+function withAnthropicBetas(model: Model<Api>, before: readonly string[], after: readonly string[] = []): Model<Api> {
+  const prior = model.headers?.["anthropic-beta"]?.split(",").map((value) => value.trim()) ?? [];
+  const beta = [...new Set([...before, ...prior, ...after])].join(",");
   return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+}
+
+function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
+  if (!model.headers?.["anthropic-beta"] || !apiKey?.includes("sk-ant-oat")) return model;
+  return withAnthropicBetas(model, CLAUDE_SUBSCRIPTION_BETAS);
 }
 
 export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
   if (api.startsWith("openai") || !direct) return model;
   const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
-  if (!betas.length) return model;
-  const prior = model.headers?.["anthropic-beta"];
-  const beta = [...new Set([...(prior ? prior.split(",").map((value) => value.trim()) : []), ...betas])].join(",");
-  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+  return betas.length ? withAnthropicBetas(model, [], betas) : model;
 }
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
@@ -1636,7 +1604,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
         try {
           const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
-          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
         } catch (e) {
           swallow("pi: request byte budget", e);
         }
@@ -1674,16 +1642,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
   /** One isolated completion on `modelId`; null when no provider key serves that model. */
   async function keyedOneShot(
-    prefix: string,
     modelId: string,
     systemPrompt: string,
     prompt: string,
-    extra?: { signal?: AbortSignal; thinkingLevel?: LegacyThinkingLevel },
+    extra?: { signal?: AbortSignal; thinkingLevel?: ModelThinkingLevel },
   ): Promise<string | undefined | null> {
     const model = requiredModel(modelId);
     const providerKeys = await resolveProviderKeys();
     if (!keyForModel(providerKeys, model)) return null;
-    return oneShot(prefix, model, providerKeys, systemPrompt, prompt, { modelGateway, ...extra });
+    return complete(model, providerKeys, systemPrompt, prompt, { modelGateway, ...extra });
   }
 
   return defineHarness({
@@ -2345,9 +2312,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
         entryCount: detect.history.length,
       });
-      const out = (
-        (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
-      ).trim();
+      const out = ((await complete(model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? "").trim();
       return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
     },
 
@@ -2393,11 +2358,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     },
 
     async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-      return (await keyedOneShot("pi-oneshot", resolveModelId(), systemPrompt, prompt)) ?? undefined;
+      return (await keyedOneShot(resolveModelId(), systemPrompt, prompt)) ?? undefined;
     },
 
     async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
-      const out = await keyedOneShot("pi-judge", judgeModelId(), systemPrompt, prompt, {
+      const out = await keyedOneShot(judgeModelId(), systemPrompt, prompt, {
         signal,
         thinkingLevel: "low",
       });
@@ -2430,7 +2395,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           truncated: false,
         });
         return parseSecurityScreenVerdict(
-          await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
+          await complete(model, providerKeys, systemPrompt, payload, {
             signal,
             modelGateway,
           }),
@@ -2448,21 +2413,28 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       try {
         const model = requiredModel(ackModelId);
         const providerKeys = await resolveProviderKeys();
-        const apiKey = keyForModel(providerKeys, model);
-        if (!apiKey) return undefined;
+        if (!keyForModel(providerKeys, model)) return undefined;
         const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-        const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway);
+        // Haiku thinks by default; a 64-token budget would go entirely to thinking.
+        const raw = await complete(model, providerKeys, ACK_EMOJI_PROMPT, prompt, {
+          modelGateway,
+          thinkingLevel: "off",
+          maxTokens: 64,
+          retry: false,
+          signal: AbortSignal.timeout(2_000),
+        });
         if (!raw) return undefined;
         const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
         return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
-      } catch {
+      } catch (e) {
+        swallow("pi: ack emoji", e);
         return undefined;
       }
     },
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const out = await keyedOneShot("pi-title", titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
+      const out = await keyedOneShot(titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
       return out === null ? undefined : sanitizeTitle(out);
     },
 
@@ -2475,7 +2447,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         "Command:",
         command.slice(0, 4000),
       ].join("\n");
-      const out = (await keyedOneShot("pi-approval-summary", titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
+      const out = (await keyedOneShot(titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);
     },

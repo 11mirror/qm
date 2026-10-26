@@ -3,14 +3,8 @@ import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import {
-  itemsToMessages,
-  hasRecordedRunReply,
-  pollRun,
-  RUN_IDLE_MS,
-  setClock,
-  type AssistantWork,
-} from "../src/core-bridge.ts";
+import { itemsToMessages, hasRecordedRunReply, type AssistantWork } from "../src/transcript-messages.ts";
+import { pollRun, RUN_IDLE_MS, setClock } from "../src/run-stream.ts";
 
 const user = (runId: string): Item =>
   item("UserMessage", { seq: 1, createdAt: 100, text: "Compute the result", turnId: runId });

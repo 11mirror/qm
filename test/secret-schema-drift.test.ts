@@ -110,7 +110,6 @@ test("production rejects weak encryption key material for managed credentials", 
     CONNECTOR_SECRET_KEY: strong,
     CORE_SIGNING_SECRET: strong,
     PORTAL_IDENTITY_SECRET: "identity",
-    SKILL_SIGNING_SECRET: strong,
     DATABASE_URL: "postgres://qm@localhost/qm",
   } as NodeJS.ProcessEnv;
   assert.deepEqual(validateCoreSecretEnv(env), []);

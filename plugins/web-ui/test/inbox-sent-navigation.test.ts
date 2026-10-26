@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { createServer } from "vite";
 import { inboxRuntime } from "./inbox-composer-fixture.ts";
-import type { LedgerItem } from "../src/inbox.ts";
+import type { LedgerItem } from "../src/inbox-model.ts";
 
 test("Sent opens from a split pane and retains drafts and queued sends after navigation", async () => {
   const domErrors: Error[] = [];
@@ -51,7 +51,10 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
   };
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const inbox = await vite.ssrLoadModule("/src/inbox.ts");
+    const inbox = {
+      ...(await vite.ssrLoadModule("/src/inbox.ts")),
+      ...(await vite.ssrLoadModule("/src/inbox-model.ts")),
+    };
     const sent = await vite.ssrLoadModule("/src/sent-mail.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { splitState } = await vite.ssrLoadModule("/src/split.ts");

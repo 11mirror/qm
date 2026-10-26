@@ -7,7 +7,7 @@ import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 const org = scopeId("org", "default-org");
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
-test("recordUse sets lastUsedAt without touching version/updatedAt or the signature", async () => {
+test("recordUse sets lastUsedAt without touching version/updatedAt", async () => {
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "alice" });
   assert.equal(s.lastUsedAt, undefined);
@@ -16,7 +16,6 @@ test("recordUse sets lastUsedAt without touching version/updatedAt or the signat
   assert.equal(after.lastUsedAt, 12345);
   assert.equal(after.version, s.version);
   assert.equal(after.updatedAt, s.updatedAt);
-  assert.equal(skills.verify(after), true);
 });
 
 test("recordUse on an unknown id is a no-op", async () => {

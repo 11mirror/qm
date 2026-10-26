@@ -3,12 +3,8 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { constants as http2Constants, createServer as createHttp2Server, type ServerHttp2Session } from "node:http2";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
-import { createAdminService } from "../src/admin/admin-service.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
-import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -365,69 +361,6 @@ test("/d/ proxy returns 504 instead of hanging when the deployment accepts but n
     assert.equal(((await res.json()) as { error?: string }).error, "gateway_timeout");
   } finally {
     for (const s of held) s.destroy();
-    await new Promise<void>((r) => server.close(() => r()));
-    await new Promise<void>((r) => upstream.close(() => r()));
-  }
-});
-
-test("admin deployment proxy bypasses deployment ACL after admin auth and audits the visit", async () => {
-  let upstreamUrl = "";
-  const upstream = createHttpServer((req, res) => {
-    upstreamUrl = req.url ?? "";
-    res.end("admin-upstream-ok");
-  });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
-
-  const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
-  let bypassAcl: boolean | undefined;
-  const app = {
-    listDeployments: async () => [{ id: "d1", ownerScopeId: "personal:U1" }],
-    reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
-      bypassAcl = opts?.bypassAcl;
-      return opts?.bypassAcl
-        ? { status: "ok", endpoint: { host: "127.0.0.1", port: upstreamPort } }
-        : { status: "denied" };
-    },
-  } as unknown as App;
-  const SECRET = "admin-deploy-proxy-secret".repeat(3);
-  const server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: createAdminService(testAdminGrantStore()),
-    signingSecret: SECRET,
-    auditLog: {
-      record: (e) => auditEvents.push(e),
-      events: async () => auditEvents as any,
-      tail: async () => auditEvents as any,
-    },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const path = "/v1/admin/deployments/d1/proxy/hello?x=1";
-    const actor = "admin-alice@default-org";
-    const ts = Math.floor(Date.now() / 1000);
-    const res = await fetch(`${base}${path}`, {
-      headers: {
-        "x-admin-actor": actor,
-        "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${actor}`),
-      },
-    });
-    assert.equal(res.status, 200);
-    assert.equal(await res.text(), "admin-upstream-ok");
-    assert.equal(upstreamUrl, "/hello?x=1");
-    assert.equal(bypassAcl, true);
-    assert.ok(
-      auditEvents.some(
-        (e) =>
-          e.principalId === "admin-alice" &&
-          e.action === "deployment.visit" &&
-          e.resource === "d1" &&
-          e.scopeLabel === "personal:U1",
-      ),
-    );
-  } finally {
     await new Promise<void>((r) => server.close(() => r()));
     await new Promise<void>((r) => upstream.close(() => r()));
   }

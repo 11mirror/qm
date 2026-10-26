@@ -1,14 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import {
   buildDetectionPrompt,
   createPiHarness,
-  oneShot,
+  complete,
   parseDetectVerdict,
   piHarnessConfigOptions,
   piLastAssistantTextOrThrow,
@@ -31,10 +29,6 @@ import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
-
-function countTempDirs(prefix: string): number {
-  return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
-}
 
 test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
   const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
@@ -323,19 +317,7 @@ test("piHarnessConfigOptions omits the optional fields when the config leaves th
   }
 });
 
-test("oneShot removes its temp dirs even when the session call throws", async () => {
-  const prefix = "pi-onesh-test";
-  const before = countTempDirs(`${prefix}-agent-`);
-
-  const fakeModel = { id: "claude-sonnet-4-5" } as unknown as Parameters<typeof oneShot>[1];
-
-  await assert.rejects(oneShot(prefix, fakeModel, "test-key", "system", "prompt"));
-
-  const after = countTempDirs(`${prefix}-agent-`);
-  assert.equal(after, before, "oneShot must leave no agent dirs behind");
-});
-
-test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
+test("complete completes an authenticated Pi 0.82 turn", async (t) => {
   let apiKey: string | undefined;
   let requestBody = "";
   const server = createServer((request, response) => {
@@ -393,13 +375,13 @@ test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
   assert(baseModel);
   const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
 
-  assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello"), "working");
+  assert.equal(await complete(model, { anthropic: "test-key" }, "system", "hello"), "working");
   assert.equal(apiKey, "test-key");
   assert.match(requestBody, /system/);
   assert.match(requestBody, /hello/);
 });
 
-test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
+test("complete routes configured models through the model gateway without mutating transport metadata", async (t) => {
   let lastBody = "";
   let stopReason = "end_turn";
   const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
@@ -466,15 +448,15 @@ test("oneShot routes configured models through the model gateway without mutatin
     models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
   };
   const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
-  assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
+  assert.equal(await complete(model, {}, "system", "hello", { modelGateway }), "gateway");
   const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
   await assert.rejects(
-    oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
+    complete(directModel, {}, "system", "hello", { modelGateway }),
     /No API key found|Provider is not configured/,
   );
 
   assert.equal(
-    await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
+    await complete(directModel, { anthropic: "direct-provider-key" }, "system", "hello", { modelGateway }),
     "gateway",
   );
   assert.deepEqual(requests, [
@@ -944,7 +926,7 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.reasoning?.effort, "low");
 });
 
-test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
+test("complete stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
   let requests = 0;
   const server = createServer((request) => {
     requests += 1;
@@ -974,7 +956,7 @@ test("oneShot stops a request whose abort lands before Pi starts its run", { tim
     controller.abort();
   }) as AbortSignal["addEventListener"];
 
-  const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
+  const outcome = await complete(model, { anthropic: "test-key" }, "system", "hello", { signal }).then(
     (text) => ({ text }),
     (error: unknown) => ({ error }),
   );

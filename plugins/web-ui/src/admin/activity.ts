@@ -1,12 +1,13 @@
 import { html } from "lit";
 import { bareCard, table, pager, mount } from "./shared.ts";
+import { egressDetail, firstLine, fmtTime, plural, relTime } from "./format.ts";
 
 export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
   const rows = data.errors || [];
   const total = data.total ?? rows.length;
   const limit = data.limit || s.errorsPageSize;
   const offset = data.offset || 0;
-  s.defaultShell({ count: s.plural(total, "error") });
+  s.defaultShell({ count: plural(total, "error") });
   const content = table(
     ["Category", "Code", "Message", ...(s.all ? ["Scope"] : []), "Session", "Time"],
     rows.map((e: any) => {
@@ -18,7 +19,7 @@ export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
         {
           node: html`<details class="error-message">
             <summary>
-              <span class="error-preview">${s.firstLine(text, 160)}</span><span class="error-full">${text}</span>
+              <span class="error-preview">${firstLine(text, 160)}</span><span class="error-full">${text}</span>
             </summary>
           </details>`,
         },
@@ -28,7 +29,7 @@ export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
         e.sessionId
           ? { node: s.navLink("View session", { view: "history", scope: scope || s.scope, session: e.sessionId }) }
           : "—",
-        time(e.ts, s),
+        time(e.ts),
       ];
     }),
     s.all ? "No errors recorded." : "No errors recorded for this scope.",
@@ -41,7 +42,7 @@ export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
 
 export function audit(root: HTMLElement, data: any, s: Record<string, any>) {
   const events = data.events || [];
-  s.defaultShell({ count: s.plural(events.length, "event") });
+  s.defaultShell({ count: plural(events.length, "event") });
   mount(
     root,
     bareCard(
@@ -56,7 +57,7 @@ export function audit(root: HTMLElement, data: any, s: Record<string, any>) {
           },
           { text: e.status ? e.resource + " (" + e.status + ")" : e.resource || "", cls: "mono" },
           ...(s.all ? [s.shortName(e.scopeLabel)] : []),
-          time(e.ts, s),
+          time(e.ts),
         ]),
         s.all ? "No admin activity yet." : "No admin activity for this scope.",
       ),
@@ -87,8 +88,8 @@ export function egress(root: HTMLElement, data: any, s: Record<string, any>) {
           { node: html`<span class="subline">${r.source || "firewall"}</span>` },
           ...(s.all ? [s.shortName(r.scopeLabel)] : []),
           { text: r.principalId || "None", cls: "mono" },
-          { text: s.egressDetail(r), cls: "mono" },
-          time(r.ts, s),
+          { text: egressDetail(r), cls: "mono" },
+          time(r.ts),
         ]),
         "No egress in this scope yet.",
       ),
@@ -103,7 +104,7 @@ function egressStatus(row: any) {
   return html`<span class=${tone}>${label}</span>`;
 }
 
-const time = (ts: number, s: Record<string, any>) => ({
-  node: html`<span title=${s.fmtTime(ts)}>${s.relTime(ts)}</span>`,
+const time = (ts: number) => ({
+  node: html`<span title=${fmtTime(ts)}>${relTime(ts)}</span>`,
   cls: "num",
 });

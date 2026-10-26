@@ -2,7 +2,8 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import { api, makeCoreStreamFn, queueTurn, PENDING_APPROVAL_REASON } from "../src/core-bridge.ts";
+import { api } from "../src/core-bridge.ts";
+import { makeCoreStreamFn, queueTurn, PENDING_APPROVAL_REASON } from "../src/run-stream.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 

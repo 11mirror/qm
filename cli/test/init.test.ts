@@ -64,7 +64,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
     // The scaffold names anthropic as the base model provider, so its key is required
     // rather than deferred to Admin; the providers not selected stay optional.
-    for (const line of ["CORE_SIGNING_SECRET=", "SKILL_SIGNING_SECRET=", "ANTHROPIC_API_KEY="]) {
+    for (const line of ["CORE_SIGNING_SECRET=", "CONNECTOR_SECRET_KEY=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
     }
     for (const line of ["# OPENROUTER_API_KEY=  # optional", "# OPENAI_API_KEY=  # optional"]) {
@@ -73,10 +73,10 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.ok(env.includes("# Generate with: openssl rand -hex 32"), "mintable secrets carry their generation command");
     const localEnv = readFileSync(join(dir, ".env"), "utf8");
     const coreSecret = localEnv.match(/^CORE_SIGNING_SECRET=([a-f0-9]{64})$/m)?.[1];
-    const skillSecret = localEnv.match(/^SKILL_SIGNING_SECRET=([a-f0-9]{64})$/m)?.[1];
+    const connectorSecret = localEnv.match(/^CONNECTOR_SECRET_KEY=([a-f0-9]{64})$/m)?.[1];
     assert.ok(coreSecret, "init generates a strong core signing key");
-    assert.ok(skillSecret, "init generates a strong skill signing key");
-    assert.notEqual(coreSecret, skillSecret, "generated keys are independent");
+    assert.ok(connectorSecret, "init generates a strong connector key");
+    assert.notEqual(coreSecret, connectorSecret, "generated keys are independent");
     assert.equal(statSync(join(dir, ".env")).mode & 0o777, 0o600, ".env is owner-readable only");
     for (const stale of ["HARNESS=", "ORG_ID=", "PORT=", "SESSION_STORE"]) {
       assert.ok(!env.includes(stale), `.env.example should not offer ${stale} as a value to fill in`);

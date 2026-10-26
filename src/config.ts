@@ -131,7 +131,6 @@ interface DeploymentConfig {
   connectorSecretKey?: string;
   slackEventsPort?: number;
   runStore: "memory" | "postgres";
-  skillSigningSecret?: string;
   seedSkills: boolean;
   skillsSeedDir: string;
   pluginSkillDirs: string[];
@@ -1051,7 +1050,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     layerEnv: { ...env },
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
-    ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),
     seedSkills: true,
     skillsSeedDir: resolve("./skills-seed"),
     pluginSkillDirs: defaultPluginSkillDirs(),

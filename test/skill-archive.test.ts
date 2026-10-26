@@ -41,7 +41,7 @@ test("an archived skill can be re-published (resurrection on re-import)", async 
   assert.equal((await skills.resolve("demo", [org])).skill?.id, id);
 });
 
-test("create carries pack provenance, kept out of the signature", async () => {
+test("create carries pack provenance", async () => {
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const s = await skills.create({
     scopeId: org,
@@ -50,5 +50,4 @@ test("create carries pack provenance, kept out of the signature", async () => {
     pack: { packId: "src1", commit: "abc123", upstreamName: "demo" },
   });
   assert.deepEqual(s.pack, { packId: "src1", commit: "abc123", upstreamName: "demo" });
-  assert.ok(skills.verify(s));
 });

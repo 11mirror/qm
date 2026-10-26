@@ -19,7 +19,7 @@ function setup() {
   dom.window.requestAnimationFrame = () => 0;
   dom.window.eval(
     bundle +
-      `;window.ui=slackUI;window.currentView='slack';window.state={container:'C1'};window.calls=[];window.responses=[];window.shells=[];ui.configure({api:async(method,path)=>{calls.push(path);return responses.shift();},go:st=>{state=st;currentView=st.view},urlToState:()=>state,stateToUrl:st=>'/admin/'+st.view,pageShell:s=>{shells.push(s);document.getElementById('shellbar').innerHTML='<button class="back">Back</button><span class="shell-title">Title</span><span class="shell-context">Context</span><span class="shell-spacer"></span>';},navLink:()=>document.createElement('a'),relTime:x=>x,fmtTime:x=>x,brandSelfLabel:()=>"QM",slackParseText:text=>document.createTextNode(text),slackContainerLabel:x=>x,slackContainerScope:()=>null,loadSlackContainers:async()=>({ok:true,data:{}}),containers:()=>[],truncated:()=>false,view:()=>currentView,loaded:()=>{}});`,
+      `;window.ui=slackUI;window.currentView='slack';window.state={container:'C1'};window.calls=[];window.responses=[];window.shells=[];ui.configure({api:async(method,path)=>{calls.push(path);return responses.shift();},go:st=>{state=st;currentView=st.view},urlToState:()=>state,stateToUrl:st=>'/admin/'+st.view,pageShell:s=>{shells.push(s);document.getElementById('shellbar').innerHTML='<button class="back">Back</button><span class="shell-title">Title</span><span class="shell-context">Context</span><span class="shell-spacer"></span>';},navLink:()=>document.createElement('a'),brandSelfLabel:()=>"QM",slackContainerLabel:x=>x,slackContainerScope:()=>null,loadSlackContainers:async()=>({ok:true,data:{}}),containers:()=>[],truncated:()=>false,view:()=>currentView,loaded:()=>{}});`,
   );
   return dom;
 }
@@ -47,7 +47,7 @@ test("Slack search ignores responses from superseded queries", async () => {
   const dom = setup();
   try {
     dom.window.eval(
-      'window.pending=[];ui.configure({...{} ,api:()=>new Promise(resolve=>pending.push(resolve)),view:()=>"slack",urlToState:()=>state,slackParseText:text=>document.createTextNode(text),slackContainerLabel:x=>x,brandSelfLabel:()=>"QM",fmtTime:x=>x,relTime:x=>x});window.first=ui.activity.search("old",null);window.second=ui.activity.search("new",null);pending[1]({ok:true,data:{messages:[]}})',
+      'window.pending=[];ui.configure({...{} ,api:()=>new Promise(resolve=>pending.push(resolve)),view:()=>"slack",urlToState:()=>state,slackContainerLabel:x=>x,brandSelfLabel:()=>"QM"});window.first=ui.activity.search("old",null);window.second=ui.activity.search("new",null);pending[1]({ok:true,data:{messages:[]}})',
     );
     await dom.window.eval("second");
     dom.window.eval('pending[0]({ok:false,status:500,data:{message:"obsolete"}})');

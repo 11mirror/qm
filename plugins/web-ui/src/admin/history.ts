@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
 import { bareCard, card, denseList, renderer, node } from "./shared.ts";
+import { cronName, historyKindMatches, historyModeLabel, plural, relTime, scopeKind, titleCase } from "./format.ts";
+import { errorStripBox } from "./dom.ts";
 
 export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
-  const sessions = (d.sessions || []).filter((row: any) => s.historyKindMatches(row, s.historyKind));
-  const orgWide = s.scopeKind(s.scope) === "org";
+  const sessions = (d.sessions || []).filter((row: any) => historyKindMatches(row, s.historyKind));
+  const orgWide = scopeKind(s.scope) === "org";
   const cron = s.historyKind === "cron" ? s.cron : null;
   const { scope, historyKind } = s;
   const route = (extra: any) => ({ view: "history", scope, session: null, cursor: null, historyKind, ...extra });
@@ -23,7 +25,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
           </button>
         </div>`
       : nothing;
-  const mode = s.historyModeLabel(s.historyKind);
+  const mode = historyModeLabel(s.historyKind);
   const tabs = ["conversation", "cron", "background"].map((kind) => ({
     label: s.kindLabels[kind],
     count: d.counts?.[kind],
@@ -52,7 +54,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
     cron
       ? {
           back: { label: "← Cron runs", onClick: () => s.go(route({})) },
-          title: s.cronName(d.cron?.cron || sessions[0]?.origin?.cron, true),
+          title: cronName(d.cron?.cron || sessions[0]?.origin?.cron, true),
           context: orgWide ? "" : s.shortName(s.scope),
         }
       : { title: orgWide ? s.title : s.shortName(s.scope), tabs, actions: [scopeFilter] },
@@ -74,7 +76,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
                   return {
                     name: e.name || s.shortName(e.id),
                     preview: html`<span title=${names.join(", ")}
-                      >${names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? " +" + s.plural(names.length - 4, "more scope") : "") : "no scopes attached"}</span
+                      >${names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? " +" + plural(names.length - 4, "more scope") : "") : "no scopes attached"}</span
                     >`,
                     href: s.stateToUrl(route({ scope: e.id })),
                   };
@@ -84,7 +86,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
               ),
             )
           : nothing
-      }${environment && !cron ? card("Attached scopes", s.plural(attached.length, "scope") + " share this environment's computer and working memory.", html`<div class="history-empty-scopes">${attached.length ? attached.map((id: string) => html`<button type="button" class="history-empty-scope" title=${id} @click=${() => s.selectScope(id)}>${s.shortName(id)}</button>`) : html`<p class="empty">No scopes attached.</p>`}</div>`) : nothing}${bareCard(
+      }${environment && !cron ? card("Attached scopes", plural(attached.length, "scope") + " share this environment's computer and working memory.", html`<div class="history-empty-scopes">${attached.length ? attached.map((id: string) => html`<button type="button" class="history-empty-scope" title=${id} @click=${() => s.selectScope(id)}>${s.shortName(id)}</button>`) : html`<p class="empty">No scopes attached.</p>`}</div>`) : nothing}${bareCard(
         denseList(
           sessions,
           (row: any) => {
@@ -97,8 +99,8 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
               const typeLabel =
                 (kind === "dm" && "DM") ||
                 (/^cron(_monologue|_wake)?$/.test(kind) && "Cron") ||
-                s.titleCase(String(kind).replaceAll("_", " "));
-              name = origin ? s.cronName(origin, true) : row.origin?.label || typeLabel;
+                titleCase(String(kind).replaceAll("_", " "));
+              name = origin ? cronName(origin, true) : row.origin?.label || typeLabel;
               preview = row.result || row.lastMessage || row.firstMessage || "";
             } else if (background && row.result) {
               name = row.result;
@@ -109,7 +111,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
               preview: html`<span
                 >${orgWide && row.scopeId ? html`<span class="dense-tag">${s.shortName(row.scopeId)}</span>` : nothing}${preview}</span
               >`,
-              time: row.lastActivity ? s.relTime(row.lastActivity) : "—",
+              time: row.lastActivity ? relTime(row.lastActivity) : "—",
               href: s.stateToUrl(route({ session: row.id })),
             };
           },
@@ -123,10 +125,10 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
                 errorCount && errors.length
                   ? html`<div class="statline">
                         <a href="#" @click=${(e: Event) => (e.preventDefault(), (errorsOpen = !errorsOpen), draw())}
-                          >${s.plural(errorCount, "error")} logged in this scope</a
+                          >${plural(errorCount, "error")} logged in this scope</a
                         >
                       </div>
-                      ${errorsOpen ? s.errorStripBox(errors, "Most recent errors", 20, (e: any) => (e.sessionId ? { href: s.stateToUrl(route({ session: e.sessionId })), go: () => s.go(route({ session: e.sessionId })) } : null)) : nothing}`
+                      ${errorsOpen ? errorStripBox(errors, "Most recent errors", 20, (e: any) => (e.sessionId ? { href: s.stateToUrl(route({ session: e.sessionId })), go: () => s.go(route({ session: e.sessionId })) } : null)) : nothing}`
                   : nothing
               }
             </div>`

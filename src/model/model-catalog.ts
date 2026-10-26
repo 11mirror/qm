@@ -1,3 +1,4 @@
+import { errMessage } from "../util/errors.ts";
 import { gatewayModelCatalog, gatewayModelsVersion } from "./gateway-models.ts";
 import { modelSupported, registerOpenRouterCatalogModel, resolveModel, selectableBaseModels } from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
@@ -171,7 +172,8 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
       entry.gatewayVersion = gatewayModelsVersion();
       return entry.models;
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      console.warn(`[model] OpenRouter catalog fetch failed; using cached and built-in models: ${errMessage(error)}`);
       const models = builtInModelCatalog();
       const known = new Set(models.map((model) => model.id));
       entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];

@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Conversation } from "../src/conv-types.ts";
-import type { AssistantWork, PendingApproval } from "../src/core-bridge.ts";
+import type { AssistantWork } from "../src/transcript-messages.ts";
+import type { PendingApproval } from "../src/core-bridge.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -125,7 +126,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { itemsToMessages, attachPendingApprovals } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { itemsToMessages, attachPendingApprovals } = await vite.ssrLoadModule("/src/transcript-messages.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());

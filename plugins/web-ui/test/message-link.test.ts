@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { messageLinkSeq, loadMessageTranscript, messageEntrySeqs, highlightMessage } from "../src/message-link.ts";
 import { sessionLink } from "../src/deep-link.ts";
-import { itemsToMessages, type TranscriptPage } from "../src/core-bridge.ts";
+import { itemsToMessages } from "../src/transcript-messages.ts";
+import type { TranscriptPage } from "../src/core-bridge.ts";
 
 test("message URLs preserve zero and reject malformed, negative, and unsafe sequences", () => {
   assert.equal(messageLinkSeq("?seq=120"), 120);

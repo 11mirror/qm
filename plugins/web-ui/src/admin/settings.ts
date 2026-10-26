@@ -1,3 +1,4 @@
+import { fmtTime } from "./format.ts";
 import { mountTemplate } from "./shared.ts";
 import { cardClass, closeIcon, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
@@ -183,8 +184,7 @@ export function mountCards() {
   }
 }
 
-let soulActions: { formatTime: (time: any) => string; restore: (revision: Data) => Promise<void> } = {
-  formatTime: String,
+let soulActions: { restore: (revision: Data) => Promise<void> } = {
   restore: async () => {},
 };
 export const configureSoul = (actions: typeof soulActions) => void (soulActions = actions);
@@ -254,7 +254,7 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
                     <p>
                       Version ${r.version}<small
                         >${r.updatedBy || "Author unavailable"} ·
-                        ${r.updatedAt ? soulActions.formatTime(r.updatedAt) : "Time unavailable"}</small
+                        ${r.updatedAt ? fmtTime(r.updatedAt) : "Time unavailable"}</small
                       >
                     </p>
                     <button

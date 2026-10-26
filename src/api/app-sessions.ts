@@ -969,10 +969,6 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
-      await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await h.artifactAuthor(ownerScopeId, ref));
-      h.audit(revokedBy, "revoke", ref, granteeScopeId);
-    },
     async promoteSkill(id, targetScopeId, actorId, liveActor) {
       if (parseScopeId(targetScopeId).kind !== "org")
         throw new Error("promote targets the org scope — use share or move for anything narrower");

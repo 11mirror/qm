@@ -32,7 +32,11 @@ async function inboxUi(t: TestContext) {
   await vite.ssrLoadModule("/src/shell.ts");
   const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
   appState.me = { user: "alice", org: "test", permissions: ["inbox"] };
-  const inbox = await vite.ssrLoadModule("/src/inbox.ts");
+  const inbox = {
+    ...(await vite.ssrLoadModule("/src/inbox.ts")),
+    ...(await vite.ssrLoadModule("/src/inbox-model.ts")),
+    ...(await vite.ssrLoadModule("/src/inbox-feed.ts")),
+  };
   reset = inbox.resetInboxState;
   const mount = (options = {}) => {
     pane?.dispose();

@@ -2,6 +2,8 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { classMap } from "lit/directives/class-map.js";
 import { badge, renderer, node, scroller, empty, denseList as dense } from "./shared.ts";
+import { fmtTime, relTime } from "./format.ts";
+import { slackParseText } from "./rich-text.ts";
 type Row = Record<string, any>;
 type Log = "judgments" | "ackemoji";
 let context: Row;
@@ -26,9 +28,9 @@ export function message(m: Row, opts: Row = {}) {
       ${opts.cont ? html`<span class="sm-guttertime">${time(m)}</span>` : html`<span class="sm-avatar">${(author(m).trim()[0] || "?").toUpperCase()}</span>`}
     </div>
     <div class="sm-body">
-      ${opts.cont ? nothing : html`<div class="sm-head"><span class="sm-author">${author(m)}</span>${messageTag(m)}${reply(m) ? html`<span class="sm-tag" title=${"Reply in the thread rooted at " + m.sub}>Thread reply</span>` : nothing}${opts.containerLabel ? html`<span class="sm-tag">${opts.containerLabel}</span>` : nothing}<span class="sm-when" title=${context.fmtTime(m.createdAt) + " · ts " + m.ts}>${context.view() === "slack" && !opts.onOpen ? time(m) : context.relTime(m.createdAt)}</span></div>`}
+      ${opts.cont ? nothing : html`<div class="sm-head"><span class="sm-author">${author(m)}</span>${messageTag(m)}${reply(m) ? html`<span class="sm-tag" title=${"Reply in the thread rooted at " + m.sub}>Thread reply</span>` : nothing}${opts.containerLabel ? html`<span class="sm-tag">${opts.containerLabel}</span>` : nothing}<span class="sm-when" title=${fmtTime(m.createdAt) + " · ts " + m.ts}>${context.view() === "slack" && !opts.onOpen ? time(m) : relTime(m.createdAt)}</span></div>`}
       <div class="sm-text">
-        ${context.slackParseText(m.text || "", m.mentions)}${m.editedAt ? html`<span class="sm-flag" title=${context.fmtTime(m.editedAt)}>(edited)</span>` : nothing}${m.deleted ? html`<span class="sm-flag">(deleted in Slack)</span>` : nothing}
+        ${slackParseText(m.text || "", m.mentions)}${m.editedAt ? html`<span class="sm-flag" title=${fmtTime(m.editedAt)}>(edited)</span>` : nothing}${m.deleted ? html`<span class="sm-flag">(deleted in Slack)</span>` : nothing}
       </div>
     </div>
   </div>`;
@@ -170,7 +172,7 @@ export class SlackActivity {
           (c) => ({
             name: context.slackContainerLabel(c.container),
             preview: `${Number(c.messageCount).toLocaleString()} mirrored · ${(c.members || []).length} ${(c.members || []).length === 1 ? "member" : "members"}`,
-            time: context.relTime(c.updatedAt),
+            time: relTime(c.updatedAt),
             href: context.stateToUrl({ view: "slack", container: c.container }),
           }),
           (c) => context.go({ view: "slack", container: c.container }),
@@ -338,7 +340,7 @@ export class SlackActivity {
                   >${ack ? r.message || "None" : r.reason || (r.decision === "fastlane" ? "@mention, routed past the judge" : "None")}</span
                 >${r.latencyMs != null ? html`<span class="dense-time">${r.latencyMs + "ms"}</span>` : nothing}</span
               >`,
-              time: context.relTime(r.createdAt),
+              time: relTime(r.createdAt),
               href: context.stateToUrl(target(r)),
             }),
             (r) => context.go(target(r)),
@@ -404,7 +406,7 @@ export class SlackActivity {
   }
 }
 const meta = (item: Row) =>
-  [item.model, item.latencyMs != null ? item.latencyMs + "ms" : null, context.fmtTime(item.createdAt)]
+  [item.model, item.latencyMs != null ? item.latencyMs + "ms" : null, fmtTime(item.createdAt)]
     .filter(Boolean)
     .join(" · ");
 function judgmentDetail(item: Row, workspace: string, mirror: unknown) {

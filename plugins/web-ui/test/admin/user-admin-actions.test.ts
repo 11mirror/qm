@@ -17,7 +17,6 @@ for (const revoke of [false, true])
       {
         defaultShell() {},
         orgScope: "org:test",
-        labelRole: () => "admin",
         confirm: (message: string) => {
           assert.ok(message.includes(user.principalId));
           return accepted;

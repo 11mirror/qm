@@ -1,4 +1,5 @@
 import { escapeHtml } from "./html-escape.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 
 type Katex = { renderToString: (text: string, opts?: object) => string };
 
@@ -7,7 +8,7 @@ let loading: Promise<void> | null = null;
 
 function rerenderMountedBlocks(): void {
   if (typeof document === "undefined") return;
-  for (const el of document.querySelectorAll("markdown-block, qm-markdown")) {
+  for (const el of document.querySelectorAll("qm-markdown")) {
     (el as { requestUpdate?: () => void }).requestUpdate?.();
   }
 }
@@ -18,7 +19,8 @@ function ensureLoading(): void {
       real = m.default;
       rerenderMountedBlocks();
     })
-    .catch(() => {
+    .catch((e: unknown) => {
+      swallow("web-ui: load KaTeX", e);
       loading = null;
     });
 }

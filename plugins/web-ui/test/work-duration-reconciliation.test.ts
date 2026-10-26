@@ -2,7 +2,8 @@ import type { Item } from "../src/items.ts";
 import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { itemsToMessages, type AssistantWork, type WorkBlock } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/transcript-messages.ts";
+import type { WorkBlock } from "../src/core-bridge.ts";
 import { workSeconds, workedLabel } from "../src/work-duration.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<typeof itemsToMessages>[1];

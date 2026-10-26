@@ -11,7 +11,7 @@ import { errMessage, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
-import { isPrivateNetworkIp } from "./util/network.ts";
+import { isPrivateNetworkIp } from "../plugins/chassis/src/network.ts";
 
 const OPEN: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
 

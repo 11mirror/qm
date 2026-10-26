@@ -16,7 +16,6 @@ const SLACK = "slack";
 const DEFAULT_READ_LIMIT = 100;
 const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
-const DEFAULT_THREADS_LIMIT = 50;
 
 function normalizeEvent(event: IngestEvent): IngestEvent {
   return JSON.parse(
@@ -356,31 +355,6 @@ export function createPostgresSurfaceCache(
         args,
       );
       return rows.map(rowToMessage);
-    },
-
-    async activeThreads(o = {}) {
-      const limit = clampLimit(o.limit, DEFAULT_THREADS_LIMIT);
-      const conds = ["org_id = $1", "sub IS NOT NULL", "deleted = FALSE", "surface = $2"];
-      const args: unknown[] = [tenant().orgId, o.surface ?? SLACK];
-      if (o.container) {
-        args.push(o.container);
-        conds.push(`container = $${args.length}`);
-      }
-      args.push(limit);
-      const rows = await q(
-        `SELECT container, sub, MAX(ts) AS last_ts, COUNT(*) AS message_count, MAX(created_at) AS last_activity_at
-           FROM channel_messages WHERE ${conds.join(" AND ")}
-          GROUP BY container, sub
-          ORDER BY last_activity_at DESC LIMIT $${args.length}`,
-        args,
-      );
-      return rows.map((r) => ({
-        container: r.container as string,
-        sub: r.sub as string,
-        lastTs: r.last_ts as string,
-        messageCount: Number(r.message_count),
-        lastActivityAt: Number(r.last_activity_at),
-      }));
     },
 
     async members(container) {

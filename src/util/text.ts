@@ -35,3 +35,9 @@ export function outermostJsonObject(text: string): string | undefined {
   const end = text.lastIndexOf("}");
   return start === -1 || end < start ? undefined : text.slice(start, end + 1);
 }
+
+/** Keep the head and tail of `s` within `maxChars`, joined by `notice` (which counts toward the limit). */
+export function headTailSlice(s: string, maxChars: number, tailChars: number, notice: string): string {
+  if (s.length <= maxChars) return s;
+  return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
+}

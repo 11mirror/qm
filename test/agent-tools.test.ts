@@ -1425,7 +1425,7 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
   const slack = surfaceTool(ref);
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
-  assert.match(out.content[0]!.text, /post, react, edit, delete/);
+  assert.match(out.content[0]!.text, /post, reach, react, edit, delete/);
 });
 
 test("the post delivery ack is never screened — a classifier false positive cannot quarantine a sent reply", async () => {
@@ -1546,7 +1546,14 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
+  assert.deepEqual([...names(readOnly)].sort(), [
+    "finish_silently",
+    "history",
+    "memory",
+    "runtime",
+    "subagents",
+    "swarm",
+  ]);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }

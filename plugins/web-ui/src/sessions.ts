@@ -39,10 +39,7 @@ import {
   fetchSessionPage,
   fetchSessionRow,
   fetchTranscript,
-  currentEarlierCount,
   detachSession,
-  inheritedTranscript,
-  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -53,6 +50,7 @@ import {
   type CoreProject,
   type CoreSession,
 } from "./core-bridge";
+import { currentEarlierCount, inheritedTranscript, itemsToMessages } from "./transcript-messages";
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
   activityOf,

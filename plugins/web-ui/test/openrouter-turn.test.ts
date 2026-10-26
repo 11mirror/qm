@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { Context } from "@earendil-works/pi-ai";
-import { makeOpenerStreamFn } from "../src/core-bridge.ts";
+import { makeOpenerStreamFn } from "../src/run-stream.ts";
 import { getModelOptions } from "../src/model-options.ts";
 
 const realFetch = globalThis.fetch;

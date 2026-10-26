@@ -61,7 +61,6 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
     PORTAL_PUBLIC_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
-    SKILL_SIGNING_SECRET: "skill-signing-secret",
     SANDBOX_BACKEND: "local",
     OIDC_CLIENT_ID: "client-id",
     OIDC_CLIENT_SECRET: "client-secret",
@@ -136,14 +135,12 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
     PORTAL_PUBLIC_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
-    SKILL_SIGNING_SECRET: "skill-signing-secret",
     SANDBOX_BACKEND: "local",
     OIDC_CLIENT_ID: "client-id",
     OIDC_CLIENT_SECRET: "client-secret",
     OIDC_ALLOWED_EMAILS: "admin@example.com",
     PORTAL_SESSION_TTL_S: "5184000",
   };
-  delete baseEnv.PORTAL_SESSION_MAX_TTL_S;
 
   const derived = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
@@ -154,11 +151,11 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
 
   const contradictory = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
-    env: { ...baseEnv, PORTAL_SESSION_MAX_TTL_S: "86400" },
+    env: { ...baseEnv, PORTAL_SESSION_TTL_S: "0" },
     encoding: "utf8",
   });
   assert.notEqual(contradictory.status, 0);
-  assert.match(contradictory.stderr, /PORTAL_SESSION_MAX_TTL_S must be a finite number/);
+  assert.match(contradictory.stderr, /PORTAL_SESSION_TTL_S must be a positive number/);
 });
 
 test("production accepts cleartext OIDC only on private-network hosts, and only for the server-to-server endpoints", () => {

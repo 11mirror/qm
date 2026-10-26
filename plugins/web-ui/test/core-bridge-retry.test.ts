@@ -2,7 +2,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
-import { pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/core-bridge.ts";
+import { pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 

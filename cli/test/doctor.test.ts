@@ -29,7 +29,7 @@ test("Docker doctor rejects missing and placeholder required secrets before exte
   try {
     await assert.rejects(
       doctorCommon(config, new Map([["CORE_SIGNING_SECRET", "replace-me"]]), { requiredSecretValues: true }),
-      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
+      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL/,
     );
   } finally {
     if (prior === undefined) delete process.env.ANTHROPIC_API_KEY;
@@ -51,7 +51,6 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
     ["CONNECTOR_SECRET_KEY", "b".repeat(64)],
     ["CORE_SIGNING_SECRET", "c".repeat(64)],
     ["PORTAL_IDENTITY_SECRET", "d".repeat(64)],
-    ["SKILL_SIGNING_SECRET", "e".repeat(64)],
   ]);
   await assert.doesNotReject(doctorCommon(deferredConfig, required, { requiredSecretValues: true }));
   await assert.rejects(
@@ -443,7 +442,6 @@ test("doctor treats a missing sandbox block as info, not a failure", async () =>
         ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
         ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
         ["PORTAL_IDENTITY_SECRET", "identity-value"],
-        ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
       ]),
       { requiredSecretValues: true },
     );

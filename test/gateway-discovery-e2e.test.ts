@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { oneShot } from "../src/harness/pi-harness.ts";
+import { complete } from "../src/harness/pi-harness.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
@@ -247,19 +247,20 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
     const catalog = createGatewayCatalog(config, fetch, () => Date.now() + clockOffset);
     await catalog.refresh();
     const model = resolveModel("gateway/acme/future")!;
-    const reply = await oneShot("gateway-e2e", model, {}, "Reply briefly", "Hello", {
+    const reply = await complete(model, {}, "Reply briefly", "Hello", {
       modelGateway: catalog.transport,
     });
     assert.equal(reply, "Discovered model replied");
     assert.ok(requests.some((r) => r.path === expectedPath));
     assert.ok(requests.every((r) => r.key === "company-key"));
-    useTool = true;
     const beforeRefresh = requests.filter((r) => r.path === "/v1/models").length;
+    clockOffset += 300001;
     assert.equal(
-      await oneShot("gateway-ttl-e2e", model, {}, "Reply briefly", "Use a tool", { modelGateway: catalog.transport }),
+      await complete(model, {}, "Reply briefly", "Hello again", { modelGateway: catalog.transport }),
       "Discovered model replied",
     );
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
+    useTool = true;
     const result = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },

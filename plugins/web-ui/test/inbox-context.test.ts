@@ -18,7 +18,8 @@ test("conversation details include the waiting message after prior context with 
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { contextTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { contextTpl } = await vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const { toInboxItem } = await vite.ssrLoadModule("/src/inbox-model.ts");
     const { render } = await vite.ssrLoadModule("lit");
     const host = dom.window.document.getElementById("main")!;
     for (const [source, payloadSource] of [

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { attachPendingApprovals } from "../src/transcript-messages.ts";
 import {
-  attachPendingApprovals,
   fetchSessionApprovals,
   resolveApproval,
   unresolvedApprovals,

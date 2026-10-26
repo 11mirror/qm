@@ -14,7 +14,8 @@ test("a failed inbox followup preserves edits made while the request was pending
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
-    const { chatTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { chatTpl } = await vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const { toInboxItem } = await vite.ssrLoadModule("/src/inbox-model.ts");
     const { render } = await vite.ssrLoadModule("lit");
     for (const edited of [undefined, "New instruction", ""]) {
       const item = toInboxItem({
