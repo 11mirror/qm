@@ -30,7 +30,7 @@ test("personal account choice persists across instances without changing anyone 
   assert.equal(await second.getIndividualModelAuthDurable(), false);
   await second.setPersonalModelAuth("alice", false);
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
-  await first.setIndividualModelAuth(true);
+  await first.setSetting("individualModelAuth", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
 });
 
@@ -83,7 +83,7 @@ test("account API binds choice to the signed-in person, preserves connections, a
     await built.userModelCredentials.delete("alice@default-org", "anthropic");
     assert.equal(await built.config.getIndividualModelAuthDurable("alice@default-org"), true);
     assert.equal((await request("company")).status, 200);
-    await built.config.setIndividualModelAuth(true);
+    await built.config.setSetting("individualModelAuth", true);
     assert.equal((await request("company")).status, 403);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

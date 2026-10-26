@@ -1026,8 +1026,8 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
-  await built.config.setBrowseMaxSteps("org:default-org", 120);
-  await built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
+  await built.config.setSetting("browseMaxSteps", 120, "org:default-org");
+  await built.config.setSetting("browseModel", "claude-sonnet-4-6", "org:default-org");
   const res2 = await app.turn(dm("!run echo steps again"));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
@@ -1054,7 +1054,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     return realProvision(layers, opts);
   };
 
-  await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
+  await built.config.setSetting("browseModel", "claude-retired-by-pi-ai", "org:acme");
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:stale1" } }));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -2615,10 +2615,14 @@ test("a session approval covers the whole rule: a different command matching it 
 test("an admin-registered rule grants by rule across turns; the approval is keyed on its pattern", async () => {
   const { app, config } = freshApp();
   const pattern = "\\bzz-tool\\s+\\S+";
-  await config.setCommandPolicy(scopeId("org", "default-org"), {
-    mode: "denylist",
-    rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
-  });
+  await config.setSetting(
+    "commandPolicy",
+    {
+      mode: "denylist",
+      rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
+    },
+    scopeId("org", "default-org"),
+  );
 
   const first = await app.turn(dm("!run zz-tool alpha"));
   assert.equal(first.status, "pending_approval");
@@ -2638,13 +2642,17 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
   await config.setSecurityPosture(org, "dangerous");
-  await config.setCommandPolicy(org, {
-    mode: "allowlist",
-    rules: [
-      { pattern: "printf", decision: "require_approval", reason: "test approval" },
-      { pattern: "forbidden", decision: "deny", reason: "hard denial" },
-    ],
-  });
+  await config.setSetting(
+    "commandPolicy",
+    {
+      mode: "allowlist",
+      rules: [
+        { pattern: "printf", decision: "require_approval", reason: "test approval" },
+        { pattern: "forbidden", decision: "deny", reason: "hard denial" },
+      ],
+    },
+    org,
+  );
 
   const gated = await app.turn(dm("!run printf dangerous-gated"));
   assert.equal(gated.status, "pending_approval");
@@ -3151,10 +3159,14 @@ test("a thread image is ingested into a session once; later turns that re-send i
 
 test("an approved automation replay preserves and re-screens its external event provenance", async () => {
   const built = freshApp();
-  await built.config.setCommandPolicy(scopeId("org", "default-org"), {
-    mode: "denylist",
-    rules: [{ pattern: "printf", decision: "require_approval", reason: "confirm automation" }],
-  });
+  await built.config.setSetting(
+    "commandPolicy",
+    {
+      mode: "denylist",
+      rules: [{ pattern: "printf", decision: "require_approval", reason: "confirm automation" }],
+    },
+    scopeId("org", "default-org"),
+  );
   const first = await built.app.turn(
     dm("!run printf replay-ok", {
       surface: "webhook",
@@ -3388,10 +3400,14 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
 
 test("allow once authorizes a single use of the rule, not the rest of the session", async () => {
   const { app, config } = freshApp();
-  await config.setCommandPolicy(scopeId("org", "default-org"), {
-    mode: "denylist",
-    rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
-  });
+  await config.setSetting(
+    "commandPolicy",
+    {
+      mode: "denylist",
+      rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
+    },
+    scopeId("org", "default-org"),
+  );
 
   const first = await app.turn(dm("!run zz-tool alpha"));
   const pending = first.pendingApprovals![0]!;

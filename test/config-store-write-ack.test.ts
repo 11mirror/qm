@@ -20,9 +20,9 @@ test("a config write resolves only after another instance can read it from the s
   const writer = testConfigStore("default-org", { orgAmbient: slow });
   const reader = testConfigStore("default-org", { orgAmbient });
 
-  await writer.setOrgAmbient(false);
+  await writer.setSetting("orgAmbient", false);
 
-  assert.equal(await reader.getOrgAmbientDurable(), false);
+  assert.equal(await reader.settingDurable("orgAmbient"), false);
 });
 
 test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
@@ -32,8 +32,11 @@ test("a failed config write rejects and leaves this instance's cache on the stor
   });
   const config = testConfigStore("default-org", { egressPolicies: failing });
 
-  await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
+  await assert.rejects(
+    config.setSetting("egress", { allowedHosts: ["api.example.com"] }, channel),
+    /database unavailable/,
+  );
 
-  assert.equal(config.getEgress(channel), null);
+  assert.equal(config.setting("egress", channel), null);
   assert.equal(await egressPolicies.get(channel), null);
 });

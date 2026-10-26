@@ -71,8 +71,8 @@ export function createResolutionService(
       const scopeSoul = external ? null : config.getSoul(scope);
       const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
-      const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
-      const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
+      const orgPolicy = config.setting("commandPolicy", orgScope) ?? defaultOrgPolicy();
+      const scopePolicy = config.setting("commandPolicy", scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
       const sharingPosture = external

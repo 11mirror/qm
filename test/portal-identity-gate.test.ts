@@ -336,10 +336,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.equal(response.status, 403, `deployment ${suffix}`);
     }
 
-    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
-      mode: "denylist",
-      rules: [{ pattern: "printf", decision: "require_approval" }],
-    });
+    await built.config.setSetting(
+      "commandPolicy",
+      {
+        mode: "denylist",
+        rules: [{ pattern: "printf", decision: "require_approval" }],
+      },
+      scopeId("org", "default-org"),
+    );
     const pending = await built.app.turn({
       surface: "web",
       actor: { externalId: "U2" },

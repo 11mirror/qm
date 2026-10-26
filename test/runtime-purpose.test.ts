@@ -193,7 +193,7 @@ test("scope inheritance in a human child continuation retains its configured pur
 test("configured categories remain selectable outside the conversation picker without weakening explicit restrictions", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
-  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
+  await config.setSetting("webuiModels", ["claude-sonnet-5"], ORG);
   const service = createRuntimeService(
     { config, baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },
@@ -212,14 +212,16 @@ test("configured categories remain selectable outside the conversation picker wi
     true,
   );
   assert.equal(denied.ok, false);
-  config.getWebuiModelsDurable = async () => [];
+  const settingDurable = config.settingDurable.bind(config);
+  config.settingDurable = (async (name, id) =>
+    name === "webuiModels" ? [] : settingDurable(name, id)) as typeof config.settingDurable;
   assert.equal((await service(claims, category, { action: "inherit" }, undefined, false, undefined, true)).ok, false);
 });
 
 test("personal-account human child inheritance recognizes a configured purpose outside the chat picker", async () => {
   const config = await setup();
   await config.setPurposeRuntime("subagent", category);
-  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
+  await config.setSetting("webuiModels", ["claude-sonnet-5"], ORG);
   const service = createRuntimeService(
     { config, baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },

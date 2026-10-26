@@ -205,7 +205,11 @@ test("branding governance validates, round-trips through surface-config, clears,
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
   const srv = start();
   try {
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
+    await srv.built.config.setSetting(
+      "webuiModels",
+      ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"],
+      "org:default-org",
+    );
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;
 

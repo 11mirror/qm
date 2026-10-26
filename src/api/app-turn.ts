@@ -235,7 +235,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
               reason: "that model isn't available on this deployment (its provider isn't configured)",
             };
           }
-          const configuredWebuiModels = await deps.config.getWebuiModelsDurable(orgRuntimeScope);
+          const configuredWebuiModels = await deps.config.settingDurable("webuiModels", orgRuntimeScope);
           let enabledWebuiModels: string[] | null = null;
           if (configuredWebuiModels != null) {
             enabledWebuiModels = configuredWebuiModels.length

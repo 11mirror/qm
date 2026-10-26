@@ -56,9 +56,9 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     const targetKind = parseScopeId(targetScope).kind;
     const target =
       parsed?.policy ??
-      deps.config.getCommandPolicy(targetScope) ??
+      deps.config.setting("commandPolicy", targetScope) ??
       (targetKind === "org" ? defaultOrgPolicy() : { mode: "denylist" as const, rules: [] });
-    const orgPolicy = deps.config.getCommandPolicy(tenant().orgScope) ?? defaultOrgPolicy();
+    const orgPolicy = deps.config.setting("commandPolicy", tenant().orgScope) ?? defaultOrgPolicy();
     const effective = targetKind === "org" ? target : composePolicy(orgPolicy, target);
     const result = evaluateCommand(command, effective);
     const effectiveRuleIndex = result.approvalKey
@@ -275,8 +275,8 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config!.getEgress(tenant().orgScope);
-  const targetEgress = deps.config!.getEgress(targetScope);
+  const orgEgress = deps.config!.setting("egress", tenant().orgScope);
+  const targetEgress = deps.config!.setting("egress", targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
     allowedHosts: [] as string[],

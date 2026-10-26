@@ -652,7 +652,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenant().orgScope) : false));
+            (deps.config ? await deps.config.settingDurable("externalSlackParticipants", tenant().orgScope) : false));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -1626,7 +1626,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         // Env delivery is gated by the same service-cred grants as the broker: the env var rides
         // only when every internal participant in this conversation is entitled to the credential.
 
-        const browseSteps = deps.config?.getBrowseMaxSteps(tenant().orgScope);
+        const browseSteps = deps.config?.setting("browseMaxSteps", tenant().orgScope);
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
@@ -3041,7 +3041,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           typeof input.fastMode !== "boolean" &&
           !purposeDefault &&
           humanInput &&
-          (await deps.config?.getInteractiveFastModeDurable());
+          (await deps.config?.settingDurable("interactiveFastMode"));
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
           let userProviderKeys: ProviderKeys | undefined;

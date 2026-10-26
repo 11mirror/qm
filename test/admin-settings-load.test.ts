@@ -31,7 +31,7 @@ async function warm(base: string) {
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
+  await srv.built.config.setSetting("branding", { selfLabel: "Test assistant", accent: "#445566" }, "org:default-org");
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [

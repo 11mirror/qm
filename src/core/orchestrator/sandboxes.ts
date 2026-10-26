@@ -356,8 +356,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return {
       resource,
       crossScope: true,
-      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
-      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
+      egress: intersectEgressPolicies(resolution.egress, deps.config!.setting("egress", resource.ownerScopeId)),
+      commandPolicy: deps.config!.setting("commandPolicy", resource.ownerScopeId),
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
