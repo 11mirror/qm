@@ -775,15 +775,7 @@ function createProjectDialog(): TemplateResult | typeof nothing {
         <div class="project-dialog-head">
           <span class="context-glyph large">${icon(FolderPlus, 21)}</span>
           <div><h2 id="project-dialog-title">New project</h2></div>
-          <button
-            class="project-icon-button"
-            type="button"
-            aria-label="Close new project"
-            ${tip("Close")}
-            @click=${closeCreateProject}
-          >
-            ${icon(X, 16)}
-          </button>
+          ${iconBtn("Close", X, closeCreateProject, { aria: "Close new project", cls: "project-icon-button", size: 16 })}
         </div>
         <label class="project-name-field" for="project-name">
           <span>Name</span>
