@@ -486,7 +486,6 @@ for (const stopBeforeIntake of [false, true]) {
     } finally {
       globalThis.fetch = realFetch;
       await store.releaseLease(lease);
-      await harness.turns.close?.();
     }
   });
 }
@@ -539,7 +538,6 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
     );
   } finally {
     globalThis.fetch = realFetch;
-    await harness.turns.close?.();
   }
 });
 
@@ -613,7 +611,6 @@ for (const abort of ["shutdown", "stop"] as const) {
     } finally {
       globalThis.fetch = realFetch;
       await store.releaseLease(lease);
-      await harness.turns.close?.();
     }
   });
 }
