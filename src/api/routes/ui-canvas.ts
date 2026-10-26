@@ -16,7 +16,7 @@ import { scopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, refuse } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -36,34 +36,23 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
-  if (!deps.uiState || !deps.runs || !deps.sessions) {
-    sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
-    return null;
-  }
-  if (!(await canvasEnabled(ctx, cap.actorId))) {
-    sendJson(res, 403, {
+  if (!deps.uiState || !deps.runs || !deps.sessions)
+    return refuse(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
+  if (!(await canvasEnabled(ctx, cap.actorId)))
+    return refuse(res, 403, {
       error: "feature_disabled",
       message: "The ui_canvas feature flag is off for this person. An org admin can enable it under feature flags.",
     });
-    return null;
-  }
-  if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor) {
-    sendJson(res, 403, {
+  if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor)
+    return refuse(res, 403, {
       error: "not_live_web_turn",
       message: "Only available during a turn the person started from the web UI.",
     });
-    return null;
-  }
   const run = cap.runId ? await deps.runs.get(cap.runId) : null;
-  if (!run || isTerminal(run.status)) {
-    sendJson(res, 409, { error: "turn_ended", message: "The turn that issued this token has ended." });
-    return null;
-  }
+  if (!run || isTerminal(run.status))
+    return refuse(res, 409, { error: "turn_ended", message: "The turn that issued this token has ended." });
   const session = await deps.sessions.getByThread(threadRef);
-  if (!session) {
-    sendJson(res, 404, { error: "not_found", message: "no such conversation" });
-    return null;
-  }
+  if (!session) return refuse(res, 404, { error: "not_found", message: "no such conversation" });
   return {
     actorId: cap.actorId,
     sessionId: session.id,
@@ -225,13 +214,10 @@ async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean>
 
 async function userCanvasStore(ctx: ApiCtx, principalId: string): Promise<UiStateStore | null> {
   const sessionId = ctx.params.sessionId!;
-  if (!principalId || (sessionId !== ALWAYS_ON_CANVAS && !(await ctx.deps.sessions?.get(sessionId)))) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
-    return null;
-  }
+  if (!principalId || (sessionId !== ALWAYS_ON_CANVAS && !(await ctx.deps.sessions?.get(sessionId))))
+    return refuse(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
   if (ctx.deps.uiState && (await canvasEnabled(ctx, principalId))) return ctx.deps.uiState;
-  sendJson(ctx.res, 404, { error: "not_found" });
-  return null;
+  return refuse(ctx.res, 404, { error: "not_found" });
 }
 
 async function userCanvasContent(ctx: ApiCtx): Promise<void> {

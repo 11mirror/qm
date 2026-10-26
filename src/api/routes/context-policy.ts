@@ -1,29 +1,24 @@
 import { parseScopeId } from "../../types.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { sendJson } from "../http.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const MAX_ORDERS_CHARS = 20_000;
 
 async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
   const { res, deps } = ctx;
-  if (!principalId || !scope) {
-    sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
-    return null;
-  }
+  if (!principalId || !scope)
+    return refuse(res, 400, { error: "bad_request", message: "principalId and scope required" });
   const { kind, ref } = parseScopeId(scope);
-  if (!ref || (kind !== "channel" && kind !== "group")) {
-    sendJson(res, 400, { error: "bad_request", message: "ambient policy applies to channel and group scopes only" });
-    return null;
-  }
-  if (!deps.channelPolicy) {
-    sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
-    return null;
-  }
+  if (!ref || (kind !== "channel" && kind !== "group"))
+    return refuse(res, 400, {
+      error: "bad_request",
+      message: "ambient policy applies to channel and group scopes only",
+    });
+  if (!deps.channelPolicy) return refuse(res, 404, { error: "not_found", message: "not available on this deployment" });
   if ((await ctx.app.listContexts(principalId)).some((c) => c.scopeId === scope)) return ref;
-  sendJson(res, 403, { error: "forbidden" });
-  return null;
+  return refuse(res, 403, { error: "forbidden" });
 }
 
 export async function getContextPolicy(ctx: ApiCtx): Promise<void> {

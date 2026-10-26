@@ -5,7 +5,7 @@ import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { userScheduleFromBody } from "../../cron/schedule.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
@@ -38,8 +38,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cr
   if (cron && (!principalId || (await canAdministerCron(app, cron, principalId)))) return cron;
   if (cron && read && (await app.listCronsForViewer(principalId!)).visible.some((candidate) => candidate.id === id))
     return cron;
-  sendJson(res, 404, { error: "not_found" });
-  return null;
+  return refuse(res, 404, { error: "not_found" });
 }
 
 const CRON_PATCH_TYPES = {

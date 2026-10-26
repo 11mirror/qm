@@ -1,5 +1,5 @@
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 type ProjectMutation = Awaited<ReturnType<ApiCtx["app"]["addProjectMember"]>>;
@@ -18,10 +18,7 @@ function bodyText(ctx: ApiCtx, key: string): string {
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
-  if (requested && requested !== ctx.capability.actorId) {
-    sendJson(ctx.res, 404, { error: "not_found" });
-    return null;
-  }
+  if (requested && requested !== ctx.capability.actorId) return refuse(ctx.res, 404, { error: "not_found" });
   return ctx.capability.actorId;
 }
 

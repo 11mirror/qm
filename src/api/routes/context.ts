@@ -2,7 +2,7 @@ import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { sleep } from "../../util/async.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
@@ -35,18 +35,14 @@ async function resolveSurfaceTarget(
       return { source: "slack", target: { channelId: ref } };
     }
     const r = await app.resolveChannel(ref);
-    if (r.kind === "none") {
-      sendJson(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
-      return null;
-    }
-    if (r.kind === "ambiguous") {
-      sendJson(res, 409, {
+    if (r.kind === "none")
+      return refuse(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
+    if (r.kind === "ambiguous")
+      return refuse(res, 409, {
         error: "ambiguous_channel",
         message: `"${b.channel}" matches multiple channels — pass an exact name or id`,
         candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
       });
-      return null;
-    }
     if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true))) {
       await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
       return null;
@@ -54,13 +50,11 @@ async function resolveSurfaceTarget(
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
-  if (!dest?.target || dest.type !== "slack") {
-    sendJson(res, 400, {
+  if (!dest?.target || dest.type !== "slack")
+    return refuse(res, 400, {
       error: "no_conversation",
       message: "this conversation has no surface history to pull — name a channel instead",
     });
-    return null;
-  }
   return { source: dest.type, target: { conversationTarget: dest.target } };
 }
 

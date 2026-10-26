@@ -4,7 +4,7 @@ import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
@@ -38,8 +38,10 @@ export interface InboxServiceDeps {
 export function actingPrincipal(ctx: ApiCtx): string | null {
   const principalId = ctx.capability?.actorId || ctx.actor?.p || (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (principalId) return principalId;
-  sendJson(ctx.res, 403, { error: "forbidden", message: "inbox routes need an agent capability or a principalId" });
-  return null;
+  return refuse(ctx.res, 403, {
+    error: "forbidden",
+    message: "inbox routes need an agent capability or a principalId",
+  });
 }
 
 export async function inboxLoopsEnabled(ctx: ApiCtx, principalId: string): Promise<boolean> {
@@ -65,29 +67,22 @@ export function appCrons(ctx: ApiCtx): Pick<CronStore, "list" | "create"> {
 
 async function loadInboxCron(ctx: ApiCtx): Promise<{ deps: InboxServiceDeps; cron: Cron; actorId: string } | null> {
   const deps = ctx.deps.inbox;
-  if (!deps) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
-    return null;
-  }
+  if (!deps) return refuse(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
   const actorId = actingPrincipal(ctx);
   if (!actorId) return null;
   const cron = await ctx.app.getCron(ctx.params.id ?? "");
-  if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, actorId))) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "no such cron inbox" });
-    return null;
-  }
+  if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, actorId)))
+    return refuse(ctx.res, 404, { error: "not_found", message: "no such cron inbox" });
   return { deps, cron, actorId };
 }
 
-async function requireCronAuthority(ctx: ApiCtx, cron: Cron): Promise<boolean> {
+async function requireCronAuthority(ctx: ApiCtx, cron: Cron): Promise<true | null> {
   if (!cron.unattendedGrants?.length) return true;
   const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
   const refusal = principal
     ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
     : { message: "a privileged cron requires a live turn started by its owner" };
-  if (!refusal) return true;
-  sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
-  return false;
+  return refusal ? refuse(ctx.res, 403, { error: "forbidden", message: refusal.message }) : true;
 }
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -157,14 +152,13 @@ function parseIngestEntry(cron: Cron, raw: unknown): IngestEntryInput | { error:
   };
 }
 
-function readableItems(ctx: ApiCtx, cron: Cron): boolean {
+function readableItems(ctx: ApiCtx, cron: Cron): true | null {
   if (!ctx.capability || parseScopeId(cron.ownerScopeId).kind !== "personal") return true;
   if (ctx.capability.privateScope === true) return true;
-  sendJson(ctx.res, 403, {
+  return refuse(ctx.res, 403, {
     error: "forbidden",
     message: "a personal inbox is reachable only from its owner's own scope",
   });
-  return false;
 }
 
 async function listItems(ctx: ApiCtx): Promise<void> {
@@ -247,10 +241,8 @@ async function loadItem(
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.cron)) return null;
   const item = await loaded.deps.items.get(ctx.params.itemId ?? "");
-  if (!item || item.cronId !== loaded.cron.id) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "no such inbox item" });
-    return null;
-  }
+  if (!item || item.cronId !== loaded.cron.id)
+    return refuse(ctx.res, 404, { error: "not_found", message: "no such inbox item" });
   return { ...loaded, item };
 }
 
