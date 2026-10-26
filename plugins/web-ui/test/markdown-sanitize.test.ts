@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
 import {
   MARKDOWN_SANITIZE_CONFIG,
-  rewriteSandboxFileLinks,
+  sandboxFileHref,
   SHARED_MARKDOWN_SANITIZE_CONFIG,
 } from "../src/markdown-sanitize.ts";
 
@@ -16,7 +16,16 @@ const sanitize = (html: string): string => DOMPurify.sanitize(html, MARKDOWN_SAN
 const renderer = new marked.Renderer();
 const originalLink = renderer.link.bind(renderer);
 renderer.link = (token) => originalLink(token).replace("<a ", '<a target="_blank" rel="noopener noreferrer" ');
-const render = (md: string): string => sanitize(rewriteSandboxFileLinks(marked.parse(md, { async: false, renderer })));
+const render = (md: string): string =>
+  sanitize(
+    marked.parse(md, {
+      async: false,
+      renderer,
+      walkTokens: (token) => {
+        if (token.type === "link") token.href = sandboxFileHref(token.href);
+      },
+    }),
+  );
 
 test("strips every script-bearing vector marked would otherwise pass through", () => {
   const vectors: Array<[string, string]> = [
@@ -63,7 +72,14 @@ test("shared Markdown preserves formatting without media or private file links",
   assert.equal(/<img|(?:src|href)=|secret\.txt|api\/files/.test(result), false);
 });
 
-test("turns sandbox workspace links into real file-library downloads", () => {
-  const out = render("[download](sandbox:/home/sprite/workspace/reports/interview-list.csv)");
-  assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/);
+test("turns sandbox workspace links into real file-library downloads on every provider", () => {
+  for (const root of [
+    "/home/sprite/workspace",
+    "/home/user/workspace",
+    "/root/workspace",
+    "/workspace/home/workspace",
+  ]) {
+    const out = render(`[download](sandbox:${root}/reports/interview-list.csv)`);
+    assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/, root);
+  }
 });

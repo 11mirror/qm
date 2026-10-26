@@ -54,12 +54,14 @@ test("a connection missing configured permissions can be reconnected or disconne
     const disconnect = [...widget.querySelectorAll<HTMLButtonElement>(".connection-connected button")].find(
       (button) => button.textContent?.trim() === "Disconnect",
     )!;
-    const answers = [false, true];
-    window.confirm = () => answers.shift()!;
     disconnect.click();
+    assert.equal(document.querySelector(".connect-apps-disconnect-dialog h2")?.textContent, "Disconnect Gmail?");
+    document.querySelector<HTMLButtonElement>(".connect-apps-disconnect-dialog [data-dialog-cancel]")!.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(posts.length, 1);
+    assert.equal(document.querySelector(".connect-apps-disconnect-dialog"), null);
     disconnect.click();
+    document.querySelector<HTMLButtonElement>(".connect-apps-disconnect-confirm")!.click();
     await settle(() => !widget.querySelector(".connection-connected"));
     assert.deepEqual(posts.at(-1), { path: "/api/composio/disconnect", body: { accountId: "ca_old" } });
     assert.equal(widget.querySelector(".connection-picker-app")?.getAttribute("aria-label"), "Connect Gmail");

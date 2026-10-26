@@ -1,10 +1,47 @@
-import "./marked-dedupe.ts";
 import "./mermaid-block.ts";
-import { MarkdownBlock } from "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
-import { ReactiveElement, render, type PropertyValues } from "lit";
+import katex from "katex";
+import { html, ReactiveElement, render, type PropertyValues } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import morphdom from "morphdom";
 import { marked, type Tokens } from "marked";
+import { escapeHtml } from "./html-escape.ts";
+
+function mathExtension(name: string, level: "block" | "inline", displayMode: boolean) {
+  return {
+    name,
+    level,
+    start: (src: string) => src.indexOf("$$"),
+    tokenizer(src: string) {
+      const match = /^\$\$([^$]+?)\$\$/s.exec(src);
+      return match ? { type: name, raw: match[0], text: match[1]!.trim() } : undefined;
+    },
+    renderer(token: Tokens.Generic) {
+      const math = katex.renderToString(token.text as string, { throwOnError: false, displayMode, output: "html" });
+      return displayMode ? `<div class="my-4">${math}</div>` : math;
+    },
+  };
+}
+
+marked.use({ extensions: [mathExtension("blockMath", "block", true), mathExtension("inlineMath", "inline", false)] });
+
+const renderer = new marked.Renderer();
+const baseLink = renderer.link.bind(renderer);
+const baseTable = renderer.table.bind(renderer);
+renderer.link = (token) => baseLink(token).replace("<a ", '<a target="_blank" rel="noopener noreferrer" ');
+renderer.table = (token) => `<div class="overflow-x-auto my-2 border border-border rounded">${baseTable(token)}</div>`;
+renderer.code = ({ text, lang }) => {
+  const code = btoa(String.fromCharCode(...new TextEncoder().encode(`${text.replace(/\n$/, "")}\n`)));
+  return `<div class="mt-2"><code-block language="${escapeHtml(lang?.match(/^\S+/)?.[0] ?? "text")}" code="${code}"></code-block></div>\n`;
+};
+
+function renderMarkdown(content: string, isThinking: boolean) {
+  if (!content) return html``;
+  const classes = isThinking
+    ? "text-muted-foreground italic max-w-none break-words overflow-wrap-anywhere text-sm [&>*:last-child]:!mb-0"
+    : "text-foreground max-w-none break-words overflow-wrap-anywhere [&>*:last-child]:!mb-0";
+  return html` <div class="${classes}">${unsafeHTML(marked.parse(content, { async: false, renderer }))}</div> `;
+}
 
 export class StableMarkdown extends ReactiveElement {
   static properties = {
@@ -21,7 +58,6 @@ export class StableMarkdown extends ReactiveElement {
   private baselineText = "";
   private renderedText = "";
   private readonly fades = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
-  private readonly renderer = new MarkdownBlock();
   private readonly staging = document.createElement("div");
 
   constructor() {
@@ -30,7 +66,6 @@ export class StableMarkdown extends ReactiveElement {
     this.isThinking = false;
     this.isStreaming = false;
     this.streamingBaseline = "";
-    this.renderer.escapeHtml = false;
   }
 
   protected createRenderRoot(): HTMLElement {
@@ -148,15 +183,12 @@ export class StableMarkdown extends ReactiveElement {
     try {
       if (changed.has("streamingBaseline")) {
         const baseline = document.createElement("div");
-        this.renderer.content = this.streamingContent(this.streamingBaseline);
-        render(this.renderer.render(), baseline);
+        render(renderMarkdown(this.streamingContent(this.streamingBaseline), this.isThinking), baseline);
         this.baselineText = this.textNodes(baseline)
           .map((node) => node.data)
           .join("");
       }
-      this.renderer.content = this.streamingContent(this.content);
-      this.renderer.isThinking = this.isThinking;
-      render(this.renderer.render(), this.staging);
+      render(renderMarkdown(this.streamingContent(this.content), this.isThinking), this.staging);
       const target = this.staging.cloneNode(true) as HTMLElement;
       for (const code of target.querySelectorAll("code-block")) {
         if (code.getAttribute("language")?.toLowerCase() !== "mermaid") continue;
