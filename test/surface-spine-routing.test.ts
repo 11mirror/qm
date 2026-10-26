@@ -8,9 +8,8 @@ import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { quietThread } from "./support/turns.ts";
 import { isUserMessage } from "../src/sessions/items.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-"));
@@ -30,33 +29,6 @@ function mention(text: string, channel: string, root: string): TurnRequest {
   };
 }
 
-async function pollDeliveries(
-  outbound: { pending(type: string): Promise<unknown[]> },
-  deadlineMs = 5_000,
-): Promise<any[]> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const pending = (await outbound.pending("slack")) as any[];
-    if (pending.length) return pending;
-    await sleep(50);
-  }
-  return [];
-}
-
-async function pollFor(
-  outbound: { pending(type: string): Promise<unknown[]> },
-  match: (d: any) => boolean,
-  deadlineMs = 5_000,
-): Promise<any> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const hit = ((await outbound.pending("slack")) as any[]).find(match);
-    if (hit) return hit;
-    await sleep(50);
-  }
-  return undefined;
-}
-
 test("spine ON: react/edit/delete route through the SAME reach chokepoint to the current conversation", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -65,21 +37,18 @@ test("spine ON: react/edit/delete route through the SAME reach chokepoint to the
     const target = `slack:${channel}:`;
 
     await built.app.turn(mention("!react 500.5 eyes", channel, "500.5"));
-    const reactD = await pollFor(built.posts, (d) => d.destination.react);
-    assert.ok(reactD, "react enqueued a reaction delivery");
+    const reactD = await built.posts.waitFor((d) => d.destination.react);
     assert.equal(reactD.text, "", "a reaction carries no composed text");
     assert.deepEqual(reactD.destination.react, { messageTs: "500.5", emoji: "eyes" });
     assert.equal(reactD.destination.target, `${target}500.5`, "reacted in the current conversation");
 
     await built.app.turn(mention("!edit 501.5 the corrected line", channel, "501.5"));
-    const editD = await pollFor(built.posts, (d) => d.destination.editRef);
-    assert.ok(editD, "edit enqueued an editRef delivery");
+    const editD = await built.posts.waitFor((d) => d.destination.editRef);
     assert.equal(editD.destination.editRef, "501.5");
     assert.equal(editD.text, "the corrected line", "the edit carries the new text");
 
     await built.app.turn(mention("!delete 502.5", channel, "502.5"));
-    const delD = await pollFor(built.posts, (d) => d.destination.delete);
-    assert.ok(delD, "delete enqueued a deletion delivery");
+    const delD = await built.posts.waitFor((d) => d.destination.delete);
     assert.deepEqual(delD.destination.delete, { messageTs: "502.5" });
     assert.equal(delD.text, "", "a deletion carries no composed text");
   } finally {
@@ -96,18 +65,20 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
     const res = await built.app.turn(mention("!post hello team", channel, root));
     assert.equal(res.status, "queued", "the addressed turn is routed (queued as a sub-conversation run)");
 
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.text === "hello team");
+    await quietThread(built, `ch:${channel}:${root}`);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "exactly one delivery — the post, not a double-post");
-    assert.equal(pending[0].text, "hello team");
-    assert.equal(pending[0].destination.target, `slack:${channel}:${root}`);
+    assert.equal(pending[0]!.text, "hello team");
+    assert.equal(pending[0]!.destination.target, `slack:${channel}:${root}`);
     const sourceSession = await built.sessions.getByThread(`ch:${channel}:${root}`);
     assert.equal(
-      pending[0].provenance?.trigger,
+      pending[0]!.provenance?.trigger,
       "conversation",
       "a live turn's post is marked conversation, not a wake",
     );
-    assert.equal(pending[0].provenance?.sourceSessionId, sourceSession!.id);
-    assert.equal(pending[0].provenance?.sourceThreadRef, `ch:${channel}:${root}`);
+    assert.equal(pending[0]!.provenance?.sourceSessionId, sourceSession!.id);
+    assert.equal(pending[0]!.provenance?.sourceThreadRef, `ch:${channel}:${root}`);
 
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
     assert.ok(sub, "the sub-conversation session is the surface's own threadRef");
@@ -150,10 +121,12 @@ test("a replayed/resumed request carries surfaceTools through app.turn (approval
     const channel = "C4";
     const root = "400.4";
     await built.app.turn({ ...mention("!post resumed", channel, root), surfaceTools: true });
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.text === "resumed");
+    await quietThread(built, `ch:${channel}:${root}`);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the resumed turn replied via post");
-    assert.equal(pending[0].text, "resumed");
-    assert.equal(pending[0].destination.target, `slack:${channel}:${root}`);
+    assert.equal(pending[0]!.text, "resumed");
+    assert.equal(pending[0]!.destination.target, `slack:${channel}:${root}`);
   } finally {
     await built.runtime.stop();
   }
@@ -164,9 +137,8 @@ test("response debt: a turn that DID post keeps its monologue shed (no double re
   built.runtime.start();
   try {
     await built.app.turn(mention("!post the actual reply", "C9", "900.1"));
-    const d = await pollFor(built.posts, (x) => x.text === "the actual reply");
-    assert.ok(d, "the posted reply landed");
-    await sleep(400);
+    await built.posts.waitFor((x) => x.text === "the actual reply");
+    await quietThread(built, "ch:C9:900.1");
     const all = (await built.posts.pending("slack")) as any[];
     const extras = all.filter((x) => x.destination.target?.includes("C9") && x.text !== "the actual reply");
     assert.deepEqual(
@@ -196,8 +168,7 @@ test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) post
       async: true,
     });
     assert.equal(res.status, "queued");
-    const d = await pollFor(built.posts, (x) => x.text === "the build passed");
-    assert.ok(d, "the reply reached the surface via post");
+    const d = await built.posts.waitFor((x) => x.text === "the build passed");
     assert.equal(d.destination.target, target, "the post aimed at the trigger destination (the arming thread)");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(all.filter((x) => x.text === "the build passed").length, 1, "exactly one delivery — no duplicate");
@@ -221,7 +192,7 @@ test("a monitor (addressed poll fire) that finishes silently is NOT nudged into 
       triggerDestination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
       async: false,
     });
-    await sleep(300);
+    await quietThread(built, "ch:C8:800.8");
     const all = (await built.posts.pending("slack")) as any[];
     assert.deepEqual(
       all.filter((x) => x.destination.target?.includes("C8")).map((x) => x.text),
@@ -269,11 +240,7 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
       unprompted: true,
       async: true,
     });
-    const posted = await pollFor(
-      built.posts,
-      (d) => d.destination.target === `slack:${channel}:${root}` && d.text === "following up",
-    );
-    assert.ok(posted, "the thread-follow ran with surface tools and posted via the post tool");
+    await built.posts.waitFor((d) => d.destination.target === `slack:${channel}:${root}` && d.text === "following up");
     assert.equal(
       await built.sessions.getByThread(`slack/${channel}`),
       null,
@@ -289,9 +256,8 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
   built.runtime.start();
   try {
     await built.app.turn(mention("!silent", "C-nudge", "700.1"));
-    const posted = await pollFor(built.posts, (d) => d.text === "nudged reply");
-    assert.ok(posted, "the agent posted after the reply-or-decline nudge");
-    await sleep(300);
+    await built.posts.waitFor((d) => d.text === "nudged reply");
+    await quietThread(built, "ch:C-nudge:700.1");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 1, "the nudge fires at most once");
   } finally {
@@ -304,8 +270,7 @@ test("addressed + no post but a final text reply → the reply is delivered dire
   built.runtime.start();
   try {
     await built.app.turn(mention("!shed", "C-shed", "710.1"));
-    const direct = await pollFor(built.posts, (d) => d.text === "worklog: did the thing but never posted");
-    assert.ok(direct, "the final text reply was delivered directly");
+    const direct = await built.posts.waitFor((d) => d.text === "worklog: did the thing but never posted");
     assert.equal(direct.destination.target, "slack:C-shed:710.1", "delivered to the addressed conversation");
     const session = await built.sessions.getByThread("ch:C-shed:710.1");
     const requests = await built.sessions.listLlmRequests(session!.id);
@@ -313,7 +278,7 @@ test("addressed + no post but a final text reply → the reply is delivered dire
       !requests.some((r) => JSON.stringify(r.promptEnvelope).includes("[system] You were addressed directly")),
       "no nudge model call — the existing reply text is delivered as-is",
     );
-    await sleep(300);
+    await quietThread(built, "ch:C-shed:710.1");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(
       all.filter((d) => d.text === "worklog: did the thing but never posted").length,
@@ -330,8 +295,7 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
   built.runtime.start();
   try {
     await built.app.turn(mention("!shedmute", "C-shedmute", "710.3"));
-    const fallback = await pollFor(built.posts, (d) => d.text === "worklog: did the thing but never posted");
-    assert.ok(fallback, "the shed reply was delivered as the fallback");
+    const fallback = await built.posts.waitFor((d) => d.text === "worklog: did the thing but never posted");
     assert.equal(fallback.destination.target, "slack:C-shedmute:710.3", "delivered to the addressed conversation");
     const session = await built.sessions.getByThread("ch:C-shedmute:710.3");
     const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
@@ -343,7 +307,7 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
       ),
       "the stateless nudge rebuild includes the first sub-turn's assistant message",
     );
-    await sleep(300);
+    await quietThread(built, "ch:C-shedmute:710.3");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(
       all.filter((d) => d.text === "worklog: did the thing but never posted").length,
@@ -367,7 +331,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
       conversationHeader: "QA-IMAGE-ENVIRONMENT",
       attachments: [{ name: "qa.png", mimetype: "image/png", sizeBytes: image.length, blobId }],
     });
-    assert.ok(await pollFor(built.posts, (d) => d.text.startsWith("worklog: did the thing but never posted"), 15_000));
+    await built.posts.waitFor((d) => d.text.startsWith("worklog: did the thing but never posted"));
     const session = await built.sessions.getByThread("ch:C-nudge-image:710.2");
     const request = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
       messages?: Array<{ role?: string; content?: string }>;
@@ -389,10 +353,10 @@ test("the nudge continuation is rebuilt from history containing the first sub-tu
   built.runtime.start();
   try {
     await built.app.turn(mention("!post prior", "C-nudge-read", "711.1"));
-    assert.ok(await pollFor(built.posts, (d) => d.text === "prior"));
+    await built.posts.waitFor((d) => d.text === "prior");
 
     await built.app.turn(mention("!shedmute", "C-nudge-read", "711.1"));
-    assert.ok(await pollFor(built.posts, (d) => d.text === "worklog: did the thing but never posted"));
+    await built.posts.waitFor((d) => d.text === "worklog: did the thing but never posted");
     const session = await built.sessions.getByThread("ch:C-nudge-read:711.1");
     const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
       messages?: Array<{ role?: string; content?: string }>;
@@ -413,11 +377,9 @@ test("addressed spine turn: the first text block posts immediately as the ack wh
   built.runtime.start();
   try {
     await built.app.turn(mention("!preamble On it — checking the deploy logs.", "C-ack", "720.1"));
-    const ack = await pollFor(built.posts, (d) => d.text === "On it — checking the deploy logs.");
-    assert.ok(ack, "the first block was harvested and enqueued while the tool ran");
+    const ack = await built.posts.waitFor((d) => d.text === "On it — checking the deploy logs.");
     assert.equal(ack.destination.target, "slack:C-ack:720.1", "the ack lands in the addressed conversation");
-    const posted = await pollFor(built.posts, (d) => d.text === "All clear — nothing broke.");
-    assert.ok(posted, "the trailing reply text is delivered (the ack alone did not satisfy the reply contract)");
+    await built.posts.waitFor((d) => d.text === "All clear — nothing broke.");
   } finally {
     await built.runtime.stop();
   }
@@ -428,9 +390,8 @@ test("first action is `post` (speaking deliberately) → the opening text is NOT
   built.runtime.start();
   try {
     await built.app.turn(mention("!speakpost the direct answer", "C-nopreharvest", "730.1"));
-    const posted = await pollFor(built.posts, (d) => d.text === "the direct answer");
-    assert.ok(posted, "the deliberate post went out");
-    await sleep(300);
+    await built.posts.waitFor((d) => d.text === "the direct answer");
+    await quietThread(built, "ch:C-nopreharvest:730.1");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(all.length, 1, "exactly one delivery — the streamed opening text never posted");
   } finally {
@@ -444,7 +405,7 @@ test("addressed + finish_silently → no nudge (explicit decline is accepted)", 
   try {
     const res = await built.app.turn({ ...mention("!finish-silent", "C-decline", "700.2"), async: false });
     assert.equal(res.status, "silent", "an explicit finish_silently ends the turn silently");
-    await sleep(300);
+    await quietThread(built, "ch:C-decline:700.2");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(all.length, 0, "finish_silently suppresses the nudge and closing reply");
   } finally {
@@ -466,7 +427,7 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
       async: false,
     });
     assert.equal(res.status, "silent", "an unaddressed silent turn stays silent, no nudge");
-    await sleep(300);
+    await quietThread(built, "ch:C-amb:700.3");
     const all = (await built.posts.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 0, "no nudge on an unaddressed turn");
   } finally {
@@ -489,8 +450,7 @@ test("post broadcast:true posts at the channel top level, not in the current thr
       liveActor: true,
       async: true,
     });
-    const posted = await pollFor(built.posts, (d) => d.text === "ahoy channel");
-    assert.ok(posted, "the top-level post landed");
+    const posted = await built.posts.waitFor((d) => d.text === "ahoy channel");
     assert.equal(posted.destination.target, channel, "broadcast posts to the bare channel, not the thread");
   } finally {
     await built.runtime.stop();
@@ -513,8 +473,7 @@ test("post with an explicit ts to the current channel targets exactly <channel>:
       liveActor: true,
       async: true,
     });
-    const posted = await pollFor(built.posts, (d) => d.text === "threaded reply");
-    assert.ok(posted, "the threaded post landed");
+    const posted = await built.posts.waitFor((d) => d.text === "threaded reply");
     assert.equal(posted.destination.target, `${channel}:${ts}`, "explicit ts replaces only the thread segment");
   } finally {
     await built.runtime.stop();
@@ -543,8 +502,7 @@ test("reach to a named channel resolves it, posts at that channel's top level, a
       async: true,
     });
     assert.equal(res.status, "queued");
-    const posted = await pollFor(built.posts, (d) => d.text === "elsewhere");
-    assert.ok(posted, "the reach post landed");
+    const posted = await built.posts.waitFor((d) => d.text === "elsewhere");
     assert.equal(posted.destination.target, channel, "reach to a channel posts at its top level (bare container)");
   } finally {
     await built.runtime.stop();
@@ -559,8 +517,7 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     const root = "700.1";
     const res = await built.app.turn(mention("!post ahoy", channel, root));
     assert.equal(res.status, "queued");
-    const posted = await pollFor(built.posts, (d) => d.destination.target === `slack:${channel}:${root}`);
-    assert.ok(posted, "the addressed turn still replies via post");
+    const posted = await built.posts.waitFor((d) => d.destination.target === `slack:${channel}:${root}`);
     assert.equal(posted.text, "ahoy");
 
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
@@ -593,11 +550,7 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
       async: true,
     });
     assert.equal(res.status, "queued");
-    const posted = await pollFor(
-      built.posts,
-      (d) => d.destination.target === `slack:${channel}:${root}` && d.text === "following up",
-    );
-    assert.ok(posted, "the thread-follow still routes + posts");
+    await built.posts.waitFor((d) => d.destination.target === `slack:${channel}:${root}` && d.text === "following up");
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
     const entries = await built.sessions.getItems(sub!.id);
     const userText = entries.find(isUserMessage)?.text ?? "";

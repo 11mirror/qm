@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 const actor = { externalId: "U1" };
@@ -92,9 +93,11 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
     const claimed = await built.runs.claim("w1", 30_000);
     await built.app.turn(slackTurn("fold me", "t2"));
     await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
+    const foldRuns = async () => (await built.runs.list()).filter((run) => run.request.text.includes(">fold me<"));
+    await settle(async () => (await foldRuns()).length > 0);
     const late = await built.app.turn(slackTurn("fold me", "t2"));
     assert.equal(late.status, "silent");
-    assert.equal(await built.runs.activeForThread("ch:C1:t1"), null, "no second run was enqueued");
+    assert.equal((await foldRuns()).length, 1, "only the orphaned steer's replay runs it; the redelivery adds none");
   } finally {
     await built.runtime.stop();
   }
