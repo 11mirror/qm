@@ -1,8 +1,7 @@
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
-import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
+import { SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
-import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
@@ -19,22 +18,19 @@ import {
 } from "./document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../harness/goal.ts";
 import {
   type DeliveryProvenance,
   type Destination,
   type ScopeId,
-  type SessionType,
   type TurnResult,
   type TurnRuntime,
-  type PendingApproval,
   type PendingApprovalRecord,
   turnSource,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -47,10 +43,8 @@ import { turnPostProvenance } from "../surfaces/outbound.ts";
 import { recentPrincipalDeliveryNote } from "../surfaces/recent-dm-posts.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
-import type { GapPhase, Lease, LeaseAttempt } from "../sessions/session-store.ts";
-import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
+import type { GapPhase } from "../sessions/session-store.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { acquireLeaseWithin } from "../sessions/session-store.ts";
 import { isOverheard, isReply, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
@@ -92,7 +86,6 @@ import {
 import type {
   GapWork,
   HarnessDetectResult,
-  HarnessLlmRequestRecord,
   HarnessTurnInput,
   HarnessTurnResult,
   RuntimeChoice,
@@ -109,10 +102,9 @@ import {
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
-import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
+import { commandApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
-import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
@@ -129,7 +121,6 @@ import {
   inboundIssuesNote,
   inboundIssueList,
   inboundManifest,
-  isVisionAttachment,
   materializeInbound,
   safeAttachmentName,
   senderNote,
@@ -149,13 +140,11 @@ import {
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   recordedMessageTimestamps,
-  renderOverheard,
   selectOverheardToImport,
   overheardItem,
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
-import { jsonbSafeStringify } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -172,9 +161,11 @@ import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { admitTurn, ProjectRosterChanged, rosterChangedRefusal } from "./orchestrator/admit.ts";
+import { acquireTurnLeaseOrRefuse } from "./orchestrator/turn-lease.ts";
+import { openTurnSession, resolveTurnScope } from "./orchestrator/turn-context.ts";
+import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import {
   consumeApprovalDecision,
-  loadActorGrants,
   loadApprovalLedger,
   parkApprovals,
   summarizeApproval,
@@ -193,7 +184,6 @@ import {
   isScreenableTextAttachment,
   loadActiveBundles,
   renderTitleTranscript,
-  replayableRequest,
   stripAckPrefix,
   turnPostKeys,
   visibleTitleItemText,
@@ -242,10 +232,6 @@ const DETECT_HISTORY_TAIL = 400;
 
 const MIN_SESSION_LEASE_TTL_MS = 15_000;
 
-const AUTOMATED_TURN_LEASE_WAIT_MS = 1_000;
-
-const SESSION_GONE_REASON = "this conversation is no longer available — start a new one";
-
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
@@ -259,7 +245,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
-  const approvalGrants = deps.approvalGrants;
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
@@ -306,93 +291,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
     ...(deps.errors ? { errors: deps.errors } : {}),
   });
-
-  function recordSessionBusy(busy: {
-    site: "turn" | "quarantined_input" | "flagged_input";
-    attempt: LeaseAttempt;
-    waitedMs?: number;
-    sessionId: string;
-    scopeId: ScopeId;
-    runId?: string;
-    surface?: string;
-  }): void {
-    const at = Date.now();
-    deps.errors?.record({
-      category: "sessions",
-      code: "session_busy",
-      message: jsonbSafeStringify({
-        site: busy.site,
-        heldBy: busy.attempt.heldBy ?? null,
-        ...(busy.attempt.heldSince !== undefined ? { heldForMs: at - busy.attempt.heldSince } : {}),
-        ...(busy.attempt.heldUntil !== undefined ? { expiresInMs: busy.attempt.heldUntil - at } : {}),
-        ...(busy.waitedMs !== undefined ? { waitedMs: busy.waitedMs } : {}),
-        runId: busy.runId ?? null,
-        surface: busy.surface ?? null,
-      }),
-      scopeLabel: busy.scopeId,
-      sessionId: busy.sessionId,
-    });
-  }
-
-  async function acquireTurnLeaseOrRefuse(args: {
-    sessionId: string;
-    site: "turn" | "flagged_input";
-    scopeId: ScopeId;
-    automated: boolean;
-    runId?: string;
-    fenceToken?: string;
-    surface?: string;
-  }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
-    const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
-    const attempt = await acquireLeaseWithin(
-      deps.sessions,
-      args.sessionId,
-      "turn",
-      args.automated ? Math.min(AUTOMATED_TURN_LEASE_WAIT_MS, budget) : budget,
-      { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
-    );
-    const waitedMs = attempt.waitedMs ?? 0;
-    if (attempt.lease)
-      return {
-        lease: args.runId
-          ? { ...attempt.lease, turnId: args.runId, ...(args.fenceToken ? { fenceToken: args.fenceToken } : {}) }
-          : attempt.lease,
-        waitedMs,
-      };
-    if (attempt.heldUntil === undefined) {
-      deps.errors?.record({
-        category: "sessions",
-        code: "session_missing",
-        message: jsonbSafeStringify({ site: args.site, runId: args.runId ?? null, surface: args.surface ?? null }),
-        scopeLabel: args.scopeId,
-        sessionId: args.sessionId,
-      });
-      return {
-        lease: null,
-        waitedMs,
-        refusal: { status: "refused", sessionId: args.sessionId, reason: SESSION_GONE_REASON },
-      };
-    }
-    recordSessionBusy({
-      site: args.site,
-      attempt,
-      waitedMs,
-      sessionId: args.sessionId,
-      scopeId: args.scopeId,
-      ...(args.runId ? { runId: args.runId } : {}),
-      ...(args.surface ? { surface: args.surface } : {}),
-    });
-    return {
-      lease: null,
-      waitedMs,
-      refusal: {
-        status: "refused",
-        sessionId: args.sessionId,
-        refusalKind: "session_busy",
-        reason: args.automated ? SESSION_BUSY_FIRE_TEXT : SESSION_BUSY_USER_TEXT,
-      },
-    };
-  }
 
   const orchestrator: Orchestrator = {
     async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
@@ -520,302 +418,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         withManagedRosterVersion,
         mirrorRunActivity,
       } = admission.admitted;
-      const resolution = await deps.resolution.resolve(conversation, actor, external);
-      const actorGrants = loadActorGrants(approvalGrants, actor.id);
-      const approvalOwner = (sessionId: string) => ({
-        sessionId,
-        request: replayableRequest(input),
-        adminGrantModes: resolution.approvalGrantModes,
-      });
-      const scopeId = deps.resolution.scopeFor(conversation, actor);
-      const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
-        actorId: actor.id,
+      const ctx = await resolveTurnScope(deps, admission.admitted);
+      const {
+        resolution,
+        actorGrants,
+        approvalOwner,
         scopeId,
-        verified: liveAuthorTurn && conversation.kind !== "dm",
-      });
-      let participantHistorySeqs: Set<number> | undefined;
-      let participantHistoryMaxSeq = -1;
-      const filterHistory = (entries: Item[]): Item[] => {
-        if (!conversation.audience.length) return [];
-        if (!participantHistorySeqs) return entries;
-        return entries.filter(
-          (entry) => entry.seq > participantHistoryMaxSeq || participantHistorySeqs!.has(entry.seq),
-        );
-      };
-      const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
-        const participantIds = input.sessionParticipantIds;
-        if (!participantIds?.length) return;
-        const desired = new Set(participantIds);
-        const existing = await deps.sessions.participantsOf(sessionId);
-        await Promise.all(
-          existing
-            .filter((principalId) => !desired.has(principalId))
-            .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
-        );
-        await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-        const snapshot = await deps.sessions.getItems(sessionId);
-        participantHistoryMaxSeq = snapshot.reduce((max, entry) => Math.max(max, entry.seq), -1);
-        const views = await Promise.all(
-          participantIds.map((principalId) => deps.sessions.visibleItems(sessionId, principalId)),
-        );
-        participantHistorySeqs = new Set(views[0]!.map((entry) => entry.seq));
-        for (const view of views.slice(1)) {
-          const visible = new Set(view.map((entry) => entry.seq));
-          for (const seq of participantHistorySeqs) if (!visible.has(seq)) participantHistorySeqs.delete(seq);
-        }
-      };
-      const securityPolicy = resolution.securityPolicy;
-      const enforceScreen = securityPolicy.screening === "enforce";
-      const screenTrace = {
-        mode: enforceScreen ? "enforce" : "observe",
-        thread: conversation.threadRef,
-        ...(input.runId ? { runId: input.runId } : {}),
-      } as const;
-      const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
-      const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
-      const approvalReplaysFlaggedRequest =
-        !!approvalRecord?.request &&
-        approvalRecord.request.text === input.text &&
-        JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
-        JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
-        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
-      const screenInbound =
-        securityPolicy.screening !== "off" &&
-        !(
-          approvalSession &&
-          approvalRecord?.sessionId === approvalSession.id &&
-          approvalRecord.kind === "input" &&
-          approvalReplaysFlaggedRequest
-        );
-      const screenSession: { id?: string } = {};
-      const pendingScreenRequests: HarnessLlmRequestRecord[] = [];
-      const recordScreenRequest = async (rec: HarnessLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
-        if (!screenSession.id) {
-          pendingScreenRequests.push(rec);
-          return;
-        }
-        try {
-          await deps.sessions.recordLlmRequest(screenSession.id, { ...rec, scopeLabel: scopeId }, signal);
-        } catch (err) {
-          reportFailure("orchestrator: persist security screen request snapshot", err);
-        }
-      };
-      const buildInboundScreen = async () => {
-        let overheard: OverheardEntryPayload[] = [];
-        if (screenInbound && conversation.kind !== "dm" && input.overheard?.length) {
-          const existingSession = await deps.sessions.getByThread(conversation.threadRef);
-          const existingEntries = existingSession ? await deps.sessions.getItems(existingSession.id) : [];
-          overheard = selectOverheardToImport(input.overheard, recordedMessageTimestamps(existingEntries));
-        }
-        let hasUnscreenableAttachment = false;
-        const attachmentPromptData: Array<{ source: string; content: string }> = [];
-        if (screenInbound) {
-          for (const attachment of input.attachments ?? []) {
-            attachmentPromptData.push({
-              source: "attachment-metadata",
-              content: JSON.stringify({
-                name: attachment.name,
-                mimetype: attachment.mimetype,
-                author: attachment.author,
-              }),
-            });
-            if (
-              isVisionAttachment(attachment) ||
-              !isScreenableTextAttachment(attachment.mimetype) ||
-              attachment.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES
-            ) {
-              hasUnscreenableAttachment = true;
-              continue;
-            }
-            const opened = await blobTransfer
-              .open(attachment.blobId)
-              .catch(swallowAs("attachment screening: open blob", null));
-            if (!opened || opened.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) {
-              hasUnscreenableAttachment = true;
-              continue;
-            }
-            const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
-            if (!data || data.length > MAX_AUTO_ATTACHMENT_SCREEN_BYTES || data.includes(0)) {
-              hasUnscreenableAttachment = true;
-              continue;
-            }
-            attachmentPromptData.push({
-              source: `attachment:${safeAttachmentName(attachment.name)}`,
-              content: data.toString("utf8"),
-            });
-          }
-        }
-        const externalPromptData = screenInbound
-          ? [
-              ...(ambientTurn && actor.displayName?.trim()
-                ? [{ source: "sender", content: senderNote(actor.displayName) }]
-                : []),
-              ...(input.conversationHeader?.trim()
-                ? [{ source: "conversation-header", content: input.conversationHeader }]
-                : []),
-              ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
-              ...attachmentPromptData,
-              ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
-            ]
-          : [];
-        const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
-        const verifiedSessionMessage = Boolean(
-          sessionSender &&
-          sessionSender.scopeId === scopeId &&
-          (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
-        );
-        const screenPayload = screenInbound
-          ? securityScreenPayload({
-              ...input,
-              ...turnOriginRequestFields(input.origin),
-              ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
-              overheard: [],
-              externalPromptData,
-              verifiedSessionMessage,
-            })
-          : null;
-        return { hasUnscreenableAttachment, externalPromptData, screenPayload };
-      };
-      let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
-      let inputUnscreened = false;
-      if (screenInbound && !enforceScreen) {
-        void buildInboundScreen()
-          .then(({ screenPayload }) =>
-            screenPayload && !screenPayload.truncated
-              ? classifySecurityData(screenPayload.content, actor.id, scopeId, undefined, {
-                  ...screenTrace,
-                  hook: "user_input",
-                  surface: input.surface,
-                  origin: input.origin.kind,
-                })
-              : undefined,
-          )
-          .catch(swallowAs("orchestrator: observed inbound screen", undefined));
-      } else if (screenInbound) {
-        const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
-        if (screenPayload || hasUnscreenableAttachment) {
-          const canScreenText =
-            !!screenPayload &&
-            !screenPayload.truncated &&
-            (!!deps.securityScreener || !!deps.harness.models.screenSecurity);
-          const verdict = canScreenText
-            ? await classifySecurityData(screenPayload!.content, actor.id, scopeId, recordScreenRequest, {
-                ...screenTrace,
-                hook: "user_input",
-                surface: input.surface,
-                origin: input.origin.kind,
-              })
-            : undefined;
-          let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
-          if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
-          else if (screenPayload.truncated) unscreenableCause = "oversize-input";
-          else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
-          if (verdict?.decision === "strict") {
-            const sources = externalPromptData.map((item) => item.source);
-            flaggedScreenedInput = {
-              reason: verdict.reason ?? "strict security screen verdict",
-              sources,
-            };
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
-              action: SECURITY_FLAGGED,
-              resource: input.surface ?? "unknown",
-              scopeLabel: scopeId,
-              status: "pending_approval",
-              detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
-            });
-          } else if (unscreenableCause || verdict?.unscreened) {
-            inputUnscreened = true;
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
-              action: "security_posture.input_failed_open",
-              resource: input.surface ?? "unknown",
-              scopeLabel: scopeId,
-              status: "allowed",
-              detail: JSON.stringify({ cause: unscreenableCause ?? UNSCREENED_REASON }),
-            });
-          }
-        }
-      }
-      if (flaggedScreenedInput) {
-        const existing = await deps.sessions.getByThread(conversation.threadRef);
-        const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
-        for (const grant of await actorGrants()) {
-          if (!resolution.approvalGrantModes[grant.scope]) continue;
-          if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
-          if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: actor.id,
-            action: "security_posture.flag_allowed_by_grant",
-            resource: input.surface ?? "unknown",
-            scopeLabel: scopeId,
-            status: "allowed",
-            detail: JSON.stringify({ scope: grant.scope, reason: flaggedScreenedInput.reason }),
-          });
-          flaggedScreenedInput = undefined;
-          break;
-        }
-      }
-      if (flaggedScreenedInput) {
-        let type: SessionType = "channel";
-        if (conversation.kind === "dm") type = "dm";
-        else if (conversation.kind === "group") type = "group";
-        const session = await deps.sessions.getOrCreateByThread(
-          conversation.threadRef,
-          type,
-          scopeId,
-          conversation.channelName,
-          input.surface,
-          desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
-        );
-        screenSession.id = session.id;
-        if (!input.sessionParticipantIds?.length && !automatedTurn)
-          await deps.sessions.addParticipant(session.id, actor.id);
-        const acquired = await acquireTurnLeaseOrRefuse({
-          sessionId: session.id,
-          site: "flagged_input",
-          scopeId,
-          automated: automatedTurn,
-          ...(input.runId ? { runId: input.runId } : {}),
-          ...(input.turnFenceToken ? { fenceToken: input.turnFenceToken } : {}),
-          ...(input.surface ? { surface: input.surface } : {}),
-        });
-        if (!acquired.lease) return acquired.refusal;
-        const lease = acquired.lease;
-        let flaggedApprovals: PendingApproval[] = [];
-        try {
-          await withManagedRosterVersion(async () => {
-            await reconcileSessionParticipants(session.id);
-            await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            flaggedApprovals = await parkApprovals(pending, approvalOwner(session.id), [
-              {
-                requestId: inputApprovalId(session.id, replayableRequest(input)),
-                command: "security-screen",
-                reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
-                blocksInput: true,
-                kind: "input",
-                approvalKey: `security-screen:${input.surface ?? "unknown"}`,
-              },
-            ]);
-            return true;
-          });
-        } catch (err) {
-          if (err instanceof ProjectRosterChanged) {
-            return rosterChangedRefusal(session.id);
-          }
-          throw err;
-        } finally {
-          await deps.sessions.releaseLease(lease);
-        }
-        return {
-          status: "pending_approval",
-          sessionId: session.id,
-          pendingApprovals: flaggedApprovals,
-        };
-      }
+        isCurrentSharedScopeMember,
+        filterHistory,
+        reconcileSessionParticipants,
+      } = ctx;
+      const screened = await screenInboundTurn(ctx, { classifySecurityData, blobTransfer });
+      if ("result" in screened) return screened.result;
+      const {
+        securityPolicy,
+        enforceScreen,
+        screenTrace,
+        approvalRecord,
+        pendingScreenRequests,
+        recordScreenRequest,
+        inputUnscreened,
+      } = screened.screen;
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
@@ -1060,20 +683,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const onboardingBlock = isIdeasConversation(input) ? IDEAS_CONVERSATION_MD : "";
 
-      let type: SessionType = "channel";
-      if (conversation.kind === "dm") type = "dm";
-      else if (conversation.kind === "group") type = "group";
-      const session = await deps.sessions.getOrCreateByThread(
-        conversation.threadRef,
-        type,
-        scopeId,
-        conversation.channelName,
-        input.surface,
-        desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
-      );
-      screenSession.id = session.id;
-      if (!input.sessionParticipantIds?.length && !automatedTurn)
-        await deps.sessions.addParticipant(session.id, actor.id);
+      const session = await openTurnSession(ctx);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
@@ -1740,7 +1350,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         emitGapWork,
       });
       const leaseStart = Date.now();
-      const acquired = await acquireTurnLeaseOrRefuse({
+      const acquired = await acquireTurnLeaseOrRefuse(deps, {
         sessionId: session.id,
         site: "turn",
         scopeId,
