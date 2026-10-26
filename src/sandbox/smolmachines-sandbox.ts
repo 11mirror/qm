@@ -5,7 +5,7 @@ import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
@@ -52,7 +52,7 @@ export interface SmolmachinesSandboxOptions extends SandboxShared {
   fetchImpl?: typeof fetch;
 }
 
-export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): Sandbox {
+export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): BackendSandbox {
   if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const token = opts.token ?? "";
   const fetchImpl = opts.fetchImpl ?? fetch;

@@ -8,6 +8,7 @@ import {
   supportsScopeProfile,
 } from "../src/sandbox/sandbox.ts";
 import type {
+  BackendSandbox,
   Sandbox,
   SandboxHandle,
   ExecResult,
@@ -16,7 +17,10 @@ import type {
 } from "../src/sandbox/sandbox.ts";
 import type { ScopeId, WorkspaceLayer } from "../src/types.ts";
 
-type Fake = Sandbox & { calls: string[]; provisioned: Array<{ layers: WorkspaceLayer[]; opts?: ProvisionOptions }> };
+type Fake = BackendSandbox & {
+  calls: string[];
+  provisioned: Array<{ layers: WorkspaceLayer[]; opts?: ProvisionOptions }>;
+};
 
 function fakeBackend(name: string): Fake {
   const calls: string[] = [];
@@ -61,6 +65,13 @@ function fakeBackend(name: string): Fake {
     async listProcesses() {
       return [];
     },
+    async exportFiles() {
+      return [];
+    },
+    async computerStatus() {
+      return { machine: name, guestResponsive: true };
+    },
+    async destroyScope() {},
   };
   return s as Fake;
 }
@@ -259,7 +270,6 @@ test("profileFor with no default resource advertises the default backend for boo
 test("fleet sweeps are absent when no backend implements them", async () => {
   const { router } = build({});
   assert.equal(router.reapDeepIdle, undefined);
-  assert.equal(router.computerStatus, undefined);
   assert.equal(router.restartComputer, undefined);
 });
 
@@ -276,9 +286,8 @@ test("reapDeepIdle is exposed when a backend implements it, and sums across back
 
 function capabilitySplit(onError?: (e: { code: string; message: string; scopeLabel?: string }) => void) {
   const aws = fakeBackend("aws");
-  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
+  Object.assign(aws, { stageIn: async () => {}, stageOut: async () => "blob", importFiles: async () => {} });
   const sprites = fakeBackend("sprites");
-  delete (sprites as Partial<Sandbox>).exportFiles;
   const router = createSandboxRouter({
     backends: { aws, sprites },
     defaultBackend: "aws",
@@ -293,13 +302,12 @@ function capabilitySplit(onError?: (e: { code: string; message: string; scopeLab
 
 test("a capability held by SOME backends stays exposed and dispatches per handle", async () => {
   const router = capabilitySplit();
-  assert.equal(typeof router.exportFiles, "function");
-  assert.deepEqual(await router.exportFiles!(await router.provision(layersFor("personal:f"))), []);
+  assert.equal(typeof router.stageIn, "function");
+  await router.stageIn!(await router.provision(layersFor("personal:f")), "in.bin", "blob");
   const onSprites = await router.provision(layersFor("personal:s"));
   await assert.rejects(
-    async () => router.exportFiles!(onSprites),
-    (e: unknown) =>
-      e instanceof CapabilityUnsupportedError && /does not support exportFiles/.test((e as Error).message),
+    async () => router.stageIn!(onSprites, "in.bin", "blob"),
+    (e: unknown) => e instanceof CapabilityUnsupportedError && /does not support stageIn/.test((e as Error).message),
   );
 });
 
@@ -307,11 +315,11 @@ test("a capability refusal reaches the operator error stream, scope-labelled and
   const errors: Array<{ code: string; message: string; scopeLabel?: string }> = [];
   const router = capabilitySplit((e) => errors.push(e));
   const handle = await router.provision(layersFor("personal:s"));
-  for (let i = 0; i < 3; i++) await assert.rejects(async () => router.exportFiles!(handle));
+  for (let i = 0; i < 3; i++) await assert.rejects(async () => router.stageIn!(handle, "in.bin", "blob"));
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.code, "capability_unsupported");
   assert.equal(errors[0]!.scopeLabel, "personal:s");
-  assert.match(errors[0]!.message, /sprites.*exportFiles/);
+  assert.match(errors[0]!.message, /sprites.*stageIn/);
 });
 
 test("a throwing error sink cannot replace the typed refusal callers catch", async () => {
@@ -320,7 +328,7 @@ test("a throwing error sink cannot replace the typed refusal callers catch", asy
   });
   const handle = await router.provision(layersFor("personal:s"));
   await assert.rejects(
-    async () => router.exportFiles!(handle),
+    async () => router.stageIn!(handle, "in.bin", "blob"),
     (e: unknown) => e instanceof CapabilityUnsupportedError,
   );
 });
@@ -378,14 +386,13 @@ test("computer status/restart with no default resource refuse with NoDefaultSand
   assert.deepEqual(sprites.calls, []);
 });
 
-test("computer status/restart on a backend without them is a typed refusal", async () => {
+test("computer restart on a backend without it is a typed refusal", async () => {
   const { aws, sprites } = computerBackends();
   const router = createSandboxRouter({
     backends: { aws, sprites },
     defaultBackend: "sprites",
     resources: stubResources({ "personal:a": resource("a", "aws") }),
   });
-  await assert.rejects(async () => router.computerStatus!("personal:a"), CapabilityUnsupportedError);
   await assert.rejects(async () => router.restartComputer!("personal:a"), CapabilityUnsupportedError);
 });
 

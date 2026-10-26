@@ -282,6 +282,10 @@ export function supportsBlobStaging(
 export type ProcessSandbox = Sandbox &
   Required<Pick<Sandbox, "startProcess" | "readProcess" | "writeStdin" | "signalProcess" | "listProcesses">>;
 
+/** What every routed backend implements (all of them are built on createProviderSandbox). */
+export type BackendSandbox = ProcessSandbox &
+  Required<Pick<Sandbox, "exportFiles" | "computerStatus" | "destroyScope">>;
+
 export function supportsProcessSessions(sandbox: Sandbox): sandbox is ProcessSandbox {
   return (
     sandbox.profile.processSessions === true &&

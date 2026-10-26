@@ -11,7 +11,7 @@ import {
   type SuperserveSandboxInfo,
   type SuperserveSession,
 } from "./superserve-client.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const DEFAULT_IDLE_PAUSE_SEC = 15 * 60;
@@ -96,7 +96,7 @@ function spooledScript(script: string, timeoutSec: number): string {
   ].join("; ");
 }
 
-export function createSuperserveSandbox(workspace: WorkspaceStore, opts: SuperserveSandboxOptions): Sandbox {
+export function createSuperserveSandbox(workspace: WorkspaceStore, opts: SuperserveSandboxOptions): BackendSandbox {
   const { client, template } = opts;
   const idlePauseSec = opts.idleParkSec ?? DEFAULT_IDLE_PAUSE_SEC;
   const keepWarmSec = Math.max(opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC, idlePauseSec);
