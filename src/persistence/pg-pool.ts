@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { Pool, PoolClient } from "pg";
+import type { ClientConfig, Pool, PoolClient } from "pg";
+import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -47,15 +48,11 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
-  let url = connectionString;
-  let ssl = pgCaOptions();
-  if (kind === "query" && connectionString === poolingConfig.poolUrl && poolingConfig.caCert) {
-    const parsed = new URL(connectionString);
-    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
-    url = parsed.toString();
-    ssl = { ssl: { ca: poolingConfig.caCert } };
-  }
-  const pool = guardedPool(new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 }));
+  const connection = pgConnectionOptions(
+    connectionString,
+    kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
+  );
+  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000 }));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -361,8 +358,14 @@ export function configurePgCaTrust(opts: { cert?: string; certFile?: string }): 
   installedCaTrust = resolvePgCaTrust(opts);
 }
 
-export function pgCaOptions(): { ssl?: { ca: string } } {
-  return installedCaTrust;
+export function pgConnectionOptions(connectionString: string, ca = installedCaTrust.ssl?.ca): ClientConfig {
+  if (!ca) return { connectionString };
+  const url = new URL(connectionString);
+  url.searchParams.delete("ssl");
+  url.searchParams.delete("sslrootcert");
+  url.searchParams.set("sslmode", "verify-full");
+  const config = parseIntoClientConfig(url.toString());
+  return { ...config, ssl: { ...(typeof config.ssl === "object" ? config.ssl : {}), ca } };
 }
 
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
@@ -416,7 +419,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
+      const pool = guardedPool(new pg.Pool(pgConnectionOptions(databaseUrl)));
       try {
         await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(
