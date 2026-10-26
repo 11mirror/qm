@@ -1,4 +1,5 @@
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
+import { mountTemplate } from "./shared.ts";
 type Data = Record<string, any>;
 const providerLabels: Record<string, string> = {
   anthropic: "Anthropic",
@@ -44,14 +45,8 @@ export class Onboarding {
     this.context = context;
   }
   mount() {
-    for (const placeholder of document.querySelectorAll<HTMLTemplateElement>("template[data-onboarding-ui]")) {
-      const kind = placeholder.dataset.onboardingUi!;
-      const fragment = document.createDocumentFragment();
-      const draw = () => render(this.template(kind), fragment);
-      draw();
-      placeholder.replaceWith(fragment.firstElementChild!);
-      this.painters.push(draw);
-    }
+    for (const kind of ["steps", "provider"])
+      this.painters.push(mountTemplate(`template[data-onboarding-ui="${kind}"]`, () => this.template(kind)));
   }
   draw() {
     for (const paint of this.painters) paint();

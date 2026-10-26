@@ -2,6 +2,7 @@ import { mountTemplate } from "./shared.ts";
 import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
+import { ifDefined } from "lit/directives/if-defined.js";
 let config: any;
 const labels: Record<string, string> = {
   openai: "OpenAI Chat Completions",
@@ -186,6 +187,22 @@ function renderRows() {
   if (empty) empty.hidden = !!provider.rows.length;
 }
 
+function input(
+  key: string,
+  label: string,
+  o: { placeholder: string; disabled?: boolean; type?: string; cls?: string },
+) {
+  return html`<label class=${ifDefined(o.cls)}
+    >${label}<input
+      type=${ifDefined(o.type)}
+      id=${"custom-provider-" + key}
+      .value=${provider.draft[key] || ""}
+      @input=${(e: Event) => changeProvider(key, (e.target as HTMLInputElement).value)}
+      ?disabled=${!!o.disabled}
+      autocomplete="off"
+      placeholder=${o.placeholder}
+  /></label>`;
+}
 function template() {
   return html`
     <dialog
@@ -215,23 +232,8 @@ function template() {
         </button>
       </div>
       <div class="custom-provider-form">
-        <label
-          >Provider id (slug)<input
-            id="custom-provider-id"
-            .value=${provider.draft.id || ""}
-            @input=${(e: Event) => changeProvider("id", (e.target as HTMLInputElement).value)}
-            ?disabled=${provider.editing}
-            autocomplete="off"
-            placeholder="litellm"
-        /></label>
-        <label
-          >Display name<input
-            id="custom-provider-name"
-            .value=${provider.draft.name || ""}
-            @input=${(e: Event) => changeProvider("name", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="LiteLLM"
-        /></label>
+        ${input("id", "Provider id (slug)", { placeholder: "litellm", disabled: provider.editing })}
+        ${input("name", "Display name", { placeholder: "LiteLLM" })}
         <label
           >Protocol<select
             id="custom-provider-protocol"
@@ -243,23 +245,8 @@ function template() {
             <option value="anthropic">Anthropic Messages</option>
           </select></label
         >
-        <label
-          >Base URL<input
-            id="custom-provider-url"
-            .value=${provider.draft.url || ""}
-            @input=${(e: Event) => changeProvider("url", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="https://gateway.internal/v1"
-        /></label>
-        <label class="custom-provider-key"
-          >API key<input
-            type="password"
-            id="custom-provider-key"
-            .value=${provider.draft.key || ""}
-            @input=${(e: Event) => changeProvider("key", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="Write-only; blank on edit keeps the stored key"
-        /></label>
+        ${input("url", "Base URL", { placeholder: "https://gateway.internal/v1" })}
+        ${input("key", "API key", { placeholder: "Write-only; blank on edit keeps the stored key", type: "password", cls: "custom-provider-key" })}
         <label class="custom-provider-models"
           >Models
           <span class="label-detail">one per line: id | name | context | max tokens | reasoning (true/false)</span

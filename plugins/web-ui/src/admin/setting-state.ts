@@ -23,6 +23,13 @@ export class SettingState {
     }
     this.render();
   }
+  loaded() {
+    this.baseline = JSON.stringify(this.collect(false));
+    this.message = "";
+    this.tone = "";
+    this.saving = false;
+    this.render();
+  }
   commit(body: unknown) {
     this.baseline = JSON.stringify(body);
     this.saving = false;

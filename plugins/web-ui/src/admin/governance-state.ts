@@ -69,11 +69,7 @@ export class GovernanceState extends SettingState {
       this.denyEditor = !!this.draft.deniedHosts;
     }
     this.expanded = false;
-    this.baseline = JSON.stringify(this.collect(false));
-    this.message = "";
-    this.tone = "";
-    this.saving = false;
-    this.render();
+    this.loaded();
   }
   collect(validate = true): Record<string, any> {
     if (this.key === "command-policy") {
