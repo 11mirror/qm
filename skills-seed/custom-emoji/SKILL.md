@@ -14,23 +14,29 @@ Adding an emoji is a visible change to the whole workspace: one per request, nev
    the org `openai` credential on the command):
 
    ```bash
-   python3 <skill dir>/scripts/emoji.py make "<subject>" --name <name> --out /tmp/emoji [--motion fly]
+   python3 <skill dir>/scripts/emoji.py make "<subject>" --name <name> --out /tmp/emoji [--motion bounce]
    ```
 
-   It asks `gpt-image-1.5` for 4 transparent candidates in a bold sticker style (one chunky
-   silhouette filling the frame, thick outline, ≤7 flat colours, no text), strips the
-   background, crops tight, caps at 32 colours and 128px, then has a vision model score each
-   at 22px on light and dark Slack themes and keeps the best. It prints the scores and writes
-   `<name>.png` plus a preview sheet. If the best scores under 7, change the subject wording
-   and run it again rather than shipping a muddy emoji. Look at the sheet yourself too.
+   Give the subject a character and one big expression or gesture ("a grinning red rocket
+   blasting off", not "a rocket"). The script asks `gpt-image-1.5` for 4 transparent
+   candidates in a flat blob-emoji style, strips the background, defringes and crops them to
+   128px, and rejects any that are cut off at the edge or have see-through holes. A vision
+   model then scores them blind alongside real Slack emoji from slackmojis.com, at 128px and
+   22px on light and dark themes, and checks each one shows the subject. It writes `<name>.png`
+   and exits 2 when nothing reaches the real emoji's median score; then reword the subject and
+   run it again. Never ship a failing one.
 
-3. **Animate (optional).** `--motion` (bounce, wobble, pulse, shake, spin, hover, fly), or
-   `emoji.py animate <name>-X.src.png <out.gif> --motion …`, builds a 128px GIF of 8–12 frames
-   in a 0.3–0.9s loop with a clean transparent background. For custom motion use
-   slack-gif-creator. Motion comes from code, never from one image call per frame.
+3. **Animate (optional).** `--motion`, or `emoji.py animate <src.png> <out.gif> "<subject>" --motion …`,
+   builds a 128px GIF of 8–12 frames in a 0.3–0.9s loop. Pick a motion that
+   means something for the subject: `bounce` for happy, `shake` for no or annoyed, `rumble`
+   for revving, `wobble` for silly, `pulse` for emphasis, `spin`, `hover`. The script plays
+   the frames back to a vision model and reports whether the motion makes sense and stays in
+   frame; act on what it says. For custom motion use slack-gif-creator. Motion comes from code,
+   never from one image call per frame.
 4. **Check.** Slack caps emoji at 128×128 and 128KB; the script warns when a file is over.
-   Pick a lowercase name (letters, digits, `_`, `-`). If a fal.ai key is ever available,
-   its image-to-video and background-removal models are a possible upgrade; don't depend on it.
+   Show people each emoji as its own file, never a sheet or frame strip. Pick a lowercase name
+   (letters, digits, `_`, `-`). If a fal.ai key is ever available, its image-to-video and
+   background-removal models are a possible upgrade; don't depend on it.
 5. **Add it in the browser.** Use Browser Use (`BROWSER_USE_API_KEY`): follow the browse skill
    and its `providers/browser-use.md` to launch a browser on the requesting person's own
    Browser Use profile, then drive `https://<workspace>.slack.com/customize/emoji` with
