@@ -1934,15 +1934,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           for (let step = 0; step < captured.length; step++) {
             const stat = statsAligned ? callStats[step] : undefined;
             const d = marksAligned ? dispatch[step] : undefined;
-            const marks: DispatchMarks | undefined = d
-              ? {
-                  ...(d.start !== undefined ? { onPayload: d.start } : {}),
-                  ...(d.first !== undefined ? { onResponse: d.first } : {}),
-                  ...(d.streamStart !== undefined ? { messageStart: d.streamStart } : {}),
-                  ...(d.prepareNextTurn !== undefined ? { prepareNextTurn: d.prepareNextTurn } : {}),
-                  ...(d.transformContext !== undefined ? { transformContext: d.transformContext } : {}),
-                }
-              : undefined;
+            const marks: DispatchMarks | undefined = d && {
+              onPayload: d.start,
+              onResponse: d.first,
+              messageStart: d.streamStart,
+              prepareNextTurn: d.prepareNextTurn,
+              transformContext: d.transformContext,
+            };
             const gapPhases = statsAligned
               ? decomposeGapPhases(stepWindows[step], allGapWork, stat?.stepGapMs ?? null, marks)
               : undefined;

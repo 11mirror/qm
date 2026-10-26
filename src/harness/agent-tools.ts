@@ -1609,6 +1609,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.text ? { text: p.text } : {}),
         ...(p.interrupt ? { interrupt: true } : {}),
       });
+      const fail = (message: string) =>
+        recordFail(callId, { tool: "subagents", action: p.action, error: message }, `[error] ${message}`);
       if (!syscalls) {
         return recordFail(
           callId,
@@ -1639,11 +1641,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.model ? { model: p.model } : {}),
         });
         if (!result.ok) {
-          return recordFail(
-            callId,
-            { tool: "subagents", action: "open", error: result.message },
-            `[error] ${result.message}`,
-          );
+          return fail(result.message);
         }
         return recordText(
           callId,
@@ -1656,7 +1654,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const body = followup ? p.task : p.text;
         if (followup && p.interrupt) {
           const message = "interrupt applies to send_message, not followup_task.";
-          return recordFail(callId, { tool: "subagents", action: p.action, error: message }, `[error] ${message}`);
+          return fail(message);
         }
         const result = await syscalls.write({
           requestId: callId,
@@ -1666,11 +1664,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
-          return recordFail(
-            callId,
-            { tool: "subagents", action: p.action, error: result.message },
-            `[error] ${result.message}`,
-          );
+          return fail(result.message);
         }
         const verbs = {
           steered: "steered into its running turn",
@@ -1696,11 +1690,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.limit !== undefined ? { limit: p.limit } : {}),
       });
       if (!result.ok) {
-        return recordFail(
-          callId,
-          { tool: "subagents", action: "read", error: result.message },
-          `[error] ${result.message}`,
-        );
+        return fail(result.message);
       }
       if (result.mode === "children") {
         const lines = result.children.map(
