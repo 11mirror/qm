@@ -122,41 +122,6 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <span class="status" id="st-auto-flagger-test"></span>
       </div>
     </section>`,
-  "card-approval-grant-modes": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-approval-grant-modes"
-    >
-      <div class="head">
-        <h2>Approval grant options</h2>
-        <p>
-          Which standing options an approval card offers besides "Allow once". Composes tighten-only with the org value;
-          disabling a mode also suspends existing grants of that mode until it is re-enabled. Predeclared command
-          approvals and strict-posture tool approvals both honor this.
-        </p>
-      </div>
-      <div class="body">
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-session"
-            .checked=${s.value("approval-grant-session")}
-            @change=${(event: Event) => changeField(s, "approval-grant-session", event)}
-          />
-          Offer "Allow session" (grant lasts for the conversation)</label
-        >
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-always"
-            .checked=${s.value("approval-grant-always")}
-            @change=${(event: Event) => changeField(s, "approval-grant-always", event)}
-          />
-          Offer "Allow always" (standing grant across turns)</label
-        >
-      </div>
-      ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
   "card-command-policy": (s) =>
     html`<section
       class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}

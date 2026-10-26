@@ -369,14 +369,6 @@ function template() {
       id="sc-editor"
       style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px"
     >
-      <div class="sc-form-head">
-        <p class="hint" id="sc-form-title">
-          ${credentialState.editing ? "Editing " + credentialState.editing : "Add a credential"}
-        </p>
-        <span class=${"badge " + (credentialState.editing ? "info" : "muted")} id="sc-form-mode"
-          >${credentialState.editing ? "Editing" : "New"}</span
-        >
-      </div>
       <div class="sc-semantics" aria-label="Blank value semantics">
         <div><strong>Blank secret</strong><span id="sc-secret-semantics">${secretSemantics()}</span></div>
         <div><strong>Blank method</strong><span>Uses the broker default: GET only.</span></div>
