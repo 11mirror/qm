@@ -187,15 +187,6 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.equal(loadConfig({ EXECUTE_SCRATCH: "" }).scratchExecEnabled, false);
 });
 
-test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
-  assert.equal(loadConfig({ SLACK_EVENTS_MODE: "http", SLACK_EVENTS_PORT: "8182" }).slackEventsPort, 8182);
-  assert.equal(loadConfig({ SLACK_EVENTS_MODE: "socket", SLACK_EVENTS_PORT: "8182" }).slackEventsPort, undefined);
-  assert.throws(
-    () => loadConfig({ SLACK_EVENTS_MODE: "http", SLACK_EVENTS_PORT: "70000" }),
-    /SLACK_EVENTS_PORT must be an integer from 1 through 65535/,
-  );
-});
-
 test("sandbox backend is parsed once before production backend guards", () => {
   assert.equal(loadConfig({ SANDBOX_BACKEND: " e2b ", E2B_API_KEY: "e2b_k" }).sandboxBackend, "e2b");
   assert.throws(

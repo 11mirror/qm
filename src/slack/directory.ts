@@ -48,20 +48,15 @@ export function createDirectory(deps: {
   externalAccess?: ExternalSlackAccess;
   core: SlackCoreClient;
   ids: BotIdentity;
-  userSnapshotTtlMs?: number;
-  channelMembersTtlMs?: number;
   syncRetryMs?: number;
-  maxPrivateChannels?: number;
-  userCacheTtlMs?: number;
   coreSingleton?: boolean;
 }) {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
-  const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
-  const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
+  const USER_SNAPSHOT_TTL_MS = 5 * 60_000;
+  const CHANNEL_MEMBERS_TTL_MS = 30 * 60_000;
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
-  const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? Infinity;
-  const userCache = createUserCache(deps.userCacheTtlMs ? { ttlMs: deps.userCacheTtlMs } : {});
+  const userCache = createUserCache();
   const classify = (u: SlackUser | undefined): ActorAssertion =>
     deps.externalAccess ? companySlackActor(u, deps.externalAccess) : classifyUser(u, ids.ownTeamId, ids.identityMode);
 
@@ -217,12 +212,10 @@ export function createDirectory(deps: {
       !targetChannelIds?.size &&
       (lastFullRosterFetchAt === undefined || fetchedAt - lastFullRosterFetchAt >= CHANNEL_MEMBERS_TTL_MS);
     const refs = listed.filter((c) => fullRefresh || targetChannelIds?.has(c.id));
-    const publicCount = refs.filter((c) => !c.is_private).length;
     const rosters = await allClassifiedRosters(client, refs, {
       plural: "channels",
       authz: "channel",
       item: "channel",
-      limit: publicCount + Math.min(refs.length - publicCount, MAX_PRIVATE_CHANNELS),
     });
     const channelMembers: Array<{ channelId: string; principalId: string }> = [];
     const channelRosterIds: string[] = [];

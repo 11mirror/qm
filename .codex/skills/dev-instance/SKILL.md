@@ -116,7 +116,7 @@ worktree's teardown missed) and kills them. If every slot is taken, `up` reclaim
 but **never a slot whose supervisor heartbeat is fresh**: an actively used instance can't
 be stolen mid-QA; only dead/legacy leases fall back to the old not-today / 4-hour rule.
 
-To add capacity, mint more Slack apps from `src/slack/manifest.json` (one Socket Mode
+To add capacity, mint more Slack apps from `cli/templates/slack-manifest.json` (one Socket Mode
 app each, with `connections:write` for the app-level token) and drop a `poolN.env`
 containing `SLACK_BOT_TOKEN` (`xoxb-`), `SLACK_APP_TOKEN` (`xapp-`), and `HANDLE` into your
 pool store. The boot canary picks its channel automatically: a channel named `dev-canary`
@@ -215,7 +215,7 @@ For a slot flagged `canary-failed`, check networking, event subscriptions, permi
 and competing connections first. If the app configuration needs rebuilding, use
 api.slack.com **signed into the example workspace** (the dev console is
 per-workspace-identity — use "Sign in to another workspace" if it lists the wrong one):
-Create New App → From a manifest → paste `src/slack/manifest.json` (give it a unique
+Create New App → From a manifest → paste `cli/templates/slack-manifest.json` (give it a unique
 `name` and bot `display_name`; old handles stay taken) → Install to Workspace → Basic
 Information → App-Level Tokens → Generate with the `connections:write` scope. Write the Bot
 token (`xoxb-…`) and app-level token (`xapp-…`) into `poolN.env`, delete `poolN.flag.json`,

@@ -52,10 +52,8 @@ export async function startSlackPlugin(
   if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
   if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
     throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort))
-    throw new Error(
-      "Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) and eventsPort (SLACK_EVENTS_PORT) in http events mode",
-    );
+  if (!cfg.receiverFactory && EVENTS_MODE === "http" && !cfg.signingSecret)
+    throw new Error("Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) in http events mode");
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -65,17 +63,8 @@ export async function startSlackPlugin(
     attachOriginalToWebAPIRequestError: false,
     ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
   } as const;
-  const IDENTITY_TOKENS: Record<string, string | undefined> = { copilot: cfg.copilotBotToken };
   const webClient = (token: string, extra: Record<string, unknown> = {}) =>
     new WebClient(token, { ...CLIENT_OPTIONS, ...extra });
-  const identityClients = new Map<string, WebClient>();
-  function clientForIdentity(identity: string): WebClient {
-    const token = IDENTITY_TOKENS[identity];
-    if (!token) throw new Error(`no token for post identity "${identity}" (set its *_BOT_TOKEN env)`);
-    let c = identityClients.get(identity);
-    if (!c) identityClients.set(identity, (c = webClient(token)));
-    return c;
-  }
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
@@ -131,15 +120,13 @@ export async function startSlackPlugin(
     return EVENTS_MODE === "http"
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
-          port: cfg.eventsPort!,
-          capMs: cfg.ackCapMs,
           staging,
+          serve: (handler) => core.slack.serveEvents(cfg.accountId ?? "", handler),
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,
           logLevel: cfg.logLevel,
           slackApiUrl: SLACK_API_URL,
-          capMs: cfg.ackCapMs,
           staging,
         });
   };
@@ -190,10 +177,6 @@ export async function startSlackPlugin(
     core,
     ids,
     coreSingleton: CORE_SINGLETON && !cfg.externalAccess,
-    userSnapshotTtlMs: cfg.userSnapshotTtlMs || undefined,
-    channelMembersTtlMs: cfg.channelMembersTtlMs || undefined,
-    maxPrivateChannels: cfg.maxPrivateChannels || undefined,
-    userCacheTtlMs: cfg.userCacheTtlMs || undefined,
   });
   const mirror = cfg.externalAccess
     ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {} }
@@ -238,7 +221,6 @@ export async function startSlackPlugin(
     ids,
     directory,
     externalParticipantsEnabled,
-    ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
   const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
@@ -385,7 +367,6 @@ export async function startSlackPlugin(
     core,
     flow,
     threads,
-    clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
     defaultClient: app.client,
     runInFlight: (runId) =>

@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SocketModeClient } from "@slack/socket-mode";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
@@ -184,7 +185,12 @@ for (const mode of ["socket", "http"] as const)
       const receiver =
         mode === "socket"
           ? createDeferredAckReceiver({ appToken: "xapp-test", capMs: afterCap ? 1 : 5000, staging })
-          : createHttpEventsReceiver({ signingSecret: "test-secret", port: 0, capMs: afterCap ? 1 : 5000, staging });
+          : createHttpEventsReceiver({
+              signingSecret: "test-secret",
+              capMs: afterCap ? 1 : 5000,
+              staging,
+              serve: () => () => {},
+            });
       receiver.init?.({ processEvent } as unknown as BoltApp);
       const body = {
         type: "event_callback",
@@ -195,6 +201,7 @@ for (const mode of ["socket", "http"] as const)
       const acknowledgement = new Promise<void>((resolve) => {
         acked = resolve;
       });
+      let port = 0;
       const deliver = async (retryNum = 0): Promise<number | undefined> => {
         if ("client" in receiver) {
           const processed = new Promise<void>((resolve) => {
@@ -212,11 +219,10 @@ for (const mode of ["socket", "http"] as const)
           else await processed;
           return undefined;
         }
-        const address = (receiver as ReturnType<typeof createHttpEventsReceiver>).server.address() as AddressInfo;
         const timestamp = String(Math.floor(Date.now() / 1000));
         const raw = JSON.stringify(body);
         const signature = `v0=${createHmac("sha256", "test-secret").update(`v0:${timestamp}:${raw}`).digest("hex")}`;
-        const response = await fetch(`http://127.0.0.1:${address.port}/slack/events`, {
+        const response = await fetch(`http://127.0.0.1:${port}/slack/events`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -230,9 +236,12 @@ for (const mode of ["socket", "http"] as const)
         else assert.deepEqual(await response.json(), { error: "not_persisted" });
         return response.status;
       };
-      if ("server" in receiver) {
-        await receiver.start(0 as never);
-        t.after(() => receiver.stop(0 as never));
+      if (mode === "http") {
+        const http = receiver as ReturnType<typeof createHttpEventsReceiver>;
+        const server = createServer((req, res) => void http.handle(req, res));
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        port = (server.address() as AddressInfo).port;
+        t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
       }
       const status = await deliver();
       if (mode === "http") assert.equal(status, afterCap ? 200 : 503);

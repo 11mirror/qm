@@ -22,7 +22,9 @@ test("the admin Slack app creation link defaults to qm and adopts a configured n
 });
 
 test("membership events invalidate the pushed authorization roster", async () => {
-  const manifest = JSON.parse(await readFile(new URL("../src/slack/manifest.json", import.meta.url), "utf8")) as {
+  const manifest = JSON.parse(
+    await readFile(new URL("../cli/templates/slack-manifest.json", import.meta.url), "utf8"),
+  ) as {
     settings?: { event_subscriptions?: { bot_events?: string[] } };
   };
   const events = manifest.settings?.event_subscriptions?.bot_events ?? [];

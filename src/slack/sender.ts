@@ -52,10 +52,9 @@ export function createSlackSender(deps: {
   flow: TurnFlow;
   runInFlight?: (runId: string) => boolean;
   threads: ReturnType<typeof createThreadTracker>;
-  clientForIdentity(identity: string): any;
   defaultClient?: any;
 }): (post: Post) => Promise<PostReceipt | void> {
-  const { core, flow, threads, clientForIdentity } = deps;
+  const { core, flow, threads } = deps;
   const runInFlight = deps.runInFlight ?? ((runId: string) => flow.inFlightRuns.has(runId));
 
   function deliveryFooter(d: Post): Array<Record<string, unknown>> {
@@ -145,7 +144,6 @@ export function createSlackSender(deps: {
       deps.continuePrivate
     )
       return deps.continuePrivate(runId, continuation.task);
-    const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
     const { keychainAskId, react, pin, delete: del } = d.destination;
     if (keychainAskId) return deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
     if (react) {
@@ -200,7 +198,7 @@ export function createSlackSender(deps: {
       try {
         const alreadyDelivered = d.attachments?.length
           ? await findPostedByKey(
-              postClient,
+              client,
               { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
               d.idempotencyKey,
               verifyOldest ?? String(Date.now() / 1000 - 60),
@@ -223,7 +221,7 @@ export function createSlackSender(deps: {
       }
     }
     const res = await postWithVerify(
-      postClient,
+      client,
       { ...slackReplyArgs(channel, text, threadTs, { unfurlLinks }), ...(blocks ? { blocks } : {}) },
       d.idempotencyKey,
       runId || d.retry ? { verifyFirst: true, ...(verifyOldest ? { verifyOldest } : {}) } : undefined,

@@ -117,7 +117,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
-  slackEventsPort?: number;
   runStore: "memory" | "postgres";
   seedSkills: boolean;
   pluginSkillDirs: string[];
@@ -813,8 +812,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     CAPABILITY_TOKEN_COMPRESSION: flag,
     REQUIRE_SIGNED_PORTAL_IDENTITY: raw,
     CONNECTOR_SECRET_KEY: str,
-    SLACK_EVENTS_MODE: trimmed,
-    SLACK_EVENTS_PORT: raw,
     DEPLOYMENT_LAYER: str,
     FILES_DIRECT_UPLOADS_ENABLED: flag,
     S3_BUCKET: str,
@@ -828,14 +825,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     SUGGESTED_ACTIVITIES_ENABLED: flag,
     SUGGESTED_ACTIVITIES_CONTEXT: str,
   });
-  const slackEventsPort =
-    e.SLACK_EVENTS_MODE === "http" ? readEnv(env, { SLACK_EVENTS_PORT: num }).SLACK_EVENTS_PORT : undefined;
-  if (
-    slackEventsPort !== undefined &&
-    (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
-  ) {
-    throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
-  }
   return {
     ...defined({
       suggestedActivitiesContext: e.SUGGESTED_ACTIVITIES_CONTEXT?.slice(0, 8000),
@@ -872,7 +861,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       capabilitySecret: e.CAPABILITY_SECRET,
       portalIdentitySecret: e.PORTAL_IDENTITY_SECRET,
       connectorSecretKey: e.CONNECTOR_SECRET_KEY,
-      slackEventsPort,
       deploymentLayerDir: e.DEPLOYMENT_LAYER ? resolve(e.DEPLOYMENT_LAYER) : undefined,
       s3Bucket: e.S3_BUCKET,
       s3Region: e.S3_REGION,
