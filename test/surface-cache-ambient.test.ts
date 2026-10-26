@@ -347,10 +347,10 @@ test("a judge failure leaves the batch unjudged so the next pass judges it again
     await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "!judge-down", createdAt: 1 }]);
     assert.equal((await built.app.judgeAmbientContainer("slack", container)).act, false);
-    assert.deepEqual(await built.ambientJudgments!.list({ container }), [], "a failed judge records no judgment");
+    assert.deepEqual(await built.ambientJudgments!.list({ scope: container }), [], "a failed judge records no judgment");
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "launch moved", createdAt: 1 }]);
     await built.app.judgeAmbientContainer("slack", container);
-    const rows = await built.ambientJudgments!.list({ container });
+    const rows = await built.ambientJudgments!.list({ scope: container });
     assert.ok(rows.length > 0, "the batch the failed judge skipped is judged on the next pass");
     assert.ok(rows.every((r: { decision: string; tsFrom?: string }) => r.decision === "ignore" && r.tsFrom === "1.0"));
   } finally {
