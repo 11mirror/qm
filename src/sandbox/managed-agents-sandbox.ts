@@ -11,7 +11,7 @@ import {
   type ManagedAgentsClient,
   type ManagedAgentsSession,
 } from "./managed-agents-client.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const WORKSPACE_ROOT = "/workspace";
 const HOME_DIR = `${WORKSPACE_ROOT}/home`;
@@ -37,7 +37,10 @@ export interface ManagedAgentsSandboxOptions extends SandboxShared {
   store: DurableMap<StoredManagedAgentsSandbox>;
 }
 
-export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: ManagedAgentsSandboxOptions): Sandbox {
+export function createManagedAgentsSandbox(
+  workspace: WorkspaceStore,
+  opts: ManagedAgentsSandboxOptions,
+): BackendSandbox {
   const { client, store } = opts;
   const sessions = new Map<string, ManagedAgentsSession>();
   const knownScopes = new Map<string, string>();

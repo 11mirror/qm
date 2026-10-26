@@ -7,7 +7,7 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { Sandbox } from "./sandbox.ts";
+import type { BackendSandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const AGENT_PORT = 8080;
@@ -47,7 +47,7 @@ interface Body {
   createdAtMs: number;
 }
 
-export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): Sandbox {
+export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): BackendSandbox {
   const { region, store } = opts;
   const api =
     opts.api ??

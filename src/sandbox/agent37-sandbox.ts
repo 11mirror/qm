@@ -6,7 +6,7 @@ import { withRequestId, swallowAs } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/home/node";
 const INLINE_LIMIT = 128 * 1024;
@@ -84,7 +84,7 @@ export interface Agent37SandboxOptions extends SandboxShared {
   fetchImpl?: typeof fetch;
 }
 
-export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): Sandbox {
+export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): BackendSandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const resources = {

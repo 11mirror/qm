@@ -13,9 +13,26 @@ import {
   type SandboxResourceUpgradeMarker,
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import type { BackendSandbox, Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+
+const processStubs = {
+  async startProcess() {
+    return { processId: "p" };
+  },
+  async readProcess() {
+    return { chunks: "", cursor: 0, status: { state: "exited" as const, code: 0 } };
+  },
+  async writeStdin() {},
+  async signalProcess() {},
+  async listProcesses() {
+    return [];
+  },
+  async exportFiles() {
+    return [];
+  },
+};
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -24,7 +41,8 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const marker = testMap<SandboxResourceUpgradeMarker>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
-  const backend: Sandbox = {
+  const backend: BackendSandbox = {
+    ...processStubs,
     profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
     async provision(layers) {
       const id = layers.find((layer) => layer.mode === "rw")!.scopeId;
@@ -128,7 +146,7 @@ test("provisioning a running computer does not wait behind a long-running comman
 
 test("an explicit sandbox id must name a real sandbox, and creating one leaves the default provider", async () => {
   const { backend, options } = fixture();
-  const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
+  const modal: BackendSandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
   const resources = createSandboxResources({ ...options, backends });
   const router = createSandboxRouter({ backends, defaultBackend: "local", resources });
@@ -769,7 +787,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
 
 test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
-  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const parking: BackendSandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
   const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
   const record = await resources.create("alice", "personal:alice", "e2b");
@@ -858,7 +876,7 @@ test("a computer stays held until its last live run releases it, and ended runs 
 
 test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
   const { options, backend, layers } = fixture();
-  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const parking: BackendSandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
   const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
   const record = await resources.create("alice", "personal:alice", "e2b");
