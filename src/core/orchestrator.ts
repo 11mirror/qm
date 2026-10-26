@@ -4,11 +4,9 @@ import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { loadDocumentInputs } from "./document-inputs.ts";
-import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../harness/goal.ts";
 import { type ScopeId, type TurnResult, type TurnRuntime, type PendingApprovalRecord } from "../types.ts";
-import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { loadProtocolFile } from "../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
@@ -16,11 +14,9 @@ import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
-import { CONFIG_DEFAULTS } from "../config.ts";
 import { isOverheard, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
 import { environmentDelta, renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
-import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { GapWork, HarnessDetectResult, HarnessTurnInput, RuntimeChoice } from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
@@ -65,14 +61,12 @@ import { mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
+import { selectTurnRuntime } from "./orchestrator/turn-runtime.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
   type QuarantineReleaseApproval,
 } from "./orchestrator/approvals.ts";
-import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
-import type { ProviderKeys } from "../harness/pi-harness.ts";
-import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   isScreenableTextAttachment,
@@ -800,133 +794,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
               }
             : undefined;
-        const effectiveTurnWallClockMs =
-          typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0
-            ? input.turnWallClockMs
-            : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
-        const runtimePurpose = turnRuntimePurpose(
-          { surface: input.surface, triggered: automatedTurn },
-          !!session.parentSessionId,
-        );
-        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
-        const wantsOrgFastMode =
-          typeof input.fastMode !== "boolean" &&
-          !purposeDefault &&
-          humanInput &&
-          (await deps.config?.getInteractiveFastModeDurable());
-        const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
-        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-          let userProviderKeys: ProviderKeys | undefined;
-          let userModelOverride: string | undefined;
-          let personalAuth = false;
-          let authLabel = "api-key";
-          const userCredStore = external ? undefined : deps.userModelCredentials;
-          const account = external
-            ? "company"
-            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
-          if (userCredStore && humanInput && account !== "company") {
-            const [anthCred, oaiCred] = await Promise.all([
-              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
-              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
-            ]);
-            const routing = resolveIndividualAuthRouting(
-              anthCred ?? null,
-              oaiCred ?? null,
-              account === "personal" || input.surface === "web"
-                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-                : (runtime.modelId ?? purposeDefault?.modelId),
-            );
-            if (routing?.kind === "apikey") {
-              personalAuth = true;
-              userProviderKeys = { [routing.provider]: routing.apiKey };
-              userModelOverride = routing.model;
-            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-              if (derived) {
-                userProviderKeys = { anthropic: derived.accessToken };
-                authLabel = "claude-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-              if (derived) {
-                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-                authLabel = "codex-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            }
-            if (!personalAuth) {
-              throw new NonRetryableTurnError(
-                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-              );
-            }
-          }
-          return { userProviderKeys, userModelOverride, personalAuth, authLabel };
-        };
-        const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
-          (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
-        const requestedModel = input.model ?? purposeDefault?.modelId;
-        let { userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth({});
-        if (
-          (input.surface === "web" || purposeDefault) &&
-          personalAuth &&
-          requestedModel &&
-          !servesModel(requestedModel, userModelOverride, userProviderKeys)
-        )
-          throw new NonRetryableTurnError("Your connected AI account cannot serve this model.");
-        const effectiveModel = userModelOverride ?? input.model;
-        if (personalAuth) {
-          console.log(`[individual-auth] user=${actor.id} model=${effectiveModel} auth=${authLabel}`);
-        }
-        let requestedRuntime: Partial<RuntimeChoice> = {
-          ...(effectiveModel ? { modelId: effectiveModel } : {}),
-          ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
-          ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
-        };
-        const runtimeDefaults = requestedRuntime;
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-          ...(automatedTurn ? { triggered: true } : {}),
-        };
-        const restoredRuntime =
-          input.runId && isRetry
-            ? recoveredRuntime(filterHistory(await deps.sessions.getItems(session.id)), input.runId, actor.id)
-            : undefined;
-        const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
-          try {
-            const auth = await loadRuntimeAuth(choice);
-            if (auth.personalAuth && !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
-              return "Your connected AI account cannot serve this model. Choose a compatible runtime from get.";
-            return null;
-          } catch (error) {
-            return errMessage(error);
-          }
-        };
-        let agentSwitch: "task" | "scope" | undefined;
-        const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
-          const error = await checkRuntimeAuth(choice);
-          if (error) throw new NonRetryableTurnError(error);
-          agentSwitch = lifetime;
-          ({ userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth(choice));
-          requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
-        };
-        if (restoredRuntime) await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
-        if (automatedTurn && input.model) {
-          const error = await deps.validateScheduledRuntime?.(
-            scopeId,
-            {
-              modelId: input.model,
-              effortLevel: input.thinkingLevel,
-              fastMode: input.fastMode,
-            },
-            runtimePurpose,
-          );
-          if (error) throw new NonRetryableTurnError(error);
-        }
+        const {
+          effectiveTurnWallClockMs,
+          runtimePurpose,
+          purposeDefault,
+          runtimeDefaults,
+          runtimeClaims,
+          restoredRuntime,
+          checkRuntimeAuth,
+          adoptRuntime,
+          runtimeState,
+        } = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -1136,13 +1014,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 author,
               };
             },
-            ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
-            ...(personalAuth && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
+            ...(runtimeState.userProviderKeys ? { providerKeys: runtimeState.userProviderKeys } : {}),
+            ...(runtimeState.personalAuth && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
             onRuntime: (reported: TurnRuntime) => {
-              const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
+              const runtime: TurnRuntime = runtimeState.agentSwitch
+                ? { ...reported, change: { agent: runtimeState.agentSwitch } }
+                : reported;
               turnRuntime = runtime;
               if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
             },
@@ -1161,7 +1041,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       active,
                       request,
                       checkRuntimeAuth,
-                      personalAuth,
+                      runtimeState.personalAuth,
                       signal,
                       automatedTurn && input.surface === "cron",
                       runtimePurpose,
@@ -1182,7 +1062,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
             documents: initialDocuments,
-            ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
+            ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
             delegateWork,
@@ -1419,7 +1299,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeId,
                   orgScopeId: resolution.orgScopeId,
                   actorId: actor.id,
-                  ...(requestedRuntime.modelId ? { model: requestedRuntime.modelId } : {}),
+                  ...(runtimeState.requestedRuntime.modelId ? { model: runtimeState.requestedRuntime.modelId } : {}),
                   cancel: turnAbort.signal,
                 }),
               );
