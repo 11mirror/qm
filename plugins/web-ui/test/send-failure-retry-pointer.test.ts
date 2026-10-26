@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { shellCss } from "./shell-css.ts";
 
 test("Retry under a failed send stays clickable while its prompt row is pinned", () => {
   const dom = new JSDOM(
@@ -12,7 +12,7 @@ test("Retry under a failed send stays clickable while its prompt row is pinned",
   );
   const { document, getComputedStyle } = dom.window;
   const style = document.createElement("style");
-  style.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  style.textContent = shellCss();
   document.head.append(style);
   const row = document.querySelector(".latest-prompt")!;
   assert.equal(getComputedStyle(row).pointerEvents, "none");
