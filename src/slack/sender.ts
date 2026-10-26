@@ -107,19 +107,15 @@ export function createSlackSender(deps: {
     }
   }
 
-  async function quietly(
-    d: Post,
-    op: () => Promise<unknown>,
-    settledCodes: Set<string>,
-    what: string,
-    note = "",
-  ): Promise<void> {
+  const refused = (what: string): Error => Object.assign(new Error(what), { permanent: true });
+
+  async function settle(op: () => Promise<unknown>, settledCodes: Set<string>, what: string, note = ""): Promise<void> {
     try {
       await op();
     } catch (err) {
       const code = slackErrorCode(err);
-      if (!code || !settledCodes.has(code))
-        console.error(`[slack-plugin] delivery ${d.idempotencyKey} ${what}: ${code ?? (err as Error).message}${note}`);
+      if (!code) throw err;
+      if (!settledCodes.has(code)) throw refused(`${what}: ${code}${note}`);
     }
   }
 
@@ -154,24 +150,19 @@ export function createSlackSender(deps: {
     if (keychainAskId) return deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
     if (react) {
       const { failed } = await applyReactions(client, channel, react.messageTs, [react.emoji]);
-      if (failed.length)
-        console.error(
-          `[slack-plugin] delivery ${d.idempotencyKey} reaction(s) failed: ${failed.join(", ")} (check reactions:write / message ts)`,
-        );
+      if (failed.length) throw refused(`reaction(s) failed: ${failed.join(", ")} (check reactions:write / message ts)`);
       return;
     }
     if (pin) {
       const args = { channel, timestamp: pin.messageTs };
-      return quietly(
-        d,
+      return settle(
         () => (pin.remove ? client.pins.remove(args) : client.pins.add(args)),
         SETTLED_PIN_ERRORS,
         `native ${pin.remove ? "unpin" : "pin"} failed`,
       );
     }
     if (del)
-      return quietly(
-        d,
+      return settle(
         () => client.chat.delete({ channel, ts: del.messageTs }),
         new Set(["message_not_found"]),
         "delete failed",

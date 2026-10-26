@@ -136,22 +136,6 @@ for (const [label, destination, method, error] of [
   });
 }
 
-test("a delete refused for a reason other than a missing message still resolves but is logged", async () => {
-  const errors: string[] = [];
-  const original = console.error;
-  console.error = (...args: unknown[]) => {
-    errors.push(args.join(" "));
-  };
-  try {
-    const h = harness({ errors: { "chat.delete": "cant_delete_message" } });
-    await h.send({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
-    assert.equal(errors.length, 1);
-    assert.match(errors[0]!, /cant_delete_message/);
-  } finally {
-    console.error = original;
-  }
-});
-
 test("fresh and recovered reaction, pin and delete posts act directly", async () => {
   for (const ageMs of [0, RECOVERED_AGE_MS]) {
     const react = harness({});
