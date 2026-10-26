@@ -451,11 +451,13 @@ export function startAdmin(host, env) {
     }
     if (view === "connectors") return void governanceUI.integrations.loadConnectors();
     if (view === "user") return void showUserDetail(st.principal);
-    if (view === "slack") return void renderSlackMirror(st);
+    if (view === "slack") return void governanceUI.slackActivity.renderSlackMirror(st);
     if (view === "judgments") return void governanceUI.slackActivity.renderAmbientJudgments(st);
     if (view === "ackemoji") return void governanceUI.slackActivity.renderAckEmojiPicks(st);
-    if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
-    if (view === "history" && st.session) return void showTranscript(st.session);
+    if (view === "history" && st.session && st.turn != null)
+      return void governanceUI.transcript.contextPage(st.session, st.turn, transcriptServices());
+    if (view === "history" && st.session)
+      return void governanceUI.transcript.show(st.session, undefined, undefined, transcriptServices());
     renderData();
   }
 
@@ -772,7 +774,7 @@ export function startAdmin(host, env) {
       return;
     }
     if (view === "slack") {
-      if (!urlToState().container) renderSlackMirror(urlToState());
+      if (!urlToState().container) governanceUI.slackActivity.renderSlackMirror(urlToState());
       return;
     }
     if (view === "crons" && cronDestinationEditId) return;
@@ -2547,10 +2549,6 @@ export function startAdmin(host, env) {
     });
   }
 
-  async function showContextPage(sessionId, turnSeq) {
-    return governanceUI.transcript.contextPage(sessionId, turnSeq, transcriptServices());
-  }
-
   let slackContainers = null;
   let slackContainersTruncated = false;
   async function loadSlackContainers() {
@@ -2582,136 +2580,76 @@ export function startAdmin(host, env) {
   function slackUnescape(s) {
     return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   }
-  function slackMentionSpan(text) {
-    const s = document.createElement("span");
-    s.className = "sm-mention";
-    s.textContent = text;
-    return s;
-  }
-
   function slackEntityNode(inner, mentions) {
     const u = slackUnescape(inner);
-    if (u[0] === "@") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || (mentions && mentions[id]) || id));
-    }
-    if (u[0] === "#") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("#" + (label || id));
-    }
-    if (u[0] === "!") {
-      const [cmd, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || cmd.split("^")[0]));
-    }
+    const [id, label] = u.slice(1).split("|");
+    if (u[0] === "@") return el("span.sm-mention", "@" + (label || (mentions && mentions[id]) || id));
+    if (u[0] === "#") return el("span.sm-mention", "#" + (label || id));
+    if (u[0] === "!") return el("span.sm-mention", "@" + (label || id.split("^")[0]));
     const bar = u.indexOf("|");
     const url = bar === -1 ? u : u.slice(0, bar);
-    const label = bar === -1 ? url : u.slice(bar + 1);
-
-    if (!/^(https?:|mailto:|tel:)/i.test(url)) return document.createTextNode(label);
-    const a = document.createElement("a");
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-    return a;
+    const text = bar === -1 ? url : u.slice(bar + 1);
+    if (!/^(https?:|mailto:|tel:)/i.test(url)) return document.createTextNode(text);
+    return el("a", { href: url, target: "_blank", rel: "noopener", textContent: text });
   }
-
   function slackAppendMrkdwn(raw, parent) {
     const text = slackUnescape(raw);
     const re = /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~|(https?:\/\/[^\s<>]+)/g;
     let last = 0,
       m;
     while ((m = re.exec(text))) {
-      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
-      let el;
-      if (m[1] != null) {
-        el = document.createElement("strong");
-        el.textContent = m[1];
-      } else if (m[2] != null) {
-        el = document.createElement("em");
-        el.textContent = m[2];
-      } else if (m[3] != null) {
-        el = document.createElement("s");
-        el.textContent = m[3];
-      } else {
+      if (m.index > last) parent.append(text.slice(last, m.index));
+      const styled = [
+        ["strong", m[1]],
+        ["em", m[2]],
+        ["s", m[3]],
+      ].find(([, value]) => value != null);
+      if (styled) parent.appendChild(el(...styled));
+      else {
         let url = m[4].replace(/[.,;!?]+$/, "");
         while (url.endsWith(")") && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length)
           url = url.slice(0, -1);
-        el = slackEntityNode(url);
-        parent.appendChild(el);
-        parent.appendChild(document.createTextNode(m[4].slice(url.length)));
-        last = re.lastIndex;
-        continue;
+        parent.append(slackEntityNode(url), m[4].slice(url.length));
       }
-      parent.appendChild(el);
       last = re.lastIndex;
     }
-    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    if (last < text.length) parent.append(text.slice(last));
   }
-
   function slackParseInline(text, parent, mentions) {
     const re = /`([^`\n]+)`|<([^>\n]+)>|:([a-z0-9_+'-]+):/g;
     let last = 0,
       m;
     while ((m = re.exec(text))) {
       if (m.index > last) slackAppendMrkdwn(text.slice(last, m.index), parent);
-      if (m[1] != null) {
-        const c = document.createElement("code");
-        c.className = "sm-code";
-        c.textContent = slackUnescape(m[1]);
-        parent.appendChild(c);
-      } else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
-      else {
-        const emoji = governanceUI.charForName(m[3]);
-        if (emoji) parent.appendChild(document.createTextNode(emoji));
-        else slackAppendMrkdwn(m[0], parent);
-      }
+      const emoji = m[3] != null && governanceUI.charForName(m[3]);
+      if (m[1] != null) parent.appendChild(el("code.sm-code", slackUnescape(m[1])));
+      else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
+      else if (emoji) parent.append(emoji);
+      else slackAppendMrkdwn(m[0], parent);
       last = re.lastIndex;
     }
     if (last < text.length) slackAppendMrkdwn(text.slice(last), parent);
   }
-
   function slackParseText(raw, mentions) {
     const frag = document.createDocumentFragment();
     if (!raw) return frag;
     raw.split("```").forEach((part, i) => {
-      if (i % 2 === 1) {
-        const pre = document.createElement("pre"),
-          code = document.createElement("code");
-        code.textContent = slackUnescape(part.replace(/^\n/, "").replace(/\n$/, ""));
-        pre.appendChild(code);
-        frag.appendChild(pre);
-      } else {
-        let quote = null;
-        part.split("\n").forEach((line, lineIndex) => {
-          const quoted = /^(?:>|&gt;) ?/.test(line);
-          if (quoted) {
-            if (!quote) {
-              quote = document.createElement("blockquote");
-              frag.appendChild(quote);
-            } else quote.appendChild(document.createTextNode("\n"));
-            slackParseInline(line.replace(/^(?:>|&gt;) ?/, ""), quote, mentions);
-          } else {
-            if (lineIndex && !quote) frag.appendChild(document.createTextNode("\n"));
-            quote = null;
-            slackParseInline(line, frag, mentions);
-          }
-        });
-      }
+      if (i % 2 === 1)
+        return frag.appendChild(el("pre", {}, el("code", slackUnescape(part.replace(/^\n/, "").replace(/\n$/, "")))));
+      let quote = null;
+      part.split("\n").forEach((line, lineIndex) => {
+        if (/^(?:>|&gt;) ?/.test(line)) {
+          if (quote) quote.append("\n");
+          else quote = frag.appendChild(el("blockquote"));
+          slackParseInline(line.replace(/^(?:>|&gt;) ?/, ""), quote, mentions);
+        } else {
+          if (lineIndex && !quote) frag.append("\n");
+          quote = null;
+          slackParseInline(line, frag, mentions);
+        }
+      });
     });
     return frag;
-  }
-  governanceUI.slackActivity.configure({
-    ...helpers(),
-    containers: () => slackContainers,
-    truncated: () => slackContainersTruncated,
-    view: () => view,
-    loaded: () => {
-      viewLoadedAt.slack = Date.now();
-    },
-  });
-  async function renderSlackMirror(st) {
-    return governanceUI.slackActivity.renderSlackMirror(st);
   }
   function deliverySurfaceLabel(event) {
     const type = event?.destination?.type;
@@ -2720,12 +2658,7 @@ export function startAdmin(host, env) {
     if (type === "web") return "Web";
     return type || "Unknown surface";
   }
-
-  function deliveryLabel(event) {
-    if (event.shadow) return "Shadow delivery";
-    return `${deliverySurfaceLabel(event)} delivery`;
-  }
-
+  const deliveryLabel = (event) => (event.shadow ? "Shadow delivery" : `${deliverySurfaceLabel(event)} delivery`);
   function slackMirrorRef(event) {
     const d = event?.destination || {};
     if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
@@ -2749,14 +2682,7 @@ export function startAdmin(host, env) {
       },
     };
   }
-  async function showTranscript(sessionId, limit, expand) {
-    return governanceUI.transcript.show(sessionId, limit, expand, transcriptServices());
-  }
-
-  function estimateTokens(text) {
-    const n = (text || "").length;
-    return n ? Math.max(1, Math.round(n / 4)) : 0;
-  }
+  const estimateTokens = (text) => ((text || "").length ? Math.max(1, Math.round(text.length / 4)) : 0);
   function fmtTokens(n) {
     if (!n) return "0 tokens";
     if (n < 20) return "< 20 tokens";
@@ -2764,7 +2690,6 @@ export function startAdmin(host, env) {
     if (n < 1000000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k tokens";
     return (n / 1000000).toFixed(1) + "m tokens";
   }
-
   function blockText(o) {
     if (o == null) return "";
     if (typeof o === "string") return o;
@@ -2772,36 +2697,29 @@ export function startAdmin(host, env) {
     if (Array.isArray(o)) return o.map(blockText).join("\n");
     if (typeof o.text === "string" && (o.type === "text" || o.type == null)) return o.text;
     if (o.type === "image") {
-      const mt = (o.source && o.source.media_type) || "image";
-      const data = o.source && typeof o.source.data === "string" ? o.source.data : "";
-      return "[image " + mt + (data ? " · " + data : "") + "]";
+      const data = typeof o.source?.data === "string" && o.source.data ? " · " + o.source.data : "";
+      return "[image " + (o.source?.media_type || "image") + data + "]";
     }
     if (o.type === "tool_use")
       return "[tool_use " + (o.name || "tool") + (o.id ? " · " + o.id : "") + "]\n" + stringify(o.input ?? {});
     if (o.type === "tool_result")
-      return (
-        "[tool_result" +
-        (o.tool_use_id ? " " + o.tool_use_id : "") +
-        (o.is_error ? " · error" : "") +
-        "]\n" +
-        blockText(o.content)
-      );
-    if (o.type === "thinking")
-      return (
-        "[thinking]\n" +
-        (typeof o.thinking === "string" ? o.thinking : "") +
-        (typeof o.signature === "string" ? "\n[signature " + o.signature + "]" : "")
-      );
+      return `[tool_result${o.tool_use_id ? " " + o.tool_use_id : ""}${o.is_error ? " · error" : ""}]\n${blockText(o.content)}`;
+    if (o.type === "thinking") {
+      const signature = typeof o.signature === "string" ? "\n[signature " + o.signature + "]" : "";
+      return "[thinking]\n" + (typeof o.thinking === "string" ? o.thinking : "") + signature;
+    }
     if (o.type === "redacted_thinking")
       return "[redacted_thinking" + (typeof o.data === "string" ? " " + o.data : "") + "]";
     if (o.type === "document") return "[document " + (o.title || o.name || "attachment") + "]";
     return stringify(o);
   }
   function messageEntryText(m) {
-    const role = m && typeof m === "object" ? m.role || "message" : "message";
-    const name = m && typeof m === "object" && m.name ? " (" + m.name + ")" : "";
-    const content = m && typeof m === "object" ? blockText(m.content) : blockText(m);
-    return "[" + String(role) + name + "]\n" + (content.length ? content : "(no content)");
+    const obj = m && typeof m === "object";
+    const content = blockText(obj ? m.content : m);
+    const name = obj && m.name ? " (" + m.name + ")" : "";
+    return (
+      "[" + String(obj ? m.role || "message" : "message") + name + "]\n" + (content.length ? content : "(no content)")
+    );
   }
   function systemToText(system) {
     if (system == null) return { text: "", cacheSplit: false };
@@ -2813,11 +2731,10 @@ export function startAdmin(host, env) {
       const t = b && typeof b === "object" && typeof b.text === "string" ? b.text : blockText(b);
       out += (i ? "\n" : "") + t;
       const cc = b && typeof b === "object" ? b.cache_control : null;
-      if (cc) {
-        const ttl = cc && typeof cc === "object" && cc.ttl ? " " + cc.ttl : "";
-        out += "\n\n────── cache breakpoint (" + ((cc && cc.type) || "ephemeral") + ttl + ") ──────\n";
-        cacheSplit = true;
-      }
+      if (!cc) return;
+      const ttl = typeof cc === "object" && cc.ttl ? " " + cc.ttl : "";
+      out += "\n\n────── cache breakpoint (" + (cc.type || "ephemeral") + ttl + ") ──────\n";
+      cacheSplit = true;
     });
     return { text: out, cacheSplit };
   }
@@ -2833,101 +2750,71 @@ export function startAdmin(host, env) {
       "\n\n(auth + anthropic-version headers are added by the provider SDK below the capture point, so they aren't shown)"
     );
   }
-  function requestBody(q) {
-    return q && q.promptEnvelope != null ? q.promptEnvelope : null;
-  }
+  const requestBody = (q) => (q && q.promptEnvelope != null ? q.promptEnvelope : null);
   function contextSections(request, transport) {
     const req = request && typeof request === "object" ? request : {};
     const messages = Array.isArray(req.messages) ? req.messages : [];
-    const params = {};
-    for (const [k, v] of Object.entries(req)) {
-      if (k !== "system" && k !== "messages" && k !== "tools") params[k] = v;
-    }
+    const params = Object.fromEntries(
+      Object.entries(req).filter(([k]) => !["system", "messages", "tools"].includes(k)),
+    );
+    const paramCount = Object.keys(params).length;
+    const count = (n, word) => n + " " + word + (n === 1 ? "" : "s");
     const sys = systemToText(req.system);
-    const sections = [
-      { key: "transport", label: "Transport", note: "model + headers", text: transportText(transport) },
-      {
-        key: "system",
-        label: "System prompt",
-        note: sys.cacheSplit ? "verbatim · cache split shown" : "verbatim",
-        text: sys.text,
-      },
-      {
-        key: "messages",
-        label: "Messages",
-        note: messages.length
-          ? messages.length + " message" + (messages.length === 1 ? "" : "s")
-          : "not re-captured per step; the transcript is the record",
-        text: messages.map(messageEntryText).join("\n\n"),
-      },
-      {
-        key: "tools",
-        label: "Tool schemas",
-        note: Array.isArray(req.tools) ? req.tools.length + " tool" + (req.tools.length === 1 ? "" : "s") : "tools",
-        text: req.tools == null ? "" : stringify(req.tools),
-      },
-      {
-        key: "params",
-        label: "Request params",
-        note: Object.keys(params).length + " field" + (Object.keys(params).length === 1 ? "" : "s"),
-        text: Object.keys(params).length ? stringify(params) : "",
-      },
-    ].filter((s) => s.text);
-    return sections.map((s) => ({ ...s, tokens: estimateTokens(s.text), chars: s.text.length }));
-  }
-  function contextTotal(sections) {
-    return sections.reduce((n, s) => n + s.tokens, 0);
+    const messageNote = messages.length
+      ? count(messages.length, "message")
+      : "not re-captured per step; the transcript is the record";
+    return [
+      ["transport", "Transport", "model + headers", transportText(transport)],
+      ["system", "System prompt", sys.cacheSplit ? "verbatim · cache split shown" : "verbatim", sys.text],
+      ["messages", "Messages", messageNote, messages.map(messageEntryText).join("\n\n")],
+      [
+        "tools",
+        "Tool schemas",
+        Array.isArray(req.tools) ? count(req.tools.length, "tool") : "tools",
+        req.tools == null ? "" : stringify(req.tools),
+      ],
+      ["params", "Request params", count(paramCount, "field"), paramCount ? stringify(params) : ""],
+    ]
+      .filter(([, , , text]) => text)
+      .map(([key, label, note, text]) => ({
+        key,
+        label,
+        note,
+        text,
+        tokens: estimateTokens(text),
+        chars: text.length,
+      }));
   }
   function callCacheUsage(q) {
     const u = q && q.usage;
     if (!u || typeof u !== "object") return null;
-    const read = Number(u.cacheRead) || 0,
-      write = Number(u.cacheWrite) || 0,
-      uncached = Number(u.input) || 0;
-    return { cacheRead: read, cacheWrite: write, uncachedInput: uncached };
+    return {
+      cacheRead: Number(u.cacheRead) || 0,
+      cacheWrite: Number(u.cacheWrite) || 0,
+      uncachedInput: Number(u.input) || 0,
+    };
   }
   function sumCacheUsage(requests) {
-    let saw = false,
-      cacheRead = 0,
-      cacheWrite = 0,
-      uncachedInput = 0;
-    for (const q of requests || []) {
-      const u = callCacheUsage(q);
-      if (!u) continue;
-      saw = true;
-      cacheRead += u.cacheRead;
-      cacheWrite += u.cacheWrite;
-      uncachedInput += u.uncachedInput;
-    }
-    return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
+    const usages = (requests || []).map(callCacheUsage).filter(Boolean);
+    const sum = (key) => usages.reduce((n, u) => n + u[key], 0);
+    return usages.length
+      ? { cacheRead: sum("cacheRead"), cacheWrite: sum("cacheWrite"), uncachedInput: sum("uncachedInput") }
+      : null;
   }
-
-  function realInputTokens(q) {
-    const u = callCacheUsage(q);
-    if (!u) return null;
-    const sum = u.cacheRead + u.cacheWrite + u.uncachedInput;
-    return sum > 0 ? sum : null;
-  }
+  const usageTotal = (u) => u.cacheRead + u.cacheWrite + u.uncachedInput;
   function fmtContextSize(q, sections) {
-    const real = realInputTokens(q);
-    return real != null ? fmtTokens(real) : "~" + fmtTokens(contextTotal(sections));
+    const u = callCacheUsage(q);
+    return u && usageTotal(u) > 0
+      ? fmtTokens(usageTotal(u))
+      : "~" + fmtTokens(sections.reduce((n, s) => n + s.tokens, 0));
   }
-  function cacheHitRatio(u) {
-    if (!u) return null;
-    const denom = u.cacheRead + u.cacheWrite + u.uncachedInput;
-    return denom > 0 ? u.cacheRead / denom : null;
-  }
+  const cacheHitRatio = (u) => (u && usageTotal(u) > 0 ? u.cacheRead / usageTotal(u) : null);
   function isStablePrefixMiss(u) {
     const ratio = cacheHitRatio(u);
-    if (ratio === null) return false;
-    return u.cacheWrite >= 1024 && ratio < 0.1;
+    return ratio !== null && u.cacheWrite >= 1024 && ratio < 0.1;
   }
-  function metaChip(text, kind = "") {
-    const s = document.createElement("span");
-    s.className = "meta-chip" + (kind ? " " + kind : "");
-    s.textContent = text;
-    return s;
-  }
+  const metaChip = (text, kind = "") =>
+    el("span", { className: "meta-chip" + (kind ? " " + kind : ""), textContent: text });
   function cacheMetaItems(u) {
     if (!u) return [];
     const ratio = cacheHitRatio(u);
@@ -2936,56 +2823,37 @@ export function startAdmin(host, env) {
     if (miss) out.push(metaChip("stable-prefix miss", "danger"));
     return out;
   }
-
   function durSeg(ms, label) {
-    const span = document.createElement("span");
     let cls = "";
     if (ms >= 30000) cls = "dur-hot";
     else if (ms >= 5000) cls = "dur-warm";
-    if (cls) span.className = cls;
-    span.textContent = fmtMs(ms);
+    const span = el("span." + cls, fmtMs(ms));
     if (!label) return span;
     const wrap = document.createDocumentFragment();
-    const lbl = document.createElement("span");
-    lbl.className = "seg-label";
-    lbl.textContent = label + " ";
-    wrap.append(lbl, span);
+    wrap.append(el("span.seg-label", label + " "), span);
     return wrap;
   }
-
   function stepDurEl(segs) {
     const parts = (segs || []).filter(([ms]) => ms != null && ms >= 0);
     if (!parts.length) return null;
-    const el = document.createElement("span");
-    el.className = "step-dur";
-    parts.forEach(([ms, label], i) => {
-      if (i) el.appendChild(document.createTextNode(" · "));
-      el.appendChild(durSeg(ms, label));
-    });
-    return el;
+    const node = el("span.step-dur");
+    parts.forEach(([ms, label], i) => node.append(...(i ? [" · "] : []), durSeg(ms, label)));
+    return node;
   }
   function rawJsonLink(requests, label = "Raw JSON") {
-    const a = document.createElement("a");
-    a.className = "context-raw";
-    let payload;
-    if (requests.length === 1) {
-      payload = requestBody(requests[0]);
-      if (requests[0]?.transport) payload = { request: requestBody(requests[0]), transport: requests[0].transport };
-    } else {
-      payload = requests.map((q) => ({
-        step: q.step,
-        model: q.model,
-        createdAt: q.createdAt,
-        truncated: !!q.truncated,
-        ...(q.transport ? { transport: q.transport } : {}),
-        request: requestBody(q),
-      }));
-    }
-    a.href = "#";
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-
+    let payload = requests.map((q) => ({
+      step: q.step,
+      model: q.model,
+      createdAt: q.createdAt,
+      truncated: !!q.truncated,
+      ...(q.transport ? { transport: q.transport } : {}),
+      request: requestBody(q),
+    }));
+    if (requests.length === 1)
+      payload = requests[0]?.transport
+        ? { request: requestBody(requests[0]), transport: requests[0].transport }
+        : requestBody(requests[0]);
+    const a = el("a.context-raw", { href: "#", target: "_blank", rel: "noopener", textContent: label });
     let url = null;
     a.addEventListener("click", () => {
       if (url) URL.revokeObjectURL(url);
@@ -3096,6 +2964,15 @@ export function startAdmin(host, env) {
       fmtPct,
     };
   }
+  governanceUI.slackActivity.configure({
+    ...helpers(),
+    containers: () => slackContainers,
+    truncated: () => slackContainersTruncated,
+    view: () => view,
+    loaded: () => {
+      viewLoadedAt.slack = Date.now();
+    },
+  });
   route();
   return {
     route,
