@@ -1415,7 +1415,8 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
   const panel = dockApi?.getPanel(paneId);
   if (!panel) return;
   const params = panelParams(panel);
-  if (params.sessionId || (!sessionId && (!threadRef || threadRef === params.threadRef))) return;
+  if (sessionId ? sessionId === params.sessionId : params.sessionId || !threadRef || threadRef === params.threadRef)
+    return;
   panel.api.updateParameters({
     ...(sessionId ? { sessionId } : {}),
     ...(threadRef ? { threadRef } : {}),
