@@ -1,13 +1,12 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
-import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
+import type { CreateCronInput } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { userScheduleFromBody } from "../../cron/schedule.ts";
 import { refusal, sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron } from "../control-service.ts";
-import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
+import { applyCronPatch, canAdministerCron } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 function isCreateCron(b: unknown): b is CreateCronInput {
@@ -47,10 +46,6 @@ const CRON_PATCH_TYPES = {
   unattendedGrants: null,
   session: "boolean",
 } as const;
-
-function hasCronPatchFields(b: Record<string, unknown>): boolean {
-  return Object.keys(CRON_PATCH_TYPES).some((key) => b[key] !== undefined);
-}
 
 function isCronPatch(b: unknown): b is {
   runtime?: Cron["runtime"];
@@ -168,49 +163,27 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
-  if (!hasCronPatchFields(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
-  }
-  const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
-  const task = body.action ?? body.task;
-  if (body.unfurlLinks !== undefined && !cron.destination) {
+  if (body.unattendedGrants !== undefined) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "unfurlLinks can only be set on a cron with a delivery destination",
+      message: "unattended grants can only be set by the cron's owner from a live turn",
     });
   }
-  const patch: CronPatch = {
-    ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
-    ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(task !== undefined ? { action: task } : {}),
-    ...(schedule !== undefined ? { schedule } : {}),
-    ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-    ...(body.archived !== undefined ? { archived: body.archived } : {}),
-    ...(body.unfurlLinks !== undefined && cron.destination
-      ? { destination: { ...cron.destination, unfurlLinks: body.unfurlLinks } }
-      : {}),
-  };
-  try {
-    const updated = await app.updateCron(id, patch);
-    const editor = url.searchParams.get("principalId");
-    if (updated && editor)
-      await notifyOwnerOfCronEdit(app, {
-        cron: updated,
-        editorId: editor,
-        changeSummary: [
-          ...(body.runtime !== undefined ? ["runtime"] : []),
-          ...(body.title !== undefined ? ["title"] : []),
-          ...(task !== undefined ? ["task"] : []),
-          ...(schedule !== undefined ? ["schedule"] : []),
-          ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
-          ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
-        ],
-        ...(schedule !== undefined ? { detail: { schedule } } : {}),
-      });
-    return sendJson(res, 200, { cron: updated ? updated : null });
-  } catch (e) {
-    throw refusal(400, "cron_update_failed", e);
-  }
+  const { task, action, schedule, ...rest } = body;
+  const text = action ?? task;
+  const result = await applyCronPatch(
+    app,
+    cron,
+    {
+      ...rest,
+      ...(text !== undefined ? { action: text } : {}),
+      ...(schedule !== undefined ? { schedule: userScheduleFromBody(schedule)! } : {}),
+    },
+    { actorId: url.searchParams.get("principalId") ?? cron.owner },
+  );
+  if (result.ok) return sendJson(res, 200, { cron: result.cron });
+  if (result.code === "not_found") return sendJson(res, 200, { cron: null });
+  return sendJson(res, result.code === "forbidden" ? 403 : 400, { error: result.code, message: result.message });
 }
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
