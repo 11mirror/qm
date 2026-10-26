@@ -879,7 +879,10 @@ test("sandbox shape errors: object and backend", () => {
       sandbox: { backend: "k8s" },
       rx: /"sandbox.backend" must be "local".*"sprites".*"e2b".*"modal".*"do-managed-agents".*or "smolmachines"/,
     },
-    { sandbox: { backend: "aws" }, rx: /"sandbox.backend" must be "local".*"sprites".*or "e2b"/ },
+    {
+      sandbox: { backend: "aws" },
+      rx: /"sandbox.backend" must be "local".*"sprites".*"e2b".*"modal".*"do-managed-agents".*or "smolmachines"/,
+    },
   ];
   for (const { sandbox, rx } of cases) {
     withConfig({ sandbox }, ({ path }) =>

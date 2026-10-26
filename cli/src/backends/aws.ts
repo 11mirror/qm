@@ -27,7 +27,6 @@ import {
 } from "../aws-lease.ts";
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
-  awsMicrovmExecRoleArn,
   awsTaskRoleArn,
   awsWorkloadArchitecture,
   requiresAwsMicrovmImage,

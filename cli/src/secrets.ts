@@ -120,17 +120,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PORTER_DEPLOY_API_TOKEN",
     service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "sandbox-backend", backend: "porter" },
-          { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" },
-        ],
-      },
-    },
+    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" } },
     description:
-      "Admin-role Porter API token for the sandbox backend and the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
+      "Admin-role Porter API token for the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
     generate:
       "create an Admin-role API token in the Porter dashboard (https://dashboard.porter.run → Settings → API tokens)",
   },
