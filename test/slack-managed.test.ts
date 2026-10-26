@@ -239,3 +239,19 @@ test("managed Slack refuses a service credential that a bearer header cannot car
     assert.throws(() => createManagedSlack({ serviceUrl: "https://slack.example.com", token, store }), /credential/);
   }
 });
+
+test("managed service failures carry the HTTP status and body", async () => {
+  const store = createSlackInstallationStore(
+    "company",
+    testMap() as Parameters<typeof createSlackInstallationStore>[1],
+    "test-encryption-key",
+  );
+  const bridge = createManagedSlack({
+    serviceUrl: "https://slack.example.com",
+    token: "company-token",
+    store,
+    fetchImpl: async () => new Response("upstream misconfigured", { status: 503 }),
+  });
+  await assert.rejects(bridge.setupStatus(), /http 503 upstream misconfigured/);
+  await assert.rejects(bridge.start("install"), /http 503 upstream misconfigured/);
+});
