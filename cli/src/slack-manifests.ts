@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { QmConfig } from "./config.ts";
+import { templateUrl } from "./templates.ts";
 
 function template(name: string): string {
-  const source = new URL(`../templates/${name}`, import.meta.url);
-  const packaged = new URL(`../../templates/${name}`, import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged, "utf8");
+  return readFileSync(templateUrl(name), "utf8");
 }
 
 function toYaml(value: unknown, indent = 0): string {

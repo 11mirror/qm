@@ -12,6 +12,10 @@ export const SANDBOX_BACKENDS = {
   agent37: "",
   superserve: "Superserve sandboxes",
   e2b: "E2B sandboxes",
+  modal: "Modal sandboxes",
+  "do-managed-agents": "DigitalOcean Managed Agents sandboxes",
+  smolmachines: "smolmachines microVMs",
+  porter: "Porter sandboxes",
 } as const;
 
 export type SandboxBackendId = keyof typeof SANDBOX_BACKENDS;
@@ -28,8 +32,24 @@ export interface SandboxBackendPolicy {
 
 /** Keyed by hosting target so adding a target forces a sandbox-backend decision. */
 export const SANDBOX_BACKEND_POLICY: Record<Target, SandboxBackendPolicy> = {
-  docker: { allowed: ["local", "sprites", "agent37", "superserve", "e2b"], requireExplicit: false },
-  aws: { allowed: ["sprites", "aws", "agent37", "superserve", "e2b"], requireExplicit: true },
+  docker: {
+    allowed: [
+      "local",
+      "sprites",
+      "agent37",
+      "superserve",
+      "e2b",
+      "modal",
+      "do-managed-agents",
+      "smolmachines",
+      "porter",
+    ],
+    requireExplicit: false,
+  },
+  aws: {
+    allowed: ["sprites", "aws", "agent37", "superserve", "e2b", "modal", "do-managed-agents", "smolmachines", "porter"],
+    requireExplicit: true,
+  },
 };
 
 export const targetsAllowingSandboxBackend = (backend: SandboxBackendId): Target[] =>

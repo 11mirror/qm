@@ -27,6 +27,8 @@ import {
 } from "../aws-lease.ts";
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
+  awsMicrovmExecRoleArn,
+  awsTaskRoleArn,
   awsWorkloadArchitecture,
   requiresAwsMicrovmImage,
   isDigestPinned,
@@ -79,9 +81,11 @@ import {
   assertTerraformScaffoldSupportsConfig,
   awsObjectStoreBucket,
   declaredVariables,
+  hclString,
   terraformVarsDrift,
 } from "../terraform.ts";
 import {
+  assertLayerBodyFits,
   currentDeploymentLayerState,
   deploymentLayerBody,
   syncDeploymentLayerBody,
@@ -411,8 +415,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         AWS_SANDBOX_REGION: aws.region,
         AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
         AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
-        AWS_SANDBOX_EXEC_ROLE_ARN:
-          config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+        AWS_SANDBOX_EXEC_ROLE_ARN: awsMicrovmExecRoleArn(config, aws),
         AWS_DEPLOY_DATA_BUCKET: awsObjectStoreBucket(config),
         ...stores,
       });
@@ -485,10 +488,7 @@ export function renderTaskDefinition(
   const def = isServiceName(service) ? serviceDef(service) : undefined;
   const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const managedTaskRole = spec.assumeRoleArns?.length
-    ? `${aws.cluster}-${service}-task`
-    : `${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
-  const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
+  const taskRoleArn = awsTaskRoleArn(aws, service, spec);
   const secrets = workloadSecrets(config, service, secretArns)
     .flatMap((secret) =>
       containerSecretNames(service, secret).map((name) => ({
@@ -1721,18 +1721,14 @@ function manifestTransaction(aws: AwsConfig, manifest: DeploymentManifest | unde
       },
     },
   });
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      awsText(aws, ["dynamodb", "transact-write-items", "--transact-items", JSON.stringify(writes)]);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
+  try {
+    awsText(aws, ["dynamodb", "transact-write-items", "--transact-items", JSON.stringify(writes)]);
+  } catch (error) {
+    throw new CliError(
+      `AWS deployment manifest write failed: ${errMessage(error)}; run \`qm check --live\` to establish the current manifest before deploying again`,
+      { cause: error },
+    );
   }
-  throw new CliError(
-    `AWS deployment manifest write failed: ${errMessage(lastError)}; run \`qm check --live\` to establish the current manifest before deploying again`,
-  );
 }
 
 function deploymentManifestForTarget(aws: AwsConfig, target: string): DeploymentManifest {
@@ -1774,8 +1770,7 @@ function recordDeploymentManifest(
 }
 
 function putDeploymentLayerArtifact(config: QmConfig, body: string): NonNullable<DeploymentManifest["layer"]> {
-  if (Buffer.byteLength(body) > 1_000_000)
-    throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
+  assertLayerBodyFits(body);
   const aws = requireAws(config);
   const sha256 = createHash("sha256").update(body).digest("hex");
   const key = `deployment/layers/${sha256}.json`;
@@ -1798,9 +1793,9 @@ function getDeploymentLayerArtifact(config: QmConfig, layer: DeploymentManifest[
   try {
     awsText(aws, ["s3api", "get-object", "--bucket", awsObjectStoreBucket(config), "--key", layer.key, file]);
     const body = readFileSync(file, "utf8");
-    if (Buffer.byteLength(body) > 1_000_000 || createHash("sha256").update(body).digest("hex") !== layer.sha256) {
-      throw new CliError("AWS deployment-layer artifact is invalid or does not match its manifest");
-    }
+    assertLayerBodyFits(body);
+    if (createHash("sha256").update(body).digest("hex") !== layer.sha256)
+      throw new CliError("AWS deployment-layer artifact does not match its manifest");
     return body;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -3604,10 +3599,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
 export function githubTrustSubject(configDir: string, deployBranch?: string, deployEnvironment?: string): string {
   const tfvars = join(configDir, "infra", "terraform.tfvars");
   const source = existsSync(tfvars) ? readFileSync(tfvars, "utf8") : undefined;
-  const tfValue = (name: string): string | undefined => {
-    const raw = source?.match(new RegExp(`^${name}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*$`, "m"))?.[1];
-    return raw ? (JSON.parse(raw) as string) : undefined;
-  };
+  const tfValue = (name: string): string | undefined => (source === undefined ? undefined : hclString(source, name));
   let repo = process.env.GITHUB_REPOSITORY;
   if (!repo && source !== undefined) {
     repo = tfValue("github_repository");
@@ -4279,20 +4271,29 @@ async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = fal
   const originHostname = awsPublicOrigin(config).hostname.toLowerCase().replace(/\.$/, "");
   const albHostname = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
   if (originHostname !== albHostname) {
+    const failures: string[] = [];
+    const noted =
+      (what: string) =>
+      (error: unknown): string[] => {
+        failures.push(`${what}: ${errMessage(error)}`);
+        return [];
+      };
     const [cnames, publicAddresses, albAddresses] = await Promise.all([
-      resolveCname(originHostname).catch(() => []),
+      resolveCname(originHostname).catch(noted(`CNAME ${originHostname}`)),
       lookup(originHostname, { all: true })
         .then((values) => values.map((value) => value.address))
-        .catch(() => []),
+        .catch(noted(`lookup ${originHostname}`)),
       lookup(albHostname, { all: true })
         .then((values) => values.map((value) => value.address))
-        .catch(() => []),
+        .catch(noted(`lookup ${albHostname}`)),
     ]);
     const cnameMatch = cnames.some((name) => name.toLowerCase().replace(/\.$/, "") === albHostname);
     const albSet = new Set(albAddresses);
     const addressMatch = publicAddresses.some((address) => albSet.has(address));
     if (!cnameMatch && !addressMatch) {
-      throw new CliError(`AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}`);
+      throw new CliError(
+        `AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}${failures.length ? ` (${failures.join("; ")})` : ""}`,
+      );
     }
   }
   const controller = new AbortController();
@@ -4349,39 +4350,6 @@ export function assertAwsDeploymentStorage(config: QmConfig): void {
     "--max-keys",
     "1",
   ]);
-}
-
-export function probeAwsSecretStore(
-  secrets: ComputedSecret[],
-  read: (name: string) => string,
-  checkPublicApiUrl: () => void,
-): { values: Map<string, string>; pending: string[]; failures: string[] } {
-  const values = new Map<string, string>();
-  const pending: string[] = [];
-  const failures: string[] = [];
-  for (const secret of secrets) {
-    const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
-    try {
-      const value = read(secret.name);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      values.set(secret.name, value);
-      if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
-      step(secret.required ? `${label}: ok` : `${label}: configured`);
-    } catch (error) {
-      if (awsErrorCode(error) === "ResourceNotFoundException") {
-        if (secret.required) {
-          pending.push(secret.name);
-          step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
-        } else {
-          warn(`${label}: not configured`);
-        }
-      } else {
-        failures.push(`${label}: ${errMessage(error)}`);
-        warn(`${label}: failed`);
-      }
-    }
-  }
-  return { values, pending, failures };
 }
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {

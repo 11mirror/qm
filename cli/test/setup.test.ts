@@ -1,18 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
-import {
-  adminGrantEmails,
-  mintSigningJwk,
-  pendingSecrets,
-  playbookFor,
-  updateEnvContent,
-  runSetup,
-} from "../src/commands/setup.ts";
+import { adminGrantEmails, pendingSecrets, playbookFor, runSetup } from "../src/commands/setup.ts";
+import { mintSigningJwk } from "../src/secrets.ts";
 import { CliError } from "../src/log.ts";
+import { writeEnvValue } from "../src/util.ts";
 
 function configFor(services: string[], extra = "", env = `{}`): ReturnType<typeof loadConfigAt>["config"] {
   const dir = mkdtempSync(join(tmpdir(), "qm-setup-"));
@@ -74,33 +69,34 @@ test("pendingSecrets keeps a malformed administrator seed pending", () => {
   );
 });
 
-test("updateEnvContent replaces blank and commented lines in place and appends new names", () => {
-  const before = [
-    "# Anthropic key (core)",
-    "ANTHROPIC_API_KEY=",
-    "# SLACK_BOT_TOKEN=  # optional",
-    "KEEP_ME=untouched",
-    "",
-  ].join("\n");
-  const after = updateEnvContent(
-    before,
-    new Map([
-      ["ANTHROPIC_API_KEY", "sk-ant-x"],
-      ["SLACK_BOT_TOKEN", "xoxb-y"],
-      ["BRAND_NEW", "z"],
-    ]),
-  );
-  const lines = after.split("\n");
-  assert.equal(lines[0], "# Anthropic key (core)");
-  assert.equal(lines[1], "ANTHROPIC_API_KEY=sk-ant-x");
-  assert.equal(lines[2], "SLACK_BOT_TOKEN=xoxb-y");
-  assert.equal(lines[3], "KEEP_ME=untouched");
-  assert.ok(after.includes("BRAND_NEW=z\n"));
-});
-
-test("updateEnvContent replaces an already-set value", () => {
-  const after = updateEnvContent("A=old\nB=keep\n", new Map([["A", "new"]]));
-  assert.equal(after, "A=new\nB=keep\n");
+test("writeEnvValue fills blank and commented placeholders in place and appends new names", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-setup-env-"));
+  const file = join(dir, ".env");
+  try {
+    writeFileSync(
+      file,
+      ["# Anthropic key (core)", "ANTHROPIC_API_KEY=", "# SLACK_BOT_TOKEN=  # optional", "KEEP_ME=untouched", ""].join(
+        "\n",
+      ),
+    );
+    writeEnvValue(file, "ANTHROPIC_API_KEY", "sk-ant-x");
+    writeEnvValue(file, "SLACK_BOT_TOKEN", "xoxb-y");
+    writeEnvValue(file, "BRAND_NEW", "z");
+    writeEnvValue(file, "KEEP_ME", "replaced");
+    assert.equal(
+      readFileSync(file, "utf8"),
+      [
+        "# Anthropic key (core)",
+        "ANTHROPIC_API_KEY=sk-ant-x",
+        "SLACK_BOT_TOKEN=xoxb-y",
+        "KEEP_ME=replaced",
+        "BRAND_NEW=z",
+        "",
+      ].join("\n"),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("playbooks substitute the manifest names", () => {

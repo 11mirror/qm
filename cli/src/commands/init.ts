@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -15,9 +14,10 @@ import {
 import { die, note, ok, warn } from "../log.ts";
 import { assertNodeEngine } from "../preflight.ts";
 import { cliPackageName, cliVersion } from "../manifest.ts";
-import { computedSecrets, renderEnvExample } from "../secrets.ts";
+import { computedSecrets, mintSecret, renderEnvExample } from "../secrets.ts";
 import { renderSlackManifests, usesSlackOidc } from "../slack-manifests.ts";
 import { hostingProvider } from "../backends/registry.ts";
+import { templateUrl } from "../templates.ts";
 
 const AGENTS_TEMPLATE = `# QM deployment
 
@@ -151,11 +151,7 @@ function envPathIsTracked(dir: string): boolean {
 }
 
 function initialEnv(config: QmConfig): string {
-  const generated = new Map(
-    computedSecrets(config)
-      .filter((secret) => secret.generate === "openssl rand -hex 32")
-      .map((secret) => [secret.name, randomBytes(32).toString("hex")]),
-  );
+  const generated = new Map(computedSecrets(config).map((secret) => [secret.name, mintSecret(secret)]));
   return renderEnvExample(config)
     .replace(
       "# Secret values for this deployment. This file holds names only; copy it to .env and fill in",
@@ -168,9 +164,7 @@ function initialEnv(config: QmConfig): string {
 }
 
 function template(rel: string): string {
-  const source = new URL(`../../templates/${rel}`, import.meta.url);
-  const packaged = new URL(`../../../templates/${rel}`, import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged, "utf8");
+  return readFileSync(templateUrl(rel), "utf8");
 }
 
 function packageContent(dir: string, orgId: string): string {
@@ -207,12 +201,10 @@ function packageContent(dir: string, orgId: string): string {
   const packageName = cliPackageName();
   const dependencies = objectField("dependencies");
   const installedPackage = typeof dependencies[packageName] === "string" ? dependencies[packageName] : cliVersion();
-  delete dependencies["qm-cli"];
   delete dependencies[packageName];
   for (const group of ["devDependencies", "optionalDependencies"] as const) {
     const groupDependencies = objectField(group);
-    if ("qm-cli" in groupDependencies || packageName in groupDependencies) {
-      delete groupDependencies["qm-cli"];
+    if (packageName in groupDependencies) {
       delete groupDependencies[packageName];
       existing[group] = groupDependencies;
     }

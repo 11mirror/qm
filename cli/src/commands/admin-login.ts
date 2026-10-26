@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { configPathInDir, loadConfigAt } from "../config.ts";
 import { CliError, note } from "../log.ts";
-import { deploymentSecretValue, isMissingOrPlaceholder, readEnvFile } from "../util.ts";
+import { deploymentSecretValue, isMissingOrPlaceholder, parseAdminGrants, readEnvFile } from "../util.ts";
 
 export function adminLoginUrl(options: {
   publicUrl: string;
@@ -33,15 +33,9 @@ export function adminLoginUrl(options: {
   }
   const admins = [
     ...new Set(
-      options.adminGrants.split(",").flatMap((entry) => {
-        const separator = entry.lastIndexOf(":");
-        const email = entry.slice(0, separator).trim().toLowerCase();
-        return entry.slice(separator + 1).trim() === "org_admin" &&
-          email.length <= 254 &&
-          /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)
-          ? [email]
-          : [];
-      }),
+      parseAdminGrants(options.adminGrants)
+        .filter((grant) => grant.role === "org_admin")
+        .map((grant) => grant.email),
     ),
   ];
   const email = options.email?.trim().toLowerCase() ?? (admins.length === 1 ? admins[0] : undefined);

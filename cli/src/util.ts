@@ -85,13 +85,8 @@ export function runInheritAsync(
         throw error;
       }
     };
-    const killGroup = (signal: NodeJS.Signals) => {
-      if (!child.pid) return;
-      try {
-        process.kill(-child.pid, signal);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      }
+    const killGroup = (sig: NodeJS.Signals) => {
+      if (child.pid) signal(-child.pid, sig);
     };
     const cancel = () => {
       cancellation = (async () => {
@@ -205,14 +200,17 @@ const pidAlive = (pid: number | undefined): boolean => {
   }
 };
 
-function killTree(pid: number, sig: NodeJS.Signals): void {
-  for (const target of [-pid, pid]) {
-    try {
-      process.kill(target, sig);
-    } catch {
-      void 0;
-    }
+function signal(target: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(target, sig);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
+}
+
+function killTree(pid: number, sig: NodeJS.Signals): void {
+  signal(-pid, sig);
+  signal(pid, sig);
 }
 
 export async function stopPid(pid: number | undefined, graceSec = 5): Promise<void> {
@@ -329,9 +327,24 @@ export function writeEnvValue(path: string, key: string, value: string): void {
       placed = true;
     }
   }
-  if (!placed) next.push(entry);
+  if (!placed) {
+    const placeholder = next.findIndex((line) => new RegExp(`^#\\s*${key}=`).test(line.trim()));
+    if (placeholder === -1) next.push(entry);
+    else next[placeholder] = entry;
+  }
   writeFileSync(path, `${next.join("\n")}\n`, { mode });
   chmodSync(path, mode);
+}
+
+/** ADMIN_GRANTS entries ("email[:role]", comma-separated) with a plausible email address. */
+export function parseAdminGrants(raw: string | undefined): Array<{ email: string; role: string | undefined }> {
+  return (raw ?? "").split(",").flatMap((entry) => {
+    const trimmed = entry.trim();
+    const separator = trimmed.lastIndexOf(":");
+    const email = (separator === -1 ? trimmed : trimmed.slice(0, separator)).trim().toLowerCase();
+    const role = separator === -1 ? undefined : trimmed.slice(separator + 1).trim();
+    return email.length <= 254 && /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email) ? [{ email, role }] : [];
+  });
 }
 
 export function deploymentSecretValue(name: string, fileValue: string | undefined): string | undefined {

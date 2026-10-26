@@ -10,6 +10,7 @@ import {
 } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { deploymentSecretValue, isInvalidSecret, readEnvFile } from "../util.ts";
+import { templateUrl } from "../templates.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
 import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
@@ -46,10 +47,7 @@ export function slackManifestBotScopes(manifest: string): string[] {
 
 export function requiredSlackScopes(configDir?: string): string[] {
   const local = configDir ? join(configDir, "slack-app-manifest.yml") : undefined;
-  const sourceTemplate = new URL("../../templates/slack-manifest.json", import.meta.url);
-  const packagedTemplate = new URL("../../../templates/slack-manifest.json", import.meta.url);
-  const templatePath = existsSync(sourceTemplate) ? sourceTemplate : packagedTemplate;
-  const path = local && existsSync(local) ? local : templatePath;
+  const path = local && existsSync(local) ? local : templateUrl("slack-manifest.json");
   const scopes = slackManifestBotScopes(readFileSync(path, "utf8"));
   if (scopes.length === 0) {
     throw new CliError(
@@ -57,7 +55,7 @@ export function requiredSlackScopes(configDir?: string): string[] {
     );
   }
   if (path === local) {
-    const behind = slackManifestBotScopes(readFileSync(templatePath, "utf8")).filter(
+    const behind = slackManifestBotScopes(readFileSync(templateUrl("slack-manifest.json"), "utf8")).filter(
       (scope) => !scopes.includes(scope),
     );
     if (behind.length)
@@ -150,7 +148,7 @@ export async function doctorCommon(
   } else if (config.target === "aws") {
     step("AWS Lambda MicroVM sandbox: configured");
   } else if (config.sandbox) {
-    step("sandbox: sprites boot the platform's stock image");
+    step(`sandbox: ${config.sandbox.backend ?? "sprites"} boots the platform's stock image`);
   } else {
     step("sandbox: not configured — agents cannot execute commands");
   }

@@ -32,7 +32,6 @@ import {
   githubTrustSubject,
   imageTransferArgs,
   isPinnedWorkloadImage,
-  probeAwsSecretStore,
   renderTaskDefinition,
   secretArns,
   serviceEnvironment,
@@ -1724,22 +1723,14 @@ test("background activation preserves candidate and manifest without another mig
   }
 });
 
-test("AWS up renews the deploy lease with a holder-conditioned update while it runs", async () => {
+test("the deploy lease renews with a holder-conditioned update while it is held", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-renew-"));
-  const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
-  chmodSync(dockerBin, 0o755);
-  const single = oneServiceConfig();
-  const fake = statefulAws(dir, single, {}, { transientFailedTaskPolls: 3 });
-  const priorPath = process.env.PATH;
-  const priorRenew = process.env.QM_AWS_LEASE_RENEW_MS;
-  process.env.PATH = `${dir}:${priorPath}`;
-  process.env.QM_AWS_LEASE_RENEW_MS = "10";
+  const fake = fakeAws(dir, `console.log("");`);
+  t.mock.timers.enable({ apis: ["setInterval"] });
   try {
-    await awsUp(single, dir, { yes: true });
+    await withAwsLease(config.aws!, async () => {
+      t.mock.timers.tick(20 * 60_000);
+    });
     const calls = readFileSync(fake.log, "utf8");
     assert.match(
       calls,
@@ -1750,15 +1741,12 @@ test("AWS up renews the deploy lease with a holder-conditioned update while it r
       "renewal happens while the lease is held",
     );
   } finally {
-    process.env.PATH = priorPath;
-    if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
-    else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a lease renewal that loses the holder condition warns loudly and stops renewing", async () => {
+test("a lease renewal that loses the holder condition warns loudly and stops renewing", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-lost-"));
   const fake = fakeAws(
     dir,
@@ -1766,14 +1754,14 @@ test("a lease renewal that loses the holder condition warns loudly and stops ren
 if (a.includes("dynamodb update-item")) { console.error("An error occurred (ConditionalCheckFailedException) when calling the UpdateItem operation"); process.exit(1); }
 console.log("");`,
   );
-  const priorRenew = process.env.QM_AWS_LEASE_RENEW_MS;
-  process.env.QM_AWS_LEASE_RENEW_MS = "5";
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const warnings: string[] = [];
   const warnLog = console.warn;
   console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
   try {
     await withAwsLease(config.aws!, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      t.mock.timers.tick(20 * 60_000);
+      t.mock.timers.tick(20 * 60_000);
     });
     assert.match(warnings.join("\n"), /"deploy" lease in acme-qm-deploy-locks was taken over by another QM operation/);
     assert.equal(
@@ -1783,8 +1771,6 @@ console.log("");`,
     );
   } finally {
     console.warn = warnLog;
-    if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
-    else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -5015,54 +5001,6 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     "/ecs/legacy-core",
   );
   assert.equal(container.stopTimeout, 120);
-});
-
-test("AWS doctor classifies an un-pushed secret store as pending, not drift", () => {
-  const rnf = new Error(
-    "An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation: Secrets Manager can't find the specified secret.",
-  );
-  const secrets = computedSecrets({
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "aws",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  });
-  const requiredNames = secrets.filter((secret) => secret.required).map((secret) => secret.name);
-  assert.ok(requiredNames.length > 0);
-  const probe = probeAwsSecretStore(
-    secrets,
-    () => {
-      throw rnf;
-    },
-    () => assert.fail("PUBLIC_API_URL must not be validated when the store is empty"),
-  );
-  assert.deepEqual(probe.pending, requiredNames);
-  assert.deepEqual(probe.failures, []);
-  assert.equal(probe.values.size, 0);
-});
-
-test("AWS doctor still fails a pushed secret store holding a placeholder value", () => {
-  const probe = probeAwsSecretStore(
-    [
-      {
-        name: "CORE_SIGNING_SECRET",
-        services: ["core"],
-        description: "",
-        required: true,
-        managedBy: "operator",
-      },
-    ],
-    () => "replace-me",
-    () => {},
-  );
-  assert.deepEqual(probe.pending, []);
-  assert.equal(probe.failures.length, 1);
-  assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
 
 for (const mode of ["stale", "failed"] as const) {

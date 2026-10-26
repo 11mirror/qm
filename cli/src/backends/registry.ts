@@ -2,7 +2,6 @@ import { awsWorkloadArchitecture, type QmConfig } from "../config.ts";
 import { CliError, errMessage, note } from "../log.ts";
 import type { Target } from "../providers.ts";
 import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deployment-layer.ts";
-import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
 import { awsScaffold, dockerScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
@@ -40,7 +39,6 @@ export interface HostingProvider {
   /** How this target's CLI reaches the deployed core's /v1/deployment-layer endpoint. */
   deploymentLayerTransport: DeploymentLayerTransport;
   /** Per-target env defaults applied when a service env var is not set explicitly. */
-  envDefaults: TargetEnvDefaults;
   /** Optional `qm infra` operations; targets without managed infra omit this. */
   infra?: Partial<Record<InfraOperation, (ctx: DeployContext) => void | Promise<void>>>;
   upFlags: readonly string[];
@@ -84,7 +82,6 @@ const workloadOptions = (flags: Readonly<Record<string, string | boolean>>, flag
 const docker: HostingProvider = {
   id: "docker",
   deploymentLayerTransport: dockerDeploymentLayerTransport,
-  envDefaults: TARGET_ENV_DEFAULTS.docker,
   scaffold: dockerScaffold,
   upFlags: ["build-from", "only"],
   upOptions: (_ctx, flags, dryRun) => {
@@ -137,7 +134,6 @@ const docker: HostingProvider = {
 const aws: HostingProvider = {
   id: "aws",
   deploymentLayerTransport: awsDeploymentLayerTransport,
-  envDefaults: TARGET_ENV_DEFAULTS.aws,
   infra: {
     render: (ctx) => renderTerraformVars(ctx.config, ctx.configDir),
     "build-image": async (ctx) => {

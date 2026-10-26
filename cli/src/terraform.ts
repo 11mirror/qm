@@ -2,7 +2,13 @@ import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
+import {
+  awsManagedTaskRoleArn,
+  awsMicrovmExecRoleArn,
+  awsTaskRoleArn,
+  awsWorkloadArchitecture,
+  type QmConfig,
+} from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
 import { hostsWebEdge, isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";
@@ -66,7 +72,7 @@ function hclAssignment(source: string, name: string): string | undefined {
   return undefined;
 }
 
-function hclString(source: string, name: string): string | undefined {
+export function hclString(source: string, name: string): string | undefined {
   const assignment = hclAssignment(source, name);
   const value = assignment?.match(/=\s*("(?:[^"\\]|\\.)*")\s*$/)?.[1];
   if (value === undefined) return undefined;
@@ -80,10 +86,11 @@ function hclString(source: string, name: string): string | undefined {
 function hclJson(source: string, name: string): unknown {
   const assignment = hclAssignment(source, name);
   const raw = assignment?.slice(assignment.indexOf("=") + 1).trim();
+  if (raw === undefined) return undefined;
   try {
-    return raw === undefined ? undefined : JSON.parse(raw);
+    return JSON.parse(raw);
   } catch {
-    return undefined;
+    throw new CliError(`infra/terraform.tfvars has an invalid ${name} value (expected the JSON qm writes)`);
   }
 }
 
@@ -95,15 +102,11 @@ function assertSafeAssumeRoleTransition(config: QmConfig, existing: string): voi
     if (typeof prior !== "object" || prior === null || Array.isArray(prior)) continue;
     const next = config.aws.services[name];
     if (!next) continue;
-    const managedArn = `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-${name === "core" ? "core" : name}-task`;
+    const managedArn = awsManagedTaskRoleArn(config.aws, name);
     const priorRole = (prior as Record<string, unknown>)["task_role_arn"];
     const priorManaged = (prior as Record<string, unknown>)["manage_task_role"] === true;
     const currentRole = typeof priorRole === "string" ? priorRole : managedArn;
-    const nextRole =
-      next.taskRoleArn ??
-      (name === "core" || next.assumeRoleArns?.length
-        ? managedArn
-        : `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-task`);
+    const nextRole = awsTaskRoleArn(config.aws, name, next);
     if (
       name !== "core" &&
       !priorManaged &&
@@ -208,8 +211,7 @@ function derivedValues(
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
       deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
-      deploy_microvm_execution_role_arn:
-        config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+      deploy_microvm_execution_role_arn: awsMicrovmExecRoleArn(config, aws),
       ...(declared.includes("db_instance_class") && aws.dbInstanceClass
         ? { db_instance_class: aws.dbInstanceClass }
         : {}),

@@ -877,7 +877,7 @@ test("sandbox shape errors: object and backend", () => {
     { sandbox: ["x"], rx: /"sandbox" must be an object/ },
     {
       sandbox: { backend: "k8s" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*"e2b".*"modal".*"do-managed-agents".*"smolmachines".*or "porter"/,
     },
     {
       sandbox: { backend: "aws" },

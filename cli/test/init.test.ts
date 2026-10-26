@@ -379,7 +379,7 @@ test("init preflights package.json and completes an install-first package manife
     writeFileSync(
       join(existing, "package.json"),
       JSON.stringify({
-        dependencies: { "qm-cli": "0.1.0", other: "1.0.0" },
+        dependencies: { other: "1.0.0" },
       }),
     );
     quiet(() => runInit({ dir: existing, org: "acme" }));
@@ -393,7 +393,6 @@ test("init preflights package.json and completes an install-first package manife
     assert.equal(manifest.engines?.node, ">=24.0.0");
     assert.equal(manifest.scripts?.deploy, "qm up");
     assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion());
-    assert.equal(manifest.dependencies?.["qm-cli"], undefined);
     assert.equal(manifest.dependencies?.other, "1.0.0");
   } finally {
     rmSync(invalid, { recursive: true, force: true });
