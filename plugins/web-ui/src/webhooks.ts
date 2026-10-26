@@ -5,14 +5,12 @@ import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
 import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane, textBtn } from "./list-page";
-import { ensureContexts, scopeChip } from "./contexts";
-import { appState } from "./shell";
+import { scopeChip } from "./contexts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
 export interface WebhookView {
   id: string;
   ownerScopeId: string;
-  owner: string;
   action: string;
   verification: { scheme: string; secret?: string };
   filters?: Array<{ path: string; in: string[] }>;
@@ -61,9 +59,6 @@ function refreshWebhooks(showLoading = false): Promise<boolean> {
 }
 
 export async function renderWebhooksPage(): Promise<void> {
-  if (appState.currentView !== "webhooks") return;
-  page.adoptScope();
-  await ensureContexts();
   await page.show({
     load: () => refreshWebhooks(webhookList.length === 0),
     find: findWebhook,
@@ -226,12 +221,6 @@ async function setWebhookEnabled(id: string, enabled: boolean): Promise<void> {
   else drawWebhooksPage();
 }
 
-function randomHex(bytes: number): string {
-  const a = new Uint8Array(bytes);
-  crypto.getRandomValues(a);
-  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 function webhookForm() {
   return html`
     <form class="resource-form" @submit=${onCreateWebhook}>
@@ -303,21 +292,20 @@ function showNewWebhook(): void {
 function selectWebhookScheme(e: Event, scheme: WebhookScheme): void {
   e.stopPropagation();
   const control = (e.currentTarget as HTMLElement).closest(".scheme-control") as HTMLElement | null;
-  const form = control?.closest("form");
-  setFormMenuValue(control, scheme, WEBHOOK_SCHEMES.find((s) => s.value === scheme)?.label ?? scheme);
-  applyWebhookScheme(form, scheme);
+  const found = WEBHOOK_SCHEMES.find((s) => s.value === scheme);
+  setFormMenuValue(control, scheme, found?.label ?? scheme);
+  const guidance = control?.closest("form")?.querySelector(".webhook-scheme-guidance");
+  if (guidance) guidance.textContent = found?.guidance ?? "";
   closeFormMenus();
-}
-
-function applyWebhookScheme(form: Element | null | undefined, scheme: string): void {
-  const guidance = form?.querySelector(".webhook-scheme-guidance");
-  if (guidance) guidance.textContent = WEBHOOK_SCHEMES.find((candidate) => candidate.value === scheme)?.guidance ?? "";
 }
 
 function fillGeneratedSecret(e: Event): void {
   const form = (e.currentTarget as HTMLElement).closest("form");
   const secret = form?.querySelector('input[name="secret"]') as HTMLInputElement | null;
-  if (secret && !secret.disabled) secret.value = randomHex(32);
+  if (secret && !secret.disabled)
+    secret.value = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join(
+      "",
+    );
 }
 
 function parseWebhookFilters(text: string): Array<{ path: string; in: string[] }> {
@@ -345,11 +333,8 @@ async function onCreateWebhook(e: Event): Promise<void> {
   const field = (n: string) => (form.elements.namedItem(n) as HTMLInputElement | HTMLTextAreaElement).value;
   const action = field("action").trim();
   const secret = field("secret").trim();
-  errSlot.textContent = "";
-  if (!action) {
-    errSlot.textContent = "An action is required.";
-    return;
-  }
+  errSlot.textContent = action ? "" : "An action is required.";
+  if (!action) return;
   let stage = "Invalid filters.";
   try {
     const filters = parseWebhookFilters(field("filters"));

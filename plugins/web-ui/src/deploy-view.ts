@@ -1,10 +1,3 @@
-interface DeploymentVersionView {
-  version: number;
-  createdAt: number;
-  commit?: string;
-  parentCommit?: string;
-}
-
 export interface DeploymentView {
   id: string;
   status?: "running" | "stopped" | "archived" | string;
@@ -14,16 +7,11 @@ export interface DeploymentView {
   currentVersion?: number;
   appliedVersion?: number;
   webUrl?: string;
-  gitUrl?: string;
   name?: string;
   displayName?: string;
   permission?: "read" | "write";
   embedAncestors?: string[];
-  public?: boolean;
-  createdAt?: number;
-  updatedAt?: number;
-  lastAccessAt?: number;
-  versions?: DeploymentVersionView[];
+  versions?: Array<{ version: number; createdAt: number }>;
 }
 
 export type DeploymentTab = "yours" | "shared" | "archived";

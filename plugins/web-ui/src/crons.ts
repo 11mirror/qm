@@ -1,7 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2, type IconNode } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
 import {
   artifactPage,
   confirmDialogTpl,
@@ -15,17 +14,11 @@ import {
   textBtn,
   type OwnershipTab,
 } from "./list-page";
-import { ensureContexts, scopeChip } from "./contexts";
+import { scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, UI_BASE } from "./deep-link";
-import {
-  cronNextFire,
-  cronRunSummary,
-  cronRunSummaryTitle,
-  cronScheduleDetail,
-  cronScheduleSummary,
-} from "./cron-format";
+import { cronNextFire, cronRunSummary, cronScheduleDetail, cronScheduleSummary } from "./cron-format";
 import { tip } from "./tooltip";
 
 export interface CronView {
@@ -48,10 +41,7 @@ export interface CronView {
 }
 
 interface CronRunView {
-  fireKey: string;
-  threadRef: string;
   firedAt: number;
-  scheduledAt?: number;
   status?: string;
   endedAt?: number;
   note?: string;
@@ -61,10 +51,8 @@ interface CronRunView {
 
 function cronRunTiming(run: CronRunView): string {
   const fired = new Date(run.firedAt).toLocaleString();
-  if (run.status === "running") {
-    const min = Math.max(0, Math.round((Date.now() - run.firedAt) / 60_000));
-    return `${fired} — in flight for ${min}m`;
-  }
+  if (run.status === "running")
+    return `${fired} — in flight for ${Math.max(0, Math.round((Date.now() - run.firedAt) / 60_000))}m`;
   if (run.endedAt === undefined) return fired;
   return `${fired} — took ${Math.max(0, Math.round((run.endedAt - run.firedAt) / 1000))}s`;
 }
@@ -137,9 +125,6 @@ function cronStatusLabel(c: CronView): "enabled" | "disabled" | "archived" {
 }
 
 export async function renderCronsPage(): Promise<void> {
-  if (appState.currentView !== "crons") return;
-  page.adoptScope();
-  await ensureContexts();
   await page.show({
     load: () => refreshCrons(cronList.length === 0 && visibleCronList.length === 0),
     find: findCron,
@@ -226,6 +211,7 @@ function canManageCron(c: CronView, mine: boolean): boolean {
 
 function cronPageRow({ c, mine }: { c: CronView; mine: boolean }): TemplateResult {
   const status = cronStatusLabel(c);
+  const run = cronRunSummary(c);
   return html`
     <div class="list-row cron-row cron-${status}">
       ${page.link(
@@ -235,7 +221,7 @@ function cronPageRow({ c, mine }: { c: CronView; mine: boolean }): TemplateResul
         html`<span class="list-row-title cron-title-line"><span dir="auto">${cronTitle(c)}</span></span>
           <span class="list-row-meta">
             ${cronScopeLabel(c) === undefined ? nothing : scopeChip(c.ownerScopeId, c.scopeName ?? null)}
-            <span class="cron-meta-line" ${tip(cronRunSummaryTitle(c))}>${cronRunSummary(c)}</span>
+            <span class="cron-meta-line" ${tip(run.title)}>${run.text}</span>
           </span>`,
       )}
       ${
@@ -352,15 +338,12 @@ function cronRunHistory(c: CronView): TemplateResult {
 
 async function loadCronRuns(id: string): Promise<void> {
   cronRunsLoading.add(id);
-  try {
-    const result = await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs`);
-    cronRuns.set(id, result.runs ?? []);
-  } catch (error) {
-    page.flash = errMessage(error, "Couldn't load run history.");
-    cronRuns.set(id, []);
-  } finally {
-    cronRunsLoading.delete(id);
-  }
+  let runs: CronRunView[] = [];
+  await page.attempt(async () => {
+    runs = (await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs`)).runs ?? [];
+  }, "Couldn't load run history.");
+  cronRuns.set(id, runs);
+  cronRunsLoading.delete(id);
   if (activeCronId !== id || appState.currentView !== "crons") return;
   const current = findCron(id);
   if (current) openCron(current);
@@ -368,9 +351,7 @@ async function loadCronRuns(id: string): Promise<void> {
 
 async function reopenCron(id: string): Promise<void> {
   await refreshCrons();
-  const c = findCron(id);
-  if (c) openCron(c, { refreshRuns: true });
-  else drawCronsPage();
+  page.route(id, findCron, (c) => openCron(c, { refreshRuns: true }), drawCronsPage);
 }
 
 async function cronCall(
@@ -389,12 +370,6 @@ async function cronCall(
   } finally {
     cronMutationInFlight = false;
   }
-}
-
-function patchCron(id: string, patch: { title?: string; task?: string; archived?: boolean }, failure: string) {
-  return cronCall(id, "", { method: "PATCH", body: JSON.stringify(patch) }, failure, {
-    done: (ok) => ok || reopenCron(id),
-  });
 }
 
 function showCronDialog(kind: "rename" | "delete", cron: CronView): void {
@@ -471,31 +446,37 @@ async function saveCronEdit(event: SubmitEvent, c: CronView): Promise<void> {
     if (error) error.textContent = taskControl ? "Title and task are required." : "Title is required.";
     return;
   }
-  const ok = await patchCron(c.id, { title, ...(task ? { task } : {}) }, "edit failed");
-  if (!ok) return;
-  cronDialog = null;
-  page.flash = "Cron updated.";
-  await reopenCron(c.id);
+  const body = JSON.stringify({ title, ...(task ? { task } : {}) });
+  await cronCall(c.id, "", { method: "PATCH", body }, "edit failed", {
+    ok: "Cron updated.",
+    done: (ok) => {
+      if (ok) cronDialog = null;
+      return reopenCron(c.id);
+    },
+  });
+}
+
+function askAgent(text: string): void {
+  void startNewChat()?.state.agent?.prompt(userSendMessage(text));
 }
 
 function editCronWithAgent(c: CronView): void {
   cronDialog = null;
-  const conv = startNewChat();
-  void conv?.state.agent?.prompt(
-    userSendMessage(
-      `Help me edit cron ${c.id} ("${cronTitle(c)}"). Its current schedule is ${cronScheduleSummary(c)}. Ask what I want changed, then update its task, schedule, timezone, destination, or run mode as requested.`,
-    ),
+  askAgent(
+    `Help me edit cron ${c.id} ("${cronTitle(c)}"). Its current schedule is ${cronScheduleSummary(c)}. Ask what I want changed, then update its task, schedule, timezone, destination, or run mode as requested.`,
   );
 }
 
-async function archiveCron(id: string, archived: boolean): Promise<void> {
-  const ok = await patchCron(id, { archived }, archived ? "archive failed" : "unarchive failed");
-  if (!ok) return;
-  await refreshCrons();
-  cronTab = "yours";
-  if (archived) return drawCronsPage();
-  showDisabledCrons = true;
-  await reopenCron(id);
+function archiveCron(id: string, archived: boolean): Promise<boolean> {
+  const body = JSON.stringify({ archived });
+  return cronCall(id, "", { method: "PATCH", body }, archived ? "archive failed" : "unarchive failed", {
+    done: async (ok) => {
+      if (ok) cronTab = "yours";
+      if (ok && archived) return refreshCrons().then(drawCronsPage);
+      if (ok) showDisabledCrons = true;
+      return reopenCron(id);
+    },
+  });
 }
 
 function setCronEnabled(id: string, enabled: boolean): Promise<boolean> {
@@ -547,10 +528,7 @@ function onCreateCron(e: Event): void {
     if (errSlot) errSlot.textContent = "Describe the cron you want.";
     return;
   }
-  const conv = startNewChat();
-  void conv?.state.agent?.prompt(
-    userSendMessage(
-      `Set up a cron for me: ${text}\n\n(Sent from the web UI's New-cron pane: create it now with your scheduling API, use a calendar schedule with timezone for daily/weekly/monthly timing, give it a 2-5 word title naming what the cron is for and distinctive in a list, like "Gmail unread digest" or "GitLab CI watch", not the command and not a generic word, and confirm what you created.)`,
-    ),
+  askAgent(
+    `Set up a cron for me: ${text}\n\n(Sent from the web UI's New-cron pane: create it now with your scheduling API, use a calendar schedule with timezone for daily/weekly/monthly timing, give it a 2-5 word title naming what the cron is for and distinctive in a list, like "Gmail unread digest" or "GitLab CI watch", not the command and not a generic word, and confirm what you created.)`,
   );
 }

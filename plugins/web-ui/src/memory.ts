@@ -36,6 +36,11 @@ async function change(method: "PATCH" | "DELETE", body: object, done: string): P
   drawMemory();
 }
 
+function edit(next: typeof editing): void {
+  editing = next;
+  drawMemory();
+}
+
 function factRow(fact: Fact) {
   const { text } = fact;
   if (editing?.id === fact.id)
@@ -56,16 +61,7 @@ function factRow(fact: Fact) {
         >
           Save
         </button>
-        <button
-          class="btn"
-          type="button"
-          @click=${() => {
-            editing = null;
-            drawMemory();
-          }}
-        >
-          Cancel
-        </button>
+        <button class="btn" type="button" @click=${() => edit(null)}>Cancel</button>
       </div>
     </div>`;
   return html`<div class="list-row memory-fact">
@@ -73,15 +69,7 @@ function factRow(fact: Fact) {
       <div>${text}</div>
       <div class="card-meta">Captured ${new Date(fact.createdAt).toISOString().slice(0, 10)}</div>
     </div>
-    ${iconBtn(
-      "Edit this fact",
-      Pencil,
-      () => {
-        editing = { id: fact.id, text };
-        drawMemory();
-      },
-      { size: 15 },
-    )}
+    ${iconBtn("Edit this fact", Pencil, () => edit({ id: fact.id, text }), { size: 15 })}
     ${iconBtn("Forget this fact", Trash2, () => void change("DELETE", { ids: [fact.id] }, "Forgotten ✓"), { size: 15, disabled: busy })}
   </div>`;
 }

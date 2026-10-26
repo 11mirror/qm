@@ -70,21 +70,11 @@ function permissionBadge(d: DeploymentView): TemplateResult {
 }
 
 function ownerLabel(d: DeploymentView): string {
-  const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Owned by you";
+  if (d.ownerScopeId === `personal:${appState.me?.user}`) return "Owned by you";
   if (d.ownerScopeId?.startsWith("personal:"))
     return `Owned by ${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
   return "Shared context";
-}
-
-function deployTabs(): TemplateResult {
-  const counts = { yours: 0, shared: 0, archived: 0 };
-  for (const d of deployList) if (deploymentInScope(d, page.scope)) counts[deploymentTab(d, appState.me?.user)]++;
-  return ownershipTabs("App view", counts, deployTab, (tab) => {
-    deployTab = tab;
-    drawDeploysPage();
-  });
 }
 
 function deploymentRow(d: DeploymentView): TemplateResult {
@@ -127,25 +117,23 @@ function drawDeploysPage(): void {
   if (appState.currentView !== "deploys" || !appState.mainEl) return;
   activeDeploy = null;
   const viewer = appState.me?.user;
-  const rows = filterDeployments(deployList, {
-    tab: deployTab,
-    scope: page.scope,
-    query: page.query,
-    viewer,
-  });
-  const allForTab = deployList.filter(
-    (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, page.scope),
-  );
+  const rows = filterDeployments(deployList, { tab: deployTab, scope: page.scope, query: page.query, viewer });
+  const tabHasApps = deployList.some((d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, page.scope));
   let empty = { yours: "No apps of your own yet.", shared: "No apps shared with you.", archived: "Nothing archived." }[
     deployTab
   ];
   if (!deployList.length && page.notice) empty = page.notice;
   else if (page.loading && deployList.length === 0) empty = "Loading apps…";
-  else if (page.query && allForTab.length) empty = "No apps match your search.";
+  else if (page.query && tabHasApps) empty = "No apps match your search.";
   else if (page.scope) empty = "No apps in this context.";
+  const counts = { yours: 0, shared: 0, archived: 0 };
+  for (const d of deployList) if (deploymentInScope(d, page.scope)) counts[deploymentTab(d, viewer)]++;
   const content = deployList.length
     ? [
-        deployTabs(),
+        ownershipTabs("App view", counts, deployTab, (tab) => {
+          deployTab = tab;
+          drawDeploysPage();
+        }),
         ...(page.notice
           ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${page.notice}</div>`]
           : []),
@@ -326,21 +314,10 @@ function settingRow(
 }
 
 function returnToDeploysList(): void {
-  editingDeploy = null;
-  deployDraft = "";
   detailNotice = null;
   activeDeploy = null;
   page.syncUrl(null);
-  drawDeploysPage();
-}
-
-function cleanEmbedDraft(rows: readonly string[]): string[] {
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const value = row.trim();
-    if (value) seen.add(value);
-  }
-  return [...seen];
+  cancelEditDeploy();
 }
 
 function embedAncestorsSummary(d: DeploymentView): TemplateResult {
@@ -349,17 +326,18 @@ function embedAncestorsSummary(d: DeploymentView): TemplateResult {
   return html`<span class="deploy-embed-origins">${origins.map((origin) => html`<code>${origin}</code>`)}</span>`;
 }
 
+function submitEdit(d: DeploymentView): (event: SubmitEvent) => void {
+  return (event) => {
+    event.preventDefault();
+    void commitEditDeploy(d);
+  };
+}
+
 function deployEditForm(d: DeploymentView, field: DeployEditField): TemplateResult {
   if (field === "embedAncestors") return deployEmbedForm(d);
   const slug = field === "name";
   return html`
-    <form
-      class="deploy-edit-form"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void commitEditDeploy(d);
-      }}
-    >
+    <form class="deploy-edit-form" @submit=${submitEdit(d)}>
       <label>
         <span class="deploy-slug-input ${slug ? "" : "name"}"
           >${slug ? html`<span>/d/</span>` : nothing}<input
@@ -395,13 +373,7 @@ function deployEmbedForm(d: DeploymentView): TemplateResult {
     focusEmbedRow(embedDraft.length - 1);
   };
   return html`
-    <form
-      class="deploy-embed-editor"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void commitEditDeploy(d);
-      }}
-    >
+    <form class="deploy-embed-editor" @submit=${submitEdit(d)}>
       <ul class="deploy-embed-list">
         ${embedDraft.map(
           (row, index) => html`
@@ -473,7 +445,8 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
   if (!editingDeploy || deploySaving) return;
   const field = editingDeploy.field;
   const value = deployDraft.trim();
-  const embedAncestors = field === "embedAncestors" ? cleanEmbedDraft(embedDraft) : [];
+  const embedAncestors =
+    field === "embedAncestors" ? [...new Set(embedDraft.map((row) => row.trim()).filter(Boolean))] : [];
   const current = DEPLOY_EDIT_FIELDS[field].savedValue(d);
   const next = field === "embedAncestors" ? embedAncestors.join("\n") : value;
   if (next === current) return cancelEditDeploy();

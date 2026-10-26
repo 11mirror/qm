@@ -152,13 +152,8 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     const email = query.trim().toLowerCase();
     if (!externalSharing) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
-    if (
-      owner.toLowerCase() === `personal:${email}` ||
-      grantees.some((g) => g.scope.toLowerCase() === `personal:${email}`)
-    )
-      return null;
-    if (matches.some((m) => m.principalId.toLowerCase() === email)) return null;
-    return email;
+    const taken = [owner, ...grantees.map((g) => g.scope)].some((s) => s.toLowerCase() === `personal:${email}`);
+    return taken || matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
   };
   const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
     html`<fieldset class="permission-control" ?disabled=${busy}>
