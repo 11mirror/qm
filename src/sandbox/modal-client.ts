@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { egressProxyHost } from "./sandbox-env.ts";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
 import { swallow } from "../util/errors.ts";
@@ -118,7 +119,7 @@ export function modalEgressAllowlist(
   egressProxyUrl: string,
 ): { outboundDomainAllowlist: string[] } | { outboundCidrAllowlist: string[] } {
   const url = new URL(egressProxyUrl);
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const host = egressProxyHost(egressProxyUrl);
   const ipVersion = isIP(host);
   if (ipVersion) return { outboundCidrAllowlist: [`${host}/${ipVersion === 4 ? 32 : 128}`] };
   if (url.protocol === "https:" && (url.port === "" || url.port === "443")) return { outboundDomainAllowlist: [host] };
