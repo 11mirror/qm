@@ -91,13 +91,8 @@ const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
   const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
+  const keys = ["orgName", "accent", "mark", "markUrl", "selfLabel"];
+  return Object.fromEntries(keys.flatMap((key) => (typeof b?.[key] === "string" ? [[key, b[key]]] : [])));
 });
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
@@ -279,12 +274,24 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
   sendBuffered(res, status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }), html);
 }
 
+const SSE_HEADERS = {
+  "content-type": "text/event-stream; charset=utf-8",
+  "cache-control": "no-cache, no-transform",
+  connection: "keep-alive",
+  "x-accel-buffering": "no",
+};
+
+const isWebThread = (value: unknown): value is string =>
+  typeof value === "string" && (value.startsWith("web:") || value.startsWith(SUBAGENT_THREAD_PREFIX));
+
+const approvalScope = (value: unknown) =>
+  value === "once" || value === "session" || value === "always" ? value : undefined;
+
+const channelLabel = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+
 function sseEvent(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
-function mayManageDeployment(d: { permission?: unknown }): boolean {
-  return d.permission === "write";
 }
 
 async function gateManageDeployment(res: ServerResponse, user: string, id: string): Promise<boolean> {
@@ -305,7 +312,7 @@ async function gateManageDeployment(res: ServerResponse, user: string, id: strin
     json(res, 404, { error: "not_found" });
     return false;
   }
-  if (!mayManageDeployment(d)) {
+  if (d.permission !== "write") {
     json(res, 403, { error: "forbidden", message: "you do not manage this deployment" });
     return false;
   }
@@ -1035,7 +1042,7 @@ interface Relay {
   core?: string;
   to?: HttpMethod;
   who?: "principalId" | "viewer";
-  query?: (c: WebCtx) => Record<string, string> | URLSearchParams;
+  query?: (c: WebCtx) => string | Record<string, string> | URLSearchParams;
   principal?: boolean;
   body?: object;
   pick?: readonly string[];
@@ -1074,7 +1081,9 @@ function relayRoute(method: HttpMethod, path: string, o: Relay = {}): WebRoute {
       if (o.noStore) c.res.setHeader("Cache-Control", "no-store");
       let target = corePathFor(o.core ?? path, c);
       if (o.who) target += `?${o.who}=${enc(c.user)}`;
-      if (o.query) target += `?${new URLSearchParams(o.query(c)).toString()}`;
+      const query = o.query?.(c);
+      if (query !== undefined)
+        target += `?${typeof query === "string" ? query : new URLSearchParams(query).toString()}`;
       return (o.cap ? relayCap : relayCore)(c.res, o.to ?? method, target, body);
     },
   };
@@ -1290,42 +1299,26 @@ const apiRoutes: readonly WebRoute[] = [
       return relay(c.res, await coreFetch("POST", "/v1/files/upload", body));
     },
   },
-  {
-    method: "GET",
-    path: "/api/resources/search",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/resources/search?principalId=${enc(c.user)}&q=${enc((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/search",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const q = url.searchParams.get("q") ?? "";
-      const limit = url.searchParams.get("limit");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/search?principalId=${enc(user)}&q=${enc(q)}${limit ? `&limit=${enc(limit)}` : ""}`,
-      );
+  relayRoute("GET", "/api/resources/search", {
+    query: (c) => `principalId=${enc(c.user)}&q=${enc((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
+  }),
+  relayRoute("GET", "/api/search", {
+    core: "/v1/sessions/search",
+    query: (c) => {
+      const limit = c.url.searchParams.get("limit");
+      return `principalId=${enc(c.user)}&q=${enc(c.url.searchParams.get("q") ?? "")}${limit ? `&limit=${enc(limit)}` : ""}`;
     },
-  },
+  }),
   relayRoute("GET", "/api/sessions", {
     query: (c) => copyParams(c, ["limit", "before", "status", "surface", "scope", "q"], undefined, true, 500),
   }),
   relayRoute("GET", "/api/sessions/row", { query: (c) => copyParams(c, ["id", "threadRef"], undefined, true) }),
   relayRoute("GET", "/api/sessions/:id/children", { who: "principalId" }),
   relayRoute("GET", "/api/contexts", { who: "principalId" }),
-  {
-    method: "GET",
-    path: "/api/contexts/:scope/ambient-policy",
-    handle: (c) =>
-      relayCore(c.res, "GET", `/v1/contexts/policy?principalId=${enc(c.user)}&scope=${enc(c.params.scope!)}`),
-  },
+  relayRoute("GET", "/api/contexts/:scope/ambient-policy", {
+    core: "/v1/contexts/policy",
+    query: (c) => `principalId=${enc(c.user)}&scope=${enc(c.params.scope!)}`,
+  }),
   relayRoute("PUT", "/api/contexts/:scope/ambient-policy", {
     core: "/v1/contexts/policy",
     read: "json",
@@ -1362,11 +1355,10 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/directory/resolve",
-    handle: async (c) => {
-      const { res, url } = c;
-      const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
-      if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
-      return relayCore(res, "GET", `/v1/directory/resolve?q=${enc(q)}`);
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim().slice(0, 80);
+      if (!q) return json(c.res, 400, { error: "bad_request", message: "q required" });
+      return relayCore(c.res, "GET", `/v1/directory/resolve?q=${enc(q)}`);
     },
   },
   ...[
@@ -1497,12 +1489,10 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/scope-resources",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scope = url.searchParams.get("scope");
-      if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
-      const qs = new URLSearchParams({ principalId: user, scope });
-      return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
+    handle: (c) => {
+      const scope = c.url.searchParams.get("scope");
+      if (!scope) return json(c.res, 400, { error: "bad_request", message: "scope required" });
+      return relayCore(c.res, "GET", `/v1/scope-resources?${new URLSearchParams({ principalId: c.user, scope })}`);
     },
   },
   relayRoute("GET", "/api/skills", {
@@ -1538,27 +1528,14 @@ const apiRoutes: readonly WebRoute[] = [
     shape: (p) => (typeof p.upToSeq === "number" ? { upToSeq: p.upToSeq } : {}),
   }),
   relayRoute("GET", "/api/sessions/:id/approvals", { who: "viewer" }),
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background/:pid/output",
-    handle: (c) => {
-      const sinceCursor = c.url.searchParams.get("sinceCursor") ?? "0";
-      return relayCore(
-        c.res,
-        "GET",
-        `${corePathFor("/api/sessions/:id/background/:pid/output", c)}?viewer=${enc(c.user)}&sinceCursor=${enc(sinceCursor)}`,
-      );
-    },
-  },
+  relayRoute("GET", "/api/sessions/:id/background/:pid/output", {
+    query: (c) => `viewer=${enc(c.user)}&sinceCursor=${enc(c.url.searchParams.get("sinceCursor") ?? "0")}`,
+  }),
   relayRoute("GET", "/api/sessions/:id/background", { who: "viewer" }),
-  {
-    method: "GET",
-    path: "/api/sessions/:id/items/:seq",
-    handle: (c) =>
-      /^\d+$/.test(c.params.seq!)
-        ? relayCore(c.res, "GET", `${corePathFor("/api/sessions/:id/items/:seq", c)}?viewer=${enc(c.user)}`)
-        : json(c.res, 404, { error: "not found" }),
-  },
+  relayRoute("GET", "/api/sessions/:id/items/:seq", {
+    gate: async (c) => /^\d+$/.test(c.params.seq!) || (json(c.res, 404, { error: "not found" }), false),
+    who: "viewer",
+  }),
   {
     method: "GET",
     path: "/api/sessions/:id",
@@ -1755,7 +1732,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       if (typeof p.approved !== "boolean") return json(res, 400, { error: "bad_request" });
       const approved = p.approved;
-      const scope = p.scope === "once" || p.scope === "session" || p.scope === "always" ? p.scope : undefined;
+      const scope = approvalScope(p.scope);
       const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
 
       const fetched = await coreFetch("GET", `/v1/approvals/${enc(requestId)}`);
@@ -1835,18 +1812,12 @@ const apiRoutes: readonly WebRoute[] = [
           approval = {
             requestId: p.approval.requestId,
             approved: p.approval.approved,
-            ...(p.approval.scope === "once" || p.approval.scope === "session" || p.approval.scope === "always"
-              ? { scope: p.approval.scope }
-              : {}),
+            ...(approvalScope(p.approval.scope) ? { scope: p.approval.scope } : {}),
           };
         }
-        if (
-          typeof p.threadRef === "string" &&
-          (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-        )
-          threadRef = p.threadRef;
+        if (isWebThread(p.threadRef)) threadRef = p.threadRef;
         if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
-        if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
+        channelName = channelLabel(p.channelName);
         if (typeof p.model === "string" && p.model) model = p.model;
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
@@ -1893,12 +1864,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/session-events",
     handle: async (c) => {
       const { req, res, user } = c;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
+      res.writeHead(200, SSE_HEADERS);
       res.write(": open\n\n");
       let set = eventClients.get(user);
       if (!set) {
@@ -1925,8 +1891,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, url, user } = c;
       const threadRef = url.searchParams.get("threadRef") ?? "";
-      if (!threadRef.startsWith("web:") && !threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-        return json(res, 404, { error: "not_found" });
+      if (!isWebThread(threadRef)) return json(res, 404, { error: "not_found" });
       let queued: Array<{ runId: string; text: string; hasAttachments?: boolean }> = [];
       let durableRunId: string | null = null;
       const durable = await coreFetch("GET", `/v1/runs?threadRef=${enc(threadRef)}`);
@@ -1989,17 +1954,11 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
       const text = typeof p.text === "string" ? p.text : undefined;
-      const threadRef =
-        typeof p.threadRef === "string" &&
-        (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-          ? p.threadRef
-          : "";
+      const threadRef = isWebThread(p.threadRef) ? p.threadRef : "";
       let steerFields: { request: Awaited<ReturnType<typeof webTurnBase>> } | undefined;
       if (kind === "steer" && text !== undefined && threadRef) {
         const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
-        const channelName =
-          typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
-        const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
+        const resolved = await resolveWebConversation(user, threadRef, scope, channelLabel(p.channelName));
         if ("error" in resolved) return json(res, 403, resolved);
         steerFields = { request: await webTurnBase(req, user, resolved.conversation, threadRef, text) };
       }
@@ -2049,12 +2008,7 @@ const apiRoutes: readonly WebRoute[] = [
           json(res, upstream.status, { error: "stream_unavailable" });
           return;
         }
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive",
-          "x-accel-buffering": "no",
-        });
+        res.writeHead(200, SSE_HEADERS);
         const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
         source.on("error", () => res.destroy());
         source.pipe(res);
