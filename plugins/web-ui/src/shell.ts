@@ -108,7 +108,7 @@ import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { appState, can, canView, isView, quietly, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { UI_OUTDATED_EVENT } from "../../chassis/src/ui-release.ts";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
@@ -174,6 +174,7 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
+const root: HTMLElement = appEl;
 
 const narrowViewport = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
 let sidebarOpen = !narrowViewport.matches;
@@ -194,26 +195,28 @@ function startSidebarResize(e: PointerEvent): void {
   e.preventDefault();
   const handle = e.currentTarget as HTMLElement;
   const startX = e.clientX;
-  const sidebar = (appEl as HTMLElement).querySelector<HTMLElement>(".sidebar");
+  const sidebar = root.querySelector<HTMLElement>(".sidebar");
   if (!sidebar) return;
   const startW = sidebar.getBoundingClientRect().width;
   handle.setPointerCapture(e.pointerId);
   document.body.classList.add("resizing-sidebar");
   let w = startW;
-  const onMove = (ev: PointerEvent) => {
-    w = Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, startW + (ev.clientX - startX)));
-    document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
-  };
+  const drag = new AbortController();
   const onUp = () => {
-    handle.removeEventListener("pointermove", onMove);
-    handle.removeEventListener("pointerup", onUp);
-    handle.removeEventListener("lostpointercapture", onUp);
+    drag.abort();
     document.body.classList.remove("resizing-sidebar");
     localStorage.setItem(SIDEBAR_W_KEY, String(Math.round(w)));
   };
-  handle.addEventListener("pointermove", onMove);
-  handle.addEventListener("pointerup", onUp);
-  handle.addEventListener("lostpointercapture", onUp);
+  handle.addEventListener(
+    "pointermove",
+    (ev) => {
+      w = Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, startW + (ev.clientX - startX)));
+      document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
+    },
+    { signal: drag.signal },
+  );
+  handle.addEventListener("pointerup", onUp, { signal: drag.signal });
+  handle.addEventListener("lostpointercapture", onUp, { signal: drag.signal });
 }
 
 function resetSidebarWidth(): void {
@@ -242,13 +245,7 @@ export async function signOut(): Promise<void> {
   stopAnalytics();
   stopBrowserErrors();
   const portal = authMode === "portal";
-  if (!portal) {
-    try {
-      await api("/signout", { method: "POST" });
-    } catch {
-      void 0;
-    }
-  }
+  if (!portal) await api("/signout", { method: "POST" }).catch(() => undefined);
   appState.me = null;
   closeBrowse();
   resetInboxState();
@@ -285,11 +282,9 @@ export async function signOut(): Promise<void> {
 }
 
 export async function exitImpersonation(): Promise<void> {
-  try {
-    await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } });
-  } catch {
-    void 0;
-  }
+  await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } }).catch(
+    () => undefined,
+  );
   window.location.href = ADMIN_HOME_URL;
 }
 
@@ -338,30 +333,18 @@ const PORTAL_ATTEMPT_KEY = "qm.portal.signin.attempt";
 const PORTAL_ATTEMPT_WINDOW_MS = 20_000;
 
 function portalAttemptedRecently(): boolean {
-  try {
-    const at = Number(sessionStorage.getItem(PORTAL_ATTEMPT_KEY) ?? "");
-    return Number.isFinite(at) && Date.now() - at < PORTAL_ATTEMPT_WINDOW_MS;
-  } catch {
-    return false;
-  }
+  const at = Number(quietly(() => sessionStorage.getItem(PORTAL_ATTEMPT_KEY), null) ?? "");
+  return Number.isFinite(at) && Date.now() - at < PORTAL_ATTEMPT_WINDOW_MS;
 }
 
 function signInWithPortal(): void {
-  try {
-    sessionStorage.setItem(PORTAL_ATTEMPT_KEY, String(Date.now()));
-  } catch {
-    void 0;
-  }
+  quietly(() => sessionStorage.setItem(PORTAL_ATTEMPT_KEY, String(Date.now())), undefined);
   const returnTo = `${location.pathname}${location.search}`;
   location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
 function clearPortalAttempt(): void {
-  try {
-    sessionStorage.removeItem(PORTAL_ATTEMPT_KEY);
-  } catch {
-    void 0;
-  }
+  quietly(() => sessionStorage.removeItem(PORTAL_ATTEMPT_KEY), undefined);
 }
 
 function portalGate() {
@@ -398,15 +381,11 @@ function deniedGate() {
   `);
 }
 
-function retryBoot(): void {
-  void bootSafely();
-}
-
 function unreachableGate() {
   return gateShell(html`
     <h1>We couldn't reach the assistant</h1>
     <p class="signin-body">The service didn't respond. This is usually temporary.</p>
-    <button class="btn primary" type="button" @click=${retryBoot}>Try again</button>
+    <button class="btn primary" type="button" @click=${() => void bootSafely()}>Try again</button>
     <div class="hint">If this keeps happening, the core service may be down.</div>
   `);
 }
@@ -470,19 +449,8 @@ export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
   stopBrowserErrors();
   shellMounted = false;
-  const body = (() => {
-    switch (gate.kind) {
-      case "portal":
-        return portalGate();
-      case "denied":
-        return deniedGate();
-      case "unreachable":
-        return unreachableGate();
-      default:
-        return devGate(gate);
-    }
-  })();
-  render(body, appEl as HTMLElement);
+  const gates = { portal: portalGate, denied: deniedGate, unreachable: unreachableGate };
+  render(gate.kind === "dev" ? devGate(gate) : gates[gate.kind](), root);
 }
 
 function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
@@ -545,12 +513,12 @@ export function mountShell(): void {
         </section>
       </div>
     `,
-    appEl as HTMLElement,
+    root,
   );
-  appState.topEl = (appEl as HTMLElement).querySelector("#sidebar-top");
-  appState.listEl = (appEl as HTMLElement).querySelector("#sidebar-body");
-  appState.mainEl = (appEl as HTMLElement).querySelector("#main");
-  footerEl = (appEl as HTMLElement).querySelector("#sidebar-footer");
+  appState.topEl = root.querySelector("#sidebar-top");
+  appState.listEl = root.querySelector("#sidebar-body");
+  appState.mainEl = root.querySelector("#main");
+  footerEl = root.querySelector("#sidebar-footer");
   renderSidebarFooter();
   renderSidebarTop();
   updateSidebarToggleLabels();
@@ -718,111 +686,43 @@ export function switchView(v: View): void {
   }
   renderSidebarTop();
   syncUrlFromState();
-  resetActiveDetail(v);
-  switch (v) {
-    case "chats": {
-      const seq = appState.viewRenderSeq;
-      const showChats = () => {
-        if (appState.currentView !== "chats" || appState.viewRenderSeq !== seq) return;
-        if (mountRestoredCanvas()) drawCanvas();
-        else void renderChatsPage();
-        renderList();
-      };
-      if (pendingCanvasRestore) {
-        appState.mainEl?.replaceChildren(
-          Object.assign(document.createElement("div"), { className: "empty", textContent: "Loading conversations…" }),
-        );
-        void pendingCanvasRestore.then(showChats);
-      } else showChats();
-      break;
-    }
-    case "inbox":
-      void renderInbox();
-      break;
-    case "calendar":
-      renderCalendar();
-      break;
-    case "webhooks":
-      void renderWebhooksPage();
-      break;
-    case "crons":
-      void renderCronsPage();
-      break;
-    case "contexts":
-      void renderContexts();
-      break;
-    case "files":
-      void renderFiles();
-      break;
-    case "keychain":
-      void renderConnectors();
-      break;
-    case "deploys":
-      void renderDeploys();
-      break;
-    case "memory":
-      void renderMemory();
-      break;
-    case "skills":
-      void renderSkills();
-      break;
-    case "settings":
-      renderSettings();
-      break;
-  }
+  if (v === "inbox") resetActiveInboxItem();
+  if (v !== "chats") return void VIEW_RENDERERS[v]();
+  const seq = appState.viewRenderSeq;
+  const showChats = () => {
+    if (appState.currentView !== "chats" || appState.viewRenderSeq !== seq) return;
+    if (mountRestoredCanvas()) drawCanvas();
+    else void renderChatsPage();
+    renderList();
+  };
+  if (!pendingCanvasRestore) return showChats();
+  appState.mainEl?.replaceChildren(
+    Object.assign(document.createElement("div"), { className: "empty", textContent: "Loading conversations…" }),
+  );
+  void pendingCanvasRestore.then(showChats);
 }
 
-function resetActiveDetail(v: View): void {
-  switch (v) {
-    case "inbox":
-      resetActiveInboxItem();
-      break;
-  }
-}
+const VIEW_RENDERERS: Record<Exclude<View, "chats">, () => unknown> = {
+  inbox: renderInbox,
+  calendar: renderCalendar,
+  contexts: renderContexts,
+  webhooks: renderWebhooksPage,
+  crons: renderCronsPage,
+  files: renderFiles,
+  keychain: renderConnectors,
+  deploys: renderDeploys,
+  memory: renderMemory,
+  skills: renderSkills,
+  settings: renderSettings,
+};
 
 function refreshActiveView(v: View): void {
-  resetActiveDetail(v);
+  if (v === "inbox") resetActiveInboxItem();
   syncUrlFromState();
-  switch (v) {
-    case "chats":
-      if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
-      else void renderChatsPage();
-      break;
-    case "inbox":
-      void renderInbox();
-      break;
-    case "calendar":
-      renderCalendar();
-      break;
-    case "contexts":
-      void renderContexts();
-      break;
-    case "webhooks":
-      void renderWebhooksPage();
-      break;
-    case "crons":
-      void renderCronsPage();
-      break;
-    case "files":
-      void renderFiles();
-      break;
-    case "keychain":
-      clearConnectorNotice();
-      void renderConnectors();
-      break;
-    case "deploys":
-      void renderDeploys();
-      break;
-    case "memory":
-      void renderMemory();
-      break;
-    case "skills":
-      void renderSkills();
-      break;
-    case "settings":
-      renderSettings();
-      break;
-  }
+  if (v === "keychain") clearConnectorNotice();
+  if (v !== "chats") void VIEW_RENDERERS[v]();
+  else if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
+  else void renderChatsPage();
 }
 
 export function showMainEmpty(text: string): void {
@@ -912,15 +812,14 @@ narrowViewport.addEventListener("change", (event) => {
 function setSidebarOpen(open: boolean, moveFocus = true): void {
   if (open && narrowViewport.matches) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
   sidebarOpen = open;
-  (appEl as HTMLElement).querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
-  (appEl as HTMLElement).querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
+  root.querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
+  root.querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
   updateSidebarToggleLabels();
   renderSidebarTop();
   syncSidebarAccessibility(moveFocus);
 }
 
 function syncSidebarAccessibility(moveFocus: boolean): void {
-  const root = appEl as HTMLElement;
   const sidebar = root.querySelector<HTMLElement>(".sidebar");
   const main = root.querySelector<HTMLElement>(".main");
   const scrim = root.querySelector<HTMLButtonElement>(".sidebar-scrim");
@@ -956,7 +855,7 @@ function sidebarToggleLabel(): string {
 
 function updateSidebarToggleLabels(): void {
   const collapseLabel = sidebarToggleLabel();
-  (appEl as HTMLElement).querySelectorAll<HTMLButtonElement>(".sidebar-toggle").forEach((btn) => {
+  root.querySelectorAll<HTMLButtonElement>(".sidebar-toggle").forEach((btn) => {
     btn.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
     btn.setAttribute("aria-label", collapseLabel);
     attachTooltip(btn, collapseLabel);
@@ -968,15 +867,24 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
   replaceChildrenPreservingFocus(appState.mainEl, host);
 }
 
+const HISTORY_ROUTES: Partial<Record<View, (item: string | null) => void>> = {
+  crons: routeCronsHistory,
+  webhooks: routeWebhooksHistory,
+  skills: routeSkillsHistory,
+  inbox: routeInboxHistory,
+};
+
+const OPEN_BY_ID: Partial<Record<View, (id: string) => void>> = {
+  deploys: openDeployById,
+  crons: openCronById,
+  webhooks: openWebhookById,
+  skills: openSkillById,
+};
+
 window.addEventListener("popstate", () => {
-  const routed = ["crons", "webhooks", "inbox", "skills"];
-  if (!routed.includes(appState.currentView)) return;
+  const route = HISTORY_ROUTES[appState.currentView];
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  if (view !== appState.currentView) return;
-  if (view === "crons") routeCronsHistory(item);
-  else if (view === "webhooks") routeWebhooksHistory(item);
-  else if (view === "skills") routeSkillsHistory(item);
-  else routeInboxHistory(item);
+  if (route && view === appState.currentView) route(item);
 });
 
 window.addEventListener("focus", () => {
@@ -1059,10 +967,10 @@ document.addEventListener("click", (e) => {
 });
 
 export async function boot(): Promise<void> {
-  if (new URLSearchParams(location.search).get("themeOnly") === "1") return;
+  const params = new URLSearchParams(location.search);
+  if (params.get("themeOnly") === "1") return;
   captureConnectionReturn(location.href);
   captureSlackReturn(location.href);
-  const params = new URLSearchParams(location.search);
   const {
     view: wanted,
     session: wantedSession,
@@ -1120,9 +1028,7 @@ export async function boot(): Promise<void> {
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);
-  if (runtimeConfig) {
-    seedRuntimeConfig(personalScope, runtimeConfig);
-  }
+  if (runtimeConfig) seedRuntimeConfig(personalScope, runtimeConfig);
   mountShell();
   renderList();
   shellMounted = true;
@@ -1179,10 +1085,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
-    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
+    if (wantedItem) OPEN_BY_ID[wanted as View]?.(wantedItem);
     switchView(wanted as View);
     if (wanted === "inbox") routeInboxHistory(wantedItem);
     return;

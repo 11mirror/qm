@@ -3,29 +3,7 @@ import { preserveTranscriptScroll } from "./transcript-viewport";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import {
-  Archive,
-  ArrowUpLeft,
-  Binoculars,
-  Bot,
-  Target,
-  Box,
-  Brain,
-  Clock3,
-  ChevronDown,
-  Cog,
-  Expand,
-  Files,
-  KeyRound,
-  Link,
-  Maximize2,
-  MoreHorizontal,
-  Plus,
-  Rocket,
-  Shrink,
-  X,
-  type IconNode,
-} from "lucide";
+import { Archive, ArrowUpLeft, ChevronDown, Expand, Link, Maximize2, MoreHorizontal, Plus, Shrink, X } from "lucide";
 import {
   createDockview,
   type DockviewApi,
@@ -53,7 +31,6 @@ import {
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
-import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
@@ -76,16 +53,19 @@ import {
   sessionsState,
   sessionTitle,
   archiveSessionById,
-  syncWorkingPulse,
+  backgroundGlyphs,
+  liveMarks,
+  menuOption,
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
-import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
+import { scopeToolCount, SESSION_TOOLS, setScopedSession, type SessionTool } from "./session-scope";
 import {
   fetchTranscript,
   fetchUiState,
   putUiState,
   TAIL_TURNS,
   type CoreSession,
+  type TranscriptPage,
   type UiStateRecord,
 } from "./core-bridge";
 import { isPhone, onPhoneChange } from "./viewport";
@@ -164,10 +144,8 @@ function flushRemoteNow(): void {
     persistTimer = null;
     persist();
   }
-  if (remoteTimer !== null) {
-    window.clearTimeout(remoteTimer);
-    remoteTimer = null;
-  }
+  if (remoteTimer !== null) window.clearTimeout(remoteTimer);
+  remoteTimer = null;
   const p = remotePayload;
   if (!p) return;
   remotePayload = null;
@@ -357,24 +335,25 @@ function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" 
   return edge;
 }
 
+function closeCanvas(): void {
+  if (dockApi) lastLayout = dockApi.toJSON();
+  splitState.active = false;
+  splitState.focusedId = null;
+  disposeDock();
+  canvasHost = null;
+  headerSignature = "";
+  syncDocumentTitle();
+  renderSidebarTop();
+}
+
 onPhoneChange((phone) => {
   if (phone) {
     if (!splitState.active) return;
     const focused = focusedPaneSession();
-    if (dockApi) lastLayout = dockApi.toJSON();
-
     suspended = true;
-    if (persistTimer !== null) {
-      window.clearTimeout(persistTimer);
-      persistTimer = null;
-    }
-    splitState.active = false;
-    splitState.focusedId = null;
-    disposeDock();
-    canvasHost = null;
-    headerSignature = "";
-    syncDocumentTitle();
-    renderSidebarTop();
+    if (persistTimer !== null) window.clearTimeout(persistTimer);
+    persistTimer = null;
+    closeCanvas();
     if (appState.currentView !== "chats") return;
     if (focused) void openSession(focused);
     else mainConversation().newChat();
@@ -399,33 +378,20 @@ onPhoneChange((phone) => {
 
 export function exitSplitIfActive(): void {
   if (!splitState.active) return;
-  if (dockApi) lastLayout = dockApi.toJSON();
   splitState.active = false;
-  splitState.focusedId = null;
-  syncDocumentTitle();
   persist();
-  disposeDock();
-  canvasHost = null;
-  headerSignature = "";
-  renderSidebarTop();
+  closeCanvas();
 }
 
 function adoptPersisted(raw: unknown): void {
   if (!raw || typeof raw !== "object") return;
-
-  if (isPhone()) {
-    if (typeof (raw as { updatedAt?: unknown }).updatedAt === "number")
-      persistedUpdatedAt = (raw as { updatedAt: number }).updatedAt;
-    pendingSeed = null;
-    splitState.active = false;
-    return;
-  }
   const o = raw as { v?: unknown; active?: unknown; layout?: unknown; updatedAt?: unknown };
-  if (o.v !== 2) return;
+  const phone = isPhone();
+  if (o.v !== 2 && !phone) return;
   if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
   pendingSeed = null;
   splitState.active = false;
-  if (o.active !== true || !o.layout || typeof o.layout !== "object") return;
+  if (phone || o.active !== true || !o.layout || typeof o.layout !== "object") return;
   const panels = (o.layout as { panels?: object }).panels;
   const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
   if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) return;
@@ -628,14 +594,7 @@ function paneSplitWithBlank(panel: IDockviewPanel): void {
 
 function closePanels(panels: IDockviewPanel[]): void {
   if (!dockApi) return;
-  for (const p of panels) {
-    dockApi.removePanel(p);
-  }
-  reconcileAfterClose();
-}
-
-function reconcileAfterClose(): void {
-  if (!dockApi) return;
+  for (const p of panels) dockApi.removePanel(p);
   if (dockApi.panels.length === 0) addPane({});
   persist();
 }
@@ -668,9 +627,7 @@ function drawToast(): void {
 }
 
 export function beginSessionDrag(s: CoreSession): void {
-  if (!s.id) return;
-  const sessionId = s.id;
-  beginPaneDrag(sessionTarget(sessionId, s.threadRef));
+  if (s.id) beginPaneDrag(sessionTarget(s.id, s.threadRef));
 }
 
 export function beginPaneKindDrag(paramsKey: string, id: string): void {
@@ -829,12 +786,8 @@ export function focusedPaneSession(): CoreSession | undefined {
 }
 
 function paneTitle(panel: IDockviewPanel): string {
-  const params = panelParams(panel);
-  const entry = paneKindEntry(params);
-  if (entry) return entry.kind.title(entry.id);
-  const session = paneSession(panel);
-  if (session) return sessionTitle(session);
-  return params.sessionId ? "Conversation" : "New session";
+  const session = paneKindEntry(panelParams(panel)) ? undefined : paneSession(panel);
+  return session ? sessionTitle(session) : paneSeedTitle(panelParams(panel));
 }
 
 function paneKindBadge(panel: IDockviewPanel): number {
@@ -852,15 +805,6 @@ function paneCrumb(panel: IDockviewPanel): string | null {
   const context = contextsState.list.find((c) => c.scopeId === scope);
   return scopeTitle(scope, context?.name ?? null);
 }
-
-const PANE_TOOLS: { tool: SessionTool; glyph: IconNode; label: string }[] = [
-  { tool: "crons", glyph: Clock3, label: "Crons" },
-  { tool: "apps", glyph: Rocket, label: "Apps" },
-  { tool: "files", glyph: Files, label: "Files" },
-  { tool: "skills", glyph: Box, label: "Skills" },
-  { tool: "memory", glyph: Brain, label: "Memory" },
-  { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
-];
 
 function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
   const params = panelParams(panel);
@@ -1006,34 +950,28 @@ class PaneContent implements IContentRenderer {
       return;
     }
     const isCurrent = conversation.mountLoadingPane();
-    let session = sessionsState.list.find((s) => s.id === wanted);
-    if (!session) {
-      await sessionsReady();
+    const find = () => sessionsState.list.find((s) => s.id === wanted);
+    let session = find();
+    for (const wait of [sessionsReady, () => refreshSessions({ silent: true })]) {
+      if (session) break;
+      await wait();
       if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
+      session = find();
     }
+    let page: TranscriptPage | null = null;
     if (!session) {
-      await refreshSessions({ silent: true });
-      if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
-    }
-    if (!session) {
-      const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
+      page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
       if (this.disposed || !isCurrent()) return;
       session = page?.session;
-      if (!session) {
-        conversation.mountLoadError(() => {
-          this.loaded = false;
-          void this.load();
-        });
-        return;
-      }
-      await openSessionInto(conversation, session, Promise.resolve(page));
-      if (this.disposed) return;
-      refreshHeaders();
+    }
+    if (!session) {
+      conversation.mountLoadError(() => {
+        this.loaded = false;
+        void this.load();
+      });
       return;
     }
-    await openSessionInto(conversation, session);
+    await openSessionInto(conversation, session, page ? Promise.resolve(page) : undefined);
     if (this.disposed) return;
     refreshHeaders();
   }
@@ -1070,52 +1008,48 @@ type SessionAction = { label: string; aria?: string; glyph: Parameters<typeof ic
 
 function sessionActionItems(sessionId: string, panelId: string): SessionAction[] {
   const parent = sessionParent(sessionId);
-  const items: SessionAction[] = [];
-  if (parent) {
-    items.push({
-      label: `Back to ${sessionTitle(parent)}`,
-      aria: `Back to parent: ${sessionTitle(parent)}`,
-      glyph: ArrowUpLeft,
-      run: () => {
-        focusPane(panelId);
-        void openSession(parent);
-      },
-    });
-  }
-  items.push(
-    {
-      label: "Share conversation",
-      glyph: Link,
-      cls: "split-tab-share",
-      run: () => {
-        void openSessionShare(sessionId);
-      },
-    },
-    {
-      label: "Archive session",
-      glyph: Archive,
-      cls: "split-tab-archive",
-      run: () => {
-        archiveSessionById(sessionId);
-      },
-    },
-  );
-  return items;
+  const back: SessionAction[] = parent
+    ? [
+        {
+          label: `Back to ${sessionTitle(parent)}`,
+          aria: `Back to parent: ${sessionTitle(parent)}`,
+          glyph: ArrowUpLeft,
+          run: () => {
+            focusPane(panelId);
+            void openSession(parent);
+          },
+        },
+      ]
+    : [];
+  return [
+    ...back,
+    { label: "Share conversation", glyph: Link, cls: "split-tab-share", run: () => void openSessionShare(sessionId) },
+    { label: "Archive session", glyph: Archive, cls: "split-tab-archive", run: () => archiveSessionById(sessionId) },
+  ];
 }
 
-function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult {
-  return html`${sessionActionItems(sessionId, panelId).map(
-    (a) =>
-      html`<button
-        type="button"
-        class=${["icon-btn", "subtle", cls, a.cls].filter(Boolean).join(" ")}
-        ${tip(a.label)}
-        aria-label=${a.aria ?? a.label}
-        @click=${a.run}
-      >
-        ${icon(a.glyph, 13)}
-      </button>`,
-  )}`;
+function subtleButton(
+  cls: string,
+  label: string,
+  glyph: TemplateResult | SVGElement,
+  run: (e: Event) => void,
+  aria = label,
+): TemplateResult {
+  return html`<button
+    class=${["icon-btn subtle", cls].filter(Boolean).join(" ")}
+    type="button"
+    ${tip(label)}
+    aria-label=${aria}
+    @click=${run}
+  >
+    ${glyph}
+  </button>`;
+}
+
+function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult[] {
+  return sessionActionItems(sessionId, panelId).map((a) =>
+    subtleButton([cls, a.cls].filter(Boolean).join(" "), a.label, icon(a.glyph, 13), a.run, a.aria),
+  );
 }
 
 let tabMenu: { panelId: string; anchor: HTMLElement } | null = null;
@@ -1135,6 +1069,13 @@ const placeBelow =
     el.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - el.offsetWidth - 8))}px`;
     el.style.right = "auto";
   };
+
+function closeTabButton(panel: IDockviewPanel): TemplateResult {
+  return subtleButton("split-tab-close", "Close pane", icon(X, 13), (e) => {
+    e.stopPropagation();
+    closePanels([panel]);
+  });
+}
 
 class PaneTab implements ITabRenderer {
   readonly element: HTMLElement;
@@ -1172,24 +1113,7 @@ class PaneTab implements ITabRenderer {
           <span class="pane-kind-glyph">${icon(entry.kind.glyph, 12)}</span>
           <span class="split-pane-title-text">${title}</span>
           ${count > 0 ? html`<span class="pane-kind-count" title=${`${count} waiting on you`}>${count}</span>` : nothing}
-          ${
-            this.inStrip
-              ? html`<span class="split-tab-actions"
-                  ><button
-                    class="icon-btn subtle split-tab-close"
-                    type="button"
-                    ${tip("Close pane")}
-                    aria-label="Close pane"
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      closePanels([panel]);
-                    }}
-                  >
-                    ${icon(X, 13)}
-                  </button></span
-                >`
-              : nothing
-          }
+          ${this.inStrip ? html`<span class="split-tab-actions">${closeTabButton(panel)}</span>` : nothing}
         `,
         this.element,
       );
@@ -1197,22 +1121,17 @@ class PaneTab implements ITabRenderer {
     }
     const title = paneTitle(panel);
     const crumb = paneCrumb(panel);
-    const working = paneIsWorking(panel);
-    const awaiting = paneAwaitsInput(panel);
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
     attachTooltip(this.element, [crumb, parent ? sessionTitle(parent) : null, title].filter(Boolean).join(" / "));
     render(
       html`
-        ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
-        ${awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing}
+        ${liveMarks(paneIsWorking(panel), paneAwaitsInput(panel))}
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
-                >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
-                  background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }${background.crons > 0 ? icon(Clock3, 11) : nothing}${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}</span
+                >${backgroundGlyphs(background)}</span
               >`
             : nothing
         }
@@ -1262,18 +1181,7 @@ class PaneTab implements ITabRenderer {
                         </button>`
                     : nothing
                 }
-                <button
-                  class="icon-btn subtle split-tab-close"
-                  type="button"
-                  ${tip("Close pane")}
-                  aria-label="Close pane"
-                  @click=${(e: Event) => {
-                    e.stopPropagation();
-                    closePanels([panel]);
-                  }}
-                >
-                  ${icon(X, 13)}
-                </button></span
+                ${closeTabButton(panel)}</span
               >`
             : nothing
         }
@@ -1397,78 +1305,33 @@ class GroupActions implements IHeaderActionsRenderer {
             ${ref(this.placeMenu)}
             @click=${(e: Event) => e.stopPropagation()}
           >
-            ${PANE_TOOLS.map(
-              (t) => html`
-                <button class="session-menu-option" type="button" role="menuitem" @click=${() => runTool(t.tool)}>
-                  ${icon(t.glyph, 15)}<span>${t.label}</span>
-                </button>
-              `,
-            )}
+            ${SESSION_TOOLS.map((t) => menuOption(t.glyph, t.label, () => runTool(t.tool)))}
             <div class="split-tools-menu-sep" role="separator"></div>
-            <button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              @click=${() => {
-                closeMenu();
-                splitPane();
-              }}
-            >
-              ${icon(Plus, 15)}<span>Split with a new session</span>
-            </button>
-            <button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              @click=${() => {
+            ${menuOption(Plus, "Split with a new session", () => {
+              closeMenu();
+              splitPane();
+            })}
+            ${menuOption(
+              maximized ? Shrink : Expand,
+              maximized ? "Restore to grid (Esc)" : "Focus over the grid",
+              () => {
                 closeMenu();
                 if (maximized) props.api.exitMaximized();
                 else props.api.maximize();
-              }}
-            >
-              ${icon(maximized ? Shrink : Expand, 15)}<span
-                >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
-              >
-            </button>
+              },
+            )}
           </div>
         `
       : nothing;
-    const buttons: { label: string; glyph: TemplateResult | SVGElement; cls?: string; run: () => void }[] = [
-      {
-        label: "Split this pane with a new session",
-        glyph: icon(Plus, 15),
-        run: splitPane,
-      },
-      {
-        label: "Open full screen",
-        glyph: icon(Maximize2, 14),
-        run: () => {
-          const p = activePanel();
-          if (!p) return;
-          if (p.api.isMaximized()) p.api.exitMaximized();
-          else p.api.maximize();
-        },
-      },
-      {
-        label: "Close pane",
-        glyph: icon(X, 15),
-        cls: " split-group-close",
-        run: () => {
-          const g = dockApi?.groups.find((x) => x.id === props.group.id);
-          if (g) closePanels([...g.panels]);
-        },
-      },
-    ];
-    const headerButton = (b: (typeof buttons)[number]): TemplateResult =>
-      html`<button
-        class="icon-btn subtle${b.cls ?? ""}"
-        type="button"
-        ${tip(b.label)}
-        aria-label=${b.label}
-        @click=${b.run}
-      >
-        ${b.glyph}
-      </button>`;
+    const toggleFull = (): void => {
+      const p = activePanel();
+      if (p?.api.isMaximized()) p.api.exitMaximized();
+      else p?.api.maximize();
+    };
+    const closeGroup = (): void => {
+      const g = dockApi?.groups.find((x) => x.id === props.group.id);
+      if (g) closePanels([...g.panels]);
+    };
     const menuPanel = tabMenu ? props.group.panels.find((p) => p.id === tabMenu?.panelId) : undefined;
     const menuSession = menuPanel ? (panelParams(menuPanel).sessionId ?? paneSession(menuPanel)?.id) : undefined;
     const tabMenuTpl =
@@ -1479,21 +1342,12 @@ class GroupActions implements IHeaderActionsRenderer {
             ${ref(placeBelow(tabMenu.anchor))}
             @click=${(e: Event) => e.stopPropagation()}
           >
-            ${sessionActionItems(menuSession, menuPanel.id).map(
-              (a) => html`
-                <button
-                  class="session-menu-option"
-                  type="button"
-                  role="menuitem"
-                  @click=${() => {
-                    tabMenu = null;
-                    this.draw();
-                    a.run();
-                  }}
-                >
-                  ${icon(a.glyph, 15)}<span>${a.label}</span>
-                </button>
-              `,
+            ${sessionActionItems(menuSession, menuPanel.id).map((a) =>
+              menuOption(a.glyph, a.label, () => {
+                tabMenu = null;
+                this.draw();
+                a.run();
+              }),
             )}
           </div>`
         : nothing;
@@ -1501,7 +1355,7 @@ class GroupActions implements IHeaderActionsRenderer {
       html`${
           single
             ? html`<span class="split-single-tools">
-                ${PANE_TOOLS.map((t) => {
+                ${SESSION_TOOLS.map((t) => {
                   const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
                   return html`<button
                     class="session-tool"
@@ -1535,9 +1389,16 @@ class GroupActions implements IHeaderActionsRenderer {
         }
         ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
         <span class="split-pane-actions-wide"
-          >${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}</span
+          >${
+            single
+              ? nothing
+              : [
+                  subtleButton("", "Split this pane with a new session", icon(Plus, 15), splitPane),
+                  subtleButton("", "Open full screen", icon(Maximize2, 14), toggleFull),
+                ]
+          }</span
         >
-        ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}${tabMenuTpl}`,
+        ${single ? nothing : subtleButton("split-group-close", "Close pane", icon(X, 15), closeGroup)}${tabMenuTpl}`,
       this.element,
     );
   }
