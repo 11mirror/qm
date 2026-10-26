@@ -560,6 +560,8 @@ export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClien
   };
 }
 
+export class ConnectorNotConfiguredError extends Error {}
+
 export interface ResolvedClient {
   id: string;
   secret: string;
@@ -580,7 +582,8 @@ export function createSecretClientResolver(secrets: SecretSource = createEnvSecr
       secrets.get(p.clientSecretEnv),
       providerName === "google" ? secrets.get("GOOGLE_WORKSPACE_DOMAIN") : undefined,
     ]);
-    if (!id || !secret) throw new Error(`provider not configured — set ${p.clientIdEnv} and ${p.clientSecretEnv}`);
+    if (!id || !secret)
+      throw new ConnectorNotConfiguredError(`provider not configured — set ${p.clientIdEnv} and ${p.clientSecretEnv}`);
     return { id, secret, clientRef: `env:${providerName}`, ...(hostedDomain ? { hostedDomain } : {}) };
   };
 }

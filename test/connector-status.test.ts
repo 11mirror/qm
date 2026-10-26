@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  configuredConnectorProviders,
   connectorLabel,
   connectorStatusIsStale,
   createConnectorStatusCache,
@@ -8,7 +9,7 @@ import {
   type ConnectorStatusRecord,
 } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
-import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
+import { ConnectorNotConfiguredError, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { testMap } from "./support/test-database.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
@@ -156,4 +157,17 @@ test("refresh includes linked per-user MCP sign-ins and skips unlinked ones", as
   );
   assert.deepEqual(rec.providers.orders, { connected: true, mcpLabel: "Orders" });
   assert.equal(rec.providers.other, undefined);
+});
+
+test("configured providers: unconfigured ones drop out quietly and resolver failures are logged", async (t) => {
+  const warnings = t.mock.method(console, "warn", () => undefined);
+  const configured = await configuredConnectorProviders(async (provider) => {
+    if (provider === "github") return { id: "id", secret: "secret", clientRef: "env:github" };
+    if (provider === "linear") throw new Error("connector store unreachable");
+    throw new ConnectorNotConfiguredError(`provider not configured: ${provider}`);
+  });
+  assert.deepEqual(configured, ["github"]);
+  const logged = warnings.mock.calls.map((call) => String(call.arguments[0]));
+  assert.equal(logged.length, 1);
+  assert.match(logged[0]!, /linear client: connector store unreachable/);
 });

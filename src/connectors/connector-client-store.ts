@@ -1,6 +1,6 @@
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
-import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
+import { ConnectorNotConfiguredError, PROVIDERS, createSecretClientResolver } from "./oauth.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
 import { tenant } from "../tenant.ts";
 
@@ -132,7 +132,7 @@ export function createConnectorClientResolver(opts: {
     const orgId = tenant().orgId;
     const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
     if (rec) {
-      if (!rec.enabled) throw new Error(`connector '${providerName}' is disabled for this org`);
+      if (!rec.enabled) throw new ConnectorNotConfiguredError(`connector '${providerName}' is disabled for this org`);
       return {
         id: rec.clientId,
         secret: rec.clientSecret,

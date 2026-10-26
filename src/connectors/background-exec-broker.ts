@@ -102,18 +102,20 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
+  const jobHandle = async (processId: string, current?: SandboxHandle): Promise<SandboxHandle> => {
+    const rec = await deps.registry.get(processId);
+    if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
+    if (current && (!rec.sandboxId || rec.sandboxId === current.resourceId)) return current;
+    if (!rec.sandboxId) throw new Error("this background job has no recorded computer and can no longer be reached");
+    if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
+    return deps.provisionSandbox(rec.sandboxId);
+  };
   const exited = async (handle: SandboxHandle, processId: string) => {
     await deps.registry.markStatus(processId, "exited");
     await deps.onExit?.(handle, processId);
   };
   return {
-    async handleFor(processId) {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
-      if (!rec.sandboxId) throw new Error("this background job has no recorded computer and can no longer be reached");
-      if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
-      return deps.provisionSandbox(rec.sandboxId);
-    },
+    handleFor: (processId) => jobHandle(processId),
     async start(handle, command, purpose, ttlMs, credentials): Promise<BackgroundStartResult> {
       if (!purpose?.trim()) throw new Error("background start requires a short purpose describing the job");
       const sandboxId = handle.resourceId;
@@ -213,14 +215,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async poll(handle, processId, opts): Promise<BackgroundPollResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
-        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
-        handle = await deps.provisionSandbox(rec.sandboxId);
-      }
+      handle = await jobHandle(processId, handle);
       const read = await deps.sandbox.readProcess(handle, processId, {
         sinceCursor: opts?.sinceCursor ?? 0,
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
@@ -231,14 +226,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
-        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
-        handle = await deps.provisionSandbox(rec.sandboxId);
-      }
+      handle = await jobHandle(processId, handle);
       await deps.sandbox.writeStdin(handle, processId, data);
       const read = await deps.sandbox.readProcess(handle, processId, { sinceCursor: 0, maxBytes: 1, waitMs: 0 });
       if (read.status.state === "exited") await exited(handle, processId);
@@ -246,14 +234,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async stop(handle, processId, signal = "TERM"): Promise<BackgroundStopResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
-      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
-        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
-        handle = await deps.provisionSandbox(rec.sandboxId);
-      }
+      handle = await jobHandle(processId, handle);
       await deps.sandbox.signalProcess(handle, processId, signal);
       let status = await awaitProcessExit(deps.sandbox, handle, processId, termGraceMs);
       if (status.state !== "exited" && signal !== "KILL") {
