@@ -30,6 +30,10 @@ function shellWords(command: string): string[] | null {
   return words;
 }
 
+const SEARCH_FLAGS = new Set(
+  "-n --line-number -i --ignore-case -l --files-with-matches -F --fixed-strings -w --word-regexp --hidden".split(" "),
+);
+
 export function activityDescription(row: Pick<ToolRowModel, "call" | "result">): {
   category: ActivityCategory;
   target: string;
@@ -63,20 +67,7 @@ export function activityDescription(row: Pick<ToolRowModel, "call" | "result">):
   }
   if (words && ["rg", "grep"].includes(words[0]!)) {
     const args = words.slice(1);
-    const flags = new Set([
-      "-n",
-      "--line-number",
-      "-i",
-      "--ignore-case",
-      "-l",
-      "--files-with-matches",
-      "-F",
-      "--fixed-strings",
-      "-w",
-      "--word-regexp",
-      "--hidden",
-    ]);
-    while (args.length && flags.has(args[0]!)) args.shift();
+    while (args.length && SEARCH_FLAGS.has(args[0]!)) args.shift();
     if (args.length >= 1 && args.length <= 2 && !args.some((arg) => arg.startsWith("-"))) {
       return { category: "search", target: `${args[0]}${args[1] ? ` in ${compactPath(args[1])}` : ""}` };
     }

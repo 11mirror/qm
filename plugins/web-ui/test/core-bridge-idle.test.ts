@@ -94,7 +94,7 @@ test("the idle deadline RESETS on each delta — sustained progress past the win
   const partial = blankAssistant();
   const st = freshAcc(clock);
 
-  await pollRun(stream, partial, "run-1", st);
+  await pollRun({ stream, partial, st }, "run-1");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "stop", "completed on the real reply, not a timeout");
@@ -122,7 +122,7 @@ test("the idle deadline DOES fire after the idle window with no progress", async
     return realF(...args);
   }) as typeof fetch;
 
-  await pollRun(stream, partial, "run-2", st);
+  await pollRun({ stream, partial, st }, "run-2");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error", "a silent run past the idle window fails");
@@ -151,7 +151,7 @@ test("a delta just before the window resets it — no premature timeout", async 
   const partial = blankAssistant();
   const st = freshAcc(clock);
 
-  await pollRun(stream, partial, "run-3", st);
+  await pollRun({ stream, partial, st }, "run-3");
   const final = await drain(stream);
   assert.equal(final.stopReason, "stop", "the pre-window delta reset the clock; no premature timeout");
 });
@@ -188,7 +188,7 @@ test("tool-activity growth (no assistant text) ALSO resets the idle clock", asyn
   (partial as AssistantWork).work = { status: "thinking", activity: [] };
   const st = freshAcc(clock);
 
-  await pollRun(stream, partial, "run-4", st);
+  await pollRun({ stream, partial, st }, "run-4");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "stop", "tool activity counts as progress; no false timeout on a tool-only turn");
@@ -220,7 +220,7 @@ test("core-attested liveness (alive:true) resets the idle clock — a long silen
   const partial = blankAssistant();
   const st = freshAcc(clock);
 
-  await pollRun(stream, partial, "run-5", st);
+  await pollRun({ stream, partial, st }, "run-5");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "stop", "alive polls count as progress; no false timeout during a quiet tool call");
@@ -247,7 +247,7 @@ test("a running snapshot WITHOUT alive still hits the idle deadline (stale run r
   const partial = blankAssistant();
   const st = freshAcc(clock);
 
-  await pollRun(stream, partial, "run-6", st);
+  await pollRun({ stream, partial, st }, "run-6");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error", "no liveness claim → the watchdog still protects against stale runs");
@@ -394,7 +394,7 @@ test("a failed run renders friendly copy, never the internal failure reason", as
   ]);
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-failed-copy", freshAcc(1_000_000));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(1_000_000) }, "run-failed-copy");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error");
@@ -410,7 +410,7 @@ test("a refused run still shows its authored, user-facing reason", async () => {
   ]);
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-refused-copy", freshAcc(1_000_000));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(1_000_000) }, "run-refused-copy");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error");
@@ -429,7 +429,7 @@ test("a stored quarantine refusal renders the canned copy on the web, never the 
   ]);
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-quarantine-copy", freshAcc(1_000_000));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(1_000_000) }, "run-quarantine-copy");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error");
@@ -455,7 +455,7 @@ test("live run polling includes consumed steering in activity order", async () =
   const stream = createAssistantMessageEventStream();
   const partial = blankAssistant() as AssistantWork;
   partial.work = { status: "thinking", activity: [] };
-  await pollRun(stream, partial, "run-steer", freshAcc(Date.now()));
+  await pollRun({ stream, partial, st: freshAcc(Date.now()) }, "run-steer");
   const final = (await drain(stream)) as AssistantWork;
   assert.deepEqual(final.work!.activity.map(activitySeq), [2, 3, 4, 6]);
   assert.deepEqual(
@@ -474,7 +474,7 @@ test("polling advances a trimmed window even when every snapshot has the same le
   const stream = createAssistantMessageEventStream();
   const partial = blankAssistant();
   const st = freshAcc(Date.now());
-  await pollRun(stream, partial, "r", st);
+  await pollRun({ stream, partial, st }, "r");
   assert.deepEqual((await drain(stream)).content, [{ type: "text", text: "final tail" }]);
   assert.equal(st.startOffset, 200_020);
 });
