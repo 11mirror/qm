@@ -654,16 +654,16 @@ function zeroUsage(): Usage {
   };
 }
 
-function baseAssistant(model: Model<Api>): AssistantMessage {
+function baseAssistant(model: Model<Api> | undefined, timestamp = Date.now(), text = ""): AssistantMessage {
   return {
     role: "assistant",
-    content: [{ type: "text", text: "" }],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
+    content: [{ type: "text", text }],
+    api: model?.api ?? "unknown",
+    provider: model?.provider ?? "unknown",
+    model: model?.id ?? "unknown",
     usage: zeroUsage(),
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp,
   };
 }
 
@@ -2045,14 +2045,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       }
     }
     const msg: AssistantWork = {
+      ...baseAssistant(model, 0, text),
       persisted: true,
       ...(entrySeqs.length ? { entrySeqs } : {}),
-      role: "assistant",
-      content: [{ type: "text", text }],
-      api: model?.api ?? "unknown",
-      provider: model?.provider ?? "unknown",
-      model: model?.id ?? "unknown",
-      usage: zeroUsage(),
       stopReason: stopped ? "aborted" : "stop",
       timestamp: at ?? pending[pending.length - 1]?.createdAt,
     };
@@ -2170,18 +2165,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     } else if (e.kind === "Error" && e.text) {
       spillHeldPosts();
       flushWork("", e.createdAt);
-      const msg: AssistantMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        api: model?.api ?? "unknown",
-        provider: model?.provider ?? "unknown",
-        model: model?.id ?? "unknown",
-        usage: zeroUsage(),
-        stopReason: "error",
-        errorMessage: e.text,
-        timestamp: e.createdAt,
-      };
-      out.push(msg as AgentMessage);
+      out.push({ ...baseAssistant(model, e.createdAt), stopReason: "error", errorMessage: e.text } as AgentMessage);
     }
   }
   spillHeldPosts();
@@ -2212,16 +2196,7 @@ export function attachPendingApprovals(
     if (trailing) return trailing;
     const tail = messages[messages.length - 1] as AssistantWork | undefined;
     if (tail && tail.role === "assistant") return (trailing = tail);
-    trailing = {
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-      api: model?.api ?? "unknown",
-      provider: model?.provider ?? "unknown",
-      model: model?.id ?? "unknown",
-      usage: zeroUsage(),
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    trailing = baseAssistant(model);
     messages.push(trailing as AgentMessage);
     return trailing;
   };
