@@ -2,18 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ArrowUpRight, ChevronRight, Mail } from "lucide";
 import type { LedgerItem } from "./inbox";
 import { api } from "./core-bridge";
+import { errMessage } from "../../chassis/src/errors";
 import { listBackLink } from "./list-page";
 import { initials, relTime } from "./ui";
 import { icon } from "./icons";
-
-interface SentThreadMessage {
-  from: string;
-  to: string;
-  cc?: string;
-  sentAt: number;
-  body: string;
-  attachments?: string[];
-}
 
 export interface SentEmail {
   accountType?: "default" | "personal" | "company";
@@ -58,12 +50,9 @@ let chatError = "";
 let detailGeneration = 0;
 
 export async function openSentEmail(message: SentEmail, draw: () => void): Promise<void> {
+  resetSelectedSentEmail();
   selected = message;
-  chatItemId = null;
-  chatError = "";
-  detail = null;
-  detailError = "";
-  const current = ++detailGeneration;
+  const current = detailGeneration;
   draw();
   try {
     const result = await api<SentDetail>(
@@ -76,8 +65,7 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
       await loadSentChat(draw, current);
     }
   } catch (cause) {
-    if (current === detailGeneration)
-      detailError = cause instanceof Error ? cause.message : "Couldn't load this email.";
+    if (current === detailGeneration) detailError = errMessage(cause, "Couldn't load this email.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -108,7 +96,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
       updateSentChat(result.item);
     }
   } catch (cause) {
-    if (current === detailGeneration) chatError = cause instanceof Error ? cause.message : "Couldn't load chat.";
+    if (current === detailGeneration) chatError = errMessage(cause, "Couldn't load chat.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -148,12 +136,7 @@ export async function openSentEmailById(id: string, draw: () => void): Promise<v
 export function resetSentMail(): void {
   chatItems.clear();
   generation++;
-  detailGeneration++;
-  selected = null;
-  chatItemId = null;
-  chatError = "";
-  detail = null;
-  detailError = "";
+  resetSelectedSentEmail();
   messages = [];
   nextPageToken = undefined;
   accountEmail = "";
@@ -194,7 +177,7 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
     loaded = true;
   } catch (cause) {
     if (current !== generation) return;
-    error = cause instanceof Error ? cause.message : "Couldn't load sent mail. Try again.";
+    error = errMessage(cause, "Couldn't load sent mail. Try again.");
   } finally {
     if (current === generation) {
       loading = false;
@@ -275,21 +258,23 @@ export function sentMailTpl(
   `;
 }
 
-function sentMessageTpl(entry: SentThreadMessage): TemplateResult {
+function sentMessageTpl(detail: SentDetail, message: SentEmail, body: string | undefined): TemplateResult {
   return html`<div class="inbox-context-msg inbox-sent-message">
-    <span class="inbox-avatar" aria-hidden="true">${initials(entry.from)}</span>
+    <span class="inbox-avatar" aria-hidden="true">${initials(detail.from)}</span>
     <div class="inbox-context-body">
       <div class="inbox-context-head">
-        <span class="inbox-context-author">${entry.from}</span>
-        <span class="inbox-context-at" title=${new Date(entry.sentAt).toLocaleString()}>${relTime(entry.sentAt)}</span>
+        <span class="inbox-context-author">${detail.from}</span>
+        <span class="inbox-context-at" title=${new Date(message.sentAt).toLocaleString()}
+          >${relTime(message.sentAt)}</span
+        >
       </div>
       <div class="inbox-sent-recipients">
-        To: ${entry.to}${entry.cc ? html`<span> · Cc: ${entry.cc}</span>` : nothing}
+        To: ${message.to}${detail.cc ? html`<span> · Cc: ${detail.cc}</span>` : nothing}
       </div>
-      <div class="inbox-context-text">${entry.body || "This email has no text body."}</div>
+      <div class="inbox-context-text">${body || "This email has no text body."}</div>
       ${
-        entry.attachments?.length
-          ? html`<div class="inbox-sent-attachments">Attachments: ${entry.attachments.join(", ")}</div>`
+        detail.attachments.length
+          ? html`<div class="inbox-sent-attachments">Attachments: ${detail.attachments.join(", ")}</div>`
           : nothing
       }
     </div>
@@ -307,18 +292,6 @@ export function sentEmailPageTpl(
   const body = detail?.html
     ? plainSnippet(detail.body.replace(/<br\s*\/?>(|\s)|<\/(p|div|tr|li|h[1-6])>/gi, "\n"))
     : detail?.body;
-  const entries: SentThreadMessage[] = detail
-    ? [
-        {
-          from: detail.from,
-          to: message.to,
-          cc: detail.cc,
-          sentAt: message.sentAt,
-          body: body || "This email has no text body.",
-          attachments: detail.attachments,
-        },
-      ]
-    : [];
   return html`
     <div class="pane-head inbox-item-head src-gmail">
       <div class="inbox-item-head-copy">
@@ -346,7 +319,7 @@ export function sentEmailPageTpl(
             : nothing
         }
         ${!detail && !detailError ? html`<div role="status" class="empty compact">Loading email…</div>` : nothing}
-        ${entries.length ? html`<div class="inbox-context">${entries.map(sentMessageTpl)}</div>` : nothing}
+        ${detail ? html`<div class="inbox-context">${sentMessageTpl(detail, message, body)}</div>` : nothing}
         ${draft ?? nothing}
         <div class="inbox-draft-head inbox-sent-actions">
           <a
