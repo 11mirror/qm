@@ -270,6 +270,8 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
+  /** Opens and writes that add runs to one session tree queue behind each other; other trees go on in parallel. */
+  const admissionKey = (root: Session) => `session-tree-admission:${root.id}`;
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
@@ -382,8 +384,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
-          return lock
-            .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
+          return (async () => {
+            const threadRef = `${SUBAGENT_THREAD_PREFIX}${
+              input.requestId
+                ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
+                : randomUUID()
+            }`;
+            // Count against the tree the child already sits in (a retried child may have been detached).
+            const placed =
+              (await deps.sessions.getByThread(threadRef)) ?? (await deps.sessions.get(binding.session.id));
+            const root = placed ? await sessionTreeRoot(deps.sessions, placed) : binding.session;
+            return lock.withLock(admissionKey(root), async (): Promise<SessionOpenResult> => {
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
@@ -392,17 +403,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
               await deps.validateRuntime?.(input, binding.scopeId);
-              const threadRef = `${SUBAGENT_THREAD_PREFIX}${
-                input.requestId
-                  ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
-                  : randomUUID()
-              }`;
               const fingerprint = hashId([canonicalJson(input)], 40);
               const existing = await deps.sessions.getByThread(threadRef);
-              const root = await sessionTreeRoot(
-                deps.sessions,
-                existing ?? (await deps.sessions.get(binding.session.id))!,
-              );
               const live = await sessionTreeRunCount(deps.sessions, deps.runs, root);
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
@@ -475,16 +477,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 maxAttempts: deps.maxAttempts,
               });
               return { ok: true, sessionId: child.id, title, liveRunsRemaining: Math.max(0, cap - live - 1) };
-            })
-            .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
+            });
+          })().catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
 
         async write(input) {
-          return lock
-            .withLock("session-tree-admission", async (): Promise<SessionWriteResult> => {
+          return (async () => {
+            const target = await resolveTarget(input.target);
+            const root = target ? await sessionTreeRoot(deps.sessions, target) : binding.session;
+            return lock.withLock(admissionKey(root), async (): Promise<SessionWriteResult> => {
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
-              const target = await resolveTarget(input.target);
               if (!target)
                 return {
                   ok: false,
@@ -595,10 +598,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
-              if (
-                (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
-                cap
-              )
+              if ((await sessionTreeRunCount(deps.sessions, deps.runs, root)) >= cap)
                 return { ok: false, message: `all ${cap} session run slots are in use.` };
               await deps.runs.enqueue({
                 sessionId: target.threadRef,
@@ -614,8 +614,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 maxAttempts: deps.maxAttempts,
               });
               return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
-            })
-            .catch((error): SessionWriteResult => ({ ok: false, message: errMessage(error) }));
+            });
+          })().catch((error): SessionWriteResult => ({ ok: false, message: errMessage(error) }));
         },
 
         async read(input) {

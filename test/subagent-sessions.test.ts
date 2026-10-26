@@ -778,6 +778,26 @@ test("retrying open after an uncertain enqueue recovers one child and rejects a 
   assert.equal((await r.syscallsFor(r.room).open({ ...input, task: "different work" })).ok, false);
 });
 
+test("opens and writes queue on their own session tree's admission lock", async (t) => {
+  const r = await rig();
+  const keys: string[] = [];
+  const withLock = r.advisoryLock.withLock.bind(r.advisoryLock);
+  t.mock.method(r.advisoryLock, "withLock", (key: string, fn: () => Promise<unknown>) => {
+    keys.push(key);
+    return withLock(key, fn);
+  });
+  const opened = await r.syscallsFor(r.room).open({ task: "one" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  assert.ok((await r.syscallsFor(child).open({ task: "grandchild" })).ok);
+  assert.ok((await r.syscallsFor(r.room).write({ target: child.id, text: "hi" })).ok);
+  const other = await r.sessions.getOrCreateByThread("slack:dm:D2", "dm", scope, undefined, "slack");
+  await r.sessions.addParticipant(other.id, actor.id);
+  assert.ok((await r.syscallsFor(other).open({ task: "elsewhere" })).ok);
+  const tree = `session-tree-admission:${r.room.id}`;
+  assert.deepEqual(keys, [tree, tree, tree, `session-tree-admission:${other.id}`]);
+});
+
 test("retrying an unqueued child preserves detachment and uses its current tree capacity", async (t) => {
   const r = await rig({ treeRunCap: 1 });
   const enqueue = r.runs.enqueue.bind(r.runs);
