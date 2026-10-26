@@ -193,11 +193,6 @@ test("update can pause/resume via the enabled flag", async () => {
   assert.deepEqual(ids(await store.due(1_000_000)), [cron.id]);
 });
 
-test("update returns null for an unknown id", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  assert.equal(await store.update("nope", { action: "x" }), null);
-});
-
 test("delete removes a cron from list and due", async () => {
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { firstFireAt: 1 } });

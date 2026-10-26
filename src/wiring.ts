@@ -2728,7 +2728,6 @@ export function buildApp(
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
-      await harness.turns.close?.();
       await semanticMemory.close();
       await errors.flush();
     },

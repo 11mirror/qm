@@ -228,8 +228,10 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
 
 test("reachExec OFF: the execute scope never accepts a room", () => {
   const ref: ToolContextRef = { current: null };
-  const [legacy] = createAgentTools(ref);
-  assert.ok(!schemaProps(legacy!).includes("scope"), "legacy surface has no scope param");
+  const [scopedOnly] = createAgentTools(ref);
+  const scopedSchema = (scopedOnly as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
+    .parameters.properties.scope;
+  assert.ok(Array.isArray(scopedSchema?.anyOf), "default scope is a closed union (scoped|owner), not a room string");
   const [scratchOnly] = createAgentTools(ref, { scratchExec: true });
   const scopeSchema = (scratchOnly as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
     .parameters.properties.scope;
@@ -250,6 +252,7 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
     "timeout_seconds",
     "credentials",
     "scope",
+    "durable",
     "retrySafe",
   ]);
   await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });
@@ -299,15 +302,6 @@ test("reachExec ON: the scoped/scratch keywords match case-insensitively, never 
     { reachTarget: "#project-alpha" },
     "a room name passes through verbatim for the resolver to normalize",
   );
-});
-
-test("reachExec ON: the description advertises rooms and the 'other computers' pointer", () => {
-  const { tc } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
-  const desc = (execute as unknown as { description: string }).description;
-  assert.match(desc, /a room like "#project-alpha"/);
-  assert.match(desc, /Other computers you can reach/);
-  assert.doesNotMatch(desc, /"scratch":/, "scratch is not advertised when only reach is on");
 });
 
 test("Trap 1: a reach result prefixes provenance", async () => {

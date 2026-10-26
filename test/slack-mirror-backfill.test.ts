@@ -5,7 +5,7 @@ import { createSlackCoreClient, type SlackCoreClient } from "../src/api/slack-co
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
-import { createDeduper } from "../src/slack/lib.ts";
+import { createDeduper } from "../src/slack/message-gating.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 

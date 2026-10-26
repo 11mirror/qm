@@ -125,7 +125,6 @@ for (const [modelId, upper, allowed, off, minimal] of [
         models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
       },
     });
-    t.after(() => harness.turns.close?.());
     // Repeat turns in the same conversation with different effort selections.
     for (const [effortLevel, expected] of [
       ["ultracode", upper],

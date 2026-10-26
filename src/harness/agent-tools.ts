@@ -135,6 +135,10 @@ export interface ToolContextRef {
   approvedToolCalls?: Map<string, string>;
 }
 
+const optionalString = (description: string) => Type.Optional(Type.String({ description }));
+const optionalBoolean = (description: string) => Type.Optional(Type.Boolean({ description }));
+const optionalInteger = (description: string) => Type.Optional(Type.Integer({ description }));
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }], details: {} };
 }
@@ -216,6 +220,7 @@ interface CronLike {
 }
 
 const LIST_PAGE_SIZE = 25;
+const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note", "retarget"]);
 const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
@@ -316,9 +321,7 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  commandCredentialHandles?: readonly string[];
   scratchExec?: boolean;
-  ownerAuthExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -326,7 +329,6 @@ export interface AgentToolsOptions {
   backgroundJobTtlMaxMs?: number;
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
-  sandboxResources?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
@@ -341,10 +343,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
-    // Availability is checked per turn; Open can be enabled without restarting the harness.
-    ownerAuthExec: true,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -378,7 +377,6 @@ const outsideWorkspace = (path: string): string =>
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const scratchExec = !!opts?.scratchExec;
-  const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -435,10 +433,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     summary: Record<string, unknown>,
     ret: T,
     isError = false,
-    sourceScopeId?: ScopeId | null,
-    coreAuthored = false,
-    display?: Record<string, unknown>,
-    screenAs?: { provenance: ToolResultProvenance; source?: string },
+    {
+      sourceScopeId,
+      coreAuthored = false,
+      display,
+      screenAs,
+    }: {
+      sourceScopeId?: ScopeId | null;
+      coreAuthored?: boolean;
+      display?: Record<string, unknown>;
+      screenAs?: { provenance: ToolResultProvenance; source?: string };
+    } = {},
   ): Promise<T> =>
     resultQueue("result", async () => {
       const originalTool = String(summary.tool ?? "");
@@ -572,7 +577,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     summary: Record<string, unknown>,
     ret: T,
     isError = false,
-  ): Promise<T> => recordResult(callId, summary, ret, isError, undefined, true);
+  ): Promise<T> => recordResult(callId, summary, ret, isError, { coreAuthored: true });
 
   const recordExternalResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
@@ -582,7 +587,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     sourceScopeId?: ScopeId | null,
     isError = false,
   ): Promise<T> =>
-    recordResult(callId, summary, ret, isError, sourceScopeId, false, undefined, { provenance: "external", source });
+    recordResult(callId, summary, ret, isError, { sourceScopeId, screenAs: { provenance: "external", source } });
+  const recordText = (callId: string, summary: Record<string, unknown>, body: string) =>
+    recordResult(callId, summary, text(body));
+  const recordFail = (callId: string, summary: Record<string, unknown>, body: string) =>
+    recordResult(callId, summary, text(body), true);
 
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under a POSIX sh such as dash, not bash: wrap bash-only syntax like ${var/a/b} or arrays in bash -c. " +
@@ -597,11 +606,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
-    background: Type.Optional(
-      Type.Boolean({
-        description:
-          "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
-      }),
+    background: optionalBoolean(
+      "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
     ),
     sandbox_id: Type.Optional(
       Type.String({
@@ -633,7 +639,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
   };
 
-  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {
+  const blockOnApproval = (
+    callId: string,
+    e: NeedsApproval,
+    purpose?: string,
+    tool = "execute",
+    extra: Record<string, unknown> = {},
+  ) => {
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -646,7 +658,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ref.pausedOnApproval = true;
     return recordResult(
       callId,
-      { tool, blocked: "needs_approval", reason: e.approvalReason },
+      { tool, ...extra, blocked: "needs_approval", reason: e.approvalReason },
       { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
       true,
     );
@@ -710,31 +722,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         { tool: "execute", ...scopeNote, ...execMeta },
         {
-          content: [
-            {
-              type: "text" as const,
-              text: `${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
-            },
-          ],
+          ...text(`${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`),
           details: r,
         },
         r.timedOut,
-        undefined,
-        false,
-        undefined,
-        r.reached ? { provenance: "external", source: "reached room" } : undefined,
+        { screenAs: r.reached ? { provenance: "external", source: "reached room" } : undefined },
       );
     } catch (e) {
       if (e instanceof MaskedExecutionError) {
-        return recordResult(callId, { tool: "execute", ...scopeNote }, text(e.message), true);
+        return recordFail(callId, { tool: "execute", ...scopeNote }, e.message);
       }
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
       if (e instanceof CommandDenied) {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "execute", denied: true, reason: e.message },
-          text(`[denied by policy] ${e.message}`),
-          true,
+          `[denied by policy] ${e.message}`,
         );
       }
       await log("ToolResult", {
@@ -749,7 +752,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   };
 
   const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
-    recordResult(callId, summary, text(message), true);
+    recordFail(callId, summary, message);
 
   const SCRATCH_DURABLE_ERROR =
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
@@ -776,7 +779,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
-    (ownerAuthExec ? '"owner" | ' : "") +
+    '"owner" | ' +
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
@@ -784,9 +787,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     (scratchExec
       ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
-    (ownerAuthExec
-      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n'
-      : "") +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
     (scratchExec
@@ -797,18 +798,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
-    (ownerAuthExec
-      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
-      : "") +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
     (scratchExec
       ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
-  const legacyDescription =
-    "Run a shell command in the isolated sandbox and return its stdout/stderr/exit code. " +
-    "Use this for any computation, file inspection, or running programs. " +
     EXECUTE_TIMEOUT_GUIDANCE;
 
   const runScopedExecute = async (
@@ -827,7 +822,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const keyword = scope.toLowerCase();
     const durable = params.durable;
     if (keyword === "scoped") {
-      if ((scratchExec || ownerAuthExec) && durable === false) {
+      if (durable === false) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
@@ -849,14 +844,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return runExecute(callId, params, { scratch: true });
     }
     if (keyword === "owner") {
-      if (!ownerAuthExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "owner_unavailable" },
-          '[error] an owner-auth box is not available on this turn — use scope:"scoped".',
-        );
-      }
       if (durable === true) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(
@@ -884,17 +871,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        ...(scratchExec || ownerAuthExec
-          ? {
-              durable: Type.Optional(
-                Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored when reaching a room.` }),
-              ),
-            }
-          : {}),
+        durable: optionalBoolean(`${DURABLE_PARAM_DESC} Ignored when reaching a room.`),
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
-  } else if (scratchExec || ownerAuthExec) {
+  } else {
     execute = defineTool({
       name: "execute",
       label: "execute",
@@ -903,11 +884,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...executeBaseParams,
         scope: Type.Optional(
           Type.Union(
-            [
-              Type.Literal("scoped"),
-              ...(scratchExec ? [Type.Literal("scratch")] : []),
-              ...(ownerAuthExec ? [Type.Literal("owner")] : []),
-            ],
+            [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
             {
               description:
                 'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
@@ -918,21 +895,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
-  } else {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: legacyDescription,
-      parameters: Type.Object(executeBaseParams),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
   }
 
-  const sandboxActions = [
-    "status",
-    "restart",
-    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
-  ];
+  const sandboxActions = ["status", "restart", "list", "create", "set_default", "retire"];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
@@ -945,8 +910,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "Exact sandbox ID; null is allowed only for set_default.",
         }),
       ),
-      backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
-      name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
+      backend: optionalString("create only: provider from list."),
+      name: optionalString("create only: human-readable name."),
       purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
     }),
     async execute(callId, params) {
@@ -972,15 +937,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               sandboxId: params.sandbox_id,
             },
           );
-          return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
+          return recordText(callId, { tool: "sandbox", action: params.action }, JSON.stringify(result));
         }
         if (params.sandbox_id === null) throw new Error("null only clears a default");
         if (params.action === "restart") {
           await tc.restartComputer(params.sandbox_id);
-          return recordResult(
+          return recordText(
             callId,
             { tool: "sandbox", action: "restart", restarted: true },
-            text("Computer restarting. Give it a moment to boot before running the next command."),
+            "Computer restarting. Give it a moment to boot before running the next command.",
           );
         }
         const s = await tc.computerStatus(params.sandbox_id);
@@ -1012,24 +977,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           verdict === "wedged"
             ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
             : "";
-        return recordResult(
+        return recordText(
           callId,
           { tool: "sandbox", action: "status", verdict, ...s },
-          text(
-            [
-              `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
-              ...recoveryLines,
-            ].join("\n"),
-          ),
+          [
+            `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
+            ...recoveryLines,
+          ].join("\n"),
         );
       } catch (e) {
         if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose, "sandbox");
-        return recordResult(
-          callId,
-          { tool: "sandbox", action: params.action, failed: true },
-          text(`[error] ${errMessage(e)}`),
-          true,
-        );
+        return recordFail(callId, { tool: "sandbox", action: params.action, failed: true }, `[error] ${errMessage(e)}`);
       }
     },
   });
@@ -1045,11 +1003,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(search
           ? { query: Type.String({ minLength: 1, description: "Words to find in skill names or descriptions." }) }
           : {}),
-        source: Type.Optional(
-          Type.String({
-            description:
-              "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
-          }),
+        source: optionalString(
+          "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
         ),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -1065,7 +1020,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { tool: "skills", action, count: result.skills.length },
           text(JSON.stringify(result)),
           false,
-          sourceScopeId,
+          { sourceScopeId },
         );
       },
     });
@@ -1077,19 +1032,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Load a skill by name before relying on it; use list or search for any left out of the per-turn index. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name from the skills index, list, or search." }),
-      source: Type.Optional(
-        Type.String({ description: "Use the same source as the discovery call to read that exact skill." }),
-      ),
-      path: Type.Optional(
-        Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
-      ),
-      ...(opts?.sandboxResources
-        ? {
-            sandbox_id: Type.Optional(
-              Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
-            ),
-          }
-        : {}),
+      source: optionalString("Use the same source as the discovery call to read that exact skill."),
+      path: optionalString("Relative file within the skill to return instead of SKILL.md."),
+      sandbox_id: optionalString("Sync the skill's files into this sandbox instead of the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1130,7 +1075,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
         text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
         content === null,
-        sourceScopeId,
+        { sourceScopeId },
       );
     },
   });
@@ -1172,10 +1117,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
         text(content ?? (outside ? outsideWorkspace(params.path) : `[no such file: ${params.path}]`)),
         content === null,
-        sourceScopeId,
-        false,
-        undefined,
-        shared ? { provenance: "external", source: "shared file" } : undefined,
+        { sourceScopeId, screenAs: shared ? { provenance: "external", source: "shared file" } : undefined },
       );
     },
   });
@@ -1223,18 +1165,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       try {
         await tc.write(params.path, params.data, params.sandbox_id);
-        return recordResult(
+        return recordText(
           callId,
           { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
-          text(`wrote ${params.path} (${params.data.length} bytes)`),
+          `wrote ${params.path} (${params.data.length} bytes)`,
         );
       } catch (e) {
         const msg = errMessage(e);
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "files", action: "write", path: params.path, error: msg },
-          text(`[write failed] ${msg}`),
-          true,
+          `[write failed] ${msg}`,
         );
       }
     },
@@ -1265,40 +1206,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
       "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
-      dir: Type.Optional(
-        Type.String({
-          description:
-            "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
-        }),
+      dir: optionalString(
+        "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
       ),
-      entrypoint: Type.Optional(
-        Type.String({
-          description:
-            'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
-        }),
+      entrypoint: optionalString(
+        'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
       ),
-      name: Type.Optional(
-        Type.String({
-          description: "Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens.",
-        }),
-      ),
-      renameFrom: Type.Optional(
-        Type.String({ description: "Existing deployment name to rename to `name`; this is a name, not an ID." }),
-      ),
+      name: optionalString("Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens."),
+      renameFrom: optionalString("Existing deployment name to rename to `name`; this is a name, not an ID."),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:
             "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
         }),
       ),
-      rollbackTo: Type.Optional(
-        Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
-      ),
-      alwaysOn: Type.Optional(
-        Type.Boolean({
-          description:
-            "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
-        }),
+      rollbackTo: optionalInteger("Flip the deployment named `name` back to this version number."),
+      alwaysOn: optionalBoolean(
+        "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
       ),
       embedAncestors: Type.Optional(
         Type.Array(Type.String(), {
@@ -1329,7 +1253,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
-        return recordResult(
+        return recordText(
           callId,
           {
             tool: "apps",
@@ -1341,18 +1265,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.audience ? { audience: r.audience } : {}),
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
-          text(
-            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
-          ),
+          `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
         );
       } catch (e) {
         const msg = errMessage(e);
-        return recordResult(
-          callId,
-          { tool: "apps", action: "publish", error: msg },
-          text(`[publish failed] ${msg}`),
-          true,
-        );
+        return recordFail(callId, { tool: "apps", action: "publish", error: msg }, `[publish failed] ${msg}`);
       }
     },
   });
@@ -1393,20 +1310,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ],
         { description: "search facts, read this notebook, or add, edit, or delete facts." },
       ),
-      query: Type.Optional(
-        Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
-      scope: Type.Optional(
-        Type.String({
-          description:
-            "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
-        }),
+      query: optionalString("search only: words to look for among your remembered facts (all must match)."),
+      limit: optionalInteger("search only: max facts to return (default 20)."),
+      scope: optionalString(
+        "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
       ),
       facts: Type.Optional(
         Type.Array(
           Type.Object({
-            id: Type.Optional(Type.String({ description: "edit only: the fact's id, e.g. #42." })),
+            id: optionalString("edit only: the fact's id, e.g. #42."),
             text: Type.String({
               description: "one short self-contained fact — a pointer to data, never the data itself.",
             }),
@@ -1429,29 +1341,25 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.facts !== undefined ? { facts: params.facts } : {}),
         ...(params.ids !== undefined ? { ids: params.ids } : {}),
       });
-      const fail = (error: string) =>
-        recordResult(callId, { tool: "memory", action, error }, text(`[error] ${error}`), true);
+      const fail = (error: string) => recordFail(callId, { tool: "memory", action, error }, `[error] ${error}`);
       const unavailable = () =>
-        recordResult(
+        recordFail(
           callId,
           { tool: "memory", action, unavailable: true },
-          text("[memory isn't available in this conversation]"),
-          true,
+          "[memory isn't available in this conversation]",
         );
       if (params.scope !== undefined && action !== "search" && action !== "read") {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "memory", action, error: "scope is read-only" },
-          text("[error] scope is only allowed for memory search/read; writes stay in this conversation."),
-          true,
+          "[error] scope is only allowed for memory search/read; writes stay in this conversation.",
         );
       }
       if (opts?.readOnly && action !== "search" && action !== "read") {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "memory", action, readOnly: true },
-          text("[this is a read-only wake — memory can be searched and read here, but not written]"),
-          true,
+          "[this is a read-only wake — memory can be searched and read here, but not written]",
         );
       }
       const facts = (params.facts ?? []).map((fact) => ({ id: fact.id?.trim() ?? "", text: fact.text.trim() }));
@@ -1462,19 +1370,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!query.trim()) return fail("memory search requires `query`.");
             const hits = await tc.memorySearch(query, params.limit, params.scope);
             if (hits === null) return unavailable();
-            return recordResult(
+            return recordText(
               callId,
               { tool: "memory", action, query, count: hits.length },
-              text(hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`),
+              hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`,
             );
           }
           case "read": {
             const body = await tc.memoryRead(params.scope);
             if (body === null) return unavailable();
-            return recordResult(
+            return recordText(
               callId,
               { tool: "memory", action, chars: body.length },
-              text(body.trim() ? body : "(you have nothing remembered here yet)"),
+              body.trim() ? body : "(you have nothing remembered here yet)",
             );
           }
           case "add": {
@@ -1482,34 +1390,32 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
             const added = await tc.memoryAdd(texts);
             if (added === null) return unavailable();
-            return recordResult(
+            return recordText(
               callId,
               { tool: "memory", action, added },
-              text(
-                added
-                  ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
-                  : "Already remembered — nothing new to save.",
-              ),
+              added
+                ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
+                : "Already remembered — nothing new to save.",
             );
           }
           case "edit": {
             if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
               return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
             if ((await tc.memoryEdit(facts)) === null) return unavailable();
-            return recordResult(
+            return recordText(
               callId,
               { tool: "memory", action, edited: facts.length },
-              text(`Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`),
+              `Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`,
             );
           }
           case "delete": {
             const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
             if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
             if ((await tc.memoryDelete(ids)) === null) return unavailable();
-            return recordResult(
+            return recordText(
               callId,
               { tool: "memory", action, deleted: ids.length },
-              text(`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`),
+              `Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`,
             );
           }
         }
@@ -1533,13 +1439,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "kind#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
       "to follow a kind#seq pointer from a search hit or an earlier-conversation summary.",
     parameters: Type.Object({
-      query: Type.Optional(
-        Type.String({ description: "Words to look for in this conversation's transcript (all must match)." }),
-      ),
-      seq: Type.Optional(
-        Type.Integer({ description: "Reopen the single entry with this seq in full, instead of searching." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "Max entries to return (default 20, query mode only)." })),
+      query: optionalString("Words to look for in this conversation's transcript (all must match)."),
+      seq: optionalInteger("Reopen the single entry with this seq in full, instead of searching."),
+      limit: optionalInteger("Max entries to return (default 20, query mode only)."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1553,37 +1455,33 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       if (seq !== undefined) {
         if (!Number.isInteger(seq)) {
-          return recordResult(
+          return recordFail(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in ToolCall#87."),
-            true,
+            "[error] history `seq` must be an integer entry number, like the 87 in ToolCall#87.",
           );
         }
         const entry = await tc.historyOpen(seq);
-        return recordResult(
+        return recordText(
           callId,
           { tool: "history", seq, found: entry !== null },
-          text(entry ?? `[no entry with seq ${seq} is visible in this conversation's transcript]`),
+          entry ?? `[no entry with seq ${seq} is visible in this conversation's transcript]`,
         );
       }
       if (!params.query?.trim()) {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "history", error: "query or seq required" },
-          text("[error] history requires `query` (words to search for) or `seq` (an entry to reopen)."),
-          true,
+          "[error] history requires `query` (words to search for) or `seq` (an entry to reopen).",
         );
       }
       const hits = await tc.history(params.query, params.limit);
-      return recordResult(
+      return recordText(
         callId,
         { tool: "history", query: params.query, count: hits.length },
-        text(
-          hits.length
-            ? hits.map((h) => `- ${h}`).join("\n")
-            : `[nothing in this conversation's transcript matches "${params.query}"]`,
-        ),
+        hits.length
+          ? hits.map((h) => `- ${h}`).join("\n")
+          : `[nothing in this conversation's transcript matches "${params.query}"]`,
       );
     },
   });
@@ -1618,35 +1516,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("followup_task"),
         Type.Literal("wait"),
       ]),
-      requestId: Type.Optional(
-        Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
+      requestId: optionalString("open: stable request key to reuse when retrying the same delegation."),
+      task: optionalString("open and followup_task: the short task brief, with relevant context and real limits."),
+      name: optionalString("open: short title for the subagent (default: from task)."),
+      noComputer: optionalBoolean(
+        "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
       ),
-      task: Type.Optional(
-        Type.String({
-          description: "open and followup_task: the short task brief, with relevant context and real limits.",
-        }),
+      model: optionalString("open: model override; fails closed if unavailable."),
+      thinkingLevel: optionalString("open: reasoning effort override."),
+      fastMode: optionalBoolean("open: fast mode override."),
+      target: optionalString(
+        "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
       ),
-      name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
-      noComputer: Type.Optional(
-        Type.Boolean({
-          description:
-            "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
-        }),
-      ),
-      model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode override." })),
-      target: Type.Optional(
-        Type.String({
-          description:
-            "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
-        }),
-      ),
-      text: Type.Optional(Type.String({ description: "send_message: the message to deliver." })),
-      interrupt: Type.Optional(
-        Type.Boolean({ description: "send_message: abort the target's current run instead of delivering text." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+      text: optionalString("send_message: the message to deliver."),
+      interrupt: optionalBoolean("send_message: abort the target's current run instead of delivering text."),
+      limit: optionalInteger("read: max transcript entries to show (default 30)."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1676,12 +1560,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.text ? { text: p.text } : {}),
         ...(p.interrupt ? { interrupt: true } : {}),
       });
+      const fail = (message: string) =>
+        recordFail(callId, { tool: "subagents", action: p.action, error: message }, `[error] ${message}`);
       if (!syscalls) {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "subagents", action: p.action, error: "unavailable" },
-          text("[error] subagents aren't available on this turn."),
-          true,
+          "[error] subagents aren't available on this turn.",
         );
       }
       if (p.action === "wait") {
@@ -1707,19 +1592,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.model ? { model: p.model } : {}),
         });
         if (!result.ok) {
-          return recordResult(
-            callId,
-            { tool: "subagents", action: "open", error: result.message },
-            text(`[error] ${result.message}`),
-            true,
-          );
+          return fail(result.message);
         }
-        return recordResult(
+        return recordText(
           callId,
           { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
-          text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
-          ),
+          `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
         );
       }
       if (p.action === "send_message" || p.action === "followup_task") {
@@ -1727,12 +1605,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const body = followup ? p.task : p.text;
         if (followup && p.interrupt) {
           const message = "interrupt applies to send_message, not followup_task.";
-          return recordResult(
-            callId,
-            { tool: "subagents", action: p.action, error: message },
-            text(`[error] ${message}`),
-            true,
-          );
+          return fail(message);
         }
         const result = await syscalls.write({
           requestId: callId,
@@ -1742,12 +1615,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
-          return recordResult(
-            callId,
-            { tool: "subagents", action: p.action, error: result.message },
-            text(`[error] ${result.message}`),
-            true,
-          );
+          return fail(result.message);
         }
         const verbs = {
           steered: "steered into its running turn",
@@ -1756,7 +1624,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           interrupted: "sent an interrupt request — it stays re-taskable",
         } as const;
         const verb = verbs[result.delivered];
-        return recordResult(
+        return recordText(
           callId,
           {
             tool: "subagents",
@@ -1765,7 +1633,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" ${verb}.`),
+          `Message to "${result.title}" ${verb}.`,
         );
       }
       const result = await syscalls.read({
@@ -1773,27 +1641,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.limit !== undefined ? { limit: p.limit } : {}),
       });
       if (!result.ok) {
-        return recordResult(
-          callId,
-          { tool: "subagents", action: "read", error: result.message },
-          text(`[error] ${result.message}`),
-          true,
-        );
+        return fail(result.message);
       }
       if (result.mode === "children") {
         const lines = result.children.map(
           (c) => `- ${c.title} (${c.sessionId}) — ${c.status}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
         );
-        return recordResult(
+        return recordText(
           callId,
           { tool: "subagents", action: "read", children: result.children.length },
-          text(lines.length ? lines.join("\n") : "[no subagents opened from this conversation]"),
+          lines.length ? lines.join("\n") : "[no subagents opened from this conversation]",
         );
       }
-      return recordResult(
+      return recordText(
         callId,
         { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        `"${result.title}" — ${result.status}\n${result.rendered}`,
       );
     },
   });
@@ -1818,18 +1681,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("new"),
         Type.Literal("fork"),
       ]),
-      query: Type.Optional(Type.String({ description: "search: words to find across visible conversations." })),
-      target: Type.Optional(Type.String({ description: "read and send_message: a sessionId from list." })),
-      text: Type.Optional(
-        Type.String({
-          description:
-            "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
-        }),
+      query: optionalString("search: words to find across visible conversations."),
+      target: optionalString("read and send_message: a sessionId from list."),
+      text: optionalString(
+        "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
       ),
-      title: Type.Optional(Type.String({ description: "new and fork: optional sidebar title." })),
-      limit: Type.Optional(
-        Type.Integer({ description: "read: max entries (default 30). search: max matches (default 20, maximum 100)." }),
-      ),
+      title: optionalString("new and fork: optional sidebar title."),
+      limit: optionalInteger("read: max entries (default 30). search: max matches (default 20, maximum 100)."),
     }),
     async execute(callId, params) {
       const syscalls = ref.current?.sessionSyscalls;
@@ -1849,15 +1707,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.title ? { name: p.title } : {}),
       });
       const fail = (message: string) =>
-        recordResult(callId, { tool: "sessions", action: p.action, error: message }, text(`[error] ${message}`), true);
+        recordFail(callId, { tool: "sessions", action: p.action, error: message }, `[error] ${message}`);
       if (p.action === "search") {
         if (!p.query?.trim()) return fail("search requires `query`.");
         if (!syscalls?.search) return fail("session search isn't available on this turn.");
         const result = await syscalls.search({ query: p.query, ...(p.limit !== undefined ? { limit: p.limit } : {}) });
-        return recordResult(
+        return recordText(
           callId,
           { tool: "sessions", action: "search", count: result.hits.length, failedBackends: result.failedBackends },
-          text(JSON.stringify(result)),
+          JSON.stringify(result),
         );
       }
       if (!syscalls?.list || !syscalls.start) return fail("sessions aren't available on this turn.");
@@ -1867,10 +1725,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const lines = result.sessions.map(
           (s) => `- ${s.title} (${s.sessionId}) — ${s.status}${s.current ? " — this conversation" : ""}`,
         );
-        return recordResult(
+        return recordText(
           callId,
           { tool: "sessions", action: "list", count: result.sessions.length },
-          text(lines.length ? lines.join("\n") : "[no sessions here]"),
+          lines.length ? lines.join("\n") : "[no sessions here]",
         );
       }
       if (p.action === "new" || p.action === "fork") {
@@ -1883,12 +1741,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         let outcome = "";
         if (result.refused) outcome = `, but your message was refused there: ${result.refused}`;
         else if (p.text) outcome = " and is working on the message you gave it";
-        return recordResult(
+        return recordText(
           callId,
           { tool: "sessions", action: p.action, sessionId: result.sessionId, title: result.title },
-          text(
-            `${p.action === "fork" ? "Forked this conversation into" : "Started"} session "${result.title}" (sessionId ${result.sessionId}). It appears in the sidebar${outcome}.`,
-          ),
+          `${p.action === "fork" ? "Forked this conversation into" : "Started"} session "${result.title}" (sessionId ${result.sessionId}). It appears in the sidebar${outcome}.`,
         );
       }
       if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
@@ -1896,7 +1752,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
         const result = await syscalls.write({ requestId: callId, peer: true, target: p.target, text: p.text });
         if (!result.ok) return fail(result.message);
-        return recordResult(
+        return recordText(
           callId,
           {
             tool: "sessions",
@@ -1905,7 +1761,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" queued internally without starting a turn.`),
+          `Message to "${result.title}" queued internally without starting a turn.`,
         );
       }
       const result = await syscalls.read({
@@ -1915,10 +1771,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       if (!result.ok) return fail(result.message);
       if (result.mode === "children") return fail("read requires `target`: a sessionId from list.");
-      return recordResult(
+      return recordText(
         callId,
         { tool: "sessions", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        `"${result.title}" — ${result.status}\n${result.rendered}`,
       );
     },
   });
@@ -1939,18 +1795,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       );
     try {
       if (!params.command)
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "execute", background: true, error: "start requires command" },
-          text("[error] execute background:true requires `command`."),
-          true,
+          "[error] execute background:true requires `command`.",
         );
       if (!params.purpose?.trim())
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "execute", background: true, error: "start requires purpose" },
-          text("[error] execute background:true requires `purpose`: a short description of the job, about 5 words."),
-          true,
+          "[error] execute background:true requires `purpose`: a short description of the job, about 5 words.",
         );
       const r = await tc.backgroundStart(params.command, {
         purpose: params.purpose,
@@ -1963,28 +1817,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         { tool: "execute", background: true, ...startMeta },
         {
-          content: [
-            {
-              type: "text" as const,
-              text: `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
-            },
-          ],
+          ...text(
+            `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
+          ),
           details: r,
         },
         false,
-        undefined,
-        false,
-        undefined,
-        { provenance: "external" },
+        { screenAs: { provenance: "external" } },
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
       if (e instanceof CommandDenied)
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "execute", background: true, denied: true, reason: e.message },
-          text(`[denied by policy] ${e.message}`),
-          true,
+          `[denied by policy] ${e.message}`,
         );
       throw e;
     }
@@ -2035,20 +1882,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
       ),
-      purpose: Type.Optional(
-        Type.String({
-          description:
-            "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
-        }),
+      purpose: optionalString(
+        "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
       ),
-      process_id: Type.Optional(
-        Type.String({ description: "poll/send_input/stop/watch only: the process_id execute returned." }),
-      ),
-      data: Type.Optional(
-        Type.String({
-          description:
-            "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
-        }),
+      process_id: optionalString("poll/send_input/stop/watch only: the process_id execute returned."),
+      data: optionalString(
+        "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
       ),
       since_cursor: Type.Optional(
         Type.Integer({
@@ -2057,18 +1896,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
         }),
       ),
-      pattern: Type.Optional(
-        Type.String({
-          description:
-            'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
-        }),
+      pattern: optionalString(
+        'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
       ),
-      instructions: Type.Optional(
-        Type.String({
-          description: "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
-        }),
+      instructions: optionalString(
+        "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
       ),
-      monitor_id: Type.Optional(Type.String({ description: "unwatch only: the monitor id watch returned." })),
+      monitor_id: optionalString("unwatch only: the monitor id watch returned."),
       wait_seconds: Type.Optional(
         Type.Integer({
           minimum: 0,
@@ -2099,24 +1933,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         process_id: params.process_id,
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
       });
+      const pid = params.process_id ?? "";
+      if (["poll", "stop", "watch", "send_input"].includes(params.action) && !pid)
+        return recordFail(
+          callId,
+          { tool: "background", action: params.action, error: `${params.action} requires process_id` },
+          `[error] background ${params.action} requires \`process_id\`.`,
+        );
       try {
         switch (params.action) {
           default:
-            return recordResult(
+            return recordFail(
               callId,
               { tool: "background", action: params.action, invalid: true },
-              text("[error] unsupported background action"),
-              true,
+              "[error] unsupported background action",
             );
           case "poll": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "poll requires process_id" },
-                text("[error] background poll requires `process_id`."),
-                true,
-              );
-            const r = await tc.backgroundPoll(params.process_id, {
+            const r = await tc.backgroundPoll(pid, {
               ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
@@ -2125,49 +1958,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...pollMeta },
-              {
-                content: [
-                  { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
-                ],
-                details: r,
-              },
+              { ...text(`${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`), details: r },
               false,
-              undefined,
-              false,
-              undefined,
-              { provenance: "external" },
+              { screenAs: { provenance: "external" } },
             );
           }
           case "stop": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "stop requires process_id" },
-                text("[error] background stop requires `process_id`."),
-                true,
-              );
-            const r = await tc.backgroundStop(params.process_id, params.signal);
+            const r = await tc.backgroundStop(pid, params.signal);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
-              {
-                content: [
-                  { type: "text" as const, text: `signalled ${r.processId}; status now ${fmtStatus(r.status)}` },
-                ],
-                details: r,
-              },
+              { ...text(`signalled ${r.processId}; status now ${fmtStatus(r.status)}`), details: r },
             );
           }
           case "watch": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "watch requires process_id" },
-                text("[error] background watch requires `process_id`."),
-                true,
-              );
             try {
-              const r = await tc.backgroundWatch(params.process_id, {
+              const r = await tc.backgroundWatch(pid, {
                 ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
                 ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
                 ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
@@ -2180,15 +1986,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 return recordResult(
                   callId,
                   { tool: "background", action: params.action, ...r },
-                  {
-                    content: [{ type: "text" as const, text: result }],
-                    details: r,
-                  },
+                  { ...text(result), details: r },
                   false,
-                  undefined,
-                  false,
-                  undefined,
-                  { provenance: "external", source: "finished job output" },
+                  { screenAs: { provenance: "external", source: "finished job output" } },
                 );
               }
               const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
@@ -2196,35 +1996,29 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 callId,
                 { tool: "background", action: params.action, ...r },
                 {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text:
-                        `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
-                        `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
-                    },
-                  ],
+                  ...text(
+                    `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
+                      `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
+                  ),
                   details: r,
                 },
               );
             } catch (e) {
               if (e instanceof NeedsApproval || e instanceof CommandDenied) throw e;
               const msg = errMessage(e);
-              return recordResult(
+              return recordFail(
                 callId,
                 { tool: "background", action: params.action, error: msg },
-                text(`[watch failed] ${msg}`),
-                true,
+                `[watch failed] ${msg}`,
               );
             }
           }
           case "unwatch": {
             if (!params.monitor_id)
-              return recordResult(
+              return recordFail(
                 callId,
                 { tool: "background", action: params.action, error: "unwatch requires monitor_id" },
-                text("[error] background unwatch requires `monitor_id`."),
-                true,
+                "[error] background unwatch requires `monitor_id`.",
               );
             try {
               const r = await tc.backgroundUnwatch(params.monitor_id);
@@ -2236,39 +2030,25 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               );
             } catch (e) {
               const msg = errMessage(e);
-              return recordResult(
+              return recordFail(
                 callId,
                 { tool: "background", action: params.action, error: msg },
-                text(`[unwatch failed] ${msg}`),
-                true,
+                `[unwatch failed] ${msg}`,
               );
             }
           }
           case "send_input": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "send_input requires process_id" },
-                text("[error] background send_input requires `process_id`."),
-                true,
-              );
             if (params.data === undefined)
-              return recordResult(
+              return recordFail(
                 callId,
                 { tool: "background", action: params.action, error: "send_input requires data" },
-                text("[error] background send_input requires `data` (the text to send to the job's stdin)."),
-                true,
+                "[error] background send_input requires `data` (the text to send to the job's stdin).",
               );
-            const r = await tc.backgroundWrite(params.process_id, params.data);
+            const r = await tc.backgroundWrite(pid, params.data);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
-              {
-                content: [
-                  { type: "text" as const, text: `wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}` },
-                ],
-                details: r,
-              },
+              { ...text(`wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}`), details: r },
             );
           }
           case "list": {
@@ -2277,49 +2057,29 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               callId,
               { tool: "background", action: params.action, jobs },
               {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: jobs.length
-                      ? jobs
-                          .map(
-                            (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
-                          )
-                          .join("\n")
-                      : "(no background jobs)",
-                  },
-                ],
+                ...text(
+                  jobs.length
+                    ? jobs
+                        .map(
+                          (j) =>
+                            `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                        )
+                        .join("\n")
+                    : "(no background jobs)",
+                ),
                 details: { jobs },
               },
             );
           }
         }
       } catch (e) {
-        if (e instanceof NeedsApproval) {
-          ref.pendingApprovals?.push({
-            command: e.command,
-            reason: e.approvalReason,
-            kind: e.kind,
-            matched: e.matched,
-            ...(params.purpose ? { purpose: params.purpose } : {}),
-            ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
-            ...(e.grantModes ? { grantModes: e.grantModes } : {}),
-          });
-          ref.pausedOnApproval = true;
-          return recordResult(
-            callId,
-            { tool: "background", action: params.action, blocked: "needs_approval", reason: e.approvalReason },
-            { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
-            true,
-          );
-        }
+        if (e instanceof NeedsApproval)
+          return blockOnApproval(callId, e, params.purpose, "background", { action: params.action });
         if (e instanceof CommandDenied) {
-          return recordResult(
+          return recordFail(
             callId,
             { tool: "background", action: params.action, denied: true, reason: e.message },
-            text(`[denied by policy] ${e.message}`),
-            true,
+            `[denied by policy] ${e.message}`,
           );
         }
         throw e;
@@ -2328,16 +2088,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   });
 
   const unavailable = (callId: string, tool: string) =>
-    recordResult(
+    recordFail(
       callId,
       { tool, error: "control_unavailable" },
-      text(
-        `[error] control-plane tools (crons, webhooks, standing instructions, sharing) aren't available on this turn.`,
-      ),
-      true,
+      `[error] control-plane tools (crons, webhooks, standing instructions, sharing) aren't available on this turn.`,
     );
   const isUnavailable = (r: unknown): r is { ok: false; code: "control_unavailable" } =>
     isObj(r) && r.code === "control_unavailable";
+  const refused = (callId: string, tool: string, r: { code: string; message?: string }) =>
+    isUnavailable(r) ? unavailable(callId, tool) : recordFail(callId, { tool, error: r.code }, `[error] ${r.message}`);
 
   const cron = defineTool({
     name: "cron",
@@ -2413,55 +2172,29 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, retarget where it delivers, or note — leave a short shift-change note for its next fire.",
         },
       ),
-      id: Type.Optional(
-        Type.String({ description: "get/runs/patch/delete/run/disable/retarget/note only: the cron id." }),
-      ),
-      title: Type.Optional(
-        Type.String({
-          description:
-            'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
-        }),
+      id: optionalString("get/runs/patch/delete/run/disable/retarget/note only: the cron id."),
+      title: optionalString(
+        'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
       ),
       schedule: Type.Optional(
         Type.Object(
           {
-            cron: Type.Optional(
-              Type.String({ description: "5-field cron expression: minute hour day-of-month month day-of-week." }),
+            cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
+            timezone: optionalString('IANA timezone for a cron schedule, e.g. "America/Los_Angeles".'),
+            everyMs: optionalInteger(
+              "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
             ),
-            timezone: Type.Optional(
-              Type.String({ description: 'IANA timezone for a cron schedule, e.g. "America/Los_Angeles".' }),
-            ),
-            everyMs: Type.Optional(
-              Type.Integer({
-                description:
-                  "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
-              }),
-            ),
-            firstFireAt: Type.Optional(
-              Type.Integer({
-                description: "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
-              }),
+            firstFireAt: optionalInteger(
+              "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
             ),
           },
           { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
         ),
       ),
-      task: Type.Optional(
-        Type.String({
-          description: "create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text.",
-        }),
-      ),
-      text: Type.Optional(
-        Type.String({
-          description: "create/patch: exact words to send verbatim (a reminder/relay). Use this OR task.",
-        }),
-      ),
-      recipient: Type.Optional(
-        Type.String({
-          description: "create: a teammate's name to DM (core resolves it; you can't author a raw address).",
-        }),
-      ),
-      channel: Type.Optional(Type.String({ description: "create: a channel name to post to (core resolves it)." })),
+      task: optionalString("create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text."),
+      text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
+      recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
+      channel: optionalString("create: a channel name to post to (core resolves it)."),
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
@@ -2474,20 +2207,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create: a group DM's other member ids (you're added automatically); a group DM has no name, so core matches it by exact membership, and the group must already exist — reach it once first, which opens it.",
         }),
       ),
-      destinationKey: Type.Optional(
-        Type.String({ description: 'create/retarget: a key from the "Where scheduled tasks post" menu.' }),
+      destinationKey: optionalString('create/retarget: a key from the "Where scheduled tasks post" menu.'),
+      session: optionalBoolean(
+        "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
       ),
-      session: Type.Optional(
-        Type.Boolean({
-          description:
-            "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
-        }),
-      ),
-      unfurlLinks: Type.Optional(
-        Type.Boolean({
-          description:
-            "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-        }),
+      unfurlLinks: optionalBoolean(
+        "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
       ),
       note: Type.Optional(
         Type.String({
@@ -2519,14 +2244,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
         }),
       ),
-      inbox: Type.Optional(
-        Type.Boolean({
-          description:
-            "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
-        }),
+      inbox: optionalBoolean(
+        "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
       ),
-      enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
-      archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
+      enabled: optionalBoolean("patch only: false pauses the cron, true resumes it."),
+      archived: optionalBoolean("patch only: true archives the cron."),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -2545,23 +2267,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
-      const needId = (): string | null => (typeof params.id === "string" && params.id ? params.id : null);
+      const id = typeof params.id === "string" ? params.id : "";
+      const fail = (error: string, message: string) =>
+        recordFail(callId, { tool: "cron", error }, `[error] ${message}`);
+      if (CRON_ID_ACTIONS.has(params.action) && !id)
+        return fail("id required", `cron ${params.action} requires \`id\`.`);
       switch (params.action) {
         case "create": {
           if (!params.schedule)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "schedule required" },
-              text("[error] cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt})."),
-              true,
+            return fail(
+              "schedule required",
+              "cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt}).",
             );
           if (params.task === undefined && params.text === undefined) {
-            return recordResult(
-              callId,
-              { tool: "cron", error: "task or text required" },
-              text("[error] cron create requires `task` (a prompt) or `text` (exact words)."),
-              true,
-            );
+            return fail("task or text required", "cron create requires `task` (a prompt) or `text` (exact words).");
           }
           const r = await tc.cronCreate({
             schedule: params.schedule,
@@ -2584,9 +2303,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             const cand = r.candidates?.length
               ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
               : "";
-            return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}${cand}`), true);
+            return fail(r.code, `${r.message}${cand}`);
           }
-          return recordResult(
+          return recordText(
             callId,
             {
               tool: "cron",
@@ -2596,7 +2315,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(r.channel ? { channel: r.channel } : {}),
               ...(r.group ? { group: r.group } : {}),
             },
-            text(fmtCronCreated(r)),
+            fmtCronCreated(r),
           );
         }
         case "list": {
@@ -2607,7 +2326,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...r.visible.map((c) => ({ c, prefix: `(read-only, ${c.scopeName ?? c.ownerScopeId}) ` })),
           ].sort((a, b) => listOrder(a.c, b.c));
           if (!items.length)
-            return recordResult(callId, { tool: "cron", count: 0, visible: 0 }, text("(no crons scheduled here)"));
+            return recordText(callId, { tool: "cron", count: 0, visible: 0 }, "(no crons scheduled here)");
           const { page, offset, note } = pageOf(items, params);
           const trimmed = page.some(({ c }) => previewTrims(c.action || c.message));
           const lines = page.map(({ c, prefix }) => `- ${prefix}${fmtCronLine(c, true)}`);
@@ -2625,50 +2344,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             },
             text([...lines, ...(footer ? [`(${footer})`] : [])].join("\n")),
             false,
-            undefined,
-            false,
-            undefined,
-            r.visible.length ? { provenance: "external", source: "shared crons" } : undefined,
+            { screenAs: r.visible.length ? { provenance: "external", source: "shared crons" } : undefined },
           );
         }
         case "get": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron get requires `id`."),
-              true,
-            );
           const r = await tc.cronGet(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(
-            callId,
-            { tool: "cron", id },
-            text(fmtCronLine(r.cron)),
-            false,
-            undefined,
-            false,
-            undefined,
-            {
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)), false, {
+            screenAs: {
               provenance: "external",
               source: "shared crons",
             },
-          );
+          });
         }
         case "runs": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron runs requires `id`."),
-              true,
-            );
           const r = await tc.cronRuns(id, params.limit !== undefined ? { limit: params.limit } : undefined);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
+          if (!r.ok) return refused(callId, "cron", r);
           const lines = r.runs.map(fmtCronRunLine);
           const suffix =
             r.runs.length === r.total
@@ -2683,21 +2374,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             { tool: "cron", id, count: r.runs.length, total: r.total },
             text(lines.length ? `${lines.join("\n")}${suffix}${noteLine}` : "(no recorded fires for this cron)"),
             false,
-            undefined,
-            false,
-            undefined,
-            { provenance: "external", source: "shared crons" },
+            { screenAs: { provenance: "external", source: "shared crons" } },
           );
         }
         case "patch": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron patch requires `id`."),
-              true,
-            );
           const r = await tc.cronPatch(id, {
             ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
@@ -2710,107 +2390,52 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
           });
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "cron", id }, text(`Updated cron ${fmtCronLine(r.cron)}`));
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(callId, { tool: "cron", id }, `Updated cron ${fmtCronLine(r.cron)}`);
         }
         case "delete": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron delete requires `id`."),
-              true,
-            );
           const r = await tc.cronDelete(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "cron", id, deleted: true }, text(`Deleted cron ${id}.`));
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(callId, { tool: "cron", id, deleted: true }, `Deleted cron ${id}.`);
         }
         case "disable": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron disable requires `id`."),
-              true,
-            );
           const r = await tc.cronSetEnabled(id, false);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "cron", id, enabled: false }, text(`Paused cron ${id}.`));
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(callId, { tool: "cron", id, enabled: false }, `Paused cron ${id}.`);
         }
         case "run": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron run requires `id`."),
-              true,
-            );
           const r = await tc.cronRun(id);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(
             callId,
             { tool: "cron", id, ran: true },
-            text(`Fired cron ${id} — the run is starting now and delivers on its own when it finishes.`),
+            `Fired cron ${id} — the run is starting now and delivers on its own when it finishes.`,
           );
         }
         case "note": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron note requires `id`."),
-              true,
-            );
           if (typeof params.note !== "string" || !params.note.trim()) {
-            return recordResult(
-              callId,
-              { tool: "cron", error: "note required" },
-              text("[error] cron note requires `note` (the short message the next fire reads)."),
-              true,
-            );
+            return fail("note required", "cron note requires `note` (the short message the next fire reads).");
           }
           const r = await tc.cronNote(id, params.note);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(
             callId,
             { tool: "cron", id, noted: r.applied },
-            text(
-              r.applied
-                ? `Noted — the next fire of ${id} will see it.`
-                : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
-            ),
+            r.applied
+              ? `Noted — the next fire of ${id} will see it.`
+              : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
           );
         }
         case "retarget": {
-          const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron retarget requires `id`."),
-              true,
-            );
           if (typeof params.destinationKey !== "string" || !params.destinationKey) {
-            return recordResult(
-              callId,
-              { tool: "cron", error: "destinationKey required" },
-              text("[error] cron retarget requires `destinationKey` (a key from the delivery menu)."),
-              true,
+            return fail(
+              "destinationKey required",
+              "cron retarget requires `destinationKey` (a key from the delivery menu).",
             );
           }
           const r = await tc.cronRetarget(id, params.destinationKey);
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "cron", id }, text(`Retargeted cron ${fmtCronLine(r.cron)}`));
+          if (!r.ok) return refused(callId, "cron", r);
+          return recordText(callId, { tool: "cron", id }, `Retargeted cron ${fmtCronLine(r.cron)}`);
         }
       }
     },
@@ -2842,12 +2467,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create an inbound webhook, list yours, update one's task in place by id (URL and secret unchanged), or disable one by id.",
         },
       ),
-      id: Type.Optional(Type.String({ description: "update and disable: the webhook id." })),
-      task: Type.Optional(
-        Type.String({
-          description: "create and update: what to do on each event (the payload is appended automatically).",
-        }),
-      ),
+      id: optionalString("update and disable: the webhook id."),
+      task: optionalString("create and update: what to do on each event (the payload is appended automatically)."),
       verification: Type.Optional(
         Type.Object(
           {
@@ -2873,9 +2494,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { description: "create only: skip the turn unless the event matches (cheap pre-gating)." },
         ),
       ),
-      destinationKey: Type.Optional(
-        Type.String({ description: 'create only: a key from the "Where scheduled tasks post" menu.' }),
-      ),
+      destinationKey: optionalString('create only: a key from the "Where scheduled tasks post" menu.'),
       limit: Type.Optional(Type.Integer({ minimum: 1, description: "list only: page size (default 25, max 100)." })),
       offset: Type.Optional(
         Type.Integer({
@@ -2891,13 +2510,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       switch (params.action) {
         case "create": {
           if (!params.verification || typeof params.task !== "string") {
-            return recordResult(
+            return recordFail(
               callId,
               { tool: "webhook", error: "verification and task required" },
-              text(
-                "[error] webhook create requires `task` (what to do per event) and `verification` ({scheme, secret?}).",
-              ),
-              true,
+              "[error] webhook create requires `task` (what to do per event) and `verification` ({scheme, secret?}).",
             );
           }
           const r = await tc.webhookCreate({
@@ -2906,68 +2522,57 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.filters?.length ? { filters: params.filters } : {}),
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
           });
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok)
-            return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
+          if (!r.ok) return refused(callId, "webhook", r);
 
           const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
-          return recordResult(
+          return recordText(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
-            text(
-              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
-            ),
+            `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
           );
         }
         case "list": {
           const r = await tc.webhookList();
           if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.length)
-            return recordResult(callId, { tool: "webhook", count: 0 }, text("(no webhooks registered here)"));
+          if (!r.length) return recordText(callId, { tool: "webhook", count: 0 }, "(no webhooks registered here)");
           const { page, offset, note } = pageOf([...r].sort(listOrder), params);
           const lines = page.map(
             (w) =>
               `- ${w.id} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
           );
-          return recordResult(
+          return recordText(
             callId,
             { tool: "webhook", count: r.length, shown: page.length, ...(offset > 0 ? { offset } : {}) },
-            text([...lines, ...(note ? [`(${note})`] : [])].join("\n")),
+            [...lines, ...(note ? [`(${note})`] : [])].join("\n"),
           );
         }
         case "disable": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
           if (!id)
-            return recordResult(
+            return recordFail(
               callId,
               { tool: "webhook", error: "id required" },
-              text("[error] webhook disable requires `id`."),
-              true,
+              "[error] webhook disable requires `id`.",
             );
           const r = await tc.webhookDisable(id);
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok)
-            return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "webhook", id, enabled: false }, text(`Disabled webhook ${id}.`));
+          if (!r.ok) return refused(callId, "webhook", r);
+          return recordText(callId, { tool: "webhook", id, enabled: false }, `Disabled webhook ${id}.`);
         }
         case "update": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
           const task = typeof params.task === "string" ? params.task : "";
           if (!id)
-            return recordResult(
+            return recordFail(
               callId,
               { tool: "webhook", error: "id required" },
-              text("[error] webhook update requires `id` and the new `task`."),
-              true,
+              "[error] webhook update requires `id` and the new `task`.",
             );
           const r = await tc.webhookUpdate(id, task);
-          if (isUnavailable(r)) return unavailable(callId, "webhook");
-          if (!r.ok)
-            return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(
+          if (!r.ok) return refused(callId, "webhook", r);
+          return recordText(
             callId,
             { tool: "webhook", id, updated: true },
-            text(`Updated webhook ${id}. The next delivery uses the new task; URL and secret are unchanged.`),
+            `Updated webhook ${id}. The next delivery uses the new task; URL and secret are unchanged.`,
           );
         }
       }
@@ -2996,11 +2601,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     parameters: Type.Object({
       action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: Type.Optional(Type.String({ description: "replace: the full new guidance for the scope." })),
-      old: Type.Optional(
-        Type.String({ description: "edit: an exact passage that appears once in the scope's current guidance." }),
-      ),
-      new: Type.Optional(Type.String({ description: "edit: the text that takes the place of `old`." })),
+      content: optionalString("replace: the full new guidance for the scope."),
+      old: optionalString("edit: an exact passage that appears once in the scope's current guidance."),
+      new: optionalString("edit: the text that takes the place of `old`."),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
@@ -3033,12 +2636,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
 
       const editError = (message: string) =>
-        recordResult(
-          callId,
-          { tool: "guidance", scope, error: message },
-          text(`[error] guidance edit ${message}.`),
-          true,
-        );
+        recordFail(callId, { tool: "guidance", scope, error: message }, `[error] guidance edit ${message}.`);
       const applyEdit = (current: string): { ok: true; next: string } | { ok: false; message: string } => {
         if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
           return { ok: false, message: "requires `old` (an exact passage of the current guidance) and `new`" };
@@ -3063,11 +2661,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
       if (scope === "channel") {
         if (!channel!.ok) {
-          return recordResult(
+          return recordFail(
             callId,
             { tool: "guidance", scope, ok: false },
-            text("[no channel scope here; use scope=conversation]"),
-            true,
+            "[no channel scope here; use scope=conversation]",
           );
         }
         if (params.action === "read") {
@@ -3088,7 +2685,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const ambient = `\n\nAmbient replies: ${ambientState}`;
           const body =
             (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
-          return recordResult(callId, { tool: "guidance", scope, ok: true }, text(body));
+          return recordText(callId, { tool: "guidance", scope, ok: true }, body);
         }
         let orders = typeof params.content === "string" ? params.content : undefined;
         if (params.action === "edit") {
@@ -3096,13 +2693,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           if (!edited.ok) return editError(edited.message);
           orders = edited.next;
         } else if (typeof orders !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
-          return recordResult(
+          return recordFail(
             callId,
             { tool: "guidance", scope, error: "content, bots, or ambientEnabled required" },
-            text(
-              "[error] guidance replace needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
-            ),
-            true,
+            "[error] guidance replace needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
           );
         }
         const r = await tc.setStandingOrder(
@@ -3111,27 +2705,25 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           params.ambientEnabled,
           params.action === "edit" ? channel!.orders : undefined,
         );
-        if (!r.ok)
-          return recordResult(callId, { tool: "guidance", scope, ok: false }, text(`[error] ${r.message}`), true);
-        return recordResult(callId, { tool: "guidance", scope, ok: true }, text("[channel guidance updated]"));
+        if (!r.ok) return recordFail(callId, { tool: "guidance", scope, ok: false }, `[error] ${r.message}`);
+        return recordText(callId, { tool: "guidance", scope, ok: true }, "[channel guidance updated]");
       }
 
       if (params.ambientEnabled !== undefined) {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "guidance", scope, error: "ambientEnabled is channel scope only" },
-          text("[error] `ambientEnabled` applies only to channel scope."),
-          true,
+          "[error] `ambientEnabled` applies only to channel scope.",
         );
       }
 
       if (params.action === "read") {
         const r = tc.soulRead();
         if (isUnavailable(r)) return unavailable(callId, "guidance");
-        return recordResult(
+        return recordText(
           callId,
           { tool: "guidance", scope, soulVersion: r.soulVersion },
-          text(r.soul ? r.soul : "(no standing instructions set)"),
+          r.soul ? r.soul : "(no standing instructions set)",
         );
       }
       let content = params.content;
@@ -3144,21 +2736,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         content = edited.next;
         expectedVersion = current.soulVersion;
       } else if (typeof content !== "string") {
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "guidance", scope, error: "content required" },
-          text("[error] guidance replace requires `content` (the full new standing instructions)."),
-          true,
+          "[error] guidance replace requires `content` (the full new standing instructions).",
         );
       }
       const r = await tc.soulWrite(content, expectedVersion);
       if (isUnavailable(r)) return unavailable(callId, "guidance");
-      if (!r.ok)
-        return recordResult(callId, { tool: "guidance", scope, error: r.code }, text(`[error] ${r.message}`), true);
-      return recordResult(
+      if (!r.ok) return recordFail(callId, { tool: "guidance", scope, error: r.code }, `[error] ${r.message}`);
+      return recordText(
         callId,
         { tool: "guidance", scope, version: r.version },
-        text(`Updated your standing instructions (now version ${r.version}).`),
+        `Updated your standing instructions (now version ${r.version}).`,
       );
     },
   });
@@ -3188,28 +2778,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
         toScope:
           type === "deploy" && !move
-            ? Type.Optional(
-                Type.String({
-                  description:
-                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
-                }),
+            ? optionalString(
+                'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
               )
             : Type.String({
                 description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
               }),
         ...(type === "deploy" && !move
           ? {
-              email: Type.Optional(
-                Type.String({
-                  description:
-                    "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
-                }),
+              email: optionalString(
+                "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
               ),
-              public: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
-                }),
+              public: optionalBoolean(
+                "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
               ),
             }
           : {}),
@@ -3237,25 +2818,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await recordCall(callId, { tool, action, type, id });
         if (type === "deploy" && !move && params.public !== undefined) {
           if (params.toScope !== undefined || params.email !== undefined)
-            return recordResult(
+            return recordFail(
               callId,
               { tool, action, error: "bad_request" },
-              text("[error] set public, email, or toScope, not more than one"),
-              true,
+              "[error] set public, email, or toScope, not more than one",
             );
           const d = await tc.setDeploymentPublic(id, params.public);
-          return recordResult(
+          return recordText(
             callId,
             { tool, action, type, id: d.id, public: d.public },
-            text(`${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`),
+            `${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`,
           );
         }
         if (!params.toScope && !params.email)
-          return recordResult(
+          return recordFail(
             callId,
             { tool, action, error: "bad_request" },
-            text("[error] toScope or email is required unless public is set"),
-            true,
+            "[error] toScope or email is required unless public is set",
           );
         const r = await tc.shareArtifact({
           type,
@@ -3270,7 +2849,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const candidates = r.candidates?.length
             ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
             : "";
-          return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
+          return recordFail(callId, { tool, action, error: r.code }, `[error] ${r.message}${candidates}`);
         }
         let invitationNote = "";
         if (r.invitation) {
@@ -3280,12 +2859,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
           if (r.invitation.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
         }
-        return recordResult(
+        return recordText(
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
-          text(
-            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
-          ),
+          `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
         );
       },
     });
@@ -3324,13 +2901,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       async execute(callId, params, signal, onUpdate, ctx) {
         const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
         if (index < 0 || !Check(variants[index]!, params)) {
-          return recordResult(
+          return recordFail(
             callId,
             { tool: name, action: params.action, error: "invalid_arguments" },
-            text(
-              `[error] Invalid arguments for ${name} action ${String(params.action)}. ${groups[index]?.operation.description ?? ""}`,
-            ),
-            true,
+            `[error] Invalid arguments for ${name} action ${String(params.action)}. ${groups[index]?.operation.description ?? ""}`,
           );
         }
         return actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
@@ -3428,39 +3002,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               : ""),
         }),
       ),
-      channel: Type.Optional(
-        Type.String({
-          description:
-            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
-        }),
+      channel: optionalString(
+        "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
       ),
-      recipient: Type.Optional(Type.String({ description: "reach: DM this teammate (by name). NOT valid on post." })),
+      recipient: optionalString("reach: DM this teammate (by name). NOT valid on post."),
       participants: Type.Optional(
         Type.Array(Type.String(), {
           description:
             "reach: send to the group DM whose other members are exactly these (a group DM has no name; it's opened if it doesn't exist yet, so never ask someone to create one). react/edit/delete: the group DM the target message is in.",
         }),
       ),
-      ts: Type.Optional(
-        Type.String({
-          description:
-            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
-        }),
+      ts: optionalString(
+        "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
       ),
-      broadcast: Type.Optional(
-        Type.Boolean({
-          description:
-            "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
-        }),
+      broadcast: optionalBoolean(
+        "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
       ),
       sandbox_id: outboundSandboxSchema,
       files: Type.Optional(outboundFilesSchema),
-      emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
-      ref: Type.Optional(
-        Type.String({
-          description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
-        }),
+      emoji: optionalString('react: emoji name without colons (e.g. "eyes", "tada").'),
+      ref: optionalString(
+        "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
       ),
       limit: Type.Optional(
         Type.Integer({
@@ -3469,7 +3031,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "read_thread: how many recent messages to fetch. search: max hits to return (default: a small window).",
         }),
       ),
-      query: Type.Optional(Type.String({ description: "search: words to look for in this place's messages." })),
+      query: optionalString("search: words to look for in this place's messages."),
       source: Type.Optional(
         Type.Union([Type.Literal("mirror"), Type.Literal("slack")], {
           description:
@@ -3482,22 +3044,31 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
         }),
       ),
-      since: Type.Optional(
-        Type.String({
-          description:
-            "whats_new: only count what's newer than this message marker (from an earlier pull). Omit for the recent window.",
-        }),
+      since: optionalString(
+        "whats_new: only count what's newer than this message marker (from an earlier pull). Omit for the recent window.",
       ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       const missing = (field: string) =>
-        recordResult(
+        recordFail(
           callId,
           { tool: surfaceName, action: params.action, error: `missing_${field}` },
-          text(`[error] the "${params.action}" action requires \`${field}\`.`),
-          true,
+          `[error] the "${params.action}" action requires \`${field}\`.`,
+        );
+      const couldnt = (what: string, message?: string) =>
+        recordFail(
+          callId,
+          { tool: surfaceName, action: params.action, ok: false },
+          `[couldn't ${what}] ${message ?? "unavailable"}`,
+        );
+      const settled = (r: { ok: boolean; message?: string }, done: string, verb: string, failure: string) =>
+        recordResult(
+          callId,
+          { tool: surfaceName, action: params.action, ok: r.ok },
+          text(r.ok ? done : `[not ${verb}] ${r.message ?? failure}`),
+          !r.ok,
         );
       const routing = {
         ...(params.channel !== undefined ? { channel: params.channel } : {}),
@@ -3507,13 +3078,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         case "post": {
           if (params.text === undefined) return missing("text");
           if (params.channel !== undefined || params.recipient !== undefined || params.participants !== undefined) {
-            return recordResult(
+            return recordFail(
               callId,
               { tool: surfaceName, action: "post", error: "post_cannot_address" },
-              text(
-                '[not sent] `post` only replies in this conversation. To send to another channel, a teammate DM, or a group, use `action: "reach"` with `channel`/`recipient`/`participants`.',
-              ),
-              true,
+              '[not sent] `post` only replies in this conversation. To send to another channel, a teammate DM, or a group, use `action: "reach"` with `channel`/`recipient`/`participants`.',
             );
           }
           const opts = {
@@ -3548,13 +3116,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             params.participants !== undefined,
           ].filter(Boolean).length;
           if (selectors !== 1) {
-            return recordResult(
+            return recordFail(
               callId,
               { tool: surfaceName, action: "reach", error: "reach_target" },
-              text(
-                "[not sent] `reach` needs exactly one destination: a `channel`, a `recipient` (teammate DM), or `participants` (group DM).",
-              ),
-              true,
+              "[not sent] `reach` needs exactly one destination: a `channel`, a `recipient` (teammate DM), or `participants` (group DM).",
             );
           }
           const target = {
@@ -3597,12 +3162,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...routing,
           });
           const r = await tc.react({ ts: params.ts, emoji: params.emoji, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "react", ok: r.ok },
-            text(r.ok ? "[reacted]" : `[not reacted] ${r.message ?? "reaction failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[reacted]", "reacted", "reaction failed");
         }
         case "edit": {
           if (params.ref === undefined) return missing("ref");
@@ -3615,23 +3175,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...routing,
           });
           const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "edit", ok: r.ok },
-            text(r.ok ? "[edited]" : `[not edited] ${r.message ?? "edit failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[edited]", "edited", "edit failed");
         }
         case "delete": {
           if (params.ref === undefined) return missing("ref");
           await recordCall(callId, { tool: surfaceName, action: "delete", ref: params.ref, ...routing });
           const r = await tc.delete({ ref: params.ref, ...routing });
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "delete", ok: r.ok },
-            text(r.ok ? "[deleted]" : `[not deleted] ${r.message ?? "delete failed"}`),
-            !r.ok,
-          );
+          return settled(r, "[deleted]", "deleted", "delete failed");
         }
         case "read_thread": {
           await recordCall(callId, {
@@ -3640,13 +3190,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
           });
           const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_thread", ok: false },
-              text(`[couldn't read the thread] ${r.message ?? "unavailable"}`),
-              true,
-            );
+          if (!r.ok) return couldnt("read the thread", r.message);
           const messages = r.messages ?? [];
           return recordExternalResult(
             callId,
@@ -3672,13 +3216,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.since !== undefined ? { since: params.since } : {}),
           });
           const r = await tc.whatsNew(params.since !== undefined ? { since: params.since } : undefined);
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "whats_new", ok: false },
-              text(`[couldn't check what's new] ${r.message ?? "unavailable"}`),
-              true,
-            );
+          if (!r.ok) return couldnt("check what's new", r.message);
           const here = r.hereNew ?? 0;
           const others = r.activeSubConversations ?? 0;
           const line =
@@ -3687,7 +3225,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "." +
             (r.latest ? ` (as of ${r.latest} — pass this as \`since\` next time.)` : "") +
             (r.coverageSince ? ` (mirror covers this channel since ${r.coverageSince})` : "");
-          return recordResult(
+          return recordText(
             callId,
             {
               tool: surfaceName,
@@ -3698,7 +3236,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(r.message ? { note: r.message } : {}),
               ...(r.latest ? { latest: r.latest } : {}),
             },
-            text([line, r.message].filter(Boolean).join("\n")),
+            [line, r.message].filter(Boolean).join("\n"),
           );
         }
         case "search": {
@@ -3714,13 +3252,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
             ...(params.source !== undefined ? { source: params.source } : {}),
           });
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "search", ok: false },
-              text(`[couldn't search] ${r.message ?? "unavailable"}`),
-              true,
-            );
+          if (!r.ok) return couldnt("search", r.message);
           const hits = r.hits ?? [];
           const coverage = r.coverageSince ? ` (mirror covers this channel since ${r.coverageSince})` : "";
           let body = `[nothing here matches "${params.query}"]`;
@@ -3754,34 +3286,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         case "read_members": {
           await recordCall(callId, { tool: surfaceName, action: "read_members" });
           const r = await tc.readMembers();
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_members", ok: false },
-              text(`[couldn't read the members] ${r.message ?? "unavailable"}`),
-              true,
-            );
+          if (!r.ok) return couldnt("read the members", r.message);
           const members = r.members ?? [];
           const body = members.length
             ? members.map((m) => `- ${m.displayName}`).join("\n")
             : "[no members to show here]";
-          return recordResult(
+          return recordText(
             callId,
             { tool: surfaceName, action: "read_members", ok: true, count: members.length },
-            text(body),
+            body,
           );
         }
         case "read_file": {
           if (params.ref === undefined) return missing("ref");
           await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref });
           const r = await tc.readFile(params.ref);
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_file", ok: false },
-              text(`[couldn't read that file] ${r.message ?? "unavailable"}`),
-              true,
-            );
+          if (!r.ok) return couldnt("read that file", r.message);
           if (r.content !== undefined) {
             return recordExternalResult(
               callId,
@@ -3798,7 +3318,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
           const kind = r.contentType ?? "binary";
           const size = r.sizeBytes !== undefined ? ` (${r.sizeBytes} bytes)` : "";
-          return recordResult(
+          return recordText(
             callId,
             {
               tool: surfaceName,
@@ -3809,17 +3329,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
               ...(r.contentType ? { contentType: r.contentType } : {}),
             },
-            text(`[${r.name ?? "file"}${size} — ${kind}; not text. Bring it onto your computer to work with it.]`),
+            `[${r.name ?? "file"}${size} — ${kind}; not text. Bring it onto your computer to work with it.]`,
           );
         }
         default:
-          return recordResult(
+          return recordFail(
             callId,
             { tool: surfaceName, error: "unknown_action" },
-            text(
-              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members, read_file.`,
-            ),
-            true,
+            `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members, read_file.`,
           );
       }
     },
@@ -3841,13 +3358,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const files = params.files ?? [];
       await recordCall(callId, { tool: "attach", files, sandbox_id: params.sandbox_id });
       const r = await tc.attach(files, params.sandbox_id);
-      if (!r.ok) return recordResult(callId, { tool: "attach", ok: false }, text(`[not attached] ${r.message}`), true);
+      if (!r.ok) return recordFail(callId, { tool: "attach", ok: false }, `[not attached] ${r.message}`);
       const list = r.files.map((f) => `${f.name} (${f.sizeBytes} bytes, ${f.mimetype})`).join("; ");
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";
-      return recordResult(
+      return recordText(
         callId,
         { tool: "attach", ok: true, files: r.files },
-        text(`[attached] ${list} — delivered with your reply when this turn ends.${total}`),
+        `[attached] ${list} — delivered with your reply when this turn ends.${total}`,
       );
     },
   });
@@ -3861,23 +3378,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "this is not needed. Keeps the audit log and any messages already posted. " +
       "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({
-          description:
-            "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
-        }),
+      reason: optionalString(
+        "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
       ),
     }),
     async execute(callId, params) {
       if (!ref.pollFire && !surfaceTools) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
-        return recordResult(
+        return recordFail(
           callId,
           { tool: "finish_silently", noop: "not_a_poll_fire" },
-          text(
-            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
-          ),
-          true,
+          "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
         );
       }
       ref.silentRequested = true;
@@ -4202,11 +3713,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               `mcp server ${d.serverId}`,
             );
           } catch (error) {
-            return recordResult(
+            return recordFail(
               callId,
               { tool: d.name, mcpServer: d.serverId, failed: true },
-              text(`[error] ${errMessage(error)}`),
-              true,
+              `[error] ${errMessage(error)}`,
             );
           }
         },
@@ -4264,12 +3774,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               outcome.isError === true,
             );
           } catch (error) {
-            return recordResult(
-              callId,
-              { tool: d.name, client: true, failed: true },
-              text(`[error] ${errMessage(error)}`),
-              true,
-            );
+            return recordFail(callId, { tool: d.name, client: true, failed: true }, `[error] ${errMessage(error)}`);
           }
         },
       }),
@@ -4303,12 +3808,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Inspect or change your model, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
-      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
-      effort: Type.Optional(
-        Type.String({
-          description:
-            "Use modelCatalog[modelId].effortLevels from get. adaptive = native Auto; default = provider default; auto = legacy default, not adaptive reasoning.",
-        }),
+      model: optionalString("Model ID or exact display name from get, such as Astra."),
+      effort: optionalString(
+        "Use modelCatalog[modelId].effortLevels from get. adaptive = native Auto; default = provider default; auto = legacy default, not adaptive reasoning.",
       ),
       fastMode: Type.Optional(Type.Boolean()),
       lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
@@ -4461,13 +3963,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             tool: tool.name,
             ...(isObj(params) ? { purpose: params.purpose, action: params.action } : {}),
           });
-          return recordResult(
+          return recordFail(
             callId,
             { tool: tool.name, invalid: true },
-            text(
-              `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
-            ),
-            true,
+            `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
           );
         }
         return tool.execute(callId, params, signal, onUpdate, ctx);
@@ -4488,11 +3987,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
 const RETRY_SAFE_FIELD = "retrySafe";
 
-const RETRY_SAFE_SCHEMA = Type.Optional(
-  Type.Boolean({
-    description:
-      "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
-  }),
+const RETRY_SAFE_SCHEMA = optionalBoolean(
+  "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
 );
 const RERUN_INPUT_MAX_CHARS = 4_000;
 
@@ -4539,6 +4035,7 @@ function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): T
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
+const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
@@ -4577,17 +4074,10 @@ function withToolApprovalGate(
     ...tool,
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
+      const resourceTool = RESOURCE_TOOL_NAMES.has(tool.name);
       const resourceAction =
-        ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(tool.name) &&
-        isObj(params) &&
-        typeof params.action === "string"
-          ? params.action
-          : undefined;
-      const approvalIdentity = ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(
-        tool.name,
-      )
-        ? `${tool.name}:${resourceAction ?? "invalid"}`
-        : tool.name;
+        resourceTool && isObj(params) && typeof params.action === "string" ? params.action : undefined;
+      const approvalIdentity = resourceTool ? `${tool.name}:${resourceAction ?? "invalid"}` : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       let declaredReason: string | undefined;
       try {
@@ -4598,15 +4088,7 @@ function withToolApprovalGate(
         return rec.recordResult(
           callId,
           { tool: tool.name, blocked: "approval_check_failed" },
-          {
-            content: [
-              {
-                type: "text" as const,
-                text: `[error] could not check whether this call needs approval: ${errMessage(error)}`,
-              },
-            ],
-            details: {},
-          },
+          text(`[error] could not check whether this call needs approval: ${errMessage(error)}`),
           true,
         );
       }
@@ -4617,7 +4099,7 @@ function withToolApprovalGate(
         return rec.recordResult(
           callId,
           { tool: tool.name, blocked: "approval_args_too_long" },
-          { content: [{ type: "text" as const, text: `[blocked] ${reason}` }], details: {} },
+          text(`[blocked] ${reason}`),
           true,
         );
       }
@@ -4659,11 +4141,7 @@ function withToolApprovalGate(
             blocked: "needs_approval",
             reason,
           },
-          {
-            content: [{ type: "text" as const, text: `[blocked: needs human approval] ${reason}` }],
-            details: {},
-            terminate: true,
-          },
+          { ...text(`[blocked: needs human approval] ${reason}`), terminate: true },
           true,
         );
       }
@@ -4705,13 +4183,9 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
       const [, params] = args;
       if (ref.runtimeHandoff || ref.runtimeMutationPending)
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
-            },
-          ],
-          details: {},
+          ...text(
+            "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
+          ),
           terminate: !!ref.runtimeHandoff,
         };
       const mutation =
@@ -4721,11 +4195,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         try {
           await Promise.allSettled(ref.runtimeInFlight ?? []);
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
-            return {
-              content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
-              details: {},
-              terminate: true,
-            };
+            return { ...text("Runtime change cancelled before execution."), terminate: true };
           return await tool.execute(...args);
         } finally {
           ref.runtimeMutationPending = false;

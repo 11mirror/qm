@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackSender } from "../src/slack/sender.ts";
-import { statusPlaceholderKey } from "../src/slack/lib.ts";
+import { statusPlaceholderKey } from "../src/slack/delivery.ts";
 
 const RECOVERED_AGE_MS = 60_000;
 

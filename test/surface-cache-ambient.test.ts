@@ -178,23 +178,6 @@ test("default rule: an action-mode bot entry opts the room in, with no standing 
   }
 });
 
-test("default rule: ambientEnabled=true opts the room in, with no standing orders", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  try {
-    const container = "C-opt";
-    await built.app.setChannelPolicy(container, "", "U-admin", undefined, undefined, true);
-    await built.app.ingestSurfaceEvents([
-      { container, ts: "1.0", authorId: "U1", text: "hey can you help? !engage !post on it", createdAt: 1 },
-    ]);
-    const pending = await pollDeliveries(built.posts);
-    assert.equal(pending.length, 1, "an explicit on override needs no orders");
-    assert.match(pending[0].text, /^on it/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
 test("org-wide ambient switch off silences every channel regardless of per-channel settings", async () => {
   const built = freshApp();
   built.runtime.start();

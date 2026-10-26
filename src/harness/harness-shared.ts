@@ -75,23 +75,11 @@ export async function recordStoppedTurn(
   return note ?? answer;
 }
 
-export interface ResumedToolResult {
-  history: Item[];
-  message: {
-    role: "toolResult";
-    toolCallId: string;
-    toolName: string;
-    content: NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]>;
-    isError: boolean;
-    timestamp: number;
-  };
-}
-
 export async function resumeInterruptedToolCall(
   turn: HarnessTurnInput,
   ref: ToolContextRef,
   tools: readonly BridgedTool[],
-): Promise<ResumedToolResult | null> {
+): Promise<Item[] | null> {
   const call = turn.resumeToolCall;
   if (!call) return null;
   const tool = tools.find((candidate) => candidate.name === call.tool);
@@ -105,7 +93,9 @@ export async function resumeInterruptedToolCall(
     return appended;
   };
   ref.abortSignal = turn.cancel;
-  let content: ResumedToolResult["message"]["content"] = [{ type: "text", text: INTERRUPTED_TOOL_RESULT }];
+  let content: NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]> = [
+    { type: "text", text: INTERRUPTED_TOOL_RESULT },
+  ];
   let isError = true;
   try {
     if (tool && !turn.cancel?.aborted) {
@@ -138,15 +128,5 @@ export async function resumeInterruptedToolCall(
   if (!recorded) return null;
   if (!isError)
     console.log(`[harness] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);
-  return {
-    history: [...turn.history, recorded],
-    message: {
-      role: "toolResult",
-      toolCallId: call.callId,
-      toolName: call.tool,
-      content,
-      isError,
-      timestamp: recorded.createdAt,
-    },
-  };
+  return [...turn.history, recorded];
 }

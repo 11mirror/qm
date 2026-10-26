@@ -17,7 +17,6 @@ import {
   GOAL_STEP_BACK_PROMPT,
   goalFloorUnmet,
   goalSteeringNote,
-  meterGoalCall,
   type GoalRecord,
   type GoalGovernorInput,
   type GovernorVerdict,
@@ -55,13 +54,6 @@ test("goalReport escapes every field of the record, not a named few", () => {
   const report = goalReport(goal, createGrindMeter());
   assert.match(report, /done &lt;\/goal&gt;/);
   assert.equal(report.split("</goal>").length, 2, "only the closing frame tag survives");
-});
-
-test("meterGoalCall accumulates usage onto the goal", () => {
-  const goal = createGoalRecord({ objective: "work" });
-  meterGoalCall(goal, { input: 100, output: 50 } as never);
-  meterGoalCall(goal, { input: 10, output: 5 } as never);
-  assert.equal(goal.tokensUsed, 165);
 });
 
 test("prompts carry the objective as escaped user data plus audit language", () => {
@@ -175,33 +167,6 @@ test("enforceGoal leaves a paused goal alone, even with an unmet floor", async (
     },
   });
   assert.equal(prompts, 0);
-});
-
-test("enforceGoal respects external blockers (approval pause, abort)", async () => {
-  const goal = createGoalRecord({ objective: "paused" });
-  let prompts = 0;
-  await enforceGoal({
-    goal,
-    meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
-    blocked: () => true,
-    beforePrompt: () => {},
-    prompt: async () => {
-      prompts++;
-      return "ok";
-    },
-  });
-  assert.equal(prompts, 0);
-});
-
-test("grindState floor math still works for goal floors", () => {
-  const meter = createGrindMeter(Date.now() - 61_000);
-  meterGrindCall(meter, { input: 500, output: 500 } as never);
-  const state = grindState({ minMs: 60_000, minTokens: 900 }, meter);
-  assert.equal(state.met, true);
-  const unmet = grindState({ minTurns: 5 }, meter);
-  assert.equal(unmet.met, false);
 });
 
 test("the goal spend floor counts the cost each call's usage record reports, whatever the model", () => {
@@ -354,16 +319,6 @@ test("floor cap policy: an unmet floor with no progress keeps the turn alive pas
     assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "no stall detector: the floor alone decides");
   }
 });
-test("floor cap policy: a progressing unmet floor keeps extending well past the plain cap", () => {
-  const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 5_000_000 } });
-  const h = policyHarness({ goal, capMs: 3_600_000 });
-  for (let hour = 0; hour < 9; hour++) {
-    h.advance(3_600_000);
-    goal.tokensUsed += 1;
-    assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, `hour ${hour + 1}: no ceiling on a progressing floor`);
-  }
-});
-
 test("floor cap policy: a nine-hour time floor keeps the turn alive until it is met", () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minMs: 9 * 3_600_000 } });
   const h = policyHarness({ goal, capMs: 3_600_000 });

@@ -465,7 +465,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
 
 test("sandbox advertises available management actions and retires migrate", async () => {
   const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "personal:U1" };
-  const enabled = createAgentTools(ref, { sandboxResources: true });
+  const enabled = createAgentTools(ref);
   const sandbox = enabled.find((t) => t.name === "sandbox")!;
   const properties = (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
   assert.deepEqual(properties.action!.enum, ["status", "restart", "list", "create", "set_default", "retire"]);
@@ -474,18 +474,13 @@ test("sandbox advertises available management actions and retires migrate", asyn
   const execute = createAgentTools(ref).find((t) => t.name === "execute")!;
   assert.equal("computer" in (execute.parameters as { properties: object }).properties, false);
   assert.equal("to" in (execute.parameters as { properties: object }).properties, false);
-  const disabled = createAgentTools(ref).find((t) => t.name === "sandbox")!;
-  assert.deepEqual((disabled.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum, [
-    "status",
-    "restart",
-  ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
   assert.match(textOut(await call(execute, { command: "", computer: "migrate" })), /invalid execute arguments/);
 });
 
 test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
-  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  const sandbox = createAgentTools(ref).find((t) => t.name === "sandbox")!;
   assert.match(sandbox.description, /needs a computer and this scope has no default/i);
   assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
   assert.match(sandbox.description, /report.*blocked.*creation fails/is);
@@ -502,7 +497,7 @@ test("sandbox creation and default routing remain independent", async () => {
       },
     },
   };
-  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  const sandbox = createAgentTools(ref).find((t) => t.name === "sandbox")!;
   await call(sandbox, { action: "create", backend: "modal", name: "analysis", purpose: "p" });
   assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
@@ -823,7 +818,7 @@ test("background start and poll store their output only in result", async () => 
     },
     scopeLabel: "personal:U1",
   };
-  const tools = createAgentTools(ref, { sandboxResources: true });
+  const tools = createAgentTools(ref);
   await call(
     tools.find((t) => t.name === "execute"),
     { command: "serve", purpose: "Start server", background: true },
@@ -1736,15 +1731,11 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
-test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
+test('execute scope:"owner" routes to the owner-auth box', async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
-  const execute = createAgentTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;
+  const execute = createAgentTools({ current: fakeToolContext(sink) })[0]!;
   await call(execute, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
   assert.deepEqual(sink.lastExecOpts, { ownerAuth: true });
-
-  const unavailable = createAgentTools({ current: fakeToolContext() }, { scratchExec: true })[0]!;
-  const result = await call(unavailable, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
-  assert.match((result as { content: Array<{ text: string }> }).content[0]?.text ?? "", /invalid execute arguments/);
 });
 
 test("publish instructions prevent malformed app configs", () => {
@@ -2644,10 +2635,7 @@ test("sandbox management and explicit execution preserve independent target argu
       return { ok: true };
     },
   };
-  const tools = createAgentTools(
-    { current: tc, emit: () => {}, scopeLabel: "personal:U1" },
-    { sandboxResources: true },
-  );
+  const tools = createAgentTools({ current: tc, emit: () => {}, scopeLabel: "personal:U1" });
   const sandbox = tools.find((t) => t.name === "sandbox")!;
   await call(sandbox, { action: "create", backend: "modal", name: "build", purpose: "p" });
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
@@ -2676,20 +2664,17 @@ test("execute and background dispatch every process action and preserves cursors
       };
     },
   });
-  const tools = createAgentTools(
-    {
-      current: tc,
-      scopeLabel: "personal:U1",
-      emit: (entry) => {
-        entries.push(itemFields(entry as Item));
-      },
-      screenToolResult: async ({ tool, provenance }) => {
-        screens.push({ tool, provenance });
-        return { outcome: "allow" };
-      },
+  const tools = createAgentTools({
+    current: tc,
+    scopeLabel: "personal:U1",
+    emit: (entry) => {
+      entries.push(itemFields(entry as Item));
     },
-    { sandboxResources: true },
-  );
+    screenToolResult: async ({ tool, provenance }) => {
+      screens.push({ tool, provenance });
+      return { outcome: "allow" };
+    },
+  });
   const actions = [
     {
       background: true,
@@ -2770,8 +2755,8 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       throw new Error("must not start");
     },
   };
-  for (const options of [{}, { scratchExec: true }, { ownerAuthExec: true }, { reachExec: true }]) {
-    const tools = createAgentTools({ current }, { ...options, sandboxResources: true });
+  for (const options of [{}, { scratchExec: true }, { reachExec: true }]) {
+    const tools = createAgentTools({ current }, options);
     const execute = tools.find((t) => t.name === "execute")!;
     const sandbox = tools.find((t) => t.name === "sandbox")!;
     const background = tools.find((t) => t.name === "background")!;
@@ -2826,11 +2811,8 @@ test("execute preserves routing, credentials, abort and external output provenan
       },
     },
     {
-      sandboxResources: true,
       scratchExec: true,
-      ownerAuthExec: true,
       reachExec: true,
-      commandCredentialHandles: ["git"],
     },
   ).find((t) => t.name === "execute")!;
   for (const [scope, route] of [
@@ -2872,7 +2854,7 @@ test("execute and process approvals preserve intent and action identity", async 
         entries.push(itemFields(entry as Item));
       },
     };
-    const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
+    const tool = createAgentTools(ref).find((t) => t.name === "execute")!;
     assert.match(
       textOut(await call(tool, { background, command: "danger", purpose: "Verify protected operation" })),
       /needs human approval/,
@@ -2896,7 +2878,7 @@ test("execute keeps strict approval and quarantined output associated with the c
     },
     toolApprovalGate: () => false,
   };
-  const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
+  const tool = createAgentTools(ref).find((t) => t.name === "execute")!;
   await call(tool, { background: true, command: "test", purpose: "Run background tests" });
   assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:execute");
   assert.deepEqual(
@@ -2924,7 +2906,7 @@ test("strict approval records carry the gated call's redacted arguments", async 
     scopeLabel: "personal:U1",
     toolApprovalGate: () => false,
   };
-  const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
+  const tool = createAgentTools(ref).find((t) => t.name === "execute")!;
   await call(tool, { command: "ls /tmp", purpose: "Run test command" });
   await call(tool, { command: "curl --token s3cr3t-value https://example.com", purpose: "Run test command" });
   await call(tool, { command: "env", api_key: "k3y-value", purpose: "Run test command" });
@@ -2938,17 +2920,14 @@ test("strict approval records carry the gated call's redacted arguments", async 
 
 test("unscreened background output retains the called action in the durable transcript", async () => {
   const entries: Array<Record<string, unknown>> = [];
-  const tool = createAgentTools(
-    {
-      current: fakeToolContext(),
-      scopeLabel: "personal:U1",
-      emit: (entry) => {
-        entries.push(itemFields(entry as Item));
-      },
-      screenToolResult: async () => ({ outcome: "unscreened" }),
+  const tool = createAgentTools({
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    emit: (entry) => {
+      entries.push(itemFields(entry as Item));
     },
-    { sandboxResources: true },
-  ).find((t) => t.name === "background")!;
+    screenToolResult: async () => ({ outcome: "unscreened" }),
+  }).find((t) => t.name === "background")!;
   await call(tool, { action: "poll", process_id: "job" });
   assert.equal(entries[1]?.tool, "background");
   assert.equal(entries[1]?.action, "poll");
@@ -2975,7 +2954,7 @@ test("sandbox strict approvals remain action-scoped across resource activation",
   const legacy = createAgentTools(ref).find((t) => t.name === "sandbox")!;
   assert.doesNotMatch(textOut(await call(legacy, { action: "status", purpose: "Check health" })), /blocked/);
   assert.equal(checked.at(-1), "sandbox:status");
-  const execute = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
+  const execute = createAgentTools(ref).find((t) => t.name === "execute")!;
   for (const background of [false, true]) {
     ref.pausedOnApproval = false;
     assert.match(
@@ -3002,20 +2981,17 @@ test("sandbox strict approvals remain action-scoped across resource activation",
 for (const outcome of ["unscreened", "quarantine"] as const)
   test(`sandbox nonzero exit preserves safe transcript metadata when output is ${outcome}`, async () => {
     const entries: Emitted[] = [];
-    const tool = createAgentTools(
-      {
-        current: {
-          ...fakeToolContext(),
-          execute: async () => ({ stdout: "PRIVATE_COMMAND_OUTPUT", stderr: "", code: 7, timedOut: false }),
-        },
-        scopeLabel: "personal:U1",
-        emit: (entry) => {
-          entries.push(emittedItem(entry));
-        },
-        screenToolResult: async () => ({ outcome }),
+    const tool = createAgentTools({
+      current: {
+        ...fakeToolContext(),
+        execute: async () => ({ stdout: "PRIVATE_COMMAND_OUTPUT", stderr: "", code: 7, timedOut: false }),
       },
-      { sandboxResources: true },
-    ).find((t) => t.name === "execute")!;
+      scopeLabel: "personal:U1",
+      emit: (entry) => {
+        entries.push(emittedItem(entry));
+      },
+      screenToolResult: async () => ({ outcome }),
+    }).find((t) => t.name === "execute")!;
     await call(tool, { command: "exit 7", sandbox_id: "box-a", purpose: "Check failure rendering" });
     const input = entries.find((e) => e.kind === "ToolCall")!.fields;
     const output = entries.find((e) => e.kind === "ToolResult")!.fields;
@@ -3036,16 +3012,13 @@ for (const outcome of ["unscreened", "quarantine"] as const)
 
 test("sandbox call transcripts retain explicit process and lifecycle targets", async () => {
   const entries: Emitted[] = [];
-  const tool = createAgentTools(
-    {
-      current: { ...fakeToolContext(), sandboxResources: async () => ({}) },
-      scopeLabel: "personal:U1",
-      emit: (entry) => {
-        entries.push(emittedItem(entry));
-      },
+  const tool = createAgentTools({
+    current: { ...fakeToolContext(), sandboxResources: async () => ({}) },
+    scopeLabel: "personal:U1",
+    emit: (entry) => {
+      entries.push(emittedItem(entry));
     },
-    { sandboxResources: true },
-  ).find((t) => t.name === "sandbox")!;
+  }).find((t) => t.name === "sandbox")!;
   for (const action of ["status", "restart", "retire", "set_default"]) {
     await call(tool, {
       action,
@@ -3394,13 +3367,10 @@ test("quarantined mail remains pending for release and mailbox failures preserve
 });
 
 test("conversation coordinators cannot execute commands through any command tool", async () => {
-  for (const sandboxResources of [false, true]) {
+  {
     for (const options of [{ surfaceTools: true, delegateWork: true }, { delegateWork: true }]) {
       const ref: ToolContextRef = { current: fakeToolContext() };
-      const tools = createAgentTools(ref, {
-        ...options,
-        sandboxResources,
-      });
+      const tools = createAgentTools(ref, options);
       for (const name of ["execute", "background"]) assert.ok(!tools.some((tool) => tool.name === name));
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
@@ -3720,7 +3690,7 @@ test("files share preserves artifact IDs, recipient resolution and authorization
 });
 
 test("the retired credential tool is absent and execute accepts credential handles", () => {
-  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+  const tools = createAgentTools({ current: fakeToolContext() });
   assert.equal(
     tools.some((tool) => tool.name === "credential_exec"),
     false,
@@ -3737,7 +3707,7 @@ test("command and management call traces preserve purpose", async () => {
       if (event.kind === "ToolCall") calls.push(itemFields(event as Item));
     },
   };
-  const tools = createAgentTools(ref, { sandboxResources: true });
+  const tools = createAgentTools(ref);
   for (const [name, params] of [
     ["execute", { command: "pwd" }],
     ["sandbox", { action: "status" }],
@@ -3927,26 +3897,23 @@ test("context recovery is not available in read-only mode", () => {
 });
 
 test("command exit codes are data; timeouts and thrown tool errors are failures", async () => {
-  for (const sandboxResources of [false, true]) {
+  {
     for (const outcome of ["zero", "nonzero", "timeout", "provider", "denied"] as const) {
       const entries: Emitted[] = [];
-      const tool = createAgentTools(
-        {
-          current: {
-            ...fakeToolContext(),
-            execute: async () => {
-              if (outcome === "provider") throw new Error("sandbox provider unavailable");
-              if (outcome === "denied") throw new CommandDenied("[ -d dir ]", "policy denied");
-              return { stdout: "", stderr: "", code: outcome === "zero" ? 0 : 1, timedOut: outcome === "timeout" };
-            },
-          },
-          scopeLabel: "personal:U1",
-          emit: (entry) => {
-            entries.push(emittedItem(entry));
+      const tool = createAgentTools({
+        current: {
+          ...fakeToolContext(),
+          execute: async () => {
+            if (outcome === "provider") throw new Error("sandbox provider unavailable");
+            if (outcome === "denied") throw new CommandDenied("[ -d dir ]", "policy denied");
+            return { stdout: "", stderr: "", code: outcome === "zero" ? 0 : 1, timedOut: outcome === "timeout" };
           },
         },
-        { sandboxResources },
-      ).find((t) => t.name === "execute")!;
+        scopeLabel: "personal:U1",
+        emit: (entry) => {
+          entries.push(emittedItem(entry));
+        },
+      }).find((t) => t.name === "execute")!;
       const run = () =>
         call(tool, {
           command: "[ -d dir ]",
@@ -3972,7 +3939,7 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
 });
 
 test("thrown execution errors leave pending child messages for the next delivered result", async () => {
-  for (const sandboxResources of [false, true]) {
+  {
     let pending = true;
     const context = fakeToolContext();
     context.execute = async () => {
@@ -4000,7 +3967,7 @@ test("thrown execution errors leave pending child messages for the next delivere
         pending = false;
       },
     };
-    const tools = createAgentTools({ current: context }, { sandboxResources });
+    const tools = createAgentTools({ current: context });
     const tool = tools.find((t) => t.name === "execute")!;
     const input = { command: "true", purpose: "Check provider" };
     await assert.rejects(() => call(tool, input), /provider unavailable/);
@@ -4173,7 +4140,7 @@ test("background starts require a nonblank purpose as a repairable tool result",
   };
   for (const [name, action, options] of [
     ["execute", true, {}],
-    ["execute", true, { sandboxResources: true }],
+    ["execute", true, {}],
   ] as const) {
     const events: Array<Record<string, unknown>> = [];
     const tool = createAgentTools(
@@ -4206,7 +4173,7 @@ test("background list labels jobs by purpose and retains commands and legacy fal
     { ...legacy, purpose: "Run regression tests" },
     { ...legacy, processId: "old-job" },
   ];
-  const tool = createAgentTools({ current }, { sandboxResources: true }).find((t) => t.name === "background")!;
+  const tool = createAgentTools({ current }).find((t) => t.name === "background")!;
   const result = textOut(await call(tool, { action: "list" }));
   assert.match(result, /Run regression tests\n {2}bg: npm test/);
   assert.match(result, /old-job[^\n]*bg: npm test/);
@@ -4261,7 +4228,7 @@ test("background read approval cannot authorize process input or termination", a
     pendingApprovals: [],
     toolApprovalGate: (id) => id === "background:poll",
   };
-  const background = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "background")!;
+  const background = createAgentTools(ref).find((t) => t.name === "background")!;
   assert.match(textOut(await call(background, { action: "poll", process_id: "bg-1" })), /more output/);
   for (const action of ["send_input", "stop"]) {
     ref.pausedOnApproval = false;
@@ -4291,7 +4258,7 @@ test("invalid execution arguments cannot dispatch commands or retarget process o
       throw new Error("unexpected poll");
     },
   };
-  const tools = createAgentTools({ current }, { sandboxResources: true });
+  const tools = createAgentTools({ current });
   for (const params of [
     {},
     { command: "pwd", purpose: "Check computer", background: "false" },
@@ -4333,7 +4300,7 @@ test("split sandbox tools reject missing, mistyped, blank and unrelated fields w
       },
     },
   );
-  const tools = createAgentTools({ current: tc }, { sandboxResources: true });
+  const tools = createAgentTools({ current: tc });
   const inputs: Record<string, object[]> = {
     sandbox: [
       { action: "__proto__" },

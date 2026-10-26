@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isOversize,
-  attachmentFromBytes,
   isTrustedSlackHost,
   downloadSlackFile,
   processInboundFiles,
@@ -11,7 +10,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_TURN,
   type SlackFile,
-} from "../src/slack/lib.ts";
+} from "../src/slack/attachments.ts";
 
 function fakeFetch(opts: {
   ok?: boolean;
@@ -36,24 +35,34 @@ function fakeFetch(opts: {
 
 const SLACK_URL = "https://files.slack.com/files-pri/T1-F1/x";
 
-test("isOversize trips above the cap; attachmentFromBytes references the staged blob", () => {
+test("isOversize trips above the cap; processInboundFiles references the staged blob", async () => {
   assert.equal(isOversize({ size: MAX_ATTACHMENT_BYTES + 1 }), true);
   assert.equal(isOversize({ size: 10 }), false);
-  const a = attachmentFromBytes(
-    { id: "F1", name: "n.txt", mimetype: "text/plain" },
-    new Uint8Array(Buffer.from("hi")),
-    "blob123",
+  const {
+    attachments: [a],
+  } = await processInboundFiles(
+    [{ id: "F1", name: "n.txt", mimetype: "text/plain" }],
+    async () => new Uint8Array(Buffer.from("hi")),
+    async () => ({ blobId: "blob123" }),
   );
-  assert.equal(a.name, "n.txt");
-  assert.equal(a.sizeBytes, 2);
-  assert.equal(a.blobId, "blob123");
-  assert.equal(a.sourceId, "F1");
-  assert.equal(a.author, undefined);
+  assert.equal(a!.name, "n.txt");
+  assert.equal(a!.mimetype, "text/plain");
+  assert.equal(a!.sizeBytes, 2);
+  assert.equal(a!.blobId, "blob123");
+  assert.equal(a!.sourceId, "F1");
+  assert.equal(a!.author, undefined);
 });
 
-test("attachmentFromBytes carries the author when one is provided", () => {
-  const a = attachmentFromBytes({ name: "n.txt" }, new Uint8Array(Buffer.from("hi")), "blob1", "eve");
-  assert.equal(a.author, "eve");
+test("processInboundFiles carries the author when one is provided", async () => {
+  const {
+    attachments: [a],
+  } = await processInboundFiles(
+    [{ name: "n.txt" }],
+    async () => new Uint8Array(Buffer.from("hi")),
+    async () => ({ blobId: "blob1" }),
+    () => "eve",
+  );
+  assert.equal(a!.author, "eve");
 });
 
 test("isTrustedSlackHost only trusts slack.com hosts (token-leak guard)", () => {

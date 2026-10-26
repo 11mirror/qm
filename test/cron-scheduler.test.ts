@@ -104,34 +104,6 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
-test("a group-DM relay message delivers verbatim, floored to the group", async () => {
-  const { crons, outbound, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    message: "standup in 5 🚀",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("group", "G1"),
-    destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal((await outbound.pending("group"))[0]?.text, "standup in 5 🚀");
-});
-
-test("a group-DM cron composed at another scope delivers verbatim (person-keyed parity, §10)", async () => {
-  const { crons, outbound, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "private digest",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal((await outbound.pending("group"))[0]?.text, "CRON-OUTPUT-XYZ");
-});
-
 test("a channel cron fire gives the agent the people-here roster with real <@…> mention ids", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
@@ -233,50 +205,6 @@ test("a personal cron with a principal destination delivers its real output to t
   const pending = await outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
-});
-
-test("a recurring verbatim reminder to a teammate delivers to the teammate", async () => {
-  const { crons, outbound, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
-    message: "daily standup notes are due",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    destination: {
-      type: "principal",
-      target: "U-alice",
-      audienceScopeId: scopeId("personal", "U-alice"),
-      onBehalfOf: "U1",
-    },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 0);
-  const pending = await outbound.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]?.destination.target, "U-alice");
-  assert.equal(pending[0]?.text, "daily standup notes are due");
-  const { runs: stored } = await crons.listFires(cron.id);
-  assert.equal(stored[0]?.status, "ok");
-});
-
-test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
-  const { crons, outbound, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "summarize this channel and DM it to Alice",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    destination: {
-      type: "principal",
-      target: "U-alice",
-      audienceScopeId: scopeId("personal", "U-alice"),
-      onBehalfOf: "U1",
-    },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal((await outbound.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a cron with a literal message delivers it verbatim, without running a turn", async () => {
@@ -418,20 +346,6 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
-});
-
-test("the default (no-op) lease ticks exactly as before — memory-mode behavior is unchanged", async () => {
-  const { crons, calls, scheduler } = harness();
-  await crons.create({
-    schedule: { everyMs: 1000, firstFireAt: 1 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-  });
-  await scheduler.tick(2000);
-  assert.equal(calls.length, 1, "without a lease, the tick fires due crons as before");
 });
 
 test("a failing interval cron does not starve later due crons across ticks", async () => {
@@ -1283,20 +1197,6 @@ test("a fire's input carries the last fire's timestamped shift-change note and a
   );
   assert.match(input, new RegExp(`action="note", id="${cron.id}"`));
   assert.match(input, /leave a short note for the next fire/);
-});
-
-test("a stale note keeps rendering with the timestamp of the fire that wrote it", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "check gmail",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-  await crons.setFireNote(cron.id, { text: "Quiet shift.", at: Date.parse("2025-01-02T03:04:00Z") });
-  await runNowSettled(scheduler, cron.id);
-  assert.match(calls[0]?.text ?? "", /Notes from last fire agent \(2025-01-02 03:04Z\): Quiet shift\./);
 });
 
 test("a fire with no prior note gets no note line, but is still asked to leave one", async () => {

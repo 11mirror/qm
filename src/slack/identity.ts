@@ -23,18 +23,19 @@ export interface SlackUser {
 
 export type SlackIdentityMode = "slack-id" | "email";
 
-export interface UserCache {
-  get(userId: string): CachedUser | undefined;
-  set(userId: string, user: CachedUser): void;
-}
-
 export interface CachedUser {
   actor: ActorAssertion;
   timezone?: string;
   avatarUrl?: string;
 }
 
-export function createUserCache(opts: { ttlMs?: number; max?: number } = {}): UserCache {
+export interface ChannelMembership {
+  audience: ActorAssertion[];
+  publishMembers?: ActorAssertion[];
+  slackIdsByPrincipal?: Map<string, string>;
+}
+
+export function createUserCache(opts: { ttlMs?: number; max?: number } = {}): LRUCache<string, CachedUser> {
   return new LRUCache<string, CachedUser>({ max: opts.max ?? 5000, ttl: opts.ttlMs ?? 5 * 60_000 });
 }
 
@@ -68,9 +69,7 @@ export function classifyUser(
 }
 
 export function slackUserTimezone(u: SlackUser | undefined): string | undefined {
-  let raw = "";
-  if (typeof u?.tz === "string") raw = u.tz;
-  else if (typeof u?.profile?.tz === "string") raw = u.profile.tz;
+  const raw = [u?.tz, u?.profile?.tz].find((tz) => typeof tz === "string") ?? "";
   const timezone = raw.trim();
   if (!timezone || timezone.length > 64) return undefined;
   try {
@@ -108,20 +107,22 @@ export function isMpim(info: ChannelMeta | undefined): boolean {
 }
 
 export function groupDmDisplayName(members: readonly ActorAssertion[]): string | undefined {
-  const names: string[] = [];
-  const seen = new Set<string>();
+  const names = new Set<string>();
   for (const member of members) {
-    if (member.isExternalGuest) continue;
     const name = (member.displayName ?? member.externalId).trim();
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    names.push(name);
+    if (!member.isExternalGuest && name) names.add(name);
   }
-  return names.length ? names.join(", ") : undefined;
+  return names.size ? [...names].join(", ") : undefined;
 }
 
 export function isExternallyShared(info: ChannelMeta | undefined): boolean {
   return Boolean(info?.is_ext_shared || info?.is_pending_ext_shared);
+}
+
+function uniqueById(members: ActorAssertion[]): ActorAssertion[] {
+  const byId = new Map<string, ActorAssertion>();
+  for (const m of members) if (m.externalId) byId.set(m.externalId, m);
+  return [...byId.values()];
 }
 
 export function computeChannelAudience(
@@ -129,17 +130,10 @@ export function computeChannelAudience(
   members: ActorAssertion[] | null,
   info: ChannelMeta | undefined,
 ): ActorAssertion[] {
-  if (members && members.length) {
-    const byId = new Map<string, ActorAssertion>();
-    for (const m of [actor, ...members]) if (m.externalId) byId.set(m.externalId, m);
-    const audience = [...byId.values()];
-    if (isExternallyShared(info) && audience.every((m) => !m.isExternalGuest)) {
-      audience.push(externalMarker());
-    }
-    return audience;
-  }
-  if (isExternallyShared(info)) return [actor, externalMarker()];
-  return [actor];
+  if (!members?.length) return isExternallyShared(info) ? [actor, externalMarker()] : [actor];
+  const audience = uniqueById([actor, ...members]);
+  if (isExternallyShared(info) && audience.every((m) => !m.isExternalGuest)) audience.push(externalMarker());
+  return audience;
 }
 
 export function computePublishMembers(
@@ -148,13 +142,9 @@ export function computePublishMembers(
   complete: boolean,
   info: ChannelMeta | undefined,
 ): ActorAssertion[] | undefined {
-  if (!complete) return undefined;
-  if (isExternallyShared(info)) return undefined;
   const all = [actor, ...members];
-  if (all.some((m) => m.isExternalGuest)) return undefined;
-  const byId = new Map<string, ActorAssertion>();
-  for (const m of all) if (m.externalId) byId.set(m.externalId, m);
-  return [...byId.values()];
+  if (!complete || isExternallyShared(info) || all.some((m) => m.isExternalGuest)) return undefined;
+  return uniqueById(all);
 }
 
 export function allInternalChannelMembers(
@@ -162,17 +152,13 @@ export function allInternalChannelMembers(
   complete: boolean,
   info: ChannelMeta | undefined,
 ): string[] | undefined {
-  if (!complete) return undefined;
-  if (isExternallyShared(info)) return undefined;
-  if (members.some((m) => m.isExternalGuest)) return undefined;
-  return internalChannelMembers(members, true);
+  if (isExternallyShared(info) || members.some((m) => m.isExternalGuest)) return undefined;
+  return internalChannelMembers(members, complete);
 }
 
 export function internalChannelMembers(members: ActorAssertion[], complete: boolean): string[] | undefined {
   if (!complete) return undefined;
-  const ids = new Set<string>();
-  for (const m of members) if (m.externalId && !m.isExternalGuest) ids.add(m.externalId);
-  return [...ids];
+  return [...new Set(members.filter((m) => m.externalId && !m.isExternalGuest).map((m) => m.externalId))];
 }
 
 export async function resolveChannelMembership(opts: {
@@ -181,15 +167,10 @@ export async function resolveChannelMembership(opts: {
   actorSlackId: string | undefined;
   info: ChannelMeta | undefined;
   classify(id: string): Promise<{ actor: ActorAssertion; ok: boolean }>;
-}): Promise<{
-  audience: ActorAssertion[];
-  publishMembers?: ActorAssertion[];
-  slackIdsByPrincipal?: Map<string, string>;
-}> {
+}): Promise<ChannelMembership> {
   const { memberIds, actor, info } = opts;
   if (!actor.isBot && (opts.actorSlackId === undefined || !memberIds.includes(opts.actorSlackId)))
     return { audience: [actor, externalMarker()] };
-
   const members: ActorAssertion[] = [];
   const slackIdsByPrincipal = new Map<string, string>();
   let complete = true;
@@ -199,7 +180,10 @@ export async function resolveChannelMembership(opts: {
     if (member.externalId && !member.isExternalGuest) slackIdsByPrincipal.set(member.externalId, id);
     if (!ok) complete = false;
   }
-  const audience = computeChannelAudience(actor, members, info);
   const publishMembers = computePublishMembers(actor, members, complete, info);
-  return { audience, ...(publishMembers ? { publishMembers } : {}), slackIdsByPrincipal };
+  return {
+    audience: computeChannelAudience(actor, members, info),
+    ...(publishMembers ? { publishMembers } : {}),
+    slackIdsByPrincipal,
+  };
 }

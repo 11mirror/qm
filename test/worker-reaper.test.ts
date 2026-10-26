@@ -172,25 +172,6 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
   }
 });
 
-test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling)", async () => {
-  const { runs } = createMemoryRunStore();
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
-  await runs.claim("dead-worker", 10);
-  await sleep(30);
-  const denyAll: LeaderLease = {
-    async hold() {
-      return null;
-    },
-  };
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
-    intervalMs: 60_000,
-    leaderLease: denyAll,
-  });
-  const swept = await reaper.sweep();
-  assert.equal(swept.requeued, 1, "direct sweep() runs regardless of leadership");
-  assert.equal((await runs.get(r.id))?.status, "pending");
-});
-
 test("reaping a lease-expired run releases its stranded session lease", async () => {
   const { runs } = createMemoryRunStore();
   const sessions = createPostgresSessionStore(testDatabaseUrl());

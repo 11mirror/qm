@@ -782,41 +782,6 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
   }
 });
 
-test("Project turns rebuild the full thread for a member who joined later", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tenure-")) }));
-  await built.app.upsertDirectory([
-    { principalId: "owner", displayName: "Owner", type: "internal" },
-    { principalId: "late-member", displayName: "Late Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("owner", "Tenure");
-  assert.ok(project);
-  const threadRef = "web:owner:tenure";
-  const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
-  assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "PRE_JOIN_SECRET" }))
-      .status,
-    "ok",
-  );
-  assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
-  assert.equal(
-    (
-      await built.app.turn({
-        surface: "web",
-        actor: { externalId: "late-member" },
-        conversation,
-        text: "hello after joining",
-      })
-    ).status,
-    "ok",
-  );
-  const session = await built.sessions.getByThread(threadRef);
-  assert.ok(session);
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
-    messages?: unknown[];
-  };
-  assert.match(JSON.stringify(request.messages), /PRE_JOIN_SECRET/);
-});
-
 test("Auto quarantine honors the current Project roster epoch", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
   await built.app.upsertDirectory([

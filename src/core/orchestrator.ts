@@ -717,7 +717,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const visible = new Set(view.map((entry) => entry.seq));
           for (const seq of participantHistorySeqs) if (!visible.has(seq)) participantHistorySeqs.delete(seq);
         }
-        await deps.harness.turns.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
       const enforceScreen = securityPolicy.screening === "enforce";
@@ -2149,7 +2148,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     body: { securityReleaseRequestId: input.approval!.requestId },
                   }),
                 );
-              await deps.harness.turns.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(lease, {
@@ -3567,7 +3565,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
-            ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
             goal: sessionGoal,
@@ -3639,7 +3636,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.harness.turns.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
             if (recovery)

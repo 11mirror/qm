@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import {
   approvalDecisionMessage,
   approvalMessage,
-  approvalCardDestination,
   recoveredApprovalContext,
   createApprovalRegistry,
-} from "../src/slack/lib.ts";
+} from "../src/slack/approval-cards.ts";
 
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);
@@ -135,15 +134,6 @@ test("recoveredApprovalContext carries the durable summary through a restart", (
   );
   assert.ok(ctx);
   assert.equal(ctx!.summary, "Deletes the entire build/ directory and everything inside it.");
-});
-
-test("approvalCardDestination DMs the requester for a channel turn and stays in place for a DM", () => {
-  const channel = approvalCardDestination(true);
-  assert.equal(channel.toDm, true);
-  assert.match(channel.channelPointer, /DM/, "the channel gets a short pointer to the DM card");
-  const dm = approvalCardDestination(false);
-  assert.equal(dm.toDm, false);
-  assert.equal(dm.channelPointer, "");
 });
 
 test("recoveredApprovalContext rebuilds a button context from core's durable record", () => {

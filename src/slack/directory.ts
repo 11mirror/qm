@@ -2,23 +2,23 @@ import { companySlackActor, type ExternalSlackAccess } from "./external-access.t
 import {
   type ActorAssertion,
   type CachedUser,
+  type ChannelMembership,
   type ChannelMeta,
   type SlackIdentityMode,
   type SlackUser,
   allInternalChannelMembers,
   internalChannelMembers,
   classifyUser,
-  createRefreshCoalescer,
   createUserCache,
   externalMarker,
   isExternallyShared,
-  isReservedMentionName,
   probeIdentityMode,
   resolveChannelMembership,
-  setMentionIndex,
   slackUserTimezone,
-  sleep,
-} from "./lib.ts";
+} from "./identity.ts";
+import { createRefreshCoalescer } from "./message-gating.ts";
+import { isReservedMentionName, setMentionIndex } from "./mrkdwn.ts";
+import { sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
@@ -36,57 +36,13 @@ interface UserSnapshot {
   fetchedAt: number;
 }
 
-interface ChannelRow {
-  channelId: string;
-  name: string;
-  isPrivate?: boolean;
-  isExternal?: boolean;
-}
-interface ChannelMembershipRow {
-  channelId: string;
-  principalId: string;
-}
 type ChannelInvalidations = ReadonlyMap<string, ReadonlySet<string>>;
-interface GroupMembershipRow {
-  groupId: string;
-  principalId: string;
-}
-interface ChannelRef {
-  id: string;
-  name: string;
-  info: ChannelMeta;
-}
-
+type RosterRef = { id: string; info?: ChannelMeta };
 type RosterKind = { plural: string; authz: string; item: string; limit?: number; requireComplete?: boolean };
 
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
-export interface Directory {
-  getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
-  forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
-  classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }>;
-  classifyActor(client: any, userId: string): Promise<ActorAssertion>;
-  getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
-  channelMembership(
-    client: any,
-    channel: string,
-    actor: ActorAssertion,
-    actorSlackId: string | undefined,
-    info: ChannelMeta | undefined,
-    observedAt?: number,
-  ): Promise<{
-    audience: ActorAssertion[];
-    publishMembers?: ActorAssertion[];
-    slackIdsByPrincipal?: Map<string, string>;
-  }>;
-  allInternalRosters(
-    client: any,
-    refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
-    kind: RosterKind,
-  ): Promise<Map<string, string[]>>;
-  syncForUnseenGroup(client: any, groupId: string): void;
-  resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode>;
-}
+export type Directory = ReturnType<typeof createDirectory>;
 
 export function createDirectory(deps: {
   externalAccess?: ExternalSlackAccess;
@@ -98,7 +54,7 @@ export function createDirectory(deps: {
   maxPrivateChannels?: number;
   userCacheTtlMs?: number;
   coreSingleton?: boolean;
-}): Directory {
+}) {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
@@ -106,9 +62,13 @@ export function createDirectory(deps: {
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
   const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? Infinity;
   const userCache = createUserCache(deps.userCacheTtlMs ? { ttlMs: deps.userCacheTtlMs } : {});
+  const classify = (u: SlackUser | undefined): ActorAssertion =>
+    deps.externalAccess ? companySlackActor(u, deps.externalAccess) : classifyUser(u, ids.ownTeamId, ids.identityMode);
 
   let userSnapshot: UserSnapshot | undefined;
   let userSnapshotInFlight: Promise<UserSnapshot> | undefined;
+  let lastFullRosterFetchAt: number | undefined;
+  const seenGroupIds = new Set<string>();
 
   async function refreshUserSnapshot(client: any): Promise<UserSnapshot> {
     const fetchedAt = Date.now();
@@ -130,19 +90,13 @@ export function createDirectory(deps: {
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
         if (!u?.id || u.id === ids.botUserId) continue;
-        const actor = deps.externalAccess
-          ? companySlackActor(u, deps.externalAccess)
-          : classifyUser(u, ids.ownTeamId, ids.identityMode);
+        const actor = classify(u);
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
         const avatarUrl = u.profile?.image_72;
         byId.set(u.id, { actor, ...(timezone ? { timezone } : {}), ...(avatarUrl ? { avatarUrl } : {}) });
-        if (!u.deleted) {
-          indexName(u.name, u.id);
-          indexName(u.profile?.display_name, u.id);
-          indexName(u.real_name, u.id);
-        }
+        if (!u.deleted) for (const name of [u.name, u.profile?.display_name, u.real_name]) indexName(name, u.id);
       }
     }
     if (CORE_SINGLETON) setMentionIndex(mentionIndex);
@@ -154,41 +108,16 @@ export function createDirectory(deps: {
     return { byId, fetchedAt };
   }
 
-  async function listBotChannels(
-    client: any,
-  ): Promise<{ publicChannels: ChannelRef[]; privateChannels: ChannelRef[] }> {
-    const publicChannels: ChannelRef[] = [];
-    const privateChannels: ChannelRef[] = [];
+  async function listBotConversations(client: any, types: string): Promise<Array<ChannelMeta & { id: string }>> {
+    const out: Array<ChannelMeta & { id: string }> = [];
     for await (const res of client.paginate("conversations.list", {
-      types: "public_channel,private_channel",
+      types,
       exclude_archived: true,
       limit: 1000,
     }) as AsyncIterable<any>) {
-      for (const c of (res.channels ?? []) as Array<{
-        id?: string;
-        name?: string;
-        is_member?: boolean;
-        is_private?: boolean;
-        is_ext_shared?: boolean;
-        is_pending_ext_shared?: boolean;
-      }>) {
-        if (!c?.id || !c?.name || !c.is_member) continue;
-        if (c.is_private) {
-          privateChannels.push({
-            id: c.id,
-            name: c.name,
-            info: { is_private: true, is_ext_shared: c.is_ext_shared, is_pending_ext_shared: c.is_pending_ext_shared },
-          });
-        } else {
-          publicChannels.push({
-            id: c.id,
-            name: c.name,
-            info: { is_private: false, is_ext_shared: c.is_ext_shared, is_pending_ext_shared: c.is_pending_ext_shared },
-          });
-        }
-      }
+      for (const c of res.channels ?? []) if (c?.id && c.is_member) out.push(c);
     }
-    return { publicChannels, privateChannels };
+    return out;
   }
 
   async function fetchChannelMemberIds(client: any, channel: string): Promise<string[]> {
@@ -204,15 +133,14 @@ export function createDirectory(deps: {
 
   async function allInternalRosters(
     client: any,
-    refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
+    refs: ReadonlyArray<RosterRef>,
     kind: RosterKind,
   ): Promise<Map<string, string[]>> {
     const classified = await allClassifiedRosters(client, refs, kind);
     const rosters = new Map<string, string[]>();
     for (const ref of refs) {
       const roster = classified.get(ref.id);
-      if (!roster) continue;
-      const internalIds = allInternalChannelMembers(roster.actors, roster.complete, ref.info);
+      const internalIds = roster && allInternalChannelMembers(roster.actors, roster.complete, ref.info);
       if (internalIds) rosters.set(ref.id, internalIds);
     }
     return rosters;
@@ -220,23 +148,20 @@ export function createDirectory(deps: {
 
   async function allClassifiedRosters(
     client: any,
-    refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
+    refs: ReadonlyArray<RosterRef>,
     kind: RosterKind,
   ): Promise<Map<string, { actors: ActorAssertion[]; complete: boolean }>> {
     const rosters = new Map<string, { actors: ActorAssertion[]; complete: boolean }>();
     const limit = kind.limit ?? Infinity;
-    const slice = refs.slice(0, limit);
-    if (refs.length > slice.length) {
+    const queue = refs.slice(0, limit);
+    if (refs.length > queue.length) {
       console.error(
-        `[slack-plugin] ${refs.length} ${kind.plural} exceed the cap (${limit}); ${refs.length - slice.length} omitted from ${kind.authz} authorization`,
+        `[slack-plugin] ${refs.length} ${kind.plural} exceed the cap (${limit}); ${refs.length - queue.length} omitted from ${kind.authz} authorization`,
       );
     }
-    const queue = [...slice];
     await Promise.all(
       Array.from({ length: Math.min(ROSTER_FETCH_CONCURRENCY, queue.length) }, async () => {
-        for (;;) {
-          const ref = queue.pop();
-          if (!ref) return;
+        for (let ref = queue.pop(); ref; ref = queue.pop()) {
           let memberIds: string[];
           try {
             memberIds = await fetchChannelMemberIds(client, ref.id);
@@ -266,134 +191,76 @@ export function createDirectory(deps: {
     return rosters;
   }
 
-  async function computeChannelMembership(
-    client: any,
-    publicChannels: ChannelRef[],
-    privateChannels: ChannelRef[],
-    invalidations: ChannelInvalidations,
-  ): Promise<{
-    channelMembers: ChannelMembershipRow[];
-    channelRosterIds: string[];
-    channelRevocations: ChannelMembershipRow[];
-  }> {
-    const refs = [...publicChannels, ...privateChannels];
-    const channelMembers: ChannelMembershipRow[] = [];
-    const channelRosterIds: string[] = [];
-    const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
-      [...principalIds].map((principalId) => ({ channelId, principalId })),
-    );
-    const rosters = await allClassifiedRosters(client, refs, {
-      plural: "channels",
-      authz: "channel",
-      item: "channel",
-      limit: publicChannels.length + Math.min(privateChannels.length, MAX_PRIVATE_CHANNELS),
-    });
-    for (const channel of refs) {
-      const roster = rosters.get(channel.id);
-      const internalIds = roster && internalChannelMembers(roster.actors, roster.complete);
-      if (!internalIds) continue;
-      const revoked = invalidations.get(channel.id);
-      channelRosterIds.push(channel.id);
-      for (const principalId of internalIds) {
-        if (!revoked?.has(principalId)) channelMembers.push({ channelId: channel.id, principalId });
-      }
-    }
-    return { channelMembers, channelRosterIds, channelRevocations };
-  }
-
-  async function listBotGroupDms(client: any): Promise<string[]> {
-    const groupIds: string[] = [];
-    for await (const res of client.paginate("conversations.list", {
-      types: "mpim",
-      exclude_archived: true,
-      limit: 1000,
-    }) as AsyncIterable<any>) {
-      for (const c of (res.channels ?? []) as Array<{ id?: string; is_member?: boolean }>) {
-        if (c?.id && c.is_member) groupIds.push(c.id);
-      }
-    }
-    return groupIds;
-  }
-
-  async function computeGroupMembership(
-    client: any,
-    groupIds: string[],
-  ): Promise<{ groupMembers: GroupMembershipRow[]; groupRosterIds: string[] }> {
-    const groupMembers: GroupMembershipRow[] = [];
-    const rosters = await allInternalRosters(
-      client,
-      groupIds.map((id) => ({ id })),
-      { plural: "group DMs", authz: "group-DM-send", item: "group DM", limit: groupIds.length },
-    );
-    for (const id of groupIds) {
-      const internalIds = rosters.get(id);
-      if (!internalIds) continue;
-      for (const pid of internalIds) groupMembers.push({ groupId: id, principalId: pid });
-    }
-    return { groupMembers, groupRosterIds: [...rosters.keys()] };
-  }
-
-  let lastFullRosterFetchAt: number | undefined;
-  const seenGroupIds = new Set<string>();
-
   async function fetchChannels(
     client: any,
     invalidations: ChannelInvalidations,
     targetChannelIds?: ReadonlySet<string>,
-  ): Promise<{
-    channels: ChannelRow[];
-    channelMembers: ChannelMembershipRow[];
-    channelRosterIds: string[];
-    channelRevocations: ChannelMembershipRow[];
-    groupMembers?: GroupMembershipRow[];
-    groupIds?: string[];
-    groupRosterIds?: string[];
-    fetchedAt: number;
-    groupsFetchedAt?: number;
-    fullRosterFetchedAt?: number;
-  } | null> {
+  ) {
     const fetchedAt = Date.now();
-    let listed: { publicChannels: ChannelRef[]; privateChannels: ChannelRef[] };
+    let listed: Array<ChannelMeta & { id: string; name: string }>;
     try {
-      listed = await listBotChannels(client);
+      const all = (await listBotConversations(client, "public_channel,private_channel")).filter(
+        (c): c is ChannelMeta & { id: string; name: string } => Boolean(c.name),
+      );
+      listed = [...all.filter((c) => !c.is_private), ...all.filter((c) => c.is_private)];
     } catch (err) {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
       return null;
     }
-    const channels = [...listed.publicChannels, ...listed.privateChannels].map((channel) => ({
-      channelId: channel.id,
-      name: channel.name,
-      ...(channel.info.is_private ? { isPrivate: true } : {}),
-      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+    const channels = listed.map((c) => ({
+      channelId: c.id,
+      name: c.name,
+      ...(c.is_private ? { isPrivate: true } : {}),
+      ...(isExternallyShared(c) ? { isExternal: true } : {}),
     }));
     const fullRefresh =
       !targetChannelIds?.size &&
       (lastFullRosterFetchAt === undefined || fetchedAt - lastFullRosterFetchAt >= CHANNEL_MEMBERS_TTL_MS);
-    const computed = await computeChannelMembership(
-      client,
-      listed.publicChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
-      listed.privateChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
-      invalidations,
+    const refs = listed.filter((c) => fullRefresh || targetChannelIds?.has(c.id));
+    const publicCount = refs.filter((c) => !c.is_private).length;
+    const rosters = await allClassifiedRosters(client, refs, {
+      plural: "channels",
+      authz: "channel",
+      item: "channel",
+      limit: publicCount + Math.min(refs.length - publicCount, MAX_PRIVATE_CHANNELS),
+    });
+    const channelMembers: Array<{ channelId: string; principalId: string }> = [];
+    const channelRosterIds: string[] = [];
+    for (const { id: channelId } of refs) {
+      const roster = rosters.get(channelId);
+      const internalIds = roster && internalChannelMembers(roster.actors, roster.complete);
+      if (!internalIds) continue;
+      channelRosterIds.push(channelId);
+      const revoked = invalidations.get(channelId);
+      for (const principalId of internalIds)
+        if (!revoked?.has(principalId)) channelMembers.push({ channelId, principalId });
+    }
+    const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
+      [...principalIds].map((principalId) => ({ channelId, principalId })),
     );
-    let groups:
-      | {
-          groupMembers: GroupMembershipRow[];
-          groupIds: string[];
-          groupRosterIds: string[];
-          groupsFetchedAt: number;
-        }
-      | undefined;
+    let groups = {};
     if (fullRefresh) {
       try {
-        const groupsFetchedAt = Date.now();
-        const groupIds = await listBotGroupDms(client);
+        const groupsSyncedAt = Date.now();
+        const groupIds = (await listBotConversations(client, "mpim")).map((c) => c.id);
         for (const id of groupIds) seenGroupIds.add(id);
-        groups = { ...(await computeGroupMembership(client, groupIds)), groupIds, groupsFetchedAt };
+        const groupRosters = await allInternalRosters(
+          client,
+          groupIds.map((id) => ({ id })),
+          { plural: "group DMs", authz: "group-DM-send", item: "group DM", limit: groupIds.length },
+        );
+        const groupMembers = groupIds.flatMap((groupId) =>
+          (groupRosters.get(groupId) ?? []).map((principalId) => ({ groupId, principalId })),
+        );
+        groups = { groupMembers, groupIds, groupRosterIds: [...groupRosters.keys()], groupsSyncedAt };
       } catch (err) {
         console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
       }
     }
-    return { channels, ...computed, fetchedAt, ...groups, fullRosterFetchedAt: fullRefresh ? fetchedAt : undefined };
+    return {
+      push: { channels, channelMembers, channelRosterIds, channelRevocations, channelsSyncedAt: fetchedAt, ...groups },
+      fullRosterFetchedAt: fullRefresh ? fetchedAt : undefined,
+    };
   }
 
   async function pushDirectory(
@@ -416,11 +283,8 @@ export function createDirectory(deps: {
       console.error("[slack-plugin] directory sync lease failed:", errMessage(err));
       return false;
     }
-    if (pushed === null) {
-      console.log("[slack-plugin] directory sync skipped: the sync lease is held elsewhere");
-      return false;
-    }
-    return pushed;
+    if (pushed === null) console.log("[slack-plugin] directory sync skipped: the sync lease is held elsewhere");
+    return pushed ?? false;
   }
 
   async function crawlAndPush(
@@ -432,43 +296,24 @@ export function createDirectory(deps: {
   ): Promise<boolean> {
     const members = [...snap.byId.entries()]
       .filter(([, u]) => !u.actor.isExternalGuest)
-      .map(([slackId, u]) => {
-        const a = u.actor;
-        return {
-          principalId: a.externalId,
-          displayName: a.displayName ?? a.externalId,
-          type: "internal" as const,
-          ...(slackId && slackId !== a.externalId ? { slackId } : {}),
-          ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
-        };
-      });
+      .map(([slackId, { actor: a, avatarUrl }]) => ({
+        principalId: a.externalId,
+        displayName: a.displayName ?? a.externalId,
+        type: "internal" as const,
+        ...(slackId && slackId !== a.externalId ? { slackId } : {}),
+        ...(avatarUrl ? { avatarUrl } : {}),
+      }));
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);
     if (leaseLost()) {
       console.error("[slack-plugin] directory sync lease lost mid-crawl — discarding the crawl");
       return false;
     }
-    if (!members.length && !(fetched && fetched.channels.length)) return false;
+    if (!members.length && !fetched?.push.channels.length) return false;
     try {
       const applied = await core.pushDirectory({
         members,
         membersSyncedAt: snap.fetchedAt,
-        ...(fetched
-          ? {
-              channels: fetched.channels,
-              channelMembers: fetched.channelMembers,
-              channelRosterIds: fetched.channelRosterIds,
-              channelRevocations: fetched.channelRevocations,
-              channelsSyncedAt: fetched.fetchedAt,
-              ...(fetched.groupMembers
-                ? {
-                    groupMembers: fetched.groupMembers,
-                    groupIds: fetched.groupIds,
-                    groupRosterIds: fetched.groupRosterIds,
-                    groupsSyncedAt: fetched.groupsFetchedAt,
-                  }
-                : {}),
-            }
-          : {}),
+        ...fetched?.push,
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
       });
       if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
@@ -496,12 +341,7 @@ export function createDirectory(deps: {
         });
       userSnapshotInFlight.catch(swallowAs("slack: user snapshot refresh", undefined));
     }
-    if (snap) return snap;
-    try {
-      return await userSnapshotInFlight;
-    } catch {
-      return undefined;
-    }
+    return snap ?? userSnapshotInFlight?.catch(() => undefined);
   }
 
   let directorySyncClient: any;
@@ -547,12 +387,14 @@ export function createDirectory(deps: {
   ): Promise<void> {
     directorySyncClient = client;
     if (!invalidateChannelId) fullDirectorySyncRequested = true;
-    if (invalidateChannelId && invalidatePrincipalId) {
-      const principals = invalidatedChannelMembers.get(invalidateChannelId) ?? new Set<string>();
-      principals.add(invalidatePrincipalId);
-      invalidatedChannelMembers.set(invalidateChannelId, principals);
+    else {
+      if (invalidatePrincipalId) {
+        const principals = invalidatedChannelMembers.get(invalidateChannelId) ?? new Set<string>();
+        principals.add(invalidatePrincipalId);
+        invalidatedChannelMembers.set(invalidateChannelId, principals);
+      }
+      targetedChannelIds.add(invalidateChannelId);
     }
-    if (invalidateChannelId) targetedChannelIds.add(invalidateChannelId);
     return coalescedDirectorySync();
   }
 
@@ -565,25 +407,17 @@ export function createDirectory(deps: {
   async function classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }> {
     const cached = userId === undefined ? undefined : userCache.get(userId);
     if (cached) return { ...cached, ok: true };
-    const snapshot = await getUserSnapshot(client);
-    const fromSnapshot = userId === undefined ? undefined : snapshot?.byId.get(userId);
+    const fromSnapshot = (await getUserSnapshot(client))?.byId.get(userId ?? "");
     if (fromSnapshot) return { ...fromSnapshot, ok: true };
     try {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
-      const actor = deps.externalAccess
-        ? companySlackActor(user, deps.externalAccess)
-        : classifyUser(user, ids.ownTeamId, ids.identityMode);
       const timezone = slackUserTimezone(user);
-      const classified = { actor, ...(timezone ? { timezone } : {}) };
+      const classified = { actor: classify(user), ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
       return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
     }
-  }
-
-  async function classifyActor(client: any, userId: string): Promise<ActorAssertion> {
-    return (await classifyUserCached(client, userId)).actor;
   }
 
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
@@ -601,12 +435,8 @@ export function createDirectory(deps: {
     actorSlackId: string | undefined,
     info: ChannelMeta | undefined,
     observedAt?: number,
-  ): Promise<{
-    audience: ActorAssertion[];
-    publishMembers?: ActorAssertion[];
-    slackIdsByPrincipal?: Map<string, string>;
-  }> {
-    let membership: Awaited<ReturnType<typeof resolveChannelMembership>>;
+  ): Promise<ChannelMembership> {
+    let membership: ChannelMembership;
     try {
       const memberIds = await fetchChannelMemberIds(client, channel);
       membership = await resolveChannelMembership({
@@ -667,7 +497,7 @@ export function createDirectory(deps: {
     getUserSnapshot,
     forceDirectorySync,
     classifyUserCached,
-    classifyActor,
+    classifyActor: async (client: any, userId: string) => (await classifyUserCached(client, userId)).actor,
     getChannelInfo,
     channelMembership,
     allInternalRosters,

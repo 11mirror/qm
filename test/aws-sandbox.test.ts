@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAwsSandbox, type StoredMicrovm } from "../src/sandbox/aws-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
@@ -161,20 +160,6 @@ test("concurrent provisions for one scope launch a single body", async () => {
   const [a, b] = await Promise.all([sb.provision(layers), sb.provision(layers)]);
   assert.equal(a.id, b.id);
   assert.equal(fake.runCount, 1);
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(makeSandbox(installFakeMicrovm())),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = makeSandbox(installFakeMicrovm(), {
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, aws can move bytes by reference");
 });
 
 test("scope retirement terminates only its body and forgets its record, including from another process", async () => {
