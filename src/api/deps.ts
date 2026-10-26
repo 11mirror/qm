@@ -198,3 +198,6 @@ export interface ServerDeps {
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   blobTransfer?: BlobTransferStore;
 }
+
+/** ServerDeps for routes that read or write per-scope configuration. */
+export type ConfiguredDeps = ServerDeps & { config: ScopedConfigStore };

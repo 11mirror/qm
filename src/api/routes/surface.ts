@@ -24,7 +24,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { isConfigured, withActor, type ApiCtx, type Route } from "./route.ts";
 import type { ItemKind } from "../../sessions/items.ts";
 import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 import { tenant } from "../../tenant.ts";
@@ -852,7 +852,7 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const account = ctx.url.searchParams.get("account");
   if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
@@ -866,7 +866,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!isConfigured(ctx) || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
@@ -920,7 +920,7 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 }
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!isConfigured(ctx) || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   if (ctx.capability && !livePersonCapability(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);

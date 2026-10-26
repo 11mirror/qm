@@ -13,7 +13,7 @@ import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import { ADMIN_RESOURCE_BY_ID } from "../src/api/routes/admin-resources.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import type { ConfiguredCtx } from "../src/api/routes/route.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   nonDeploymentCredential,
@@ -340,7 +340,7 @@ test("a deployment credential cannot back a decision provider", async () => {
           rules: async () => [],
         },
       },
-    }) as unknown as ApiCtx;
+    }) as unknown as ConfiguredCtx;
   const provider = (credential: string) => ({
     provider: { id: "p", protocol: "decisions", baseUrl: "https://api.search.example/search", credential },
   });

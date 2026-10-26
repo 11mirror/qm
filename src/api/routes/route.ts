@@ -4,7 +4,7 @@ import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
 
 export { compilePath, findRoute };
 import type { App } from "../app.ts";
-import type { ServerDeps } from "../deps.ts";
+import type { ConfiguredDeps, ServerDeps } from "../deps.ts";
 import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { PortalIdentity } from "../../auth/portal-identity.ts";
@@ -23,6 +23,10 @@ export interface BaseCtx {
   params: Record<string, string>;
   capability?: CapabilityClaims | null;
 }
+
+export type ConfiguredCtx = ApiCtx & { deps: ConfiguredDeps };
+
+export const isConfigured = (ctx: ApiCtx): ctx is ConfiguredCtx => ctx.deps.config !== undefined;
 
 export interface ApiCtx extends BaseCtx {
   body: unknown;
