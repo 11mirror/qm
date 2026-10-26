@@ -202,7 +202,7 @@ import {
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
+import { createModalSandbox, modalLegacyRecordMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox, type StoredPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
@@ -805,6 +805,7 @@ export function buildApp(
   };
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
+  pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
   const buildLocal = (): Sandbox =>
