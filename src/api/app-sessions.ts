@@ -1009,7 +1009,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
         const f = await deps.files.get(idOrName);
         return f ? home(f, f.ownerScopeId, fileRef(f.id)) : null;
       }
-      const d = (await deps.deploy.listDeployments()).find((x) => x.id === idOrName || x.name === idOrName);
+      const d = await deps.deploy.getDeployment(idOrName);
       return d ? home(d, d.ownerScopeId, deployRef(d.id)) : null;
     },
 

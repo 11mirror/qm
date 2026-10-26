@@ -546,7 +546,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const r = parseRef(ref);
     if (r.kind === "skill") return (await deps.skills.get(r.id))?.createdBy;
     if (r.kind === "cron") return (await deps.crons.get(r.id))?.createdBy;
-    if (r.kind === "deploy") return (await deps.deploy.listDeployments()).find((d) => d.id === r.id)?.createdBy;
+    if (r.kind === "deploy") {
+      const deployment = await deps.deploy.getDeployment(r.id);
+      return deployment?.id === r.id ? deployment.createdBy : undefined;
+    }
     if (r.kind === "file") return (await deps.files.resolveByIds([{ ownerScopeId, id: r.id }]))[0]?.createdBy;
     return undefined;
   }

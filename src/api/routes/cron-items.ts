@@ -1,3 +1,4 @@
+import { collectBytes } from "../../util/bytes.ts";
 import { z } from "zod";
 import type { Cron, InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
@@ -294,8 +295,14 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
     return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
   }
-  const bytes = Buffer.from(await upstream.arrayBuffer());
-  if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
+  let bytes: Buffer;
+  try {
+    bytes = (
+      await collectBytes(upstream.body, { maxBytes: IMAGE_MAX_BYTES, tooLarge: () => new Error("image too large") })
+    ).data;
+  } catch (e) {
+    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+  }
   ctx.res.writeHead(200, {
     "content-type": type,
     "content-length": String(bytes.length),

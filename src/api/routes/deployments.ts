@@ -959,7 +959,7 @@ function signInFailedHtml(signIn: string): string {
 }
 
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
-  (await app.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName)?.id;
+  (await app.getDeployment(idOrName))?.id;
 
 function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
   const prefix = "/v1/deployments/";
@@ -1260,7 +1260,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   if (principalId) {
     deployment = (await app.listDeploymentsForViewer(principalId)).find((d) => d.id === id || d.name === id);
   } else {
-    const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
+    const stored = await app.getDeployment(id);
     deployment = stored ? deploymentView(stored) : undefined;
   }
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
