@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
+import { createPerTurnStrategy, type PendingCapture } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const ACTOR = "U1";
 const CHANNEL = scopeId("channel", "C9");
@@ -58,7 +58,12 @@ test("redirected capture writes only to the resolved target, not the speaker's n
 
 test("burst debounce: turns within the quiet window flush as one extraction after it elapses", async () => {
   const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30 });
+  const strategy = createPerTurnStrategy({
+    harness: createMockHarness().models,
+    memory,
+    captureQuietMs: 30,
+    pending: testMap<PendingCapture>(),
+  });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
@@ -74,6 +79,7 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
     harness: createMockHarness().models,
     memory,
     captureQuietMs: 60_000,
+    pending: testMap<PendingCapture>(),
     captureMaxTurns: 2,
   });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
@@ -86,7 +92,12 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
 
 test("burst debounce: different speakers in one channel keep separate bursts in the channel", async () => {
   const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30 });
+  const strategy = createPerTurnStrategy({
+    harness: createMockHarness().models,
+    memory,
+    captureQuietMs: 30,
+    pending: testMap<PendingCapture>(),
+  });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
     input: "remember that my task list is ship the launch",
@@ -127,4 +138,41 @@ test("an autonomous (triggered) channel turn captures nothing, even for a human 
 
   assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing on a triggered wake");
   assert.equal(await memory.read(PERSONAL), "", "owner notebook remains untouched on a triggered wake");
+});
+
+test("burst debounce: turns appended through two instances flush once, as one extraction", async () => {
+  const { memory } = freshMemory();
+  const pending = testMap<PendingCapture>();
+  const prompts: string[] = [];
+  const harness = {
+    oneShot: async (_system: string, prompt: string) => {
+      prompts.push(prompt);
+      return "SENSITIVITY: ordinary\n- Combined fact";
+    },
+  };
+  const one = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, pending });
+  const two = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, pending });
+  await one.onTurnEnd!({ scopeId: DM, input: "first", reply: REPLY, actorId: ACTOR });
+  await two.onTurnEnd!({ scopeId: DM, input: "second", reply: REPLY, actorId: ACTOR });
+  await flushed(() => memory.read(DM), [/Combined fact/]);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(prompts.length, 1, "the first instance's timer yields to the later append");
+  assert.match(prompts[0]!, /first[\s\S]*second/);
+});
+
+test("burst debounce: the sweep finishes a burst whose instance went away", async () => {
+  const { memory } = freshMemory();
+  const pending = testMap<PendingCapture>();
+  await pending.put("orphan", {
+    scopeId: DM,
+    conversationScopeId: DM,
+    actorId: ACTOR,
+    turns: [{ input: "remember that fact one is alpha", reply: REPLY }],
+    token: "left-behind",
+    at: Date.now() - 10 * 60_000,
+  });
+  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30, pending });
+  await strategy.sweep();
+  assert.match(await memory.read(DM), /fact one is alpha/);
+  assert.deepEqual(await pending.all(), []);
 });
