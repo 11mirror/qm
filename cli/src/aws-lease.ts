@@ -17,8 +17,15 @@ export function awsText(aws: AwsConfig, args: string[]): string {
   return capture(process.env.AWS_BIN ?? "aws", [...args, "--region", aws.region, "--output", "text"]).trim();
 }
 
+/**
+ * The AWS error code behind a failed call: the error's own name (SDK-style errors), the AWS CLI's
+ * "An error occurred (<Code>)", or a leading "<Code>: message" line.
+ */
 export function awsErrorCode(error: unknown): string | undefined {
-  return /An error occurred \((\w+)\)/.exec(errMessage(error))?.[1];
+  const name = (error as { name?: unknown } | null | undefined)?.name;
+  if (typeof name === "string" && /^\w+(?:Exception|Fault)$/.test(name)) return name;
+  const message = errMessage(error);
+  return /An error occurred \((\w+)\)/.exec(message)?.[1] ?? /^\s*([A-Z]\w*(?:Exception|Fault)):/m.exec(message)?.[1];
 }
 
 export function deployLocksTable(aws: AwsConfig): string {
