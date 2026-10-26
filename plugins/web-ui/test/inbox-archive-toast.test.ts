@@ -27,7 +27,9 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { setItemStatus, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { setItemStatus } = await vite.ssrLoadModule("/src/inbox-actions.ts");
+    const { toInboxItem, inboxState } = await vite.ssrLoadModule("/src/inbox-model.ts");
     const entry = {
       id: "item-1",
       cronId: "cron-1",
