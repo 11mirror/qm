@@ -122,7 +122,6 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
               }
             : { apiKey: "sk-offline-test-key" }),
         });
-        t.after(() => harness.turns.close?.());
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;
         for (const effortLevel of [
           "high",

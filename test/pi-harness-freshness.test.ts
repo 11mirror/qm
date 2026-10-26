@@ -86,10 +86,6 @@ test("a squatted shared cwd falls back to a per-turn cwd that is removed afterwa
   rmSync(stableCwd(prefix), { force: true });
 });
 
-test("the Pi harness exposes no session-reset hook after removing session state", () => {
-  assert.equal(createPiHarness().turns.resetSession, undefined);
-});
-
 test("ack emoji keeps working on a non-Anthropic base model when an Anthropic key is present", async () => {
   const harness = createPiHarness({
     defaultModelId: "gpt-5.6-sol",

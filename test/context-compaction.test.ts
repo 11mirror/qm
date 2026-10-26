@@ -57,17 +57,7 @@ const PERSONAL = scopeId("personal", "U1");
 function spyHarness(opts: { withSummarizer?: boolean } = {}) {
   const base = createMockHarness();
   const compactCalls: HarnessCompactInput[] = [];
-  const resetCalls: string[] = [];
-  const harness: Harness = {
-    ...base,
-    turns: {
-      ...base.turns,
-      resetSession(sessionId: string) {
-        resetCalls.push(sessionId);
-      },
-    },
-    models: { ...base.models },
-  };
+  const harness: Harness = { ...base, models: { ...base.models } };
   if (opts.withSummarizer === false) {
     delete harness.models.compactHistory;
   } else {
@@ -76,7 +66,7 @@ function spyHarness(opts: { withSummarizer?: boolean } = {}) {
       return base.models.compactHistory!(input);
     };
   }
-  return { harness, compactCalls, resetCalls };
+  return { harness, compactCalls };
 }
 
 function fakeSandbox(): Sandbox {
@@ -199,7 +189,7 @@ async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, de
 }
 
 test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
+  const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(
@@ -220,8 +210,6 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
 
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(contextSummary(summaries[0]!)!.throughSeq, 4, "summary throughSeq must advance to seq 4");
-
-  assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
 
   assert.equal(res.reply, "history:2", "rebuilt context is [summary, keep-recent…]");
 });
@@ -253,7 +241,7 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
 });
 
 test("token overflow triggers compaction with only a few huge entries", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
+  const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, 50);
 
   const big = "many different tokens here ".repeat(25);
@@ -266,7 +254,6 @@ test("token overflow triggers compaction with only a few huge entries", async ()
   assert.equal(res.status, "ok");
 
   assert.ok(compactCalls.length >= 1, "token overflow must trigger compaction despite the low entry count");
-  assert.equal(resetCalls[0], sid, "compaction resets the harness session");
   const summaries = await summaryEntries(sessions, sid);
   assert.ok(summaries.length >= 1, "a summary entry is written");
   assert.ok(
@@ -303,7 +290,7 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
 });
 
 test("with no harness summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness({ withSummarizer: false });
+  const { harness, compactCalls } = spyHarness({ withSummarizer: false });
   assert.equal(harness.models.compactHistory, undefined, "fixture: summarizer is absent");
   const { orch, sessions } = buildOrchestrator(harness, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
@@ -316,7 +303,6 @@ test("with no harness summarizer, overflow falls back to a plain slice — no su
   assert.equal(res.status, "ok");
 
   assert.equal(compactCalls.length, 0, "no summarizer → compactHistory never called");
-  assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
   assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
@@ -659,7 +645,7 @@ test("the context window start never regresses as the log grows", () => {
 });
 
 function gatedHarness() {
-  const { harness, compactCalls, resetCalls } = spyHarness();
+  const { harness, compactCalls } = spyHarness();
   let open = (): void => {};
   const gate = new Promise<void>((resolve) => {
     open = () => resolve();
@@ -670,7 +656,7 @@ function gatedHarness() {
     await gate;
     return text;
   };
-  return { harness, compactCalls, resetCalls, open };
+  return { harness, compactCalls, open };
 }
 
 async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_000): Promise<void> {
@@ -742,7 +728,7 @@ test("the background pass summarizes first and requests its lease only after the
 });
 
 test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
-  const { harness, compactCalls, resetCalls, open } = gatedHarness();
+  const { harness, compactCalls, open } = gatedHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
@@ -757,7 +743,6 @@ test("the background pass waits out a turn that holds the lock rather than throw
   open();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal((await summaryEntries(sessions, sid)).length, 0, "the pass wrote nothing behind the turn's back");
-  assert.equal(resetCalls.length, 0);
 
   await sessions.releaseLease(held!);
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
@@ -799,7 +784,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 });
 
 test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
-  const { harness, compactCalls, resetCalls, open } = gatedHarness();
+  const { harness, compactCalls, open } = gatedHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
@@ -819,7 +804,6 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 1, "only the rival fold — the stale one was dropped");
   assert.equal(contextSummary(summaries[0]!)?.text, "a rival fold");
-  assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
 });
 
 test("the token estimate counts the environment note persisted on a user entry", () => {
@@ -833,15 +817,11 @@ test("the token estimate counts the environment note persisted on a user entry",
 test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
   const base = createMockHarness();
   const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
-  let resets = 0;
   const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
   const harness: Harness = {
     ...base,
     turns: {
       ...base.turns,
-      resetSession: async () => {
-        resets++;
-      },
       runTurn: async (input) => {
         seen.push(input);
         if (seen.length === 1) {
@@ -868,7 +848,6 @@ test("runtime handoff continues once with saved results under the original run a
   const { orch, sessions } = buildOrchestrator(harness, undefined, 60000);
   await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
   assert.equal(seen.length, 2);
-  assert.equal(resets, 1);
   const session = await sessions.getByThread(conv.threadRef);
   const entries = await sessions.getItems(session!.id);
   assert.deepEqual(
@@ -899,7 +878,7 @@ test("runtime handoff cannot restart a stopped task", async () => {
   assert.equal(calls, 1);
 });
 
-test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
+test("a retry restores a committed runtime decision after a crash, without replaying the selection", async () => {
   const base = createMockHarness();
   const choice = { modelId: "gpt-6-astra" };
   let calls = 0;
@@ -907,9 +886,6 @@ test("a retry restores a committed runtime decision after reset crashes, without
     ...base,
     turns: {
       ...base.turns,
-      resetSession: async () => {
-        throw new Error("worker died during reset");
-      },
       runTurn: async (input) => {
         calls++;
         if (calls === 1) {
@@ -924,6 +900,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
           return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
         }
         assert.deepEqual(input.runtime, choice);
+        if (calls === 2) throw new Error("worker died after the handoff");
         return { reply: "resumed" };
       },
     },
@@ -932,7 +909,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
   const input = { ...turn("switch and finish"), runId: "5f0c3a52-8e1b-4d7a-9c36-2b8e4f1d7a90", surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {

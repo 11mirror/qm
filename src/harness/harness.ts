@@ -123,12 +123,10 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: Item[];
   goal?: GoalRecord | null;
-  goalContinuation?: boolean;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
-  commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
@@ -139,7 +137,6 @@ export interface HarnessTurnInput {
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
-  onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;
@@ -193,8 +190,6 @@ export interface HarnessCompactInput {
 
 interface HarnessTurnController {
   runTurn(input: HarnessTurnInput): Promise<HarnessTurnResult>;
-  close?(): Promise<void> | void;
-  resetSession?(sessionId: string): Promise<void> | void;
 }
 
 export interface HarnessModelUtilities {
@@ -216,26 +211,6 @@ export interface Harness {
 
 export type HarnessImplementation = HarnessTurnController & HarnessModelUtilities;
 
-export function defineHarness(implementation: HarnessImplementation): Harness {
-  const turns: HarnessTurnController = {
-    runTurn: implementation.runTurn.bind(implementation),
-    ...(implementation.close ? { close: implementation.close.bind(implementation) } : {}),
-    ...(implementation.resetSession ? { resetSession: implementation.resetSession.bind(implementation) } : {}),
-  };
-  const models: HarnessModelUtilities = {
-    ...(implementation.shouldRespond ? { shouldRespond: implementation.shouldRespond.bind(implementation) } : {}),
-    ...(implementation.compactHistory ? { compactHistory: implementation.compactHistory.bind(implementation) } : {}),
-    ...(implementation.contextTokenBudget
-      ? { contextTokenBudget: implementation.contextTokenBudget.bind(implementation) }
-      : {}),
-    ...(implementation.oneShot ? { oneShot: implementation.oneShot.bind(implementation) } : {}),
-    ...(implementation.judge ? { judge: implementation.judge.bind(implementation) } : {}),
-    ...(implementation.screenSecurity ? { screenSecurity: implementation.screenSecurity.bind(implementation) } : {}),
-    ...(implementation.pickAckEmoji ? { pickAckEmoji: implementation.pickAckEmoji.bind(implementation) } : {}),
-    ...(implementation.generateTitle ? { generateTitle: implementation.generateTitle.bind(implementation) } : {}),
-    ...(implementation.summarizeApproval
-      ? { summarizeApproval: implementation.summarizeApproval.bind(implementation) }
-      : {}),
-  };
-  return { turns, models };
+export function defineHarness({ runTurn, ...models }: HarnessImplementation): Harness {
+  return { turns: { runTurn }, models };
 }

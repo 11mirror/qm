@@ -52,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId } from "../types.ts";
+import type { ConversationTurn } from "../types.ts";
 import { isReply, isUserMessage, type Item } from "../sessions/items.ts";
 import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
@@ -100,7 +100,13 @@ import {
   type HarnessTurnResult,
   type GapWork,
 } from "./harness.ts";
-import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
+import {
+  coreToolOptions,
+  createAgentTools,
+  pauseStampAfterToolCall,
+  type CoreToolOptions,
+  type ToolContextRef,
+} from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -138,8 +144,7 @@ import {
 } from "./goal.ts";
 import { perTenant } from "../tenant.ts";
 
-export interface PiHarnessOptions {
-  modelId?: string | ((scope?: ScopeId) => string | undefined);
+export interface PiHarnessOptions extends CoreToolOptions {
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
   resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
@@ -155,16 +160,7 @@ export interface PiHarnessOptions {
   tempDirPrefix?: string;
   captureRequests?: boolean;
   systemCacheSplit?: boolean;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
-  sandboxResources?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
 }
 
@@ -498,6 +494,9 @@ export function decomposeGapPhases(
 ): GapPhases | undefined {
   if (!gapWindow || gapWindow.gapStart === undefined || gap === null) return undefined;
   const { gapStart, gapEnd } = gapWindow;
+  const tagged = intervals
+    .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
+    .map((w) => ({ start: w.start, end: w.end }));
   const byPhase = new Map<GapPhase, Array<{ start: number; end: number }>>();
   for (const w of intervals) {
     if (w.end <= gapStart || w.start >= gapEnd) continue;
@@ -516,13 +515,7 @@ export function decomposeGapPhases(
     }
   }
   if (marks?.onPayload !== undefined && marks.onPayload > gapStart) {
-    const toolBefore = unionMs(
-      intervals
-        .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-        .map((w) => ({ start: w.start, end: w.end })),
-      gapStart,
-      marks.onPayload,
-    );
+    const toolBefore = unionMs(tagged, gapStart, marks.onPayload);
     const glue = Math.max(0, marks.onPayload - gapStart - toolBefore);
     if (glue > 0) {
       phases.dispatch_glue = glue;
@@ -530,13 +523,7 @@ export function decomposeGapPhases(
       const inWindow = (t: number | undefined): boolean => t !== undefined && t >= gapStart && t <= marks.onPayload!;
       let loopReentry = 0;
       if (inWindow(marks.prepareNextTurn)) {
-        const toolBeforeReentry = unionMs(
-          intervals
-            .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-            .map((w) => ({ start: w.start, end: w.end })),
-          gapStart,
-          marks.prepareNextTurn!,
-        );
+        const toolBeforeReentry = unionMs(tagged, gapStart, marks.prepareNextTurn!);
         loopReentry = Math.min(glue, Math.max(0, marks.prepareNextTurn! - gapStart - toolBeforeReentry));
       }
       let contextAssemble = 0;
@@ -557,13 +544,7 @@ export function decomposeGapPhases(
           const firstEntry = Math.min(...bodySpans.map((w) => w.start));
           const lastExit = Math.max(...bodySpans.map((w) => w.end));
           const bodyUnion = unionMs(bodySpans, gapStart, reentryEnd);
-          const taggedInside = unionMs(
-            intervals
-              .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-              .map((w) => ({ start: w.start, end: w.end })),
-            firstEntry,
-            lastExit,
-          );
+          const taggedInside = unionMs(tagged, firstEntry, lastExit);
           const preTool = Math.min(loopReentry, Math.max(0, firstEntry - gapStart));
           const inToolUntagged = Math.min(loopReentry - preTool, Math.max(0, bodyUnion - taggedInside));
           const postTool = Math.min(loopReentry - preTool - inToolUntagged, Math.max(0, reentryEnd - lastExit));
@@ -1136,6 +1117,32 @@ function removeIsolatedDirs(dirs: { agentDir: string; ephemeralCwd?: string }): 
   }
 }
 
+async function openAgentSession(
+  prefix: string,
+  systemPrompt: string,
+  options: Pick<
+    Parameters<typeof createAgentSession>[0] & object,
+    "model" | "modelRuntime" | "customTools" | "sessionManager" | "thinkingLevel"
+  >,
+): Promise<{ session: AgentSession; dirs: IsolatedResources }> {
+  const dirs = await createIsolatedResources(prefix, systemPrompt);
+  try {
+    const { resourceLoader, settingsManager, cwd, agentDir } = dirs;
+    const { session } = await createAgentSession({
+      ...options,
+      resourceLoader,
+      settingsManager,
+      noTools: "builtin",
+      cwd,
+      agentDir,
+    });
+    return { session, dirs };
+  } catch (err) {
+    removeIsolatedDirs(dirs);
+    throw err;
+  }
+}
+
 export interface ProviderKeys {
   anthropic?: string;
   openai?: string;
@@ -1296,23 +1303,14 @@ export async function oneShot(
   opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig; thinkingLevel?: LegacyThinkingLevel },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
-    prefix,
-    systemPrompt,
-  );
+  const { session, dirs } = await openAgentSession(prefix, systemPrompt, {
+    model,
+    modelRuntime,
+    customTools: [],
+    sessionManager: SessionManager.inMemory(),
+    ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+  });
   try {
-    const { session } = await createAgentSession({
-      model,
-      modelRuntime,
-      resourceLoader,
-      settingsManager,
-      customTools: [],
-      noTools: "builtin",
-      sessionManager: SessionManager.inMemory(),
-      ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
-      cwd,
-      agentDir,
-    });
     const messagesBefore = session.messages.length;
     if (opts?.signal?.aborted) return undefined;
     const onAbort = () => {
@@ -1332,7 +1330,7 @@ export async function oneShot(
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
-    removeIsolatedDirs({ agentDir, ephemeralCwd });
+    removeIsolatedDirs(dirs);
   }
 }
 
@@ -1514,19 +1512,9 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
 }
 
 export function createPiHarness(opts?: PiHarnessOptions): Harness {
-  const configuredModelId = opts?.modelId;
-  const resolveModelId = (scope?: ScopeId): string =>
-    resolveConfiguredModelId(
-      typeof configuredModelId === "function" ? configuredModelId(scope) : configuredModelId,
-      opts?.defaultModelId,
-    );
+  const resolveModelId = (): string => resolveConfiguredModelId(undefined, opts?.defaultModelId);
   const auxiliaryModelId = (): string =>
-    auxiliaryModelFor(
-      resolveConfiguredModelId(
-        opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
-        opts?.defaultModelId,
-      ),
-    );
+    auxiliaryModelFor(resolveConfiguredModelId(opts?.resolveBaseModelId?.(), opts?.defaultModelId));
   const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
   const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
   const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
@@ -1549,31 +1537,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
   const systemCacheSplit = opts?.systemCacheSplit ?? false;
-  const scratchExec = opts?.scratchExec ?? false;
-  const ownerAuthExec = opts?.ownerAuthExec ?? false;
-  const reachExec = opts?.reachExec ?? false;
-  const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
     return createAgentTools(ref, {
+      scratchExec: opts?.scratchExec,
+      reachExec: opts?.reachExec,
+      controlTools: opts?.controlTools,
+      execTimeoutMs: opts?.execTimeoutMs,
+      execTimeoutCeilingMs: opts?.execTimeoutCeilingMs,
+      backgroundJobTtlMs: opts?.backgroundJobTtlMs,
+      backgroundJobTtlMaxMs: opts?.backgroundJobTtlMaxMs,
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      scratchExec,
-      ownerAuthExec,
-      reachExec,
-      ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
-      controlTools,
-      ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
-      ...(turn.surfaceTools ? { surfaceTools: true } : {}),
-      ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
-      ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
-      ...(turn.readOnly ? { readOnly: true } : {}),
-      ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
-      ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
-      ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
-      ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-      sandboxResources: opts?.sandboxResources,
+      mcpTools: turn.mcpTools,
+      surfaceTools: turn.surfaceTools,
+      surfaceName: turn.surfaceName || undefined,
+      clientTools: turn.clientTools,
+      readOnly: turn.readOnly,
     });
   }
   async function createTurnSession(
@@ -1586,7 +1567,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
-  ): Promise<{ entry: TurnSession }> {
+  ): Promise<TurnSession> {
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -1594,8 +1575,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
       reconstructed = null;
     }
-    const seedSource = reconstructed;
-    const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
+    const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
     const modelRuntime = await buildModelRuntime(
@@ -1603,147 +1583,122 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
-      tempDirPrefix,
-      composedPrompt,
-    );
+    const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
+      model,
+      modelRuntime,
+      customTools: tools,
+      sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
+    });
 
-    let session: AgentSession;
-    try {
-      ({ session } = await createAgentSession({
-        model,
-        modelRuntime,
-        resourceLoader,
-        settingsManager,
-        customTools: tools,
-        noTools: "builtin",
-        sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
-        cwd,
-        agentDir,
-      }));
-    } catch (err) {
-      removeIsolatedDirs({ agentDir, ephemeralCwd });
-      throw err;
-    }
-
-    if (seedPlan === "structured") {
+    if (seedPlan === "structured" || seedPlan === "priorTurns") {
+      const structured = seedPlan === "structured";
       try {
-        seedRawMessagesIntoSession(session, seedSource!);
+        seedRawMessagesIntoSession(
+          session,
+          structured ? reconstructed! : seedPriorTurns(priorTurns!, []).map(toPiMessage),
+        );
       } catch (err) {
-        console.error("[pi-harness] failed to seed reconstructed history (continuing without it):", errMessage(err));
-      }
-    } else if (seedPlan === "priorTurns") {
-      try {
-        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
-      } catch (err) {
-        console.error("[pi-harness] failed to seed prior turns (continuing without them):", errMessage(err));
+        console.error(
+          `[pi-harness] failed to seed ${structured ? "reconstructed history (continuing without it)" : "prior turns (continuing without them)"}:`,
+          errMessage(err),
+        );
       }
     }
 
-    {
-      const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
-      if (agent) {
-        const prior = agent.onPayload;
-        agent.onPayload = async (payload, model) => {
-          ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          (ref.modelDispatch ??= []).push({
-            start: Date.now(),
-            ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
-            ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-          });
-          ref.pendingPrepareNextTurn = undefined;
-          ref.pendingTransformContext = undefined;
-          applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const result = prior ? await prior(payload, model) : payload;
-          const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
-          let finalPayload = await withDocumentInputs(
-            result ?? payload,
-            model as DocumentModel,
-            ref.documents ?? [],
-            ref.abortSignal,
-            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+    const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
+    if (agent) {
+      const prior = agent.onPayload;
+      agent.onPayload = async (payload, model) => {
+        ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+        (ref.modelDispatch ??= []).push({
+          start: Date.now(),
+          ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
+          ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
+        });
+        ref.pendingPrepareNextTurn = undefined;
+        ref.pendingTransformContext = undefined;
+        applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+        applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+        const result = prior ? await prior(payload, model) : payload;
+        const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+        let finalPayload = await withDocumentInputs(
+          result ?? payload,
+          model as DocumentModel,
+          ref.documents ?? [],
+          ref.abortSignal,
+          ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+        );
+        const guarded = guardOutputBudget(finalPayload, model);
+        if (guarded.kind === "raised") {
+          console.error(
+            `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
           );
-          const guarded = guardOutputBudget(finalPayload, model);
-          if (guarded.kind === "raised") {
-            console.error(
-              `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-            );
-          }
-          try {
-            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
-            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
-          } catch (e) {
-            swallow("pi: request byte budget", e);
-          }
-          if (captureRequests) {
-            try {
-              ref.llmCapture?.push(capturedPayload!);
-            } catch (e) {
-              swallow("pi: llm request capture", e);
-            }
-          }
-          return finalPayload;
-        };
-        const priorResponse = agent.onResponse;
-        agent.onResponse = async (response, model) => {
-          try {
-            const calls = ref.modelDispatch;
-            const last = calls?.[calls.length - 1];
-            if (last && last.first === undefined) last.first = Date.now();
-          } catch (e) {
-            swallow("pi: model dispatch capture", e);
-          }
-          if (priorResponse) await priorResponse(response, model);
-        };
-        const priorTransform = agent.transformContext;
-        agent.transformContext = async (messages, signal) => {
-          try {
-            ref.pendingTransformContext = Date.now();
-          } catch (e) {
-            swallow("pi: transformContext stamp", e);
-          }
-          return priorTransform ? await priorTransform(messages, signal) : messages;
-        };
-        agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
-        const priorPrepare = agent.prepareNextTurn;
-        agent.prepareNextTurn = async (signal) => {
-          try {
-            ref.pendingPrepareNextTurn = Date.now();
-          } catch (e) {
-            swallow("pi: prepareNextTurn stamp", e);
-          }
-          return priorPrepare ? await priorPrepare(signal) : undefined;
-        };
-      }
+        }
+        try {
+          const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+        } catch (e) {
+          swallow("pi: request byte budget", e);
+        }
+        if (captureRequests) ref.llmCapture?.push(capturedPayload!);
+        return finalPayload;
+      };
+      const priorResponse = agent.onResponse;
+      agent.onResponse = async (response, model) => {
+        const last = ref.modelDispatch?.at(-1);
+        if (last && last.first === undefined) last.first = Date.now();
+        if (priorResponse) await priorResponse(response, model);
+      };
+      const priorTransform = agent.transformContext;
+      agent.transformContext = async (messages, signal) => {
+        ref.pendingTransformContext = Date.now();
+        return priorTransform ? await priorTransform(messages, signal) : messages;
+      };
+      agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+      const priorPrepare = agent.prepareNextTurn;
+      agent.prepareNextTurn = async (signal) => {
+        ref.pendingPrepareNextTurn = Date.now();
+        return priorPrepare ? await priorPrepare(signal) : undefined;
+      };
     }
 
-    const entry: TurnSession = {
+    return {
       agentSession: session,
       ref,
       composedPromptTokens: countTokens(composedPrompt),
-      cwd,
-      agentDir,
-      ...(ephemeralCwd ? { ephemeralCwd } : {}),
+      cwd: dirs.cwd,
+      agentDir: dirs.agentDir,
+      ...(dirs.ephemeralCwd ? { ephemeralCwd: dirs.ephemeralCwd } : {}),
     };
-    return { entry };
+  }
+
+  /** One isolated completion on `modelId`; null when no provider key serves that model. */
+  async function keyedOneShot(
+    prefix: string,
+    modelId: string,
+    systemPrompt: string,
+    prompt: string,
+    extra?: { signal?: AbortSignal; thinkingLevel?: LegacyThinkingLevel },
+  ): Promise<string | undefined | null> {
+    const model = requiredModel(modelId);
+    const providerKeys = await resolveProviderKeys();
+    if (!keyForModel(providerKeys, model)) return null;
+    return oneShot(prefix, model, providerKeys, systemPrompt, prompt, { modelGateway, ...extra });
   }
 
   return defineHarness({
     async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
+      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId();
       const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
       const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
       const ref: TurnSession["ref"] = {
         current: dispatched.tools,
         documents: dispatched.documents,
-        runtimeHandoff: undefined,
         runtimeMutationPending: false,
         runtimeInFlight: new Set(),
         runtimeActorId: dispatched.runtimeActorId,
         pendingApprovals: [],
-        pausedOnApproval: undefined,
         silentRequested: false,
         pollFire: !!dispatched.pollFire,
         screenToolResult: dispatched.screenToolResult,
@@ -1758,8 +1713,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
       const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
-      const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-      const { entry } = await createTurnSession(
+      const turn = resumed ? { ...dispatched, history: resumed } : dispatched;
+      const entry = await createTurnSession(
         withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
         turn.session.id,
         turn.systemPrompt,
@@ -1901,13 +1856,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             steps.startStreaming();
             curStart = Date.now();
             curFirst = undefined;
-            try {
-              const calls = entry.ref.modelDispatch;
-              const last = calls?.[calls.length - 1];
-              if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
-            } catch (e) {
-              swallow("pi: stream-open capture", e);
-            }
+            const last = entry.ref.modelDispatch?.at(-1);
+            if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
           } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
             turn.onTextBlockStart?.();
           } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
@@ -1960,15 +1910,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           for (let step = 0; step < captured.length; step++) {
             const stat = statsAligned ? callStats[step] : undefined;
             const d = marksAligned ? dispatch[step] : undefined;
-            const marks: DispatchMarks | undefined = d
-              ? {
-                  ...(d.start !== undefined ? { onPayload: d.start } : {}),
-                  ...(d.first !== undefined ? { onResponse: d.first } : {}),
-                  ...(d.streamStart !== undefined ? { messageStart: d.streamStart } : {}),
-                  ...(d.prepareNextTurn !== undefined ? { prepareNextTurn: d.prepareNextTurn } : {}),
-                  ...(d.transformContext !== undefined ? { transformContext: d.transformContext } : {}),
-                }
-              : undefined;
+            const marks: DispatchMarks | undefined = d && {
+              onPayload: d.start,
+              onResponse: d.first,
+              messageStart: d.streamStart,
+              prepareNextTurn: d.prepareNextTurn,
+              transformContext: d.transformContext,
+            };
             const gapPhases = statsAligned
               ? decomposeGapPhases(stepWindows[step], allGapWork, stat?.stepGapMs ?? null, marks)
               : undefined;
@@ -2078,6 +2026,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const rawRemainingCapMs = floorCap.remainingCapMs;
         const raceCapMs = floorCap.raceCapMs;
         const extendCapMs = floorCap.extendMs;
+        const race = (prompting: Promise<void>, capMs = raceCapMs()) =>
+          raceTurnWallClock(prompting, { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() });
         const refusedModelIds = new Set<string>();
         const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
           if (userAborted || turn.cancel?.aborted) return false;
@@ -2111,11 +2061,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
           applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(
+          const outcome = await race(
             entry.agentSession.prompt(
               refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
             ),
-            { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
+            capMs,
           );
           if (userAborted) return false;
           if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
@@ -2145,11 +2095,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
-            capMs,
-            extendMs: extendCapMs,
-            abort: () => entry.agentSession.abort(),
-          });
+          const outcome = await race(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), capMs);
           if (userAborted) return false;
           if (outcome !== "ok")
             throw new NonRetryableTurnError(
@@ -2173,15 +2119,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const images = turn.images?.length
             ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
             : undefined;
-          wallClock = await raceTurnWallClock(
+          wallClock = await race(
             continueTurn
               ? continueAssistantTurn(entry.agentSession)
               : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
-            {
-              capMs: raceCapMs(),
-              extendMs: extendCapMs,
-              abort: () => entry.agentSession.abort(),
-            },
           );
           if (wallClock === "ok") await recoverFailedRound();
           const goalAfterPrompt = entry.ref.goal;
@@ -2209,20 +2150,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                       }),
                   }
                 : {}),
-              beforePrompt: async (note) => {
+              beforePrompt: async () => {
                 console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
-                void note;
                 entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
                 entry.ref.silentRequested = false;
                 await thinkTail;
               },
               prompt: async (note) => {
                 if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs: raceCapMs(),
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
+                const outcome = await race(entry.agentSession.prompt(note));
                 if (outcome === "ok") await recoverFailedRound();
                 return outcome;
               },
@@ -2251,11 +2187,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
             ) {
               try {
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs,
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
+                const outcome = await race(entry.agentSession.prompt(note), capMs);
                 if (outcome !== "ok" && !userAborted) {
                   recoveryDead = true;
                 } else if (
@@ -2320,14 +2252,22 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
+        const settleGoal = async (pause = false): Promise<void> => {
+          const g = entry.ref.goal;
+          if (!g) return;
+          bankGoalTurn(g, grindMeter.startedAt);
+          if (pause && g.status === "active") {
+            g.status = "paused";
+            g.updatedAt = Date.now();
+          }
+          await turn.saveGoal?.(g);
+          if (g.status === "complete") entry.ref.goal = null;
+        };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;
           if (persistError) throw persistError;
-          if (entry.ref.goal) {
-            bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-            await turn.saveGoal?.(entry.ref.goal);
-          }
+          await settleGoal();
           return {
             reply: "",
             runtimeHandoff: entry.ref.runtimeHandoff,
@@ -2347,17 +2287,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
           const reply = partial.trim() ? partial : "(stopped)";
-          if (entry.ref.goal) {
-            const g = entry.ref.goal;
-
-            bankGoalTurn(g, grindMeter.startedAt);
-            if (userAborted && g.status === "active") {
-              g.status = "paused";
-              g.updatedAt = Date.now();
-            }
-            await turn.saveGoal?.(g);
-            if (g.status === "complete") entry.ref.goal = null;
-          }
+          await settleGoal(userAborted);
           await recordStoppedTurn(
             turn,
             partial,
@@ -2373,12 +2303,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           return cacheUsage ? { ...base, cacheUsage } : base;
         }
 
-        if (entry.ref.goal) {
-          const g = entry.ref.goal;
-          bankGoalTurn(g, grindMeter.startedAt);
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        }
+        await settleGoal();
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
         // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
         const reply = entry.ref.silentRequested ? "" : closingText;
@@ -2462,27 +2387,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       }
     },
 
-    contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
-      const id = model && resolveModel(model) ? model : resolveModelId(scopeLabel as ScopeId | undefined);
+    contextTokenBudget(_scopeLabel?: string, model?: string): number | undefined {
+      const id = model && resolveModel(model) ? model : resolveModelId();
       return contextTokenBudgetForModel(id);
     },
 
     async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-      const model = requiredModel(resolveModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+      return (await keyedOneShot("pi-oneshot", resolveModelId(), systemPrompt, prompt)) ?? undefined;
     },
 
     async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
-      const model = requiredModel(judgeModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-        modelGateway,
+      const out = await keyedOneShot("pi-judge", judgeModelId(), systemPrompt, prompt, {
         signal,
         thinkingLevel: "low",
       });
+      return out ?? undefined;
     },
 
     async screenSecurity({
@@ -2543,32 +2462,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
-        modelGateway,
-      });
-      return sanitizeTitle(out);
+      const out = await keyedOneShot("pi-title", titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
+      return out === null ? undefined : sanitizeTitle(out);
     },
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
       if (!command.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
       const prompt = [
         `Policy flagged this as: ${reason}`,
         purpose ? `Agent's stated purpose: ${purpose}` : "",
         "",
         "Command:",
         command.slice(0, 4000),
-      ]
-        .filter((l) => l !== undefined)
-        .join("\n");
-      const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
-      )?.trim();
+      ].join("\n");
+      const out = (await keyedOneShot("pi-approval-summary", titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);
     },

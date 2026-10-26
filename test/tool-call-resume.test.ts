@@ -108,19 +108,11 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
   assert.equal(result.isError, false);
   assert.match(result.text ?? "", /shared\/q2\.md/);
   assert.ok(resumed);
-  assert.equal(resumed.history.length, 2, "the harness continues from history that now carries the result");
-  assert.equal(resumed.history[1]!.kind, "ToolResult");
-  assert.deepEqual(
-    { ...resumed.message, timestamp: 0 },
-    {
-      role: "toolResult",
-      toolCallId: "c-budget",
-      toolName: "history",
-      content: [{ type: "text", text: "- UserMessage#3: the budget doc is in shared/q2.md (budget)" }],
-      isError: false,
-      timestamp: 0,
-    },
-  );
+  assert.equal(resumed.length, 2, "the harness continues from history that now carries the result");
+  assert.equal(resumed[1]!.kind, "ToolResult");
+  assert.equal(resumed[1]!.callId, "c-budget");
+  assert.equal(resumed[1]!.isError, false);
+  assert.match(resumed[1]!.text ?? "", /shared\/q2\.md/);
   assert.equal(ref.emit, turn.emit, "the emit hook is restored after the re-run");
 });
 
@@ -143,8 +135,8 @@ test("when the tool is unavailable on the retried turn the call is closed as int
   const ref: ToolContextRef = { current: tools, emit: missing.emit, scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(missing, ref, createAgentTools(ref, {}) as unknown as BridgedTool[]);
   assert.ok(resumed);
-  assert.equal(resumed.message.isError, true);
-  assert.equal(resumed.message.content[0]!.text, INTERRUPTED_TOOL_RESULT);
+  assert.equal(resumed.at(-1)!.isError, true);
+  assert.equal(resumed.at(-1)!.text, INTERRUPTED_TOOL_RESULT);
   assert.deepEqual(
     sink.map((e) => [e.kind, e.text]),
     [["ToolResult", INTERRUPTED_TOOL_RESULT]],
@@ -166,7 +158,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
   turn.cancel = AbortSignal.abort();
   const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref, {}) as unknown as BridgedTool[]);
-  assert.equal(resumed?.message.isError, true);
+  assert.equal(resumed?.at(-1)?.isError, true);
   assert.deepEqual(queries, []);
   assert.equal(sink.length, 1);
   assert.equal(ref.abortSignal, undefined, "the cancel signal is only borrowed for the re-run");
@@ -188,8 +180,8 @@ test("a tool that throws during the re-run still records an error result so the 
   const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref, {}) as unknown as BridgedTool[]);
   assert.ok(resumed);
-  assert.equal(resumed.message.isError, true);
-  assert.match(resumed.message.content[0]!.text ?? "", /transcript index offline/);
+  assert.equal(resumed.at(-1)!.isError, true);
+  assert.match(resumed.at(-1)!.text ?? "", /transcript index offline/);
   assert.deepEqual(
     sink.map((e) => [e.kind, e.isError]),
     [["ToolResult", true]],

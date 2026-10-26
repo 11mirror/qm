@@ -1,13 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { coreToolOptions } from "../src/harness/agent-tools.ts";
-import { loadConfig } from "../src/config.ts";
-
-test("Open owner execution is discoverable without an isolation flag", () => {
-  const config = loadConfig({});
-  assert.equal(coreToolOptions(config).ownerAuthExec, true);
-});
 
 test("Open owner computer rechecks revocation before reuse and is destroyed, never shared", async () => {
   let member = true;
