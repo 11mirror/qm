@@ -7,12 +7,9 @@ import {
   encodeDeliveryTarget,
   parseDeliveryTarget,
   deliveryCandidatesFor,
-  createDeliveryTracker,
-  deliverWithRetry,
   postWithVerify,
   SLACK_POST_SPLIT_LIMIT,
   recoveryVerifyOldest,
-  channelSurfaceUrl,
   channelWelcomeMessage,
   surfaceHeaderText,
   headerUpdate,
@@ -21,7 +18,7 @@ import {
   createSurfaceHeaderEnsurer,
   scopeSurfaceUrl,
   onBotJoinedChannel,
-} from "../src/slack/lib.ts";
+} from "../src/slack/delivery.ts";
 
 test("slackReplyArgs keeps channel replies thread-only and never broadcasts them", () => {
   assert.deepEqual(slackReplyArgs("C1", "reply", "123.45", { threadOnly: true }), {
@@ -116,91 +113,6 @@ test("deliveryCandidatesFor: a group DM offers this-thread and group-DM destinat
   assert.deepEqual(cands[1], { target: "G123", label: "the group DM" });
 });
 
-interface DeliveryLogEntry {
-  stage: "post" | "ack";
-  gaveUp: boolean;
-}
-
-function deliveryHarness(opts: { postFails?: number; ackFails?: number; maxAttempts?: number } = {}) {
-  const tracker = createDeliveryTracker({ maxAttempts: opts.maxAttempts ?? 5 });
-  let postFails = opts.postFails ?? 0;
-  let ackFails = opts.ackFails ?? 0;
-  const posts: number[] = [];
-  const acks: unknown[] = [];
-  const errors: DeliveryLogEntry[] = [];
-  const cycle = async (ackBody?: unknown): Promise<void> =>
-    deliverWithRetry({
-      tracker,
-      id: "d1",
-      post: async () => {
-        if (postFails > 0) {
-          postFails--;
-          throw new Error("slack 429");
-        }
-        posts.push(1);
-        return ackBody;
-      },
-      ack: async (body) => {
-        if (ackFails > 0) {
-          ackFails--;
-          throw new Error("core 503");
-        }
-        acks.push(body);
-      },
-      onError: (stage, _err, gaveUp) => errors.push({ stage, gaveUp }),
-    });
-  return { tracker, cycle, posts, acks, errors };
-}
-
-test("deliverWithRetry: happy path posts once, acks once, and clears its state", async () => {
-  const h = deliveryHarness();
-  await h.cycle({ recipientThreadRef: "dm:D1" });
-  assert.equal(h.posts.length, 1);
-  assert.deepEqual(h.acks, [{ recipientThreadRef: "dm:D1" }]);
-  assert.deepEqual(h.errors, []);
-});
-
-test("deliverWithRetry: a failed ack does NOT re-post on the next cycle — only the ack retries (no duplicate message)", async () => {
-  const h = deliveryHarness({ ackFails: 1 });
-  await h.cycle({ recipientThreadRef: "dm:D1" });
-  assert.equal(h.posts.length, 1);
-  assert.deepEqual(h.errors, [{ stage: "ack", gaveUp: false }]);
-
-  await h.cycle();
-  assert.equal(h.posts.length, 1, "message was already posted — never duplicated");
-  assert.deepEqual(h.acks, [{ recipientThreadRef: "dm:D1" }], "the original ack body is retried");
-});
-
-test("deliverWithRetry: a poison delivery is given up on after the attempt cap, then skipped for free", async () => {
-  const h = deliveryHarness({ postFails: 100, maxAttempts: 3 });
-  for (let i = 0; i < 5; i++) await h.cycle();
-  assert.equal(h.posts.length, 0);
-  assert.deepEqual(h.errors, [
-    { stage: "post", gaveUp: false },
-    { stage: "post", gaveUp: false },
-    { stage: "post", gaveUp: true },
-  ]);
-  assert.ok(h.tracker.givenUp("d1"), "later cycles skip the poison delivery without attempting it");
-});
-
-test("deliverWithRetry: transient post failures recover before the cap", async () => {
-  const h = deliveryHarness({ postFails: 2, maxAttempts: 5 });
-  for (let i = 0; i < 3; i++) await h.cycle();
-  assert.equal(h.posts.length, 1);
-  assert.equal(h.acks.length, 1);
-  assert.ok(!h.tracker.givenUp("d1"));
-});
-
-test("createDeliveryTracker: a posted-but-unacked entry evicted by the cap is given up on, never re-posted", () => {
-  const t = createDeliveryTracker({ maxAttempts: 5, maxTracked: 2 });
-  t.markPosted("a");
-  t.markPosted("b");
-  t.markPosted("c");
-  assert.equal(t.posted("a"), undefined);
-  assert.ok(t.givenUp("a"), "evicted posted entry becomes dead — duplicate post is impossible");
-  assert.ok(t.posted("b") && t.posted("c"), "entries within the cap keep their posted state");
-});
-
 const WEB_BASE = "https://portal.example.com/web-ui";
 const BOT = "UBOT";
 
@@ -238,15 +150,15 @@ function fakeJoinClient(
   };
 }
 
-test("channelSurfaceUrl builds the project deep link and degrades when unset", () => {
-  assert.equal(channelSurfaceUrl(WEB_BASE, "C123"), `${WEB_BASE}/projects/channel/C123`);
-  assert.equal(channelSurfaceUrl("https://x/web-ui/", "C9"), "https://x/web-ui/projects/channel/C9");
-  assert.equal(channelSurfaceUrl(undefined, "C1"), undefined);
-  assert.equal(channelSurfaceUrl("", "C1"), undefined);
+test("scopeSurfaceUrl builds the channel project deep link and degrades when unset", () => {
+  assert.equal(scopeSurfaceUrl(WEB_BASE, "channel:C123"), `${WEB_BASE}/projects/channel/C123`);
+  assert.equal(scopeSurfaceUrl("https://x/web-ui/", "channel:C9"), "https://x/web-ui/projects/channel/C9");
+  assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
+  assert.equal(scopeSurfaceUrl("", "channel:C1"), undefined);
 });
 
 test("channelWelcomeMessage includes the link when present, omits it cleanly when not", () => {
-  const url = channelSurfaceUrl(WEB_BASE, "C1")!;
+  const url = scopeSurfaceUrl(WEB_BASE, "channel:C1")!;
   assert.ok(channelWelcomeMessage(url).includes(url));
   const linkless = channelWelcomeMessage(undefined);
   assert.ok(!linkless.includes("http"));

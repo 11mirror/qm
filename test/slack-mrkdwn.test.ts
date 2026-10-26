@@ -4,13 +4,12 @@ import {
   decodeSlackEntities,
   toSlackMrkdwn,
   slackSectionBlocks,
-  resolveMentionsInText,
   neutralizeMassMentions,
   neutralizeMentions,
   wireMentionKeys,
   setMentionIndex,
-  inlineCode,
-} from "../src/slack/lib.ts";
+} from "../src/slack/mrkdwn.ts";
+import { inlineCode } from "../src/slack/approval-cards.ts";
 import { resolveMentions } from "../src/slack/mrkdwn.ts";
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
@@ -133,16 +132,6 @@ test("slackSectionBlocks splits long replies below Slack's section limit", () =>
   const blocks = slackSectionBlocks("x".repeat(7_000));
   assert.equal(blocks.length, 3);
   assert.ok(blocks.every((block) => (block.text as { text: string }).text.length <= 2_900));
-});
-
-test("resolveMentionsInText: plain, labeled, unknown, multiple", () => {
-  const lookup = (id: string): string | undefined => ({ U1: "jordan", U2: "avery" })[id];
-  assert.equal(resolveMentionsInText("hey <@U1>", lookup), "hey @jordan");
-  assert.equal(resolveMentionsInText("hey <@U1|Jordan Label>", lookup), "hey @Jordan Label");
-  assert.equal(resolveMentionsInText("ping <@U9>", lookup), "ping @U9");
-  assert.equal(resolveMentionsInText("ping <@U9|Nobody>", lookup), "ping @Nobody");
-  assert.equal(resolveMentionsInText("<@U1> and <@U2> and <@U3>", lookup), "@jordan and @avery and @U3");
-  assert.equal(resolveMentionsInText("no mentions", lookup), "no mentions");
 });
 
 test("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real mentions alone", () => {
@@ -284,10 +273,6 @@ test("pathological inline markdown and mention floods stay linear-time", () => {
   assert.equal(toSlackMrkdwn(heading), `*${heading.slice(2, -1)}*\n`);
   assert.equal(neutralizeMentions("<@UU|".repeat(12_000)), `${"@UU".repeat(11_999)}<@UU|`);
   assert.equal(neutralizeMassMentions("<!here|".repeat(8_000)), `${"@\u200bhere".repeat(7_999)}<!here|`);
-  assert.equal(
-    resolveMentionsInText("<@U1|".repeat(12_000), () => undefined),
-    `${"@U1".repeat(11_999)}<@U1|`,
-  );
   assert.equal(resolveMentions("<@U1|".repeat(12_000), new Map([["U1", "ann"]])), `${"@ann".repeat(11_999)}<@U1|`);
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 1_000, `pathological inline markdown took ${Math.round(elapsed)}ms`);
@@ -297,10 +282,6 @@ test("a mention token nested inside another token's label cannot re-form a live 
   assert.equal(toSlackMrkdwn("<!here|<!channel>>"), "@\u200bhere@\u200bchannel>");
   assert.equal(neutralizeMassMentions("<!channel|<!here|x>>"), "@\u200bchannel@\u200bhere>");
   assert.equal(neutralizeMentions("<@U123|<@U456>>"), "@U123@U456>");
-  assert.equal(
-    resolveMentionsInText("<@U1|<@U2>>", () => undefined),
-    "@U1@U2>",
-  );
   assert.equal(neutralizeMentions("<<@U123>> <<@U4|x>>"), "@U123> @x>");
   assert.equal(toSlackMrkdwn("<<!channel>>"), "@\u200bchannel>");
   assert.equal(neutralizeMentions("<<<<<".repeat(5_000) + "<@U9>"), "@U9", "an opener run is consumed whole");

@@ -31,18 +31,13 @@ export function threadHasBotStake(
   botUserId: string,
   ownBotId = "",
 ): boolean {
-  if (!botUserId && !ownBotId) return false;
-  return messages.some((m) => {
-    const user = m.user ? String(m.user) : "";
-    const bot = m.bot_id ? String(m.bot_id) : "";
-    const text = m.text ? String(m.text) : "";
-    return Boolean(
+  return messages.some((m) =>
+    Boolean(
       m.mentionsSelf ||
-      (botUserId && user === botUserId) ||
-      (ownBotId && bot === ownBotId) ||
-      (botUserId && mentionsBot(text, botUserId)),
-    );
-  });
+      (botUserId && (m.user === botUserId || mentionsBot(m.text ? String(m.text) : "", botUserId))) ||
+      (ownBotId && m.bot_id === ownBotId),
+    ),
+  );
 }
 
 export function shouldProcessMessage(
@@ -120,14 +115,10 @@ const THREAD_NO_STAKE_TTL_MS = 5 * 60_000;
 export function createThreadTracker(opts: { negativeTtlMs?: number } = {}): ThreadTracker {
   const negativeTtlMs = opts.negativeTtlMs ?? THREAD_NO_STAKE_TTL_MS;
   const cache = new LRUCache<string, boolean>({ max: 10_000 });
-  const keyOf = (channel: string, threadTs: string): string => `${channel}:${threadTs}`;
   return {
-    get(channel, threadTs) {
-      return cache.get(keyOf(channel, threadTs));
-    },
-    mark(channel, threadTs, present) {
-      cache.set(keyOf(channel, threadTs), present, present ? undefined : { ttl: negativeTtlMs });
-    },
+    get: (channel, threadTs) => cache.get(`${channel}:${threadTs}`),
+    mark: (channel, threadTs, present) =>
+      void cache.set(`${channel}:${threadTs}`, present, present ? undefined : { ttl: negativeTtlMs }),
   };
 }
 
@@ -205,35 +196,4 @@ export function isBareStop(text: string, botHandle = ""): boolean {
   const afterTag = tag && trimmed.startsWith(tag) ? trimmed.slice(tag.length) : undefined;
   const rest = afterTag !== undefined && /^\s/.test(afterTag) ? afterTag : trimmed;
   return /^stop[.!]?$/i.test(rest.trim());
-}
-
-export function createInFlightThreadMap(): {
-  set(threadRef: string, runId: string): void;
-  get(threadRef: string): string | undefined;
-  clear(threadRef: string, runId: string): void;
-} {
-  const byThread = new Map<string, string>();
-  return {
-    set: (threadRef, runId) => byThread.set(threadRef, runId),
-    get: (threadRef) => byThread.get(threadRef),
-    clear: (threadRef, runId) => {
-      if (byThread.get(threadRef) === runId) byThread.delete(threadRef);
-    },
-  };
-}
-
-export async function maybeInterceptStop(opts: {
-  text: string;
-  botHandle?: string;
-  threadRef: string;
-  getInFlightRun: (threadRef: string) => string | undefined | Promise<string | undefined>;
-  signalAbort: (runId: string) => Promise<void>;
-  stopConversation?: (threadRef: string) => Promise<boolean>;
-}): Promise<boolean> {
-  if (!isBareStop(opts.text, opts.botHandle)) return false;
-  if (opts.stopConversation) return opts.stopConversation(opts.threadRef);
-  const runId = await opts.getInFlightRun(opts.threadRef);
-  if (!runId) return false;
-  await opts.signalAbort(runId);
-  return true;
 }

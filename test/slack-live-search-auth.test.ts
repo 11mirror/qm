@@ -16,6 +16,7 @@ async function searchWith(error: string, viewerToken?: string): Promise<unknown>
       core: { fulfillContextRequest: async (_id: string, outcome: unknown) => void fulfilled.push(outcome) } as never,
       directory: {} as never,
       serializer: {} as never,
+      readHistory: {} as never,
       botToken: "xoxb-test",
       userToken: "xoxp-install",
       clientOptions: {

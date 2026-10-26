@@ -1,7 +1,6 @@
-import { isOwnStatusCard } from "./message-gating.ts";
+import { isOwnStatusCard, mentionsBot } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
-import { decodeSlackEntities, mentionsBot } from "./lib.ts";
-import { mentionedUserIds } from "./mrkdwn.ts";
+import { decodeSlackEntities, mentionedUserIds } from "./mrkdwn.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
@@ -9,36 +8,27 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackMessageEvent } from "./payloads.ts";
 import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
 
+type MirrorOpts = {
+  partial?: boolean;
+  editedAt?: number;
+  handled?: boolean;
+  containerName?: string;
+  kind?: "channel" | "dm" | "group";
+};
+
 export interface Mirror {
   pushSurfaceEvents(events: IngestEvent[]): Promise<void>;
-  mirrorMessageEvent(
-    m: Partial<SlackMessageEvent>,
-    client: any,
-    opts?: {
-      partial?: boolean;
-      editedAt?: number;
-      handled?: boolean;
-      containerName?: string;
-      kind?: "channel" | "dm" | "group";
-    },
-  ): Promise<void>;
+  mirrorMessageEvent(m: Partial<SlackMessageEvent>, client: any, opts?: MirrorOpts): Promise<void>;
 }
 
 export function slackMessageToIngestEvent(
   m: Partial<SlackMessageEvent>,
   ids: BotIdentity,
-  opts: {
-    partial?: boolean;
-    text?: string;
-    mentions?: Record<string, string>;
-    editedAt?: number;
-    handled?: boolean;
-    containerName?: string;
-    kind?: "channel" | "dm" | "group";
-  } = {},
+  opts: MirrorOpts & { text?: string; mentions?: Record<string, string> } = {},
 ): IngestEvent {
   const content = messageWithForwardedContent(m);
   const raw = content.text;
+  const editedAt = opts.editedAt ?? Number(m.edited?.ts) * 1000;
   return {
     container: m.channel!,
     ts: m.ts!,
@@ -68,9 +58,7 @@ export function slackMessageToIngestEvent(
     ...(Object.keys(opts.mentions ?? {}).length ? { mentions: opts.mentions } : {}),
     ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
     ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
-    ...((opts.editedAt ?? Number(m.edited?.ts) * 1000) > 0
-      ? { editedAt: Math.round(opts.editedAt ?? Number(m.edited?.ts) * 1000) }
-      : {}),
+    ...(editedAt > 0 ? { editedAt: Math.round(editedAt) } : {}),
     ...(opts.handled ? { handled: true } : {}),
     ...(opts.containerName ? { containerName: opts.containerName } : {}),
     ...(opts.kind ? { kind: opts.kind } : {}),
@@ -92,10 +80,9 @@ export function createMirror(deps: {
   }
 
   async function resolveMentionNames(client: any, text: string): Promise<Record<string, string>> {
-    const mentionIds = new Set(mentionedUserIds(text));
     const names = new Map<string, string>();
     await Promise.all(
-      [...mentionIds].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
+      [...new Set(mentionedUserIds(text))].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
         try {
           const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
           if (dn) names.set(id, dn);
@@ -107,21 +94,10 @@ export function createMirror(deps: {
     return Object.fromEntries(names);
   }
 
-  async function mirrorMessageEvent(
-    m: Partial<SlackMessageEvent>,
-    client: any,
-    opts: {
-      partial?: boolean;
-      editedAt?: number;
-      handled?: boolean;
-      containerName?: string;
-      kind?: "channel" | "dm" | "group";
-    } = {},
-  ): Promise<void> {
+  async function mirrorMessageEvent(m: Partial<SlackMessageEvent>, client: any, opts: MirrorOpts = {}): Promise<void> {
     if (isOwnStatusCard(m, ids.botUserId, ids.ownBotId)) return;
     const container = m.channel;
-    const ts = m.ts;
-    if (!container || !ts) return;
+    if (!container || !m.ts) return;
     const type = m.channel_type;
     if (!opts.kind && type !== "channel" && type !== "group" && type !== "mpim") return;
     const kind = opts.kind ?? (type === "mpim" ? "group" : "channel");
@@ -141,9 +117,7 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const content = messageWithForwardedContent(m);
-    const raw = content.text;
-    const mentions = await resolveMentionNames(client, decodeSlackEntities(raw));
+    const mentions = await resolveMentionNames(client, decodeSlackEntities(messageWithForwardedContent(m).text));
     await pushSurfaceEvents([slackMessageToIngestEvent(m, ids, { ...opts, mentions, kind })]);
   }
 

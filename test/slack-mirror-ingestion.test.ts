@@ -7,7 +7,7 @@ import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
+import { createDeduper, createThreadTracker } from "../src/slack/message-gating.ts";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -519,31 +519,6 @@ test("real message handler checks prior stake before ingesting the current reply
   assert.equal(records[0].liveMessagesMissingFromMirror, 0);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
   assert.equal(calls.length, 1);
-});
-
-test("stake fallback bounds Slack replies while omitted cutoff and negative tracking remain unchanged", async () => {
-  const calls: any[] = [];
-  const client = {
-    conversations: {
-      replies: async (args: any) => {
-        calls.push(args);
-        return { messages: [] };
-      },
-    },
-  };
-  const handler = createTurnHandler({
-    directory: {},
-    mirror: {},
-    flow: {},
-    ids,
-    threads: createThreadTracker(),
-  } as any);
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "3"), false);
-  assert.deepEqual(calls[0], { channel: "C1", ts: "1", limit: 200, latest: "3", inclusive: false });
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "4"), false);
-  assert.equal(calls.length, 1);
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "5"), false);
-  assert.deepEqual(calls[1], { channel: "C1", ts: "5", limit: 200 });
 });
 
 test("reaction turns preserve the reacted message in the mirror", async () => {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../src/slack/lib.ts";
+import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../src/slack/refusals.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";

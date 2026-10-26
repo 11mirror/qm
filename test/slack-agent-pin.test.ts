@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerSlackEvents } from "../src/slack/events.ts";
-import { createDeduper } from "../src/slack/lib.ts";
+import { createDeduper } from "../src/slack/message-gating.ts";
 import type { TurnHandler } from "../src/slack/turn-handler.ts";
 
 function fakeApp() {

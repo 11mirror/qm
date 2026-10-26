@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { createTurnFlow } from "../src/slack/turn-flow.ts";
-import { createDeliveryTracker, deliverWithRetry } from "../src/slack/delivery.ts";
 
 function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
   return {
@@ -60,40 +59,6 @@ test("without deferDeliveryAck an ok run still acks its recovery delivery", asyn
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(events, ["ack"]);
   assert.equal(pending.size, 0);
-});
-
-test("delivery tracker retries a given-up delivery after the bench window", async () => {
-  const tracker = createDeliveryTracker({ giveUpRetryMs: 50 });
-  let posts = 0;
-  let acked = false;
-  const failing = {
-    tracker,
-    id: "d1",
-    post: async () => {
-      posts++;
-      throw new Error("slack 429");
-    },
-    ack: async () => {
-      acked = true;
-    },
-    onError: () => {},
-  };
-  for (let i = 0; i < 6; i++) await deliverWithRetry(failing);
-  assert.equal(posts, 5, "benched after 5 attempts");
-
-  const healthy = {
-    ...failing,
-    post: async () => {
-      posts++;
-    },
-  };
-  await deliverWithRetry(healthy);
-  assert.equal(posts, 5);
-
-  await new Promise((r) => setTimeout(r, 60));
-  await deliverWithRetry(healthy);
-  assert.equal(posts, 6, "retried after the bench expired");
-  assert.equal(acked, true, "delivery finally acked");
 });
 
 test("failed and refused turns keep recovery pending until their notice is delivered", async () => {
