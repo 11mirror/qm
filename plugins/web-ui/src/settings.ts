@@ -95,33 +95,14 @@ export function watchSystemTheme(): void {
   });
 }
 
-function themeOption(value: ThemeChoice, current: ThemeChoice, label: string, glyph: TemplateResult): TemplateResult {
-  return html`
-    <button
-      class="settings-choice-option ${current === value ? "selected" : ""}"
-      type="button"
-      role="radio"
-      aria-checked=${current === value ? "true" : "false"}
-      @click=${() => setTheme(value)}
-    >
-      ${glyph}<span>${label}</span>
-    </button>
-  `;
-}
-
 function themeRow(): TemplateResult {
-  const current = storedTheme();
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Theme</div>
-        <div class="settings-row-note">System follows your device's light or dark setting.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="Theme">
-        ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
-      </div>
-    </div>
-  `;
+  return choiceRow(
+    "Theme",
+    "System follows your device's light or dark setting.",
+    THEME_OPTIONS,
+    storedTheme(),
+    setTheme,
+  );
 }
 
 const OPEN_NEW_CHAT_KEY = "open-new-chat";
@@ -159,43 +140,25 @@ function setOpenNewChat(value: boolean): void {
   );
 }
 
-const OPEN_OPTIONS: Array<{ newChat: boolean; label: string }> = [
-  { newChat: false, label: "Last session" },
-  { newChat: true, label: "New chat" },
-];
-
 function openBehaviorRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">When QM opens</div>
-        <div class="settings-row-note">Reopen the conversations you had open last time, or start on a new chat.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="When QM opens">
-        ${OPEN_OPTIONS.map(
-          (option) => html`
-            <button
-              class="settings-choice-option ${openNewChat === option.newChat ? "selected" : ""}"
-              type="button"
-              role="radio"
-              aria-checked=${openNewChat === option.newChat ? "true" : "false"}
-              @click=${() => setOpenNewChat(option.newChat)}
-            >
-              <span>${option.label}</span>
-            </button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
+  return choiceRow(
+    "When QM opens",
+    "Reopen the conversations you had open last time, or start on a new chat.",
+    [
+      { value: false, label: "Last session" },
+      { value: true, label: "New chat" },
+    ],
+    openNewChat,
+    setOpenNewChat,
+  );
 }
 
-function choiceRow(
+function choiceRow<T>(
   title: string,
   note: string,
-  options: Array<{ value: boolean; label: string }>,
-  current: boolean,
-  choose: (value: boolean) => void,
+  options: Array<{ value: T; label: string; glyph?: IconNode }>,
+  current: T,
+  choose: (value: T) => void,
 ): TemplateResult {
   return html`
     <div class="settings-row">
@@ -216,7 +179,7 @@ function choiceRow(
                 drawSettings();
               }}
             >
-              <span>${option.label}</span>
+              ${option.glyph ? icon(option.glyph, 15) : nothing}<span>${option.label}</span>
             </button>
           `,
         )}
@@ -251,38 +214,17 @@ function sendWhileWorkingRow(): TemplateResult {
   );
 }
 
-const SURFACE_OPTIONS: Array<{ webOnly: boolean; label: string }> = [
-  { webOnly: false, label: "All conversations" },
-  { webOnly: true, label: "Web only" },
-];
-
 function sidebarSurfaceRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Sidebar conversations</div>
-        <div class="settings-row-note">Web only hides the Slack channels and DMs the agent also works in.</div>
-      </div>
-      <div class="settings-choice" role="radiogroup" aria-label="Sidebar conversations">
-        ${SURFACE_OPTIONS.map(
-          (option) => html`
-            <button
-              class="settings-choice-option ${sessionsState.webOnly === option.webOnly ? "selected" : ""}"
-              type="button"
-              role="radio"
-              aria-checked=${sessionsState.webOnly === option.webOnly ? "true" : "false"}
-              @click=${() => {
-                setWebOnly(option.webOnly);
-                drawSettings();
-              }}
-            >
-              <span>${option.label}</span>
-            </button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
+  return choiceRow(
+    "Sidebar conversations",
+    "Web only hides the Slack channels and DMs the agent also works in.",
+    [
+      { value: false, label: "All conversations" },
+      { value: true, label: "Web only" },
+    ],
+    sessionsState.webOnly,
+    setWebOnly,
+  );
 }
 
 let aiStatus: StatusResponse | null = null;
