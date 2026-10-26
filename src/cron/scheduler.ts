@@ -55,7 +55,7 @@ export interface Scheduler {
   tick(now?: number): Promise<void>;
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
-  start(intervalMs: number): void;
+  start(): void;
   ready(): Promise<void>;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
@@ -72,15 +72,13 @@ export interface SchedulerDeps {
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
   now?: () => number;
-  maxFiresPerTick?: number;
   leaderLease: LeaderLease;
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     list(): Promise<DirectoryMember[]>;
   };
   sweepAsks?: (now: number) => Promise<void>;
-  jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
+  jobQueue: CronJobQueue;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
@@ -187,7 +185,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
-  const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease;
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
@@ -339,62 +336,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  const fireDue = async (t: number, observed: number): Promise<void> => {
-    const due = await deps.crons.due(t);
-    let batch = due;
-    if (due.length > maxFiresPerTick) {
-      const ordered = [...due].sort((a, b) => (a.lastAttemptAt ?? 0) - (b.lastAttemptAt ?? 0));
-      batch = [];
-      for (const cron of ordered) {
-        if (batch.length >= maxFiresPerTick) break;
-        try {
-          await deps.crons.markAttempted(cron.id, t);
-          batch.push(cron);
-        } catch (e) {
-          reportFailure("scheduler: attempt mark (holding this cron back)", e);
-        }
-      }
-      console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
-    }
-    for (const cron of batch) {
-      if (stopped || observed !== epoch) break;
-      try {
-        await withCronLifecycle(cron.id, true, async () => {
-          if (stopped || observed !== epoch) return;
-          const { authzFailed, deferred } = await fire(
-            cron,
-            t,
-            `cron:${cron.id}:${cron.scheduledAt}`,
-            cron.scheduledAt,
-          );
-          if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
-        });
-      } catch (e) {
-        reportFailure("scheduler: fire", e);
-      }
-    }
-  };
-
-  const tick = async (nowArg?: number): Promise<void> => {
-    const t = nowArg ?? now();
-    const observed = epoch;
-    await withWork(() =>
-      leaderLease.hold(TICK_LEASE_KEY, async () => {
-        await fireDue(t, observed);
-        await sweepStranded(t);
-        await gcFires(t);
-        await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
-      }),
-    );
-  };
-
-  const makeSweeper = () =>
-    createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {
-      label: "scheduler",
-    });
-
-  let sweeper = makeSweeper();
-
   function nextSlot(cron: Cron): number | undefined {
     return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt);
   }
@@ -413,16 +354,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const cron = await deps.crons.get(cronId);
     if (!cron || cron.archived || !cron.enabled) return;
     const job = nextJob(cron);
-    if (job) await deps.jobQueue!.enqueueFire(job);
+    if (job) await deps.jobQueue.enqueueFire(job);
   }
 
-  async function fireJob(job: CronFireJob): Promise<CronFireDisposition> {
+  async function fireJob(job: CronFireJob, at?: number): Promise<CronFireDisposition> {
     const observed = epoch;
     const cron = await deps.crons.get(job.cronId);
     if (!cron || cron.archived || !cron.enabled) return "release";
     const slot = nextSlot(cron);
     if (slot !== job.scheduledAt) return "done";
-    const t = now();
+    const t = at ?? now();
     if (t < slot) return slot;
     if (isDeferred(cron, t)) return cron.deferUntil!;
     if (stopped || observed !== epoch) return t;
@@ -466,33 +407,48 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (stopped) break;
         if (cron.archived || !cron.enabled) continue;
         const job = nextJob(cron);
-        if (job) await deps.jobQueue!.enqueueFire(job);
+        if (job) await deps.jobQueue.enqueueFire(job);
       }
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
   }
 
-  async function maintain(): Promise<void> {
-    await sweepStranded(now());
-    await gcFires(now());
-    await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
+  async function maintain(t = now()): Promise<void> {
+    await sweepStranded(t);
+    await gcFires(t);
+    await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
   }
+
+  /** One leader pass driven by the caller's clock: every due slot runs inline through the queue's fire path. */
+  const tick = async (nowArg?: number): Promise<void> => {
+    const t = nowArg ?? now();
+    await withWork(() =>
+      leaderLease.hold(TICK_LEASE_KEY, async () => {
+        for (const cron of await deps.crons.list()) {
+          if (stopped) break;
+          const job = cron.enabled && !cron.archived ? nextJob(cron) : undefined;
+          if (job && job.scheduledAt <= t) await fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined));
+        }
+        await maintain(t);
+      }),
+    );
+  };
 
   let stopSignal = Promise.withResolvers<void>();
   const leaseGuard = createSweeper(
     () =>
-      deps.jobQueue!.healthy()
+      deps.jobQueue.healthy()
         ? leaderLease.hold(TICK_LEASE_KEY, async (lost) => {
             let lockLost = false;
             void lost.then(() => (lockLost = true));
             let repairAt = 0;
-            while (!stopped && !lockLost && deps.jobQueue!.healthy()) {
+            while (!stopped && !lockLost && deps.jobQueue.healthy()) {
               if (Date.now() >= repairAt) {
                 repairAt = Date.now() + REPAIR_INTERVAL_MS;
                 await runQueueTask(reconcile);
               }
-              await runQueueTask(maintain);
+              await runQueueTask(() => maintain());
               await Promise.race([sleep(MAINTENANCE_INTERVAL_MS, { unref: true }), lost, stopSignal.promise]);
             }
           })
@@ -508,11 +464,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let starting: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
   let pausing: Promise<void> | null = null;
-  const oldSweeps = new Set<Promise<void>>();
-  const retireSweep = (work: Promise<void>) => {
-    oldSweeps.add(work);
-    void work.finally(() => oldSweeps.delete(work));
-  };
   const pending = new Set<Promise<unknown>>();
   async function runQueueTask(work: () => Promise<void>): Promise<void> {
     if (stopped) return;
@@ -563,18 +514,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
     },
     notifyChanged(cronId) {
-      if (!deps.jobQueue) return;
       void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
     },
-    start(intervalMs) {
+    start() {
       if (started || stopping || pausing || stopFailed) return;
       started = true;
       stopped = false;
       stopSignal = Promise.withResolvers<void>();
-      if (!deps.jobQueue) {
-        sweeper.start(intervalMs);
-        return;
-      }
       const observed = epoch;
       starting = deps.jobQueue
         .start({
@@ -592,11 +538,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
-            if (!stopped) sweeper.start(intervalMs);
+            reportFailure("scheduler: cron job queue start (crons will not fire from this process)", e);
+            throw e;
           },
         );
+      starting.catch(() => {});
     },
     async ready() {
       await starting;
@@ -607,12 +553,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       started = false;
       epoch++;
       stopSignal.resolve();
-      retireSweep(sweeper.stop());
-      sweeper = makeSweeper();
       const guard = leaseGuard.stop();
       pausing = (async () => {
         await starting?.catch(() => {});
-        await deps.jobQueue?.stopClaims();
+        await deps.jobQueue.stopClaims();
         await guard;
         stopFailed = false;
       })()
@@ -626,7 +570,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return pausing;
     },
     async drained() {
-      while (oldSweeps.size || pending.size) await Promise.all([...oldSweeps, ...pending]);
+      while (pending.size) await Promise.all([...pending]);
     },
     stop() {
       if (stopping) return stopping;
@@ -634,15 +578,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       epoch++;
       stopSignal.resolve();
       started = false;
-      const sweeps = [sweeper.stop(), leaseGuard.stop()];
+      const sweeps = [leaseGuard.stop()];
       stopping = (async () => {
         await starting?.catch(() => {});
-        await deps.jobQueue?.stopClaims();
+        await deps.jobQueue.stopClaims();
         await pausing;
         await Promise.all(sweeps);
-        await Promise.all(oldSweeps);
         while (pending.size) await Promise.allSettled(pending);
-        await deps.jobQueue?.stop();
+        await deps.jobQueue.stop();
         stopFailed = false;
       })()
         .catch((error: unknown) => {

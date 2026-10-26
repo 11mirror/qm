@@ -62,12 +62,9 @@ export interface CronStore {
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
-  markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
-  markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -214,16 +211,6 @@ export function createCronStore(
       if (applied) await backing.merge(id, { lastFireNote: note });
       return applied ? "applied" : "superseded";
     },
-    async markFired(id, at, scheduledAt) {
-      const cron = await backing.get(id);
-      if (!cron) return;
-      const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-      await backing.merge(id, {
-        lastFiredAt: at,
-        nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-        deferUntil: undefined,
-      });
-    },
     async claimSlot(id, scheduledAt, at) {
       let claimed = false;
       const transform = (cron: Cron): Cron => {
@@ -266,20 +253,8 @@ export function createCronStore(
       if (!cron || cron.lastFiredAt !== at) return;
       await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
     },
-    async markAttempted(id, at) {
-      await backing.merge(id, { lastAttemptAt: at });
-    },
     async defer(id, until) {
       await backing.merge(id, { deferUntil: until });
-    },
-    async due(now) {
-      const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
-        if (c.archived || !c.enabled || isDeferred(c, now)) continue;
-        const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
-        if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
-      }
-      return due;
     },
   };
 }

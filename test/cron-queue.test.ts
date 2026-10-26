@@ -66,8 +66,8 @@ test(
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const cron = await a.crons.create({
         schedule: { firstFireAt: Date.now() + 500 },
@@ -99,8 +99,8 @@ test(
     const fireStore = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const cron = await a.crons.create({
         schedule: { everyMs: 2000 },
@@ -144,8 +144,8 @@ test(
       createdBy: "U3",
       ownerScopeId: scopeId("personal", "U3"),
     });
-    a.scheduler.start(1000);
-    b.scheduler.start(1000);
+    a.scheduler.start();
+    b.scheduler.start();
     try {
       const fired = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fired() >= 1, 30_000);

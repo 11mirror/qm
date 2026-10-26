@@ -17,6 +17,7 @@ import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { markFired } from "./support/cron-slots.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -85,7 +86,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
     owner: "U1",
     createdBy: "U1",
   });
-  await store.markFired(c.id, 123);
+  await markFired(store, c.id, 123);
   const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });

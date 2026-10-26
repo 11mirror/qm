@@ -12,6 +12,7 @@ import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { idleCronQueue } from "./support/cron-slots.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
@@ -37,6 +38,7 @@ function fixture() {
   };
   const service = createMemoryTidyService(deps);
   const scheduler = createScheduler({
+    jobQueue: idleCronQueue(),
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),

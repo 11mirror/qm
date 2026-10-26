@@ -96,7 +96,7 @@ export async function bootTenant(
   }
 
   if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-    built.scheduler.start(1000);
+    built.scheduler.start();
   } else if (!config.backgroundDeploymentId) {
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
   }
@@ -162,7 +162,7 @@ export async function bootTenant(
         built.runtime.startBackground();
         await periodicStop;
         if (signal.aborted || epoch !== activationEpoch) return;
-        built.scheduler.start(1000);
+        built.scheduler.start();
         await built.scheduler.ready();
         if (signal.aborted || epoch !== activationEpoch) return;
         for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {

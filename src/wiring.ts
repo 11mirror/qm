@@ -2266,7 +2266,6 @@ export function buildApp(
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     ...scopedTriggerDeps,
