@@ -23,16 +23,19 @@ const REQUEST_FIELDS = new Set([
   "stream",
 ]);
 
+const BROWSER_REQUEST_FAILED = { error: "Selected AI account could not complete the browser request" };
+
 async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
   const gateway = deps.browserModelGateway;
   if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
   if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
     return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
-  if (!body || typeof body !== "object" || Array.isArray(body))
-    return sendJson(res, 400, { error: "invalid browser model request" });
   const input = body as Record<string, unknown>;
   if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
     input.model !== capability.browserModel ||
     !Array.isArray(input.messages) ||
     input.stream === true ||
@@ -42,6 +45,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   res.once("close", abort);
+  const signal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]);
   try {
     const selected = await resolveBrowserModel({
       actorId: capability.actorId,
@@ -54,29 +58,28 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
         error: "AI access changed or is unavailable; start a new turn to refresh browser access",
       });
     const nativeVariant = Boolean(modelRequestOverrides(capability.browserModel));
-    if (nativeVariant && selected.account === "company") await gateway?.refresh?.();
-    if (selected.account !== "company" || !gateway || nativeVariant) {
-      if (selected.account !== "company" && !selected.routing)
+    const company = selected.account === "company";
+    if (nativeVariant && company) await gateway?.refresh?.();
+    if (!company || !gateway || nativeVariant) {
+      if (!company && !selected.routing)
         return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings" });
       if (selected.routing?.kind === "oauth" && selected.routing.provider === "anthropic")
         return sendJson(res, 422, {
           error:
             "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
         });
-      const useCompanySubscription = selected.account === "company";
       return sendJson(
         res,
         200,
         await nativeBrowserCompletion({
           selection: selected,
-          modelGateway: selected.account === "company" ? gateway : undefined,
+          modelGateway: company ? gateway : undefined,
           credentials: deps.userModelCredentials,
-          companyProviderKeys:
-            selected.account === "company" ? await deps.resolveBrowserCompanyKeys?.(useCompanySubscription) : undefined,
-          companySubscriptionProvider: useCompanySubscription ? deps.companySubscriptionAuth : undefined,
+          companyProviderKeys: company ? await deps.resolveBrowserCompanyKeys?.(company) : undefined,
+          companySubscriptionProvider: company ? deps.companySubscriptionAuth : undefined,
           actorId: capability.actorId,
           body: input,
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+          signal: signal(),
         }),
       );
     }
@@ -87,20 +90,17 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json", [gateway.apiKeyHeader]: gateway.apiKey },
       body: JSON.stringify({ ...input, model: target, stream: false }),
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+      signal: signal(),
       redirect: "error",
     });
     if (!response.ok) {
       await response.body?.cancel();
-      return sendJson(res, response.status === 429 ? 429 : 502, {
-        error: "Selected AI account could not complete the browser request",
-      });
+      return sendJson(res, response.status === 429 ? 429 : 502, BROWSER_REQUEST_FAILED);
     }
-    const result = await response.json();
-    sendJson(res, 200, result);
+    sendJson(res, 200, await response.json());
   } catch (error) {
     if (error instanceof BrowserCompletionError) return sendJson(res, error.status, { error: error.message });
-    if (!res.destroyed) sendJson(res, 502, { error: "Selected AI account could not complete the browser request" });
+    if (!res.destroyed) sendJson(res, 502, BROWSER_REQUEST_FAILED);
   } finally {
     res.off("close", abort);
   }

@@ -42,7 +42,7 @@ export interface ContainerState {
   updatedAt: number;
 }
 
-export interface ActiveThread {
+interface ActiveThread {
   container: string;
   sub: string;
   lastTs: string;

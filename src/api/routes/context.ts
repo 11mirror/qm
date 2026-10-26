@@ -2,7 +2,7 @@ import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { sleep } from "../../util/async.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
@@ -13,6 +13,8 @@ const FULFILL_WAIT_MS = 25_000;
 const FULFILL_POLL_MS = 100;
 const PENDING_WAIT_CAP_MS = 20_000;
 const PENDING_POLL_MS = 100;
+const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
+const FILE_FULFILL_WAIT_MS = 120_000;
 
 async function resolveSurfaceTarget(
   ctx: ApiCtx,
@@ -33,18 +35,14 @@ async function resolveSurfaceTarget(
       return { source: "slack", target: { channelId: ref } };
     }
     const r = await app.resolveChannel(ref);
-    if (r.kind === "none") {
-      sendJson(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
-      return null;
-    }
-    if (r.kind === "ambiguous") {
-      sendJson(res, 409, {
+    if (r.kind === "none")
+      return refuse(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
+    if (r.kind === "ambiguous")
+      return refuse(res, 409, {
         error: "ambiguous_channel",
         message: `"${b.channel}" matches multiple channels — pass an exact name or id`,
         candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
       });
-      return null;
-    }
     if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true))) {
       await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
       return null;
@@ -52,13 +50,11 @@ async function resolveSurfaceTarget(
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
-  if (!dest?.target || dest.type !== "slack") {
-    sendJson(res, 400, {
+  if (!dest?.target || dest.type !== "slack")
+    return refuse(res, 400, {
       error: "no_conversation",
       message: "this conversation has no surface history to pull — name a channel instead",
     });
-    return null;
-  }
   return { source: dest.type, target: { conversationTarget: dest.target } };
 }
 
@@ -97,7 +93,9 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
     ...(b.live === true ? { live: true } : {}),
   };
   const request = await app.createContextRequest(resolved.source, query);
-  return awaitFulfillment(ctx, request.id, query.channelName);
+  return awaitOutcome(ctx, request.id, FULFILL_WAIT_MS, (result) => {
+    sendJson(res, 200, { ...(query.channelName ? { channel: `#${query.channelName}` } : {}), ...result });
+  });
 }
 
 async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
@@ -125,7 +123,42 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
     file: { ts, ...(threadTs ? { threadTs } : {}), ...(name ? { name } : {}) },
   };
   const request = await app.createContextRequest(resolved.source, query);
-  return awaitFileFulfillment(ctx, request.id);
+  return awaitOutcome(ctx, request.id, FILE_FULFILL_WAIT_MS, async (result) => {
+    const file = result.file;
+    if (!file) {
+      return sendJson(res, 502, {
+        error: "surface_error",
+        message:
+          "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
+      });
+    }
+    const token = await mintCapabilityToken(
+      {
+        actorId: capability.actorId,
+        scopeId: capability.scopeId,
+        ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
+        ...(capability.botActor ? { botActor: true } : {}),
+        ...(capability.liveActor ? { liveActor: true } : {}),
+        ...(capability.members ? { members: capability.members } : {}),
+        aud: BLOB_TRANSFER_AUD,
+        blob: { dir: "read", id: file.blobId },
+        exp: Date.now() + FILE_DOWNLOAD_TTL_MS,
+      },
+      (ctx.deps.capabilitySecret ?? ctx.secret)!,
+      ctx.deps.capabilityTokenCompression,
+    );
+    const { blobId, ...meta } = file;
+    return sendJson(res, 200, {
+      file: meta,
+      download: {
+        path: `/v1/blobs/${encodeURIComponent(blobId)}`,
+        header: CAPABILITY_HEADER,
+        token,
+        expiresInSeconds: Math.floor(FILE_DOWNLOAD_TTL_MS / 1000),
+      },
+      note: `run: curl -fsS -H "${CAPABILITY_HEADER}: <token>" "$AGENT_API_URL/v1/blobs/${encodeURIComponent(blobId)}" -o <path you choose — do NOT paste the posted filename into a shell unquoted>`,
+    });
+  });
 }
 
 async function notVisible(ctx: ApiCtx, actorId: string, label: string): Promise<void> {
@@ -151,55 +184,6 @@ async function awaitOutcome(
     return sendJson(res, 502, { error: "surface_error", message: outcome.error ?? "the surface couldn't answer that" });
   }
   return sendJson(res, 504, { error: "surface_timeout", message: "the surface didn't answer in time — try again" });
-}
-
-function awaitFulfillment(ctx: ApiCtx, requestId: string, channelName: string | undefined): Promise<void> {
-  return awaitOutcome(ctx, requestId, FULFILL_WAIT_MS, (result) => {
-    sendJson(ctx.res, 200, { ...(channelName ? { channel: `#${channelName}` } : {}), ...result });
-  });
-}
-
-const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
-const FILE_FULFILL_WAIT_MS = 120_000;
-function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
-  return awaitOutcome(ctx, requestId, FILE_FULFILL_WAIT_MS, async (result) => {
-    const { res, capability, secret } = ctx;
-    const file = result.file;
-    if (!file) {
-      return sendJson(res, 502, {
-        error: "surface_error",
-        message:
-          "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
-      });
-    }
-    const cap = capability!;
-    const token = await mintCapabilityToken(
-      {
-        actorId: cap.actorId,
-        scopeId: cap.scopeId,
-        ...(cap.scopeVersion ? { scopeVersion: cap.scopeVersion } : {}),
-        ...(cap.botActor ? { botActor: true } : {}),
-        ...(cap.liveActor ? { liveActor: true } : {}),
-        ...(cap.members ? { members: cap.members } : {}),
-        aud: BLOB_TRANSFER_AUD,
-        blob: { dir: "read", id: file.blobId },
-        exp: Date.now() + FILE_DOWNLOAD_TTL_MS,
-      },
-      (ctx.deps.capabilitySecret ?? secret)!,
-      ctx.deps.capabilityTokenCompression,
-    );
-    const { blobId, ...meta } = file;
-    return sendJson(res, 200, {
-      file: meta,
-      download: {
-        path: `/v1/blobs/${encodeURIComponent(blobId)}`,
-        header: CAPABILITY_HEADER,
-        token,
-        expiresInSeconds: Math.floor(FILE_DOWNLOAD_TTL_MS / 1000),
-      },
-      note: `run: curl -fsS -H "${CAPABILITY_HEADER}: <token>" "$AGENT_API_URL/v1/blobs/${encodeURIComponent(blobId)}" -o <path you choose — do NOT paste the posted filename into a shell unquoted>`,
-    });
-  });
 }
 
 async function listPendingContextRequests(ctx: ApiCtx): Promise<void> {

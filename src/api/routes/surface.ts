@@ -55,41 +55,55 @@ function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null
   return SHARED_SKILL_TRIGGER_REFUSAL;
 }
 
-function isConversationColor(value: unknown): value is string | null {
-  return value === null || (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value));
+const AGENT_ONLY = { error: "capability_required", message: "this endpoint is for the agent self-API" };
+const WINDOW_ERROR = "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one";
+
+function badRequest(res: ApiCtx["res"], message: string): void {
+  return sendJson(res, 400, { error: "bad_request", message });
 }
 
-async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const principalId = (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId) {
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  }
-  const out = await app.regenerateTitle(id, principalId);
-  if (!out) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, out);
+function found(res: ApiCtx["res"], value: unknown): void {
+  return value ? sendJson(res, 200, value) : sendJson(res, 404, { error: "not_found" });
 }
 
-async function detachSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const principalId = (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId) {
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  }
-  const out = await app.detachSession(id, principalId);
-  if (!out) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, out);
+function bodyField(ctx: ApiCtx, name: string): unknown {
+  return isObj(ctx.body) ? ctx.body[name] : undefined;
 }
 
-async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const principalId = (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId) {
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  }
-  const out = await app.cancelSessionGoal(ctx.params.id!, principalId);
+function bodyPrincipal(ctx: ApiCtx): string | null {
+  const principalId = bodyField(ctx, "principalId");
+  return typeof principalId === "string" && principalId ? principalId : null;
+}
+
+function withQuery(
+  name: "viewer" | "principalId",
+  handle: (ctx: ApiCtx, id: string) => Promise<void>,
+): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const id = ctx.url.searchParams.get(name);
+    return id ? handle(ctx, id) : badRequest(ctx.res, `${name} required`);
+  };
+}
+
+function withBodyPrincipal(
+  handle: (ctx: ApiCtx, principalId: string) => Promise<void>,
+): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const principalId = bodyPrincipal(ctx);
+    return principalId ? handle(ctx, principalId) : badRequest(ctx.res, "principalId required");
+  };
+}
+
+const regenerateSessionTitle = withBodyPrincipal(async ({ res, app, params }, principalId) =>
+  found(res, await app.regenerateTitle(params.id!, principalId)),
+);
+
+const detachSession = withBodyPrincipal(async ({ res, app, params }, principalId) =>
+  found(res, await app.detachSession(params.id!, principalId)),
+);
+
+const cancelSessionGoal = withBodyPrincipal(async ({ res, app, params }, principalId) => {
+  const out = await app.cancelSessionGoal(params.id!, principalId);
   if (!out) return sendJson(res, 404, { error: "not_found" });
   if (!out.cancelled)
     return sendJson(res, 409, {
@@ -100,22 +114,15 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
           : "This conversation has no active or paused goal to cancel.",
     });
   return sendJson(res, 200, out);
-}
+});
 
-async function forkSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const b = body as { principalId?: unknown; upToSeq?: unknown };
-  if (typeof b.principalId !== "string" || !b.principalId) {
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  }
-  if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
-    return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
-  }
-  const out = await app.forkSession(id, b.principalId, b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : undefined);
-  if (!out) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, out);
-}
+const forkSession = withBodyPrincipal(async (ctx, principalId) => {
+  const upToSeq = bodyField(ctx, "upToSeq");
+  if (upToSeq !== undefined && (typeof upToSeq !== "number" || !Number.isInteger(upToSeq) || upToSeq < 0))
+    return badRequest(ctx.res, "upToSeq must be a non-negative integer");
+  const options = upToSeq !== undefined ? { upToSeq: upToSeq as number } : undefined;
+  return found(ctx.res, await ctx.app.forkSession(ctx.params.id!, principalId, options));
+});
 
 function agentConversation(session: Session) {
   return {
@@ -157,74 +164,40 @@ function transcriptWindow(
   };
 }
 
-async function getSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+const getSession = withQuery("viewer", async ({ res, app, url, params }, viewer) => {
   const window = transcriptWindow(url);
-  if (!window) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
-    });
-  }
-  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
-  if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
-}
+  if (!window) return badRequest(res, WINDOW_ERROR);
+  return found(res, await app.getSessionForViewer(params.id!, viewer, Object.keys(window).length ? window : undefined));
+});
 
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  if (url.searchParams.has("sinceSeq")) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "agent transcript paging supports tailTurns and beforeSeq",
-    });
-  }
+  if (!capability) return sendJson(res, 401, AGENT_ONLY);
+  if (url.searchParams.has("sinceSeq"))
+    return badRequest(res, "agent transcript paging supports tailTurns and beforeSeq");
   const window = transcriptWindow(url, 20);
-  if (!window) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
-    });
-  }
-  const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
-  if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
+  if (!window) return badRequest(res, WINDOW_ERROR);
+  const view = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
+  if (!view) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
-    session: agentConversation(found.session),
-    items: found.items.filter((item) => !SYSTEM_KINDS.has(item.kind)),
-    ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
+    session: agentConversation(view.session),
+    items: view.items.filter((item) => !SYSTEM_KINDS.has(item.kind)),
+    ...(view.earlierItems ? { earlierItems: view.earlierItems } : {}),
   });
 }
 
-async function getSessionItem(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const seq = Number(ctx.params.seq);
-  if (!Number.isInteger(seq) || seq < 0) {
-    return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
-  }
-  const found = await app.getSessionItemForViewer(id, viewer, seq);
-  if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
-}
+const getSessionItem = withQuery("viewer", async ({ res, app, params }, viewer) => {
+  const seq = Number(params.seq);
+  if (!Number.isInteger(seq) || seq < 0) return badRequest(res, "seq must be a non-negative integer");
+  return found(res, await app.getSessionItemForViewer(params.id!, viewer, seq));
+});
 
-async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+const listSessionApprovals = withQuery("viewer", async (ctx, viewer) => {
   const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const approvals = await app.listSessionApprovals(id, viewer);
-  return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
-}
+  const approvals = await ctx.app.listSessionApprovals(id, viewer);
+  return sendJson(ctx.res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
+});
 
-// Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
 async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
   const kc = ctx.deps.keychain;
   const approvals = ctx.deps.keychainApprovals;
@@ -246,27 +219,14 @@ async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: strin
   return out;
 }
 
-async function getSessionBackground(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const view = await app.sessionBackground(id, viewer);
-  if (!view) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, view);
-}
+const getSessionBackground = withQuery("viewer", async ({ res, app, params }, viewer) =>
+  found(res, await app.sessionBackground(params.id!, viewer)),
+);
 
-async function getSessionBackgroundOutput(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const id = ctx.params.id!;
-  const processId = ctx.params.pid!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+const getSessionBackgroundOutput = withQuery("viewer", async ({ res, app, url, params }, viewer) => {
   const sinceCursor = Math.max(0, Number(url.searchParams.get("sinceCursor") ?? "0") || 0);
-  const read = await app.readSessionBackgroundOutput(id, processId, viewer, sinceCursor);
-  if (!read) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, read);
-}
+  return found(res, await app.readSessionBackgroundOutput(params.id!, params.pid!, viewer, sinceCursor));
+});
 
 async function getFileContent(ctx: ApiCtx): Promise<void> {
   const { res, app, capability, actor } = ctx;
@@ -281,7 +241,6 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
   });
   pipeToResponse(res, opened.stream, "file read failed");
-  return;
 }
 
 async function listFiles(ctx: ApiCtx): Promise<void> {
@@ -337,130 +296,81 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function patchSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const b = body as {
-    principalId?: unknown;
-    title?: unknown;
-    archived?: unknown;
-    pinned?: unknown;
-    color?: unknown;
-    unread?: unknown;
+type ConversationPatch = {
+  title?: string | null;
+  archived?: boolean;
+  pinned?: boolean;
+  color?: string | null;
+  readAt?: number;
+};
+
+const flagField =
+  (key: "archived" | "pinned") =>
+  (value: unknown, patch: ConversationPatch): string | void => {
+    if (typeof value !== "boolean") return `${key} must be a boolean`;
+    patch[key] = value;
   };
-  const principalId = typeof b.principalId === "string" ? b.principalId : null;
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-    readAt?: number;
-  } = {};
-  if ("unread" in b) {
-    if (typeof b.unread !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "unread must be a boolean" });
-    }
-    patch.readAt = b.unread ? 0 : Date.now();
+
+const PATCH_FIELDS = {
+  unread: (value: unknown, patch: ConversationPatch): string | void => {
+    if (typeof value !== "boolean") return "unread must be a boolean";
+    patch.readAt = value ? 0 : Date.now();
+  },
+  title: (value: unknown, patch: ConversationPatch): string | void => {
+    if (value !== null && typeof value !== "string") return "title must be a string or null";
+    patch.title = (typeof value === "string" ? value.trim().slice(0, 200) : null) || null;
+  },
+  archived: flagField("archived"),
+  pinned: flagField("pinned"),
+  color: (value: unknown, patch: ConversationPatch): string | void => {
+    if (value !== null && !(typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)))
+      return "color must be '#rrggbb' or null";
+    patch.color = typeof value === "string" ? value.toLowerCase() : null;
+  },
+};
+
+function conversationPatch(
+  body: unknown,
+  fields: (keyof typeof PATCH_FIELDS)[],
+  required: string,
+): ConversationPatch | string {
+  const b = isObj(body) ? body : {};
+  const patch: ConversationPatch = {};
+  for (const field of fields) {
+    const error = field in b ? PATCH_FIELDS[field](b[field], patch) : undefined;
+    if (error) return error;
   }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.title === undefined &&
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.color === undefined &&
-    patch.readAt === undefined
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "title, archived, pinned, color, or unread required",
-    });
-  }
-  const session = await app.updateSession(id, principalId, patch);
+  return Object.keys(patch).length ? patch : required;
+}
+
+const patchSession = withBodyPrincipal(async ({ res, app, body, params }, principalId) => {
+  const patch = conversationPatch(
+    body,
+    ["unread", "title", "archived", "pinned", "color"],
+    "title, archived, pinned, color, or unread required",
+  );
+  if (typeof patch === "string") return badRequest(res, patch);
+  const session = await app.updateSession(params.id!, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
-}
+});
 
 async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   const { res, app, capability } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
+  if (!capability) return sendJson(res, 401, AGENT_ONLY);
   const sessions = await app.listSessions(capability.actorId);
-  return sendJson(res, 200, {
-    conversations: sessions.map(agentConversation),
-  });
+  return sendJson(res, 200, { conversations: sessions.map(agentConversation) });
 }
 
 async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, capability, body } = ctx;
-  if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
-  const b = isObj(body) ? body : {};
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-  } = {};
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.title === undefined &&
-    patch.color === undefined
-  ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
-  }
+  if (!capability) return sendJson(res, 401, AGENT_ONLY);
+  const patch = conversationPatch(
+    body,
+    ["archived", "pinned", "title", "color"],
+    "archived, pinned, title, or color required",
+  );
+  if (typeof patch === "string") return badRequest(res, patch);
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx.deps, {
@@ -480,18 +390,12 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
 
 const DEFAULT_SESSION_PAGE = 50;
 
-async function listSessions(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+const listSessions = withQuery("principalId", async ({ res, app, url }, principalId) => {
   const n = Number(url.searchParams.get("limit") ?? DEFAULT_SESSION_PAGE);
   const before = parseSessionCursor(url.searchParams.get("before"));
   const status = url.searchParams.get("status") ?? "active";
   if (!Number.isInteger(n) || n < 1 || before === null || !isSessionPageStatus(status))
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "limit must be a positive integer, before a cursor, status active, archived or waiting",
-    });
+    return badRequest(res, "limit must be a positive integer, before a cursor, status active, archived or waiting");
   const page = await app.listSessionPage(principalId, {
     limit: n,
     ...(before ? { before } : {}),
@@ -506,7 +410,7 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(page.hasArchived !== undefined ? { hasArchived: page.hasArchived } : {}),
     nextCursor: page.next ? `${page.next.activity}.${page.next.id}` : null,
   });
-}
+});
 
 function isSessionPageStatus(value: string): value is SessionPageStatus {
   return value === "active" || value === "archived" || value === "waiting";
@@ -520,25 +424,19 @@ function parseSessionCursor(raw: string | null): { activity: number; id: string 
   return dot > 0 && Number.isSafeInteger(activity) && id ? { activity, id } : null;
 }
 
-async function listSessionChildren(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, params } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+const listSessionChildren = withQuery("principalId", async ({ res, app, params }, principalId) => {
   const children = await app.sessionChildren(principalId, params.id!);
-  if (!children) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { sessions: children });
-}
+  return found(res, children && { sessions: children });
+});
 
 async function getSessionRow(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   const id = url.searchParams.get("id") ?? undefined;
   const threadRef = url.searchParams.get("threadRef") ?? undefined;
-  if (!principalId || (!id && !threadRef))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and id or threadRef required" });
+  if (!principalId || (!id && !threadRef)) return badRequest(res, "principalId and id or threadRef required");
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
-  if (!session) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { session: session });
+  return found(res, session && { session });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
@@ -548,40 +446,23 @@ async function searchResources(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, await ctx.app.searchResources(principalId, query));
 }
 
-async function searchSessions(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const query = url.searchParams.get("q") ?? "";
+const searchSessions = withQuery("principalId", async ({ res, app, url }, principalId) => {
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
-  return sendJson(res, 200, { hits: await app.searchSessions(principalId, query, limit) });
-}
+  return sendJson(res, 200, { hits: await app.searchSessions(principalId, url.searchParams.get("q") ?? "", limit) });
+});
 
-async function listContexts(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(res, 200, { contexts: await app.listContexts(principalId) });
-}
+const listContexts = withQuery("principalId", async ({ res, app }, principalId) =>
+  sendJson(res, 200, { contexts: await app.listContexts(principalId) }),
+);
 
-async function listScopeResources(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
+const listScopeResources = withQuery("principalId", async ({ res, app, url }, principalId) => {
   const scope = url.searchParams.get("scope");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  if (!scope) return sendJson(res, 400, { error: "bad_request", message: "scope required" });
+  if (!scope) return badRequest(res, "scope required");
   const out = await app.listScopeResources(principalId, scope as ScopeId);
   if (!out) return sendJson(res, 404, { error: "not_found", message: "not a context you can see" });
-  return sendJson(res, 200, {
-    files: out.files,
-    crons: out.crons,
-    webhooks: out.webhooks.map(redactWebhook),
-    deployments: out.deployments,
-    skills: out.skills,
-    manageable: out.manageable,
-  });
-}
+  return sendJson(res, 200, { ...out, webhooks: out.webhooks.map(redactWebhook) });
+});
 
 async function getUiState(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
@@ -715,10 +596,7 @@ export function parseFacts(body: unknown): string[] | string {
   return facts;
 }
 
-async function listSkills(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+const listSkills = withQuery("principalId", async ({ res, app, url }, principalId) => {
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
   const resolved = (await app.listVisibleSkills(principalId)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
@@ -751,15 +629,34 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
     })),
   );
   return sendJson(res, 200, { skills });
+});
+
+function skillReader(ctx: ApiCtx, fallback: unknown): string | null {
+  const principalId = ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof fallback === "string" ? fallback : "");
+  if (!ctx.capability && !ctx.actor && ctx.secret) {
+    sendJson(ctx.res, 401, { error: "capability_required" });
+    return null;
+  }
+  if (principalId) return principalId;
+  badRequest(ctx.res, "principalId required");
+  return null;
+}
+
+function skillView(skill: Skill) {
+  return {
+    id: skill.id,
+    name: skill.manifest.name,
+    description: skill.manifest.description,
+    body: skill.manifest.body,
+    status: skill.status,
+    version: skill.version,
+  };
 }
 
 async function getSkillDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, capability, actor } = ctx;
-  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
-  if (!capability && !actor && ctx.secret) {
-    return sendJson(res, 401, { error: "capability_required" });
-  }
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const { res, app } = ctx;
+  const principalId = skillReader(ctx, ctx.url.searchParams.get("principalId"));
+  if (!principalId) return;
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
@@ -770,14 +667,9 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   }
   return sendJson(res, 200, {
     skill: {
-      id: skill.id,
-      name: skill.manifest.name,
-      description: skill.manifest.description,
-      body: skill.manifest.body,
+      ...skillView(skill),
       scope: parseScopeId(skill.scopeId).kind ?? skill.scopeId,
       scopeId: skill.scopeId,
-      status: skill.status,
-      version: skill.version,
       createdBy: skill.createdBy,
       pack: skill.pack,
       files: (skill.manifest.files ?? []).map((file) => ({ path: file.path, executable: file.executable === true })),
@@ -791,73 +683,40 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
 }
 
 async function restoreSkill(ctx: ApiCtx): Promise<void> {
-  const b = (ctx.body ?? {}) as { principalId?: unknown };
-  const principalId =
-    ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof b.principalId === "string" ? b.principalId : "");
-  if (!ctx.capability && !ctx.actor && ctx.secret) {
-    return sendJson(ctx.res, 401, { error: "capability_required" });
-  }
-  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  const principalId = skillReader(ctx, bodyField(ctx, "principalId"));
+  if (!principalId) return;
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
-async function updateSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const id = ctx.params.id!;
-  const b = (body ?? {}) as { principalId?: unknown; description?: unknown; body?: unknown };
+function skillOwner(ctx: ApiCtx): string | null {
+  return ctx.capability ? ctx.capability.actorId : bodyPrincipal(ctx);
+}
 
-  let principalId: string;
-  if (capability) {
-    principalId = capability.actorId;
-  } else {
-    if (typeof b.principalId !== "string" || !b.principalId) {
-      return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-    }
-    principalId = b.principalId;
-  }
-  if (b.description !== undefined && typeof b.description !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "description must be a string" });
-  }
-  if (b.body !== undefined && typeof b.body !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "body must be a string" });
-  }
+async function updateSkill(ctx: ApiCtx): Promise<void> {
+  const { res, app, capability } = ctx;
+  const principalId = skillOwner(ctx);
+  if (principalId === null) return badRequest(res, "principalId required");
   const patch: { description?: string; body?: string } = {};
-  if (typeof b.description === "string") patch.description = b.description;
-  if (typeof b.body === "string") patch.body = b.body;
+  for (const field of ["description", "body"] as const) {
+    const value = bodyField(ctx, field);
+    if (value !== undefined && typeof value !== "string") return badRequest(res, `${field} must be a string`);
+    if (typeof value === "string") patch[field] = value;
+  }
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(ctx.params.id!, principalId, patch, { liveActor });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
-  return sendJson(res, 200, {
-    skill: {
-      id: updated.id,
-      name: updated.manifest.name,
-      description: updated.manifest.description,
-      body: updated.manifest.body,
-      status: updated.status,
-      version: updated.version,
-    },
-  });
+  return sendJson(res, 200, { skill: skillView(updated) });
 }
 
 async function deleteSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const id = ctx.params.id!;
-  const b = (body ?? {}) as { principalId?: unknown };
-
-  let principalId: string;
-  if (capability) {
-    principalId = capability.actorId;
-  } else {
-    if (typeof b.principalId !== "string" || !b.principalId) {
-      return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-    }
-    principalId = b.principalId;
-  }
+  const { res, app, capability } = ctx;
+  const principalId = skillOwner(ctx);
+  if (principalId === null) return badRequest(res, "principalId required");
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({ principalId, id: ctx.params.id!, liveActor });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -867,34 +726,17 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
 }
 
 async function createSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const b = (body ?? {}) as {
-    principalId?: unknown;
-    scopeId?: unknown;
-    name?: unknown;
-    description?: unknown;
-    body?: unknown;
-  };
-
+  const { res, app, capability } = ctx;
   const blocked = sharedSkillCreateBlock(capability);
   if (blocked) return sendJson(res, 403, { error: "forbidden", message: blocked });
-
-  let principalId: string;
-  let homeScope: ScopeId | undefined;
-  if (capability) {
-    principalId = capability.actorId;
-    homeScope = capability.scopeId;
-  } else {
-    if (typeof b.principalId !== "string" || !b.principalId) {
-      return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-    }
-    principalId = b.principalId;
-    if (typeof b.scopeId === "string" && b.scopeId !== makeScopeId("personal", principalId)) {
-      if (!(await app.managesScope(principalId, b.scopeId as ScopeId))) {
-        return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
-      }
-      homeScope = b.scopeId as ScopeId;
-    }
+  const principalId = skillOwner(ctx);
+  if (principalId === null) return badRequest(res, "principalId required");
+  let homeScope = capability?.scopeId;
+  const requestedScope = bodyField(ctx, "scopeId");
+  if (!capability && typeof requestedScope === "string" && requestedScope !== makeScopeId("personal", principalId)) {
+    if (!(await app.managesScope(principalId, requestedScope as ScopeId)))
+      return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
+    homeScope = requestedScope as ScopeId;
   }
   if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
     return sendJson(res, 403, {
@@ -902,37 +744,26 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
     });
   }
-  if (typeof b.name !== "string" || !b.name.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "name required" });
-  }
-  if (typeof b.description !== "string" || !b.description.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "description required" });
-  }
-  if (typeof b.body !== "string" || !b.body.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "body required" });
-  }
+  const fields = {
+    name: bodyField(ctx, "name"),
+    description: bodyField(ctx, "description"),
+    body: bodyField(ctx, "body"),
+  };
+  for (const [field, value] of Object.entries(fields))
+    if (typeof value !== "string" || !value.trim()) return badRequest(res, `${field} required`);
   const created = await app.createOwnedSkill({
     principalId,
     ...(homeScope ? { homeScope } : {}),
-    name: b.name,
-    description: b.description,
-    body: b.body,
+    name: fields.name as string,
+    description: fields.description as string,
+    body: fields.body as string,
   });
   if (!created)
     return sendJson(res, 409, {
       error: "exists",
       message: "a skill of that name already exists here — edit it instead",
     });
-  return sendJson(res, 201, {
-    skill: {
-      id: created.id,
-      name: created.manifest.name,
-      description: created.manifest.description,
-      body: created.manifest.body,
-      status: created.status,
-      version: created.version,
-    },
-  });
+  return sendJson(res, 201, { skill: skillView(created) });
 }
 
 async function createGrant(ctx: ApiCtx): Promise<void> {
@@ -981,13 +812,11 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const allowed = selectableCatalog(catalog).map((model) => model.id);
   const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
   const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
-  const resolvedBranding = {
-    ...(branding.orgName ? { orgName: branding.orgName } : {}),
-    ...(branding.accent ? { accent: branding.accent } : {}),
-    ...(branding.mark ? { mark: branding.mark } : {}),
-    ...(branding.markUrl ? { markUrl: branding.markUrl } : {}),
-    ...(branding.selfLabel ? { selfLabel: branding.selfLabel } : {}),
-  };
+  const resolvedBranding = Object.fromEntries(
+    (["orgName", "accent", "mark", "markUrl", "selfLabel"] as const).flatMap((key) =>
+      branding[key] ? [[key, branding[key]]] : [],
+    ),
+  );
   return sendJson(res, 200, {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
@@ -1006,21 +835,18 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: ScopeId } | null> {
-  const actorId =
-    ctx.capability?.actorId ??
-    (isObj(ctx.body) && typeof ctx.body.principalId === "string"
-      ? ctx.body.principalId
-      : ctx.url.searchParams.get("principalId"));
-  const scope =
-    ctx.capability?.scopeId ??
-    (isObj(ctx.body) && typeof ctx.body.scopeId === "string" ? ctx.body.scopeId : ctx.url.searchParams.get("scopeId"));
+  const requested = (name: string) => {
+    const value = bodyField(ctx, name);
+    return typeof value === "string" ? value : ctx.url.searchParams.get(name);
+  };
+  const actorId = ctx.capability?.actorId ?? requested("principalId");
+  const scope = (ctx.capability?.scopeId ?? requested("scopeId")) as ScopeId | null;
   if (!actorId || !scope) return null;
   const parsed = parseScopeId(scope);
-  if (parsed.kind === "personal" && parsed.ref === actorId) return { actorId, scope: scope as ScopeId };
-  if (ctx.capability && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
-  if (parsed.kind !== "org" && (await ctx.app.belongsToScope(actorId, scope as ScopeId)))
-    return { actorId, scope: scope as ScopeId };
-  return null;
+  const allowed =
+    (parsed.kind === "personal" && parsed.ref === actorId) ||
+    (parsed.kind !== "org" && (Boolean(ctx.capability) || (await ctx.app.belongsToScope(actorId, scope))));
+  return allowed ? { actorId, scope } : null;
 }
 
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
@@ -1033,7 +859,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(
     ctx.res,
     200,
-    ctx.url.searchParams.get("account") === "company"
+    account === "company"
       ? await runtimeConfigBody(ctx, target.scope)
       : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
   );
@@ -1127,25 +953,12 @@ function getSoul(ctx: ApiCtx): void {
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
-  let scopeIdVal: string;
-  let content: string;
-  let actorId: string;
-  if (capability) {
-    const b = body as { content?: unknown };
-    if (typeof b.content !== "string")
-      return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    actorId = capability.actorId;
-    scopeIdVal = capability.scopeId;
-    content = b.content;
-  } else {
-    const b = body as { scopeId?: string; content?: string; actorId?: string };
-    if (typeof b.scopeId !== "string" || typeof b.content !== "string" || typeof b.actorId !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "scopeId, content, actorId required" });
-    }
-    scopeIdVal = b.scopeId;
-    content = b.content;
-    actorId = b.actorId;
-  }
+  const b = body as { scopeId?: unknown; content?: unknown; actorId?: unknown };
+  const scopeIdVal = capability ? capability.scopeId : b.scopeId;
+  const actorId = capability ? capability.actorId : b.actorId;
+  const content = b.content;
+  if (typeof content !== "string" || typeof scopeIdVal !== "string" || typeof actorId !== "string")
+    return badRequest(res, capability ? "content (string) required" : "scopeId, content, actorId required");
   const allowSharedScope =
     Boolean(capability) ||
     (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));

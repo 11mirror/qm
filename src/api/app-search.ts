@@ -134,11 +134,7 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
     },
   };
 }
-export function createSearchMethods(
-  deps: AppDeps,
-  app: App,
-  helpers: AppHelpers,
-): Pick<App, "search" | "searchConversations"> {
+export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers) {
   const slack = slackBackend(deps, app);
   const options = {
     onBackendError: (backend: string, error: unknown) =>
@@ -157,5 +153,5 @@ export function createSearchMethods(
   return {
     search: (query, principals, limit) => core.search({ query, principals, limit }),
     searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
-  };
+  } satisfies Partial<App>;
 }

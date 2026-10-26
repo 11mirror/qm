@@ -2,9 +2,9 @@ import { PrincipalLinkError } from "../../../identity/principal-links.ts";
 import { adminStatusFromGrants } from "../../../admin/admin-service.ts";
 import { samePerson } from "../../../directory/person.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj } from "../shared.ts";
+import { isObj } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { tenant } from "../../../tenant.ts";
+import { notFound, orgAdmin } from "./common.ts";
 
 const DIRECTORY_MEMBER_IS_CANONICAL =
   "that principal is a directory member; directory members stay canonical, so link the other identity to it instead";
@@ -19,17 +19,16 @@ async function directoryMember(deps: ApiCtx["deps"], id: string): Promise<boolea
 
 export async function listPrincipalLinks(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  if (!deps.principalLinks) return notFound(res);
+  if (!(await orgAdmin(ctx))) return;
   return sendJson(res, 200, { links: await deps.principalLinks.list() });
 }
 
 export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  if (!deps.principalLinks) return notFound(res);
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const b = isObj(body) ? body : {};
   if (typeof b.principalId === "string" && (await directoryMember(deps, b.principalId)))
     return sendJson(res, 400, { error: "link_failed", message: DIRECTORY_MEMBER_IS_CANONICAL });
@@ -43,15 +42,10 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
       principalId: b.principalId,
       canonicalId: b.canonicalId,
       evidence: b.evidence,
-      linkedBy: actor.id,
+      linkedBy: authz.actor.id,
     });
     await deps.identity?.refresh(true);
-    audit(deps, {
-      principalId: actor.id,
-      action: "principal_link.create",
-      resource: `${link.principalId} -> ${link.canonicalId}`,
-      scopeLabel: tenant().orgScope,
-    });
+    authz.audit("principal_link.create", `${link.principalId} -> ${link.canonicalId}`);
     return sendJson(res, 200, { ok: true, link });
   } catch (error) {
     if (error instanceof PrincipalLinkError)
@@ -62,17 +56,12 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
 
 export async function deletePrincipalLink(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  if (!deps.principalLinks) return notFound(res);
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const link = await deps.principalLinks.unlink(params.principalId!);
-  if (!link) return sendJson(res, 404, { error: "not_found" });
+  if (!link) return notFound(res);
   await deps.identity?.refresh(true);
-  audit(deps, {
-    principalId: actor.id,
-    action: "principal_link.delete",
-    resource: `${link.principalId} -> ${link.canonicalId}`,
-    scopeLabel: tenant().orgScope,
-  });
+  authz.audit("principal_link.delete", `${link.principalId} -> ${link.canonicalId}`);
   return sendJson(res, 200, { ok: true, link });
 }

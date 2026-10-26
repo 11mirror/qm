@@ -1,30 +1,20 @@
 import { isSubagentThreadRef, sessionTreeRoot } from "../../sessions/session-syscalls.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 export async function conversationRef(ctx: ApiCtx): Promise<string | null> {
   const { res, capability } = ctx;
-  if (!capability) {
-    sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-    return null;
-  }
-  if (!capability.threadRef) {
-    sendJson(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
-    return null;
-  }
+  if (!capability)
+    return refuse(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  if (!capability.threadRef)
+    return refuse(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
   if (!isSubagentThreadRef(capability.threadRef)) return capability.threadRef;
   const sessions = ctx.deps.sessions;
   const session = await sessions?.getByThread(capability.threadRef);
   const root = session && sessions ? await sessionTreeRoot(sessions, session) : null;
-  if (
-    !root ||
-    root.scopeId !== capability.scopeId ||
-    !(await sessions!.getForParticipant(root.id, capability.actorId))
-  ) {
-    sendJson(res, 403, { error: "forbidden", message: "the originating conversation is no longer accessible" });
-    return null;
-  }
+  if (!root || root.scopeId !== capability.scopeId || !(await sessions!.getForParticipant(root.id, capability.actorId)))
+    return refuse(res, 403, { error: "forbidden", message: "the originating conversation is no longer accessible" });
   return root.threadRef;
 }
 

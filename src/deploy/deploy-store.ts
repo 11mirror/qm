@@ -31,7 +31,6 @@ export interface DeployEndpoint {
   tls?: boolean;
   httpVersion?: "1.1" | "2";
   proxyHeaders?: Record<string, string>;
-  socksProxyPort?: number;
   renewAt?: number;
 }
 

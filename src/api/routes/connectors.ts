@@ -56,6 +56,44 @@ export function resolverFor(deps: ServerDeps): OAuthClientResolver {
   );
 }
 
+function notWired(res: BaseCtx["res"]): void {
+  return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+}
+
+function unknownProvider(res: BaseCtx["res"], provider: string): void {
+  return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
+}
+
+const REDIRECT_NOT_ALLOWED = {
+  error: "redirect_not_allowed",
+  message: "redirectUri is not registered for this client",
+};
+
+async function startAuthorization(
+  deps: ServerDeps,
+  secret: string | undefined,
+  flow: Omit<OAuthFlowContext, "orgId" | "clientRef" | "accountType" | "codeVerifier"> & { accountType: AccountType },
+): Promise<string | null> {
+  const { accountType, ...rest } = flow;
+  const client = await resolverFor(deps)(flow.provider, { accountType });
+  if (client.redirectAllowlist && !client.redirectAllowlist.includes(flow.redirectUri)) return null;
+  const codeVerifier = oauthProvider(flow.provider)?.pkce ? generateCodeVerifier() : undefined;
+  const state = await beginOAuthFlow(deps, secret, {
+    ...rest,
+    orgId: tenant().orgId,
+    ...(accountType !== "default" ? { accountType } : {}),
+    clientRef: client.clientRef,
+    ...(codeVerifier ? { codeVerifier } : {}),
+  });
+  return authorizeUrl(flow.provider, {
+    redirectUri: flow.redirectUri,
+    state,
+    client,
+    accountType,
+    ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
+  });
+}
+
 function parseAccountType(v: string | null | undefined): AccountType {
   return isAccountType(v) ? v : "default";
 }
@@ -87,19 +125,16 @@ function safeReturnTo(value: string | null): string | undefined {
 function latestRefreshFailure(
   entries: ReadonlyArray<Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError">>,
 ): Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError"> {
-  let latest: Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError"> = {};
-  for (const entry of entries) {
-    if (
-      entry.refreshFailedAt !== undefined &&
-      (latest.refreshFailedAt === undefined || entry.refreshFailedAt > latest.refreshFailedAt)
-    ) {
-      latest = {
-        refreshFailedAt: entry.refreshFailedAt,
-        ...(entry.refreshError ? { refreshError: entry.refreshError } : {}),
-      };
-    }
-  }
-  return latest;
+  const latest = entries.reduce<(typeof entries)[number] | undefined>(
+    (best, entry) =>
+      entry.refreshFailedAt !== undefined && (!best || entry.refreshFailedAt > best.refreshFailedAt!) ? entry : best,
+    undefined,
+  );
+  if (!latest) return {};
+  return {
+    refreshFailedAt: latest.refreshFailedAt,
+    ...(latest.refreshError ? { refreshError: latest.refreshError } : {}),
+  };
 }
 
 async function connectorProviderStatus(
@@ -133,8 +168,7 @@ async function connectorProviderStatus(
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const { res, deps, secret, url, pathname } = ctx;
   const oauthRoute = parseOAuthRoute(pathname)!;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.connectorTokens) return notWired(res);
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
@@ -229,33 +263,16 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    const client = await resolverFor(deps)(rec.provider, { accountType: rec.accountType });
-    if (client.redirectAllowlist && !client.redirectAllowlist.includes(rec.redirectUri)) {
-      return sendJson(res, 400, {
-        error: "redirect_not_allowed",
-        message: "redirectUri is not registered for this client",
-      });
-    }
     const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
-    const codeVerifier = oauthProvider(rec.provider)?.pkce ? generateCodeVerifier() : undefined;
-    const state = await beginOAuthFlow(deps, secret, {
+    const consentUrl = await startAuthorization(deps, secret, {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      orgId: tenant().orgId,
-      ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
-      clientRef: client.clientRef,
+      accountType: rec.accountType,
       ...(returnTo ? { returnTo } : {}),
-      ...(codeVerifier ? { codeVerifier } : {}),
       consentLinkId: linkId,
     });
-    const consentUrl = authorizeUrl(rec.provider, {
-      redirectUri: rec.redirectUri,
-      state,
-      client,
-      accountType: rec.accountType,
-      ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
-    });
+    if (!consentUrl) return sendJson(res, 400, REDIRECT_NOT_ALLOWED);
     audit(deps, {
       principalId: rec.principalId,
       action: "connector.oauth.consent.redeem",
@@ -273,16 +290,9 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
-  const b = body as {
-    provider?: unknown;
-    accountType?: unknown;
-    redirectUri?: unknown;
-    returnTo?: unknown;
-    intendedPrincipalId?: unknown;
-  };
+  const b = body as Record<string, unknown>;
   const provider = typeof b.provider === "string" ? b.provider : "";
-  if (!oauthProvider(provider))
-    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
+  if (!oauthProvider(provider)) return unknownProvider(res, provider);
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
   const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
   const intendedPrincipalId = personKey(typeof b.intendedPrincipalId === "string" ? b.intendedPrincipalId : "");
@@ -310,13 +320,9 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
   }
   if (base) {
-    if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
-      return sendJson(res, 400, {
-        error: "redirect_not_allowed",
-        message: "redirectUri is not registered for this client",
-      });
-    }
-  } else if (!client.redirectAllowlist || !client.redirectAllowlist.includes(redirectUri)) {
+    if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri))
+      return sendJson(res, 400, REDIRECT_NOT_ALLOWED);
+  } else if (!client.redirectAllowlist?.includes(redirectUri)) {
     return sendJson(res, 400, {
       error: "redirect_not_allowed",
       message: "set PUBLIC_WEB_URL, or supply a redirectUri registered in the client's redirect allowlist",
@@ -350,44 +356,24 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
 async function oauthStart(ctx: ApiCtx): Promise<void> {
   const { res, deps, secret, url, pathname } = ctx;
   const oauthRoute = parseOAuthRoute(pathname)!;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.connectorTokens) return notWired(res);
   const provider = oauthProvider(oauthRoute.provider);
-  if (!provider)
-    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
+  if (!provider) return unknownProvider(res, oauthRoute.provider);
   const principalId = url.searchParams.get("principalId") ?? "";
   const redirectUri = url.searchParams.get("redirectUri") ?? "";
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
   const accountType = parseAccountType(url.searchParams.get("accountType"));
   try {
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
-    if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
-      return sendJson(res, 400, {
-        error: "redirect_not_allowed",
-        message: "redirectUri is not registered for this client",
-      });
-    }
-    const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
-    const state = await beginOAuthFlow(deps, secret, {
+    const returnTo = safeReturnTo(url.searchParams.get("returnTo"));
+    const consentUrl = await startAuthorization(deps, secret, {
       provider: oauthRoute.provider,
       principalId,
       redirectUri,
-      orgId: tenant().orgId,
-      ...(accountType !== "default" ? { accountType } : {}),
-      clientRef: client.clientRef,
-      ...(safeReturnTo(url.searchParams.get("returnTo"))
-        ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
-        : {}),
-      ...(codeVerifier ? { codeVerifier } : {}),
-    });
-    const consentUrl = authorizeUrl(oauthRoute.provider, {
-      redirectUri,
-      state,
-      client,
       accountType,
-      ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
+      ...(returnTo ? { returnTo } : {}),
     });
+    if (!consentUrl) return sendJson(res, 400, REDIRECT_NOT_ALLOWED);
     audit(deps, {
       principalId,
       action: "connector.oauth.start",
@@ -408,8 +394,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
 
 async function oauthStatus(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.connectorTokens) return notWired(res);
   const principalId = url.searchParams.get("principalId") ?? "";
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   audit(deps, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
@@ -421,8 +406,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 
 export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.connectorTokens) return notWired(res);
   const b = body as Record<string, unknown>;
   let principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (capability) {
@@ -442,24 +426,22 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   if (!principalId || (!providerName && !host)) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and provider or host required" });
   }
-  if (providerName) {
-    const provider = oauthProvider(providerName);
-    if (!provider)
-      return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
-    for (const h of provider.hosts)
-      for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
-    audit(deps, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
-    return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
-  }
-  for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
-  audit(deps, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
-  return sendJson(res, 200, { ok: true, principalId, host });
+  const hosts = providerName ? oauthProvider(providerName)?.hosts : [host];
+  if (!hosts) return unknownProvider(res, providerName);
+  for (const h of hosts)
+    for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
+  const resource = providerName || host;
+  audit(deps, { principalId, action: "connector.oauth.revoked", resource, scopeLabel: principalId });
+  return sendJson(res, 200, {
+    ok: true,
+    principalId,
+    ...(providerName ? { provider: providerName, hosts } : { host }),
+  });
 }
 
 async function setToken(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.connectorTokens) return notWired(res);
   const b = body as Record<string, unknown>;
   const host = typeof b.host === "string" ? b.host : "";
   const principalId = typeof b.principalId === "string" ? b.principalId : "";

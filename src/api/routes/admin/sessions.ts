@@ -1,13 +1,12 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
-import { parseScopeId, type Session } from "../../../types.ts";
+import { type Session } from "../../../types.ts";
 import { sessionCategory, type SessionCategory, type SessionSummary } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
 import { isUserMessage, type Item } from "../../../sessions/items.ts";
 import { sendJson } from "../../http.ts";
-import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { requireScopedResource } from "./common.ts";
+import { badRequest, limitParam, requireScopedResource, scopedAdmin } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
 import { parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
 
@@ -16,37 +15,21 @@ const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
 
-async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
-  return (await app.directoryMember(principalId))?.displayName?.trim() || principalId;
-}
-
-async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId: string): Promise<string | null> {
-  const participantIds = new Set((await deps.sessions?.participantsOf(sessionId)) ?? []);
-  if (participantIds.size !== 1) return null;
-  return displayNameForPrincipal(app, deps, [...participantIds][0]!);
-}
-
-function withAuthorName(item: Item, name: string): Item {
-  if (!isUserMessage(item) || !name.trim()) return item;
-  if (typeof item.body.name === "string" && item.body.name.trim()) return item;
-  return { ...item, body: { ...item.body, name } };
-}
-
 async function labelTranscriptItems(app: App, deps: ServerDeps, session: Session, items: Item[]): Promise<Item[]> {
-  const fallbackName = await inferSingleParticipantName(app, deps, session.id);
-  if (!fallbackName) return items;
-  return items.map((item) => withAuthorName(item, fallbackName));
-}
-
-function requireAdminSession(ctx: ApiCtx, id: string) {
-  return requireScopedResource(
-    ctx,
-    () => ctx.deps.sessions?.get(id),
-    (s) => s.scopeId,
-    "session",
-    "fallback",
+  const participantIds = new Set((await deps.sessions?.participantsOf(session.id)) ?? []);
+  if (participantIds.size !== 1) return items;
+  const only = [...participantIds][0]!;
+  const name = (await app.directoryMember(only))?.displayName?.trim() || only;
+  if (!name.trim()) return items;
+  return items.map((item) =>
+    !isUserMessage(item) || (typeof item.body.name === "string" && item.body.name.trim())
+      ? item
+      : { ...item, body: { ...item.body, name } },
   );
 }
+
+const requireAdminSession = (ctx: ApiCtx, id: string) =>
+  requireScopedResource(ctx, () => ctx.deps.sessions?.get(id), "scopeId", "session", "fallback");
 
 async function cronFireResults(app: App, summaries: readonly SessionSummary[]): Promise<Map<string, string>> {
   const results = new Map<string, string>();
@@ -64,11 +47,9 @@ async function cronFireResults(app: App, summaries: readonly SessionSummary[]): 
 
 export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, "sessions");
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "sessions.read", resource: "sessions", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   const categoryParam = url.searchParams.get("category") ?? "conversation";
   let category: SessionCategory | "all" = "conversation";
   if (categoryParam === "background" || categoryParam === "all") category = categoryParam;
@@ -77,10 +58,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const originFilter: AdminSessionOrigin | undefined =
     originParam === "cron" || originParam === "other_background" ? originParam : undefined;
   const cronId = url.searchParams.get("cron") || undefined;
-  const limit = Math.min(
-    SESSIONS_PAGE_LIMIT_MAX,
-    Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SESSIONS_PAGE_LIMIT_DEFAULT),
-  );
+  const limit = limitParam(url, SESSIONS_PAGE_LIMIT_DEFAULT, SESSIONS_PAGE_LIMIT_MAX);
   const cursorParam = url.searchParams.get("cursor");
   const cursorMatch = cursorParam ? /^(\d+)~(.+)$/.exec(cursorParam) : null;
   const before = cursorMatch ? { lastActivity: Number(cursorMatch[1]), id: cursorMatch[2]! } : undefined;
@@ -150,14 +128,14 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
-  const { actor, record: session } = scoped;
-  audit(deps, { principalId: actor.id, action: "session.llm.read", resource: id, scopeLabel: session.scopeId });
+  const { record: session } = scoped;
+  scoped.audit("session.llm.read", id, session.scopeId);
   const turnParam = url.searchParams.get("turnSeq");
   if (turnParam != null && turnParam !== "") {
     let opts: { orphans: true } | { turnSeqs: number[] } | null = null;
     if (turnParam === "orphan") opts = { orphans: true };
     else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
-    if (!opts) return sendJson(res, 400, { error: "bad_request", message: 'turnSeq must be an integer or "orphan"' });
+    if (!opts) return badRequest(res, 'turnSeq must be an integer or "orphan"');
     const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
     return sendJson(res, 200, { session, requests });
   }
@@ -170,8 +148,8 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
-  const { actor, scope, record: session } = scoped;
-  audit(deps, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
+  const { scope, record: session } = scoped;
+  scoped.audit("session.read", id, session.scopeId);
   const want = Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT);
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
