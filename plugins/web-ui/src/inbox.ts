@@ -10,299 +10,99 @@ import {
   sentEmailPageTpl,
   sentChatTpl,
   selectedSentChat,
-  updateSentChat,
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { live } from "lit/directives/live.js";
-import { ref } from "lit/directives/ref.js";
 import {
   Archive,
-  ArrowUpRight,
-  CheckCheck,
   ChevronDown,
   ChevronRight,
   Inbox as InboxGlyph,
-  Mail,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RefreshCw,
-  Undo2,
   X,
 } from "lucide";
-import { embeddedComposer } from "./embedded-composer";
-import type { ComposerSubmission } from "./composer";
-import { api, ApiError, putUiState } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
-import { onInboxItemEvent, onInboxResync } from "./conversations";
-import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
-import { charForName } from "./emoji-picker";
+import { api } from "./core-bridge";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
 import { renderSidebarTop, switchView } from "./shell";
-import { openSession, sessionsState } from "./sessions";
-import { splitMentions } from "./linkify";
-import { splitSlackWire } from "./slack-text";
 import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
+import { menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
-import { assistantSidebar, threadMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 import { readStorage, writeStorage } from "./drafts";
-
-export type InboxSource = "gmail" | "slack" | "generic";
-
-export interface InboxDraft {
-  to?: string[];
-  cc?: string[];
-  subject?: string;
-  body: string;
-}
-
-export interface InboxContextMessage {
-  author: string;
-  authorId?: string;
-  avatarUrl?: string;
-  at?: number;
-  text: string;
-  images?: string[];
-  reply?: boolean;
-  nearby?: boolean;
-}
-
-export interface LedgerThreadMessage {
-  id: string;
-  role: "human" | "agent" | "system";
-  text: string;
-  at: number;
-}
-
-export interface LedgerItem {
-  id: string;
-  cronId: string;
-  dedupeKey: string;
-  state: "pending" | "held" | "actioned" | "dismissed" | "failed";
-  summary?: string;
-  parkedReason?: string;
-  source?: string;
-  sourcePayload: Record<string, unknown>;
-  sourceAt?: number;
-  proposal?: { data: Record<string, unknown>; by: "agent" | "human"; at: number; sessionId?: string };
-  thread: LedgerThreadMessage[];
-  actedAt?: number;
-  actionKind?: string;
-  actionResult?: string;
-  updatedAt: number;
-}
-
-export interface InboxItem {
-  sentChat?: boolean;
-  id: string;
-  cronId: string;
-  source: InboxSource;
-  sourceKey: string;
-  attention?: boolean;
-  proposalData?: Record<string, unknown>;
-  detailLoaded?: boolean;
-  status: "open" | "sent" | "dismissed" | "replied";
-  title: string;
-  from: string;
-  snippet: string;
-  context?: InboxContextMessage[];
-  participants?: Participant[];
-  receivedAt: number;
-  externalUrl?: string;
-  draft?: InboxDraft;
-  draftAt?: number;
-  draftSessionId?: string;
-  thread: LedgerThreadMessage[];
-  gmail?: { threadId: string; subject?: string; to?: string[]; cc?: string[] };
-  slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string; userId?: string };
-  sentAt?: number;
-  dismissedAt?: number;
-  repliedAt?: number;
-  externalReplyText?: string;
-  noReplyNeeded?: { reason?: string };
-  reactions?: string[];
-  probablyResolved?: boolean;
-  automated?: boolean;
-  images?: string[];
-  updatedAt: number;
-  sourceContextFetched?: boolean;
-  sourceContextPartial?: boolean;
-  sourceRefreshError?: string;
-}
-
-export interface InboxView {
-  id: string;
-  name: string;
-}
-
-export interface InboxSyncCron {
-  id: string;
-  enabled: boolean;
-  lastFiredAt?: number;
-}
-
-const DEFAULT_VIEWS: InboxView[] = [
-  { id: "all", name: "All" },
-  { id: "gmail", name: "Email" },
-  { id: "slack", name: "Slack" },
-  { id: "sent", name: "Sent" },
-];
-
-function isInboxViewId(value: string | null): value is string {
-  return value !== null && [...DEFAULT_VIEWS, ...inboxViews()].some((view) => view.id === value);
-}
-
-function inboxViewIdForSegment(segment: string | null): string | null {
-  if (segment?.startsWith("cron-")) return segment.slice(5);
-  if (segment === "email") return "gmail";
-  return isInboxViewId(segment) ? segment : null;
-}
-
-function inboxViewSegment(viewId: string): string {
-  if (viewId === "gmail") return "email";
-  return DEFAULT_VIEWS.some((view) => view.id === viewId) ? viewId : `cron-${viewId}`;
-}
-
-const INBOX_FILTERS = [
-  { id: "all", label: "All emails", description: "All synced emails, including newsletters and automated mail" },
-  {
-    id: "human",
-    label: "Light filtering — exclude notifications",
-    description: "Emails from people, including conversations that need no reply",
-  },
-  {
-    id: "triaged",
-    label: "Heavy filtering — only emails that need your attention",
-    description: "Emails identified as needing a reply or review",
-  },
-] as const;
-
-type InboxFilter = (typeof INBOX_FILTERS)[number]["id"];
-
-const freshInboxState = () => ({
-  filter: "human" as InboxFilter,
-  filterBusy: false,
-  items: [] as InboxItem[],
-  selected: [] as Array<{
-    id: string;
-    name: string;
-    sources?: string[];
-    count: number;
-    source?: string;
-    syncCron?: InboxSyncCron | null;
-  }>,
-  available: [] as Array<{
-    id: string;
-    name: string;
-    sources?: string[];
-    source?: string;
-    selected: boolean;
-  }>,
-  total: 0,
-  nextCursor: null as string | null,
-  picker: false,
-  menuId: null as string | null,
-  selectionBusy: false,
-  loaded: false,
-  loading: false,
-  error: null as string | null,
-  fetchedAt: 0,
-  notice: null as string | null,
-  syncBusy: false,
-});
-
-export const inboxState = freshInboxState();
-
-const draftConflicts = new Map<string, number>();
-const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
-const acting = new Set<string>();
-const chatting = new Set<string>();
-
-let archiveToastHost: HTMLDivElement | null = null;
-let archiveToastTimer: ReturnType<typeof setTimeout> | undefined;
-
-function closeArchiveToast(): void {
-  clearTimeout(archiveToastTimer);
-  archiveToastHost?.remove();
-  archiveToastHost = null;
-}
-
-function showArchiveToast(item: InboxItem): void {
-  closeArchiveToast();
-  const host = document.createElement("div");
-  archiveToastHost = host;
-  document.body.append(host);
-  let busy = false;
-  const schedule = (): void => {
-    clearTimeout(archiveToastTimer);
-    if (!busy && !host.matches(":hover") && !host.contains(document.activeElement)) {
-      archiveToastTimer = setTimeout(() => {
-        if (archiveToastHost === host) closeArchiveToast();
-      }, 8000);
-    }
-  };
-  const draw = (): void => {
-    render(
-      html`<div
-        class="action-toast"
-        role="status"
-        @mouseenter=${() => clearTimeout(archiveToastTimer)}
-        @mouseleave=${schedule}
-        @focusin=${() => clearTimeout(archiveToastTimer)}
-        @focusout=${() => queueMicrotask(schedule)}
-      >
-        ${icon(Archive, 16)}
-        <span>Dismissed from inbox</span>
-        <button
-          type="button"
-          ?disabled=${busy}
-          @click=${async () => {
-            busy = true;
-            clearTimeout(archiveToastTimer);
-            draw();
-            const restored = await setItemStatus(item, "open");
-            if (archiveToastHost !== host) return;
-            if (restored) closeArchiveToast();
-            else {
-              busy = false;
-              draw();
-              schedule();
-            }
-          }}
-        >
-          ${busy ? "Undoing…" : "Undo"}
-        </button>
-        <button class="icon-btn" type="button" aria-label="Dismiss notification" @click=${closeArchiveToast}>
-          ${icon(X, 14)}
-        </button>
-      </div>`,
-      host,
-    );
-  };
-  draw();
-  schedule();
-}
-
-interface InboxSurface {
-  host: HTMLElement;
-  viewId: string;
-  pane: boolean;
-  density: () => DensityTier;
-  selectedId: string | null;
-  showHandled: boolean;
-}
-
-const surfaces = new Set<InboxSurface>();
+import {
+  type LedgerItem,
+  type InboxItem,
+  type InboxSyncCron,
+  isInboxViewId,
+  inboxViewIdForSegment,
+  inboxViewSegment,
+  INBOX_FILTERS,
+  type InboxFilter,
+  freshInboxState,
+  inboxState,
+  type InboxSurface,
+  surfaces,
+  inboxViews,
+  inboxViewName,
+  itemsFor,
+  inboxOpenCount,
+  toInboxItem,
+  syncCrons,
+  inboxPage,
+  onInboxRedraw,
+} from "./inbox-model";
+import {
+  ensurePolling,
+  feedWindows,
+  refreshInbox,
+  loadDetail,
+  selectInboxFilter,
+  toggleSelection,
+  upsertItem,
+  ensureRealtime,
+  ensureItemSource,
+  setUpSync,
+  syncNow,
+} from "./inbox-feed";
+import {
+  draftConflicts,
+  draftEdits,
+  acting,
+  chatting,
+  continueSentReply,
+  persistDraft,
+  setItemStatus,
+} from "./inbox-actions";
+import { closeArchiveToast } from "./inbox-toast";
+import {
+  sourceIcon,
+  sourceGlyph,
+  fmtClock,
+  participantName,
+  participantKey,
+  participantsOf,
+  participantsTpl,
+  slackTextTpl,
+} from "./inbox-people";
+import {
+  reviewTpl,
+  contextTpl,
+  chatTpl,
+  draftMessageTpl,
+  itemSideMark,
+  handledNoteTpl,
+  dismissItemTpl,
+} from "./inbox-item-view";
 
 export function resetInboxState(): void {
   resetSentMail();
@@ -313,1025 +113,6 @@ export function resetInboxState(): void {
   draftConflicts.clear();
   acting.clear();
   chatting.clear();
-}
-
-export function inboxViews(): InboxView[] {
-  return [{ id: "all", name: "All" }, ...inboxState.selected.map((cron) => ({ id: cron.id, name: cron.name }))];
-}
-
-export function inboxViewName(viewId: string): string {
-  return inboxViews().find((v) => v.id === viewId)?.name ?? DEFAULT_VIEWS.find((v) => v.id === viewId)?.name ?? "All";
-}
-
-export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[] {
-  return inboxState.items.filter((item) => {
-    if (item.sentChat) return false;
-    if (viewId !== "all" && viewId !== "sent" && item.cronId !== viewId && item.source !== viewId) return false;
-    if (viewId === "sent") return item.status === "sent" && item.source !== "generic";
-    if (status !== "open") return item.status !== "open";
-    if (item.status !== "open") return false;
-    if (item.source === "gmail") {
-      if (inboxState.filter === "all") return true;
-      if (item.automated) return false;
-      if (inboxState.filter === "human") return true;
-      if (item.probablyResolved) return false;
-    }
-    return item.attention !== false;
-  });
-}
-
-export function inboxOpenCount(viewId = "all"): number {
-  if (!inboxState.loaded) return 0;
-  return viewId === "all" ? inboxState.total : (inboxState.selected.find((cron) => cron.id === viewId)?.count ?? 0);
-}
-
-const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
-
-function draftOf(item: LedgerItem): InboxDraft | undefined {
-  const data = item.proposal?.data;
-  if (!data || typeof data.body !== "string") return undefined;
-  return {
-    body: data.body,
-    ...(Array.isArray(data.to) ? { to: data.to as string[] } : {}),
-    ...(Array.isArray(data.cc) ? { cc: data.cc as string[] } : {}),
-    ...(str(data.subject) ? { subject: data.subject as string } : {}),
-  };
-}
-
-function resolvedStatus(entry: LedgerItem): InboxItem["status"] {
-  if (entry.state === "actioned") return entry.source === "gmail" || entry.source === "slack" ? "sent" : "dismissed";
-  if (entry.state !== "dismissed") return "open";
-  return entry.actionKind === "replied" ? "replied" : "dismissed";
-}
-
-export function toInboxItem(entry: LedgerItem): InboxItem {
-  const payload = entry.sourcePayload;
-  const sourceId = entry.source ?? payload.source;
-  const source: InboxSource = sourceId === "gmail" || sourceId === "slack" ? sourceId : "generic";
-  const status = resolvedStatus(entry);
-  const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : [];
-  const actedAt = (when: InboxItem["status"]) => (status === when ? entry.actedAt : undefined);
-  return {
-    id: entry.id,
-    cronId: entry.cronId,
-    source,
-    sourceKey: entry.dedupeKey,
-    status,
-    sentChat: payload.sentChat === true,
-    detailLoaded: payload.sentChat === true,
-    title: str(payload.title) ?? entry.summary ?? "Review item",
-    attention: entry.state === "held" || (entry.state === "failed" && Boolean(entry.parkedReason)),
-    proposalData: entry.proposal?.data,
-    from: str(payload.from) ?? "",
-    snippet: str(payload.snippet) ?? entry.parkedReason ?? entry.summary ?? "",
-    receivedAt: entry.sourceAt ?? (typeof payload.receivedAt === "number" ? payload.receivedAt : entry.updatedAt),
-    thread: entry.thread,
-    updatedAt: entry.updatedAt,
-    sourceContextFetched: payload.sourceContextFetched === true,
-    sourceContextPartial: payload.sourceContextPartial === true,
-    sourceRefreshError: typeof payload.sourceRefreshError === "string" ? payload.sourceRefreshError : undefined,
-    participants:
-      source === "slack" && Array.isArray(payload.participants)
-        ? payload.participants.flatMap((person) =>
-            person && typeof person.id === "string" && typeof person.name === "string"
-              ? [{ key: person.id, name: person.name, avatarUrl: str(person.avatarUrl) }]
-              : [],
-          )
-        : undefined,
-    context: Array.isArray(payload.context) ? (payload.context as InboxContextMessage[]) : undefined,
-    externalUrl: str(payload.externalUrl),
-    draft: draftOf(entry),
-    draftAt: entry.proposal?.at,
-    draftSessionId: entry.proposal?.sessionId,
-    gmail: payload.gmail as InboxItem["gmail"],
-    slack: payload.slack as InboxItem["slack"],
-    reactions: reactions.length ? reactions : undefined,
-    probablyResolved: payload.probablyResolved === true,
-    automated: payload.automated === true,
-    images: Array.isArray(payload.images)
-      ? (payload.images as unknown[]).filter((u): u is string => typeof u === "string")
-      : undefined,
-    sentAt: actedAt("sent"),
-    dismissedAt: actedAt("dismissed"),
-    repliedAt: actedAt("replied"),
-    externalReplyText: status === "replied" && entry.actionResult ? entry.actionResult : undefined,
-    noReplyNeeded: entry.actionKind === "no_reply_needed" ? { reason: entry.actionResult } : undefined,
-  };
-}
-
-let pollTimer: number | null = null;
-
-function anySurfaceVisible(): boolean {
-  if (!can("inbox")) return false;
-  if (appState.currentView === "inbox") return true;
-  return [...surfaces].some((s) => s.pane && s.host.isConnected);
-}
-
-function ensurePolling(): void {
-  if (!can("inbox")) return;
-  if (pollTimer !== null) return;
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState !== "visible" || !anySurfaceVisible()) return;
-    void refreshInbox({ silent: true });
-  }, 120_000);
-}
-
-const feedWindows = new Map<string, { limit: number; nextCursor: string | null }>();
-let refreshFollowUp = false;
-let resyncMissedWhileHidden = false;
-
-type Feed = {
-  filter: InboxFilter;
-  selected: typeof inboxState.selected;
-  available: typeof inboxState.available;
-  items: LedgerItem[];
-  total: number;
-  nextCursor: string | null;
-};
-
-function shownViewIds(): string[] {
-  const shown = [...surfaces].filter((surface) => surface.host.isConnected).map((surface) => surface.viewId);
-  if (appState.currentView === "inbox") shown.push(fullViewId);
-  return [...new Set(shown)];
-}
-
-function applyFeedMetadata(feed: Feed): void {
-  inboxState.selected = feed.selected;
-  inboxState.available = feed.available;
-  inboxState.total = feed.total;
-  inboxState.filter = feed.filter;
-}
-
-async function refreshChangedItems(refs: InboxItemRef[]): Promise<void> {
-  const [feed, ...results] = await Promise.all([
-    api<Feed>(`/api/inbox?${new URLSearchParams({ filter: inboxState.filter })}`),
-    ...refs.map((ref) => fetchItem({ id: ref.itemId, cronId: ref.cronId }, "").catch((error: unknown) => error)),
-  ]);
-  if ((feed.filter ?? "human") !== inboxState.filter) {
-    refreshFollowUp = true;
-    return;
-  }
-  applyFeedMetadata({ ...feed, filter: inboxState.filter });
-  refs.forEach((ref, i) => {
-    const result = results[i];
-    if (result instanceof ApiError && result.status === 404)
-      inboxState.items = inboxState.items.filter((item) => item.id !== ref.itemId);
-    else if (result instanceof Error) refreshFollowUp = true;
-    else if (result && !(result as InboxItem).sentChat) upsertItem(result as InboxItem);
-  });
-}
-
-export async function refreshInbox(
-  opts: { silent?: boolean; ifStaleMs?: number; more?: boolean; viewId?: string; changed?: InboxItemRef[] } = {},
-): Promise<void> {
-  if (!can("inbox")) return;
-  if (inboxState.loading) {
-    if (opts.ifStaleMs === undefined || resyncMissedWhileHidden) refreshFollowUp = true;
-    return;
-  }
-  if (opts.ifStaleMs !== undefined && !resyncMissedWhileHidden && Date.now() - inboxState.fetchedAt < opts.ifStaleMs)
-    return;
-  resyncMissedWhileHidden = false;
-  inboxState.loading = true;
-  if (!opts.silent || inboxState.loaded) drawAll();
-  try {
-    if (opts.changed && inboxState.loaded) await refreshChangedItems(opts.changed);
-    else await refreshFeeds(opts);
-  } catch (e) {
-    inboxState.error = errMessage(e);
-  } finally {
-    inboxState.loading = false;
-    drawAll();
-  }
-  if (refreshFollowUp) {
-    refreshFollowUp = false;
-    void refreshInbox({ silent: true });
-  }
-}
-
-async function refreshFeeds(opts: { more?: boolean; viewId?: string }): Promise<void> {
-  const shown = shownViewIds();
-  const moreView = opts.viewId ?? fullViewId;
-  const windows = new Map<string, { limit: number; nextCursor: string | null }>();
-  let refreshFilter: InboxFilter | undefined;
-  let metadata: Feed | undefined;
-  const fetchFeed = async (qs: URLSearchParams): Promise<Feed> => {
-    if (refreshFilter) qs.set("filter", refreshFilter);
-    const feed = await api<Feed>(`/api/inbox?${qs}`);
-    const filter = feed.filter ?? "human";
-    if (refreshFilter && filter !== refreshFilter) throw new Error("Inbox filter changed during refresh. Try again.");
-    refreshFilter = filter;
-    return feed;
-  };
-  const fetchView = async (viewId: string): Promise<LedgerItem[]> => {
-    const handled = viewId.startsWith("handled:");
-    const filterView = handled ? viewId.slice(8) : viewId;
-    const limit = (feedWindows.get(viewId)?.limit ?? 40) + (opts.more && moreView === viewId ? 40 : 0);
-    const qs = new URLSearchParams();
-    if (handled) qs.set("view", "handled");
-    else if (filterView === "sent") qs.set("view", "sent");
-    if (filterView !== "all" && filterView !== "sent")
-      qs.set(
-        "cronId",
-        (metadata?.selected ?? inboxState.selected).find((cron) => cron.source === filterView)?.id ?? filterView,
-      );
-    let found = await fetchFeed(qs);
-    while (found.nextCursor && found.items.length < limit) {
-      qs.set("cursor", found.nextCursor);
-      const page = await fetchFeed(qs);
-      found = { ...page, items: [...found.items, ...page.items] };
-    }
-    windows.set(viewId, { limit, nextCursor: found.nextCursor });
-    metadata = found;
-    return found.items;
-  };
-  const first = await fetchView("all");
-  const rest = await Promise.all(
-    [...shown.filter((id) => id !== "all"), ...shown.filter((id) => id !== "sent").map((id) => `handled:${id}`)].map(
-      fetchView,
-    ),
-  );
-  if (!metadata) return;
-  const combined = new Map<string, InboxItem>();
-  for (const entry of [first, ...rest].flat()) combined.set(entry.id, toInboxItem(entry));
-  feedWindows.clear();
-  for (const [view, window] of windows) feedWindows.set(view, window);
-  applyFeedMetadata({ ...metadata, filter: refreshFilter! });
-  const next = [...combined.values()];
-  const openId = fullSurface?.selectedId;
-  const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
-  inboxState.items = next;
-  if (detail && inboxState.selected.some((cron) => cron.id === detail.cronId)) {
-    upsertItem(detail);
-    void loadDetail(detail.id, detail.cronId);
-  }
-  if (openId && !detail) {
-    const entry = inboxState.items.find((item) => item.id === openId);
-    if (entry) void loadDetail(entry.id, entry.cronId);
-  }
-  inboxState.loaded = true;
-  inboxState.error = null;
-  inboxState.fetchedAt = Date.now();
-}
-
-async function loadDetail(itemId: string, cronId: string): Promise<void> {
-  try {
-    const detail = await fetchItem({ id: itemId, cronId }, "");
-    if (!inboxState.selected.some((cron) => cron.id === cronId)) return;
-    upsertItem(detail);
-    drawAll();
-  } catch (error) {
-    inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
-    notify(errMessage(error, "Could not load item"));
-  }
-}
-
-async function busyAction(
-  flag: "filterBusy" | "selectionBusy" | "syncBusy",
-  run: () => Promise<void>,
-  failure: (error: unknown) => string,
-): Promise<void> {
-  if (inboxState[flag]) return;
-  inboxState[flag] = true;
-  drawAll();
-  try {
-    await run();
-  } catch (error) {
-    notify(failure(error));
-  } finally {
-    inboxState[flag] = false;
-    drawAll();
-  }
-}
-
-async function selectInboxFilter(filter: InboxFilter): Promise<void> {
-  if (inboxState.loading || inboxState.filter === filter) return;
-  await busyAction(
-    "filterBusy",
-    async () => {
-      const saved = await putUiState("inbox-filter", filter, Date.now());
-      feedWindows.clear();
-      await refreshInbox();
-      if (inboxState.error) notify(inboxState.error);
-      else if (!saved.ok)
-        notify("A newer inbox filter was already saved. Your selection wasn't saved. Please try again.");
-    },
-    (error) => errMessage(error, "Could not save inbox filter"),
-  );
-}
-
-async function toggleSelection(id: string): Promise<void> {
-  const ids = inboxState.selected.map((cron) => cron.id);
-  await busyAction(
-    "selectionBusy",
-    async () => {
-      await api("/api/inbox/selection", {
-        method: "POST",
-        body: JSON.stringify({ cronIds: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }),
-      });
-      if (fullViewId === id) fullViewId = "all";
-      await refreshInbox();
-    },
-    (error) => errMessage(error, "Could not update Inbox"),
-  );
-}
-
-function subjectTpl(item: InboxItem): TemplateResult {
-  return html`<section class="inbox-subject" aria-label="Item">
-    <ul>
-      <li>
-        <span class="inbox-subject-key">${item.source === "generic" ? item.sourceKey : item.from}</span>
-        <span class="inbox-subject-text">${item.snippet || item.title}</span>
-        <span class="inbox-subject-at" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
-        ${item.externalUrl ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noopener noreferrer" aria-label="Open source">${icon(ArrowUpRight, 12)}</a>` : nothing}
-      </li>
-    </ul>
-  </section>`;
-}
-
-function reviewTpl(item: InboxItem, withChat = true): TemplateResult {
-  if (!item.detailLoaded) return html`<div class="empty compact">Loading review…</div>`;
-  return html`<div class="inbox-generic-review">
-    ${subjectTpl(item)}
-    ${item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
-    ${withChat ? chatTpl(item) : nothing}
-  </div>`;
-}
-
-let realtimeWired = false;
-
-const enqueueRealtimeEvent = createInboxEventCoalescer(
-  250,
-  (changed) => void refreshWhenVisible(changed),
-  (fn, ms) => void window.setTimeout(fn, ms),
-);
-
-async function refreshWhenVisible(changed?: InboxItemRef[]): Promise<void> {
-  if (document.visibilityState !== "visible" || !anySurfaceVisible()) {
-    resyncMissedWhileHidden = true;
-    return;
-  }
-  await refreshInbox({ silent: true, changed });
-}
-
-function upsertItem(next: InboxItem): void {
-  if (inboxState.items.some((i) => i.id === next.id)) replaceItem(next);
-  else inboxState.items = [next, ...inboxState.items];
-}
-
-function ensureRealtime(): void {
-  if (realtimeWired) return;
-  realtimeWired = true;
-  onInboxItemEvent((event) => {
-    if (!can("inbox")) return;
-    if (inboxState.loaded && !inboxState.selected.some((cron) => cron.id === event.cronId)) return;
-    enqueueRealtimeEvent({ cronId: event.cronId, itemId: event.itemId });
-  });
-  onInboxResync(() => {
-    if (!can("inbox")) return;
-    void refreshWhenVisible();
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible" || !anySurfaceVisible()) return;
-    void refreshInbox({ ifStaleMs: 30_000, silent: true });
-  });
-}
-
-function inboxItemById(id: string): InboxItem | undefined {
-  const sent = selectedSentChat(id);
-  return sent?.id === id ? toInboxItem(sent) : inboxState.items.find((item) => item.id === id);
-}
-
-async function continueSentReply(item: InboxItem): Promise<void> {
-  try {
-    replaceItem(await postAction(item, "reply"));
-    drawAll();
-  } catch (error) {
-    notify(`Couldn't start a reply: ${errMessage(error)}`);
-  }
-}
-
-function replaceItem(next: InboxItem): void {
-  inboxState.items = inboxState.items.map((i) => (i.id === next.id ? next : i));
-}
-
-function notify(msg: string | null): void {
-  inboxState.notice = msg;
-  drawAll();
-  if (msg) {
-    window.setTimeout(() => {
-      if (inboxState.notice === msg) {
-        inboxState.notice = null;
-        drawAll();
-      }
-    }, 4000);
-  }
-}
-
-function draftSubject(item: InboxItem, draft: InboxDraft): string {
-  if (draft.subject !== undefined) return draft.subject;
-  return item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "";
-}
-
-function effectiveDraft(item: InboxItem): InboxDraft {
-  const edited = draftEdits.get(item.id);
-  if (edited) {
-    const { basedOnAt: _basedOnAt, ...draft } = edited;
-    return draft;
-  }
-  return {
-    body: "",
-    ...(item.source === "gmail"
-      ? { to: item.gmail?.to ?? [], cc: item.gmail?.cc ?? [], subject: item.gmail?.subject }
-      : {}),
-    ...item.draft,
-  };
-}
-
-function sameDraft(a: InboxDraft | undefined, b: InboxDraft): boolean {
-  return Boolean(
-    a &&
-    a.body === b.body &&
-    (a.subject ?? "") === (b.subject ?? "") &&
-    (a.to ?? []).join(",") === (b.to ?? []).join(",") &&
-    (a.cc ?? []).join(",") === (b.cc ?? []).join(","),
-  );
-}
-
-function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
-  const basedOnAt = draftEdits.get(item.id)?.basedOnAt ?? item.draftAt;
-  draftEdits.set(item.id, { ...effectiveDraft(item), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) });
-}
-
-function isDraftConflict(e: unknown): boolean {
-  return e instanceof ApiError && (e.body as { error?: unknown } | null)?.error === "draft_changed";
-}
-
-async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {
-  draftConflicts.set(item.id, (draftConflicts.get(item.id) ?? 0) + 1);
-  await refetchItem(item);
-  const fresh = inboxItemById(item.id);
-  const overlay = draftEdits.get(item.id);
-  if (overlay && fresh?.draftAt !== undefined) draftEdits.set(item.id, { ...overlay, basedOnAt: fresh.draftAt });
-  const preview = (fresh?.draft?.body ?? "").trim().slice(0, 140);
-  notify(
-    edited
-      ? `The agent redrafted this reply while you were editing. Your text is kept in the box. New draft: "${preview}". Send again to use yours.`
-      : "The draft changed while you were looking. Review the new draft, then send again.",
-  );
-}
-
-function addressHeaderList(raw: string): string[] {
-  return raw.trim() ? [raw.trim()] : [];
-}
-
-function itemPath(cronId: string, itemId: string, leaf = ""): string {
-  return `/api/crons/${encodeURIComponent(cronId)}/items/${encodeURIComponent(itemId)}${leaf}`;
-}
-
-const sourceRefreshAt = new Map<string, number>();
-function ensureItemSource(item: InboxItem): void {
-  if (!item.slack || Date.now() - (sourceRefreshAt.get(item.id) ?? 0) < 60_000) return;
-  for (const [id, at] of sourceRefreshAt) if (Date.now() - at >= 60_000) sourceRefreshAt.delete(id);
-  sourceRefreshAt.set(item.id, Date.now());
-  void refetchItem(item, true);
-}
-
-async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
-  try {
-    replaceItem(await fetchItem(item, refreshSource ? "?refreshSource=1" : ""));
-    drawAll();
-  } catch {
-    void refreshInbox({ silent: true });
-  }
-}
-
-async function fetchItem(
-  item: Pick<InboxItem, "id" | "cronId">,
-  leaf: string,
-  body?: Record<string, unknown>,
-): Promise<InboxItem> {
-  const { item: next } = await api<{ item: LedgerItem }>(
-    itemPath(item.cronId, item.id, leaf),
-    body ? { method: "POST", body: JSON.stringify(body) } : undefined,
-  );
-  updateSentChat(next);
-  return { ...toInboxItem(next), detailLoaded: true };
-}
-
-function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
-  return fetchItem(item, "/action", { kind, ...(args ? { args } : {}) });
-}
-
-const persistQueue = new Map<string, Promise<void>>();
-const persistWaiting = new Set<string>();
-
-function enqueueForItem(itemId: string, task: () => Promise<void>): Promise<void> {
-  const queued = (persistQueue.get(itemId) ?? Promise.resolve()).then(task);
-  persistQueue.set(itemId, queued);
-  const clear = (): void => {
-    if (persistQueue.get(itemId) === queued) persistQueue.delete(itemId);
-  };
-  void queued.then(clear, clear);
-  return queued;
-}
-
-export function persistDraft(item: InboxItem): Promise<void> {
-  if (persistWaiting.has(item.id)) return persistQueue.get(item.id) ?? Promise.resolve();
-  persistWaiting.add(item.id);
-  return enqueueForItem(item.id, () => {
-    persistWaiting.delete(item.id);
-    return persistDraftNow(item.id);
-  });
-}
-
-async function persistDraftNow(itemId: string): Promise<void> {
-  const item = inboxItemById(itemId);
-  if (!item) return;
-  const edited = draftEdits.get(item.id);
-  if (!edited) return;
-  const saved = item.draft;
-  if (sameDraft(saved, edited)) {
-    draftEdits.delete(item.id);
-    return;
-  }
-  const { basedOnAt, ...proposal } = edited;
-  try {
-    const next = await postAction(item, "edit", {
-      proposal,
-      ...(basedOnAt !== undefined ? { expectedProposalAt: basedOnAt } : {}),
-    });
-    const newer = draftEdits.get(item.id);
-    if (newer === edited) draftEdits.delete(item.id);
-    else if (newer && next.draftAt !== undefined) draftEdits.set(item.id, { ...newer, basedOnAt: next.draftAt });
-    replaceItem(next);
-    drawAll();
-  } catch (e) {
-    if (isDraftConflict(e)) return explainDraftConflict(item, true);
-    notify(`Couldn't save the draft: ${errMessage(e)}`);
-  }
-}
-
-export async function setItemStatus(item: InboxItem, status: "open" | "dismissed"): Promise<boolean> {
-  if (acting.has(item.id)) return false;
-  acting.add(item.id);
-  drawAll();
-  try {
-    upsertItem(await postAction(item, status === "dismissed" ? "dismiss" : "reopen"));
-    if (status === "dismissed") showArchiveToast(item);
-    return true;
-  } catch (e) {
-    notify(`Couldn't update the item: ${errMessage(e)}`);
-    return false;
-  } finally {
-    acting.delete(item.id);
-    drawAll();
-  }
-}
-
-export async function askAgent(
-  item: InboxItem,
-  message: string,
-  options?: ComposerSubmission,
-  snapshot = { draft: effectiveDraft(item), conflictRevision: draftConflicts.get(item.id) ?? 0 },
-): Promise<boolean> {
-  const text = message.trim();
-  if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
-  const { draft, conflictRevision } = snapshot;
-  chatting.add(item.id);
-  drawAll();
-  try {
-    await enqueueForItem(item.id, async () => {
-      if ((draftConflicts.get(item.id) ?? 0) !== conflictRevision)
-        throw new Error("The draft changed. Review it before sending again.");
-      await persistDraftNow(item.id);
-      if (draftEdits.has(item.id)) throw new Error("Save the draft before continuing. Your edits have been kept.");
-      const current = inboxItemById(item.id) ?? item;
-      if (!sameDraft(effectiveDraft(current), draft)) {
-        throw new Error("The draft changed. Review it before continuing.");
-      }
-      replaceItem(
-        await fetchItem(item, "/followup", {
-          message: text,
-          ...options,
-          ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
-        }),
-      );
-    });
-    return true;
-  } catch (e) {
-    if (isDraftConflict(e)) await refetchItem(item);
-    notify(`The agent couldn't answer: ${errMessage(e)}`);
-    return false;
-  } finally {
-    chatting.delete(item.id);
-    drawAll();
-  }
-}
-
-async function setUpSync(cronId: string): Promise<void> {
-  await busyAction(
-    "syncBusy",
-    async () => {
-      await api("/api/inbox/sync-cron", { method: "POST", body: JSON.stringify({ enabled: true, cronId }) });
-      notify("Sync is on. First pass runs within 15 minutes.");
-      await refreshInbox({ silent: true });
-    },
-    (e) => `Couldn't set up sync: ${errMessage(e)}`,
-  );
-}
-
-async function syncNow(viewId: string): Promise<void> {
-  const crons = syncCrons(viewId).flatMap((cron) => (cron.syncCron ? [cron.syncCron] : []));
-  if (!crons.length) return;
-  await busyAction(
-    "syncBusy",
-    async () => {
-      for (const cron of crons)
-        await api(`/api/crons/${encodeURIComponent(cron.id)}/run`, { method: "POST", body: "{}" });
-      notify("Sync kicked off. New items appear as the agent finishes drafting.");
-    },
-    (e) => `Couldn't start a sync: ${errMessage(e)}`,
-  );
-}
-
-function openDraftSession(e: MouseEvent, sessionId: string): void {
-  e.preventDefault();
-  const session = sessionsState.list.find((s) => s.id === sessionId);
-  if (session) void openSession(session);
-  else window.location.assign(deepLinkPath(UI_BASE, "chats", sessionId));
-}
-
-function sourceIcon(entry: { source?: string; sources?: string[] }, size = 16): TemplateResult {
-  const source = entry.source ?? entry.sources?.[0];
-  let glyph: TemplateResult;
-  if (source === "slack") glyph = slackMark(size);
-  else glyph = icon(source === "gmail" ? Mail : InboxGlyph, size);
-  return html`<span class="inbox-source-icon" aria-hidden="true">${glyph}</span>`;
-}
-
-function sourceGlyph(item: InboxItem): TemplateResult {
-  return sourceIcon(inboxState.selected.find((cron) => cron.id === item.cronId) ?? { source: item.source }, 14);
-}
-
-function fmtClock(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-interface Participant {
-  key: string;
-  name: string;
-  avatarUrl?: string;
-}
-
-function participantName(raw: string): string {
-  return (raw.match(/^\s*"?([^"<]+?)"?\s*</)?.[1] ?? raw).trim();
-}
-
-function participantKey(raw: string): string {
-  return (raw.match(/<([^>]+)>/)?.[1] ?? raw).trim().toLowerCase();
-}
-
-function participantsOf(item: InboxItem): Participant[] {
-  const slack = item.source === "slack";
-  const found = new Map<string, Participant>((slack ? (item.participants ?? []) : []).map((p) => [p.key, p]));
-  for (const message of [
-    {
-      author: item.from,
-      authorId: slack ? (item.slack?.userId ?? item.participants?.[0]?.key) : undefined,
-      avatarUrl: undefined,
-    },
-    ...(item.context ?? []),
-  ]) {
-    const name = participantName(message.author ?? "");
-    if (!name) continue;
-    const id = slack ? message.authorId : undefined;
-    if (slack && !id && [...found.values()].some((person) => person.name === name)) continue;
-    const key = id ?? participantKey(message.author);
-    if (!found.has(key)) found.set(key, { key, name, avatarUrl: slack ? message.avatarUrl : undefined });
-  }
-  return [...found.values()];
-}
-
-const AVATARS_SHOWN = 4;
-
-export function participantsTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const people = participantsOf(item);
-  if (!people.length) return nothing;
-  const shown = people.length > AVATARS_SHOWN ? people.slice(0, AVATARS_SHOWN - 1) : people;
-  const rest = people.slice(shown.length);
-  return html`<span class="inbox-avatars" aria-label=${`In this conversation: ${people.map((p) => p.name).join(", ")}`}>
-    ${shown.map(avatarTpl)}
-    ${
-      rest.length
-        ? html`<span class="inbox-avatar more" ${tip(rest.map((p) => p.name).join(", "))} aria-hidden="true"
-            >+${rest.length}</span
-          >`
-        : nothing
-    }
-  </span>`;
-}
-
-export function slackTextTpl(item: InboxItem, text: string, opts: { links?: boolean } = {}): TemplateResult {
-  if (item.source !== "slack") return html`${text}`;
-  const me = appState.me?.user ?? "";
-  const self = (me.split("@")[0] || me).trim().toLowerCase();
-  const mentionChip = (handle: string): TemplateResult =>
-    html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-  const withMentions = (str: string): Array<TemplateResult | string> =>
-    splitMentions(str).map((m) => (m.kind === "text" ? m.text : mentionChip(m.handle)));
-  return html`${splitSlackWire(text).map((seg) => {
-    if (seg.kind === "mention") return mentionChip(seg.handle);
-    if (seg.kind === "link") {
-      if (opts.links === false) return html`<span ${tip(seg.href)}>${withMentions(seg.label)}</span>`;
-      return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-        >${withMentions(seg.label)}</a
-      >`;
-    }
-    return withMentions(seg.text);
-  })}`;
-}
-
-function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: number): TemplateResult | typeof nothing {
-  if (!urls?.length) return nothing;
-  const base = `${UI_BASE}${itemPath(item.cronId, item.id, "/image")}`;
-  return html`<div class="inbox-images">
-    ${urls.map((_u, j) => {
-      const src = `${base}?ctx=${ctxIndex}&i=${j}`;
-      return html`<a href=${src} target="_blank" rel="noreferrer noopener"
-        ><img class="inbox-image" src=${src} loading="lazy" alt="attached image"
-      /></a>`;
-    })}
-  </div>`;
-}
-
-export const CONTEXT_TAIL = 6;
-const CONTEXT_PAGE = 20;
-const revealedContext = new Map<string, number>();
-
-function revealEarlier(item: InboxItem, marker: Element): void {
-  const scroller = marker.closest<HTMLElement>(".inbox-scroll");
-  const before = scroller ? scroller.scrollHeight - scroller.scrollTop : 0;
-  revealedContext.set(item.id, (revealedContext.get(item.id) ?? 0) + CONTEXT_PAGE);
-  drawAll();
-  if (scroller) scroller.scrollTop = scroller.scrollHeight - before;
-}
-
-const watchedEarlier = new WeakSet<Element>();
-
-function watchEarlier(item: InboxItem, el: Element | undefined): void {
-  const scroller = el?.closest<HTMLElement>(".inbox-scroll");
-  if (!el || !scroller || watchedEarlier.has(el) || typeof IntersectionObserver === "undefined") return;
-  watchedEarlier.add(el);
-  let userScrolled = false;
-  const markScrolled = (): void => void (userScrolled = true);
-  scroller.addEventListener("wheel", markScrolled, { passive: true });
-  scroller.addEventListener("touchmove", markScrolled, { passive: true });
-  const observer = new IntersectionObserver((entries) => {
-    if (!el.isConnected) return observer.disconnect();
-    if (!userScrolled || !entries.some((entry) => entry.isIntersecting)) return;
-    revealEarlier(item, el);
-  });
-  observer.observe(el);
-}
-
-export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const context = (item.context ?? []).map((message, index) => ({ ...message, imageIndex: index }));
-  const rows = item.sourceContextFetched
-    ? context
-    : [
-        ...context.filter((m) => !item.slack || m.nearby === true),
-        {
-          author: item.from,
-          authorId: item.slack?.userId ?? (item.source === "slack" ? item.participants?.[0]?.key : undefined),
-          at: item.receivedAt,
-          text: item.snippet,
-          images: item.images,
-          imageIndex: -1,
-          reply: false,
-          nearby: false,
-        },
-      ];
-  const hidden = Math.max(0, rows.length - CONTEXT_TAIL - (revealedContext.get(item.id) ?? 0));
-  return html`<div class="inbox-context">
-    ${
-      hidden
-        ? html`<button
-            class="inbox-source-notice inbox-earlier"
-            ${ref((el) => watchEarlier(item, el))}
-            @click=${(event: MouseEvent) => revealEarlier(item, event.currentTarget as Element)}
-          >
-            ${hidden === 1 ? "1 earlier message" : `${hidden} earlier messages`}
-          </button>`
-        : nothing
-    }
-    ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
-    ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
-    ${rows.slice(hidden).map((m) => {
-      const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
-      const author = participant?.name ?? m.author;
-      const name = participantName(author) || author;
-      const avatarUrl = participant ? participant.avatarUrl : m.avatarUrl;
-      return html`
-        <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
-          ${avatarTpl({ key: m.authorId ?? participantKey(m.author), name, avatarUrl: item.source === "slack" ? avatarUrl : undefined })}
-          <div class="inbox-context-body">
-            <div class="inbox-context-head">
-              <span class="inbox-context-author">${name}</span>
-              ${m.nearby ? html`<span class="inbox-context-at">Nearby in channel</span>` : nothing}
-              ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
-            </div>
-            <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
-            ${itemImagesTpl(item, m.images, m.imageIndex)}
-          </div>
-        </div>
-      `;
-    })}
-  </div>`;
-}
-
-export function chatTpl(item: InboxItem, compact = false): TemplateResult {
-  const busy = chatting.has(item.id);
-  const submit = (event: MouseEvent, instruction: string): void => {
-    const composer = (event.currentTarget as HTMLElement).closest(".inbox-chat")?.querySelector(".embedded-composer");
-    composer?.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
-  };
-  return assistantSidebar({
-    context: {
-      kind: "thread",
-      source: item.source,
-      hasDraft: Boolean(item.draft),
-      sent: Boolean(item.sentChat),
-      resolved: Boolean(item.probablyResolved),
-    },
-    messages: html`${item.thread.map(threadMessage)}`,
-    busy,
-    status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
-    showPrompts: item.status === "open" && item.thread.length === 0,
-    send:
-      item.status === "open" && item.source !== "generic" && (!item.sentChat || item.draft)
-        ? { disabled: busy || acting.has(item.id), run: (event) => submit(event, "Send it") }
-        : undefined,
-    onPrompt: (prompt, event) => submit(event, prompt),
-    composer: embeddedComposer(
-      `inbox:${appState.me?.user ?? "anon"}:${item.cronId}:${item.id}`,
-      {
-        placeholder: `Ask ${brandName()} for something`,
-        prepareSubmit: () => {
-          const snapshot = {
-            draft: effectiveDraft(inboxItemById(item.id) ?? item),
-            conflictRevision: draftConflicts.get(item.id) ?? 0,
-          };
-          return async (text, options) => {
-            if (!(await askAgent(item, text, options, snapshot)))
-              throw new Error("Could not complete the request. Your message has been kept.");
-          };
-        },
-      },
-      compact,
-    ),
-  });
-}
-
-export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (item.status !== "open" || item.source === "generic" || (item.sentChat && !item.draft)) return nothing;
-  const busy = chatting.has(item.id);
-  const draft = effectiveDraft(item);
-  const gmail = item.source === "gmail";
-  const peek = [(draft.to ?? []).join(", "), draftSubject(item, draft)].filter(Boolean).join(" · ");
-  const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
-  const field = (label: string, value: string, patch: (value: string) => Partial<InboxDraft>, placeholder?: string) =>
-    html`<label class="inbox-field">
-      <span>${label}</span>
-      <input
-        type="text"
-        ?disabled=${busy}
-        .value=${live(value)}
-        placeholder=${placeholder ?? nothing}
-        @input=${(e: Event) => editDraft(item, patch((e.currentTarget as HTMLInputElement).value))}
-        @blur=${() => void persistDraft(item)}
-      />
-    </label>`;
-  return html`
-    <div class="inbox-draft ${gmail ? "email" : "slack"}">
-      <div class="inbox-draft-head">
-        <span class="inbox-draft-label">Draft reply</span>
-        ${
-          item.draftSessionId
-            ? html`<a
-                class="inbox-session-link"
-                href=${deepLinkPath(UI_BASE, "chats", item.draftSessionId)}
-                title="See how the agent arrived at this draft"
-                @click=${(e: MouseEvent) => openDraftSession(e, item.draftSessionId!)}
-              >
-                ${icon(ArrowUpRight, 12)}<span>Open agent session</span>
-              </a>`
-            : nothing
-        }
-        ${
-          item.externalUrl
-            ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noreferrer noopener">
-                ${icon(ArrowUpRight, 12)}<span>Open in ${gmail ? "Gmail" : "Slack"}</span>
-              </a>`
-            : nothing
-        }
-      </div>
-      ${
-        gmail
-          ? html`
-              <details class="inbox-draft-headers">
-                <summary><span class="inbox-draft-headers-peek">${peek || "Recipients and subject"}</span></summary>
-                <div class="inbox-draft-headers-fields">
-                  ${field("To", (draft.to ?? []).join(", "), (v) => ({ to: addressHeaderList(v) }), "who@example.com")}
-                  ${showCc ? field("Cc", (draft.cc ?? []).join(", "), (v) => ({ cc: addressHeaderList(v) })) : nothing}
-                  ${field("Subject", draftSubject(item, draft), (subject) => ({ subject }))}
-                </div>
-              </details>
-            `
-          : nothing
-      }
-      <div class="inbox-draft-body-wrap">
-        <textarea
-          class="inbox-draft-body"
-          aria-label="Draft reply"
-          ?disabled=${busy}
-          rows=${gmail ? 7 : 3}
-          placeholder=${item.draft ? "" : "No draft yet. The next sync writes one, or write your own."}
-          .value=${live(draft.body)}
-          @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
-          @blur=${() => void persistDraft(item)}
-        ></textarea>
-      </div>
-      ${
-        !gmail && item.reactions?.length
-          ? html`<div class="inbox-reactions">${item.reactions.map(reactionChipTpl)}</div>`
-          : nothing
-      }
-    </div>
-  `;
-}
-
-function reactionChipTpl(name: string): TemplateResult {
-  return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${charForName(name) ?? `:${name}:`}</span>`;
-}
-
-function handledStateLabel(item: InboxItem): string {
-  if (item.status === "sent") return "Sent";
-  if (item.status === "replied") return "Replied";
-  return item.noReplyNeeded ? "No reply needed" : "Dismissed";
-}
-
-function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
-  if (handled) return html`<span class="inbox-item-state">${handledStateLabel(item)}</span>`;
-  if (item.draft)
-    return html`<span class="inbox-item-drafted" title="A reply is drafted and ready">${icon(CheckCheck, 12)}</span>`;
-  return nothing;
-}
-
-function reopenButtonTpl(item: InboxItem): TemplateResult {
-  return html`<button class="btn inbox-reopen" type="button" @click=${() => void setItemStatus(item, "open")}>
-    ${icon(Undo2, 13)}<span>Reopen</span>
-  </button>`;
-}
-
-export function handledNoteTpl(item: InboxItem): TemplateResult {
-  if (item.status === "sent") {
-    return html`<div class="inbox-handled-note">
-      ${icon(CheckCheck, 13)}<span>Reply sent ${item.sentAt ? relTime(item.sentAt) : ""}</span>
-    </div>`;
-  }
-  if (item.status === "replied") {
-    const where = item.source === "slack" ? "Slack" : "Gmail";
-    return html`<div class="inbox-handled-note inbox-replied-note">
-      <div class="inbox-handled-line">
-        ${icon(CheckCheck, 13)}<span>You replied in ${where} ${item.repliedAt ? relTime(item.repliedAt) : ""}</span>
-        ${reopenButtonTpl(item)}
-      </div>
-      ${item.externalReplyText ? html`<div class="inbox-replied-text">${slackTextTpl(item, item.externalReplyText)}</div>` : nothing}
-    </div>`;
-  }
-  const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
-  if (item.noReplyNeeded?.reason)
-    return html`<div class="inbox-handled-note inbox-replied-note">
-      <div class="inbox-handled-line">${icon(X, 13)}<span>${label}</span> ${reopenButtonTpl(item)}</div>
-      <div class="inbox-replied-text">${item.noReplyNeeded.reason}</div>
-    </div>`;
-  return html`<div class="inbox-handled-note">
-    ${icon(X, 13)}<span>${label}</span>
-    ${reopenButtonTpl(item)}
-  </div>`;
-}
-
-function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (item.status !== "open") return nothing;
-  return html`<button
-    class="inbox-dismiss"
-    type="button"
-    ?disabled=${chatting.has(item.id) || acting.has(item.id)}
-    @click=${() => void setItemStatus(item, "dismissed")}
-  >
-    Dismiss
-  </button>`;
 }
 
 function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
@@ -1447,13 +228,8 @@ function syncActionTpl(opts: {
   </button>`;
 }
 
-function syncCrons(viewId: string) {
-  return inboxState.selected.filter(
-    (cron) => cron.source && (viewId === "all" || cron.id === viewId || cron.source === viewId),
-  );
-}
-
 const ASSISTANT_HIDDEN_KEY = "web-ui:inbox-assistant-hidden";
+
 let assistantHidden = readStorage(ASSISTANT_HIDDEN_KEY) === "1";
 
 function assistantToggleTpl(): TemplateResult {
@@ -1507,7 +283,7 @@ const thenDraw = (change: () => unknown) => (): void => {
 };
 
 function pickView(surface: InboxSurface, viewId: string): void {
-  if (surface === fullSurface) selectInboxView(viewId, true);
+  if (surface === inboxPage.surface) selectInboxView(viewId, true);
   else surface.viewId = viewId;
 }
 
@@ -1747,8 +523,8 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                   exitSplitIfActive();
                   switchView("inbox");
                 }
-                fullViewId = "sent";
-                if (fullSurface) fullSurface.selectedId = null;
+                inboxPage.viewId = "sent";
+                if (inboxPage.surface) inboxPage.surface.selectedId = null;
                 syncInboxUrl(message.id, true);
                 void openSentEmail(message, drawAll);
               })
@@ -1832,17 +608,17 @@ function drawSurface(surface: InboxSurface): void {
   if (selected) ensureItemSource(selected);
 }
 
-let fullSurface: InboxSurface | null = null;
-let fullViewId = "all";
 let pendingItemId: string | null = null;
+
 let loadingDeepLink = false;
+
 async function loadDeepLink(id: string): Promise<void> {
   try {
     const result = await api<{ item: LedgerItem }>(`/api/inbox?itemId=${encodeURIComponent(id)}`);
     upsertItem({ ...toInboxItem(result.item), detailLoaded: true });
   } catch {
-    if (fullSurface?.selectedId === id) fullSurface.selectedId = null;
-    fullViewId = "sent";
+    if (inboxPage.surface?.selectedId === id) inboxPage.surface.selectedId = null;
+    inboxPage.viewId = "sent";
     await openSentEmailById(id, drawAll);
   } finally {
     loadingDeepLink = false;
@@ -1852,34 +628,40 @@ async function loadDeepLink(id: string): Promise<void> {
 
 function drawFull(): void {
   if (!can("inbox") || appState.currentView !== "inbox" || !appState.mainEl) return;
-  if (!fullSurface || !fullSurface.host.isConnected || fullSurface.host.parentElement !== appState.mainEl) {
+  if (
+    !inboxPage.surface ||
+    !inboxPage.surface.host.isConnected ||
+    inboxPage.surface.host.parentElement !== appState.mainEl
+  ) {
     const host = document.createElement("div");
     host.className = "pane inbox-page content-wide-page";
-    fullSurface = {
+    inboxPage.surface = {
       host,
-      viewId: fullViewId,
+      viewId: inboxPage.viewId,
       pane: false,
       density: () => "full" as DensityTier,
-      selectedId: fullSurface?.selectedId ?? null,
-      showHandled: fullSurface?.showHandled ?? false,
+      selectedId: inboxPage.surface?.selectedId ?? null,
+      showHandled: inboxPage.surface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
   }
-  fullSurface.viewId = fullViewId;
+  inboxPage.surface.viewId = inboxPage.viewId;
   if (pendingItemId) {
-    fullSurface.selectedId = pendingItemId;
+    inboxPage.surface.selectedId = pendingItemId;
     pendingItemId = null;
   }
-  const openItem = fullSurface.selectedId ? inboxState.items.find((i) => i.id === fullSurface?.selectedId) : undefined;
+  const openItem = inboxPage.surface.selectedId
+    ? inboxState.items.find((i) => i.id === inboxPage.surface?.selectedId)
+    : undefined;
   const openSentEmail = selectedSentEmail();
-  if (fullSurface.selectedId && !openItem?.detailLoaded && inboxState.loaded && !loadingDeepLink) {
+  if (inboxPage.surface.selectedId && !openItem?.detailLoaded && inboxState.loaded && !loadingDeepLink) {
     loadingDeepLink = true;
-    void loadDeepLink(fullSurface.selectedId);
+    void loadDeepLink(inboxPage.surface.selectedId);
   }
-  syncInboxUrl(openSentEmail?.id ?? fullSurface.selectedId);
-  const host = fullSurface.host;
+  syncInboxUrl(openSentEmail?.id ?? inboxPage.surface.selectedId);
+  const host = inboxPage.surface.host;
   host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded) && !assistantHidden);
-  const surface = fullSurface;
+  const surface = inboxPage.surface;
   let page: TemplateResult | typeof nothing;
   if (openItem) page = itemPageTpl(openItem);
   else if (openSentEmail) {
@@ -1921,7 +703,7 @@ function selectedHas(source: string): boolean {
 
 function syncInboxUrl(itemId: string | null, push = false): void {
   if (appState.currentView !== "inbox") return;
-  const next = deepLinkPath(UI_BASE, "inbox", null, null, itemId ?? inboxViewSegment(fullViewId));
+  const next = deepLinkPath(UI_BASE, "inbox", null, null, itemId ?? inboxViewSegment(inboxPage.viewId));
   if (`${location.pathname}${location.search}` === next) return;
   if (push) history.pushState(null, "", next);
   else history.replaceState(null, "", next);
@@ -1931,17 +713,17 @@ export function resetActiveInboxItem(): void {
   const sent = selectedSentChat();
   if (sent) void persistDraft(toInboxItem(sent));
   resetSelectedSentEmail();
-  const open = fullSurface?.selectedId;
-  if (!open || !fullSurface) return;
+  const open = inboxPage.surface?.selectedId;
+  if (!open || !inboxPage.surface) return;
   const item = inboxState.items.find((i) => i.id === open);
   if (item) void persistDraft(item);
-  fullSurface.selectedId = null;
+  inboxPage.surface.selectedId = null;
 }
 
 function closeInboxItem(): void {
   resetActiveInboxItem();
   syncInboxUrl(null);
-  if (fullViewId === "sent") ensureSentMail(drawAll);
+  if (inboxPage.viewId === "sent") ensureSentMail(drawAll);
   drawAll();
 }
 
@@ -1969,10 +751,10 @@ export function selectInboxView(viewId: string, push = false): void {
 }
 
 function showFullView(viewId: string, selectedId: string | null = null): void {
-  fullViewId = viewId;
-  if (fullSurface) {
-    fullSurface.viewId = viewId;
-    fullSurface.selectedId = selectedId;
+  inboxPage.viewId = viewId;
+  if (inboxPage.surface) {
+    inboxPage.surface.viewId = viewId;
+    inboxPage.surface.selectedId = selectedId;
   }
 }
 
@@ -2011,6 +793,8 @@ export function mountInboxPane(opts: {
     },
   };
 }
+
+onInboxRedraw(drawAll);
 
 registerPaneKind({
   paramsKey: "inboxView",

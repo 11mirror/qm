@@ -97,14 +97,9 @@ import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeych
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
-import {
-  inboxOpenCount,
-  refreshInbox,
-  renderInbox,
-  resetActiveInboxItem,
-  resetInboxState,
-  routeInboxHistory,
-} from "./inbox";
+import { renderInbox, resetActiveInboxItem, resetInboxState, routeInboxHistory } from "./inbox";
+import { refreshInbox } from "./inbox-feed";
+import { inboxOpenCount } from "./inbox-model";
 import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";

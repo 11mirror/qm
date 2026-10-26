@@ -64,7 +64,11 @@ test("an inbox item event refetches that item and the counts, not every view", a
   const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
   appState.me = { user: "alice", org: "test", permissions: ["inbox"] };
   const { ensureDeliveryStream } = await vite.ssrLoadModule("/src/conversations.ts");
-  const inbox = await vite.ssrLoadModule("/src/inbox.ts");
+  const inbox = {
+    ...(await vite.ssrLoadModule("/src/inbox.ts")),
+    ...(await vite.ssrLoadModule("/src/inbox-model.ts")),
+    ...(await vite.ssrLoadModule("/src/inbox-feed.ts")),
+  };
   t.after(inbox.resetInboxState);
   ensureDeliveryStream();
   const pane = inbox.mountInboxPane({ host, viewId: "all", density: () => "full", onDensityChange() {} });

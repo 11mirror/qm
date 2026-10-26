@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ArrowUpRight, ChevronRight, Mail } from "lucide";
-import type { LedgerItem } from "./inbox";
+import type { LedgerItem } from "./inbox-model";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { listBackLink } from "./list-page";
