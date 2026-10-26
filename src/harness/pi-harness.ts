@@ -1,3 +1,5 @@
+import { createCallTelemetry } from "./call-telemetry.ts";
+import { sumCacheUsage } from "./call-telemetry.ts";
 import {
   recordSteerIntake,
   recordStoppedTurn,
@@ -23,7 +25,6 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
-  calculateCost,
   clampThinkingLevel,
   InMemoryCredentialStore,
   retryAssistantCall,
@@ -36,26 +37,11 @@ import {
   type ModelsSimpleStreamOptions,
   type ProviderHeaders,
   type ToolResultMessage,
-  type Usage,
 } from "@earendil-works/pi-ai";
 import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
-
-const TURN_EFFORT_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-  "auto",
-  "default",
-  "adaptive",
-]);
 import type { ConversationTurn } from "../types.ts";
 import { isReply, isUserMessage, type Item } from "../sessions/items.ts";
-import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
@@ -99,7 +85,6 @@ import {
   type HarnessDetectResult,
   type HarnessTurnInput,
   type HarnessTurnResult,
-  type GapWork,
 } from "./harness.ts";
 import {
   coreToolOptions,
@@ -132,18 +117,31 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { createGrindMeter, meterGrindCall } from "./grind.ts";
+import { createGrindMeter } from "./grind.ts";
 import {
   createFloorCapPolicy,
   bankGoalTurn,
   enforceGoal,
   goalPausedNote,
   goalSteeringNote,
-  meterGoalCall,
   goalWorkDigest,
   type GovernorVerdict,
 } from "./goal.ts";
 import { perTenant } from "../tenant.ts";
+
+const TURN_EFFORT_LEVELS = new Set<string>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+  "auto",
+  "default",
+  "adaptive",
+]);
 
 export interface PiHarnessOptions extends CoreToolOptions {
   defaultModelId?: string;
@@ -400,198 +398,6 @@ interface TurnSession {
   cwd: string;
   agentDir: string;
   ephemeralCwd?: string;
-}
-
-interface PerCallStat {
-  ttftMs: number | null;
-  durationMs: number | null;
-  stepGapMs: number | null;
-  usage: LlmCallUsage | null;
-}
-
-export function stepGapMs(prevStepEnd: number | undefined, curStreamStart: number | undefined): number | null {
-  if (prevStepEnd === undefined || curStreamStart === undefined) return null;
-  return Math.max(0, curStreamStart - prevStepEnd);
-}
-
-function unionMs(
-  intervals: ReadonlyArray<{ start: number; end: number }>,
-  windowStart: number,
-  windowEnd: number,
-): number {
-  const clamped = intervals
-    .map((i) => ({ start: Math.max(i.start, windowStart), end: Math.min(i.end, windowEnd) }))
-    .filter((i) => i.end > i.start)
-    .sort((a, b) => a.start - b.start);
-  let total = 0;
-  let curStart = -1;
-  let curEnd = -1;
-  for (const i of clamped) {
-    if (i.start > curEnd) {
-      if (curEnd > curStart) total += curEnd - curStart;
-      curStart = i.start;
-      curEnd = i.end;
-    } else if (i.end > curEnd) {
-      curEnd = i.end;
-    }
-  }
-  if (curEnd > curStart) total += curEnd - curStart;
-  return total;
-}
-
-export interface DispatchMarks {
-  onPayload?: number;
-  onResponse?: number;
-  messageStart?: number;
-  prepareNextTurn?: number;
-  transformContext?: number;
-}
-
-export function decomposeGapPhases(
-  gapWindow: { gapStart?: number; gapEnd: number } | undefined,
-  intervals: ReadonlyArray<GapWork>,
-  gap: number | null,
-  marks?: DispatchMarks,
-): GapPhases | undefined {
-  if (!gapWindow || gapWindow.gapStart === undefined || gap === null) return undefined;
-  const { gapStart, gapEnd } = gapWindow;
-  const tagged = intervals
-    .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-    .map((w) => ({ start: w.start, end: w.end }));
-  const byPhase = new Map<GapPhase, Array<{ start: number; end: number }>>();
-  for (const w of intervals) {
-    if (w.end <= gapStart || w.start >= gapEnd) continue;
-    if (w.phase === "tool_body" || w.phase === "persist") continue;
-    const arr = byPhase.get(w.phase) ?? [];
-    arr.push({ start: w.start, end: w.end });
-    byPhase.set(w.phase, arr);
-  }
-  const phases: GapPhases = {};
-  let attributed = 0;
-  for (const [phase, arr] of byPhase) {
-    const ms = unionMs(arr, gapStart, gapEnd);
-    if (ms > 0) {
-      phases[phase] = ms;
-      attributed += ms;
-    }
-  }
-  if (marks?.onPayload !== undefined && marks.onPayload > gapStart) {
-    const toolBefore = unionMs(tagged, gapStart, marks.onPayload);
-    const glue = Math.max(0, marks.onPayload - gapStart - toolBefore);
-    if (glue > 0) {
-      phases.dispatch_glue = glue;
-      attributed += glue;
-      const inWindow = (t: number | undefined): boolean => t !== undefined && t >= gapStart && t <= marks.onPayload!;
-      let loopReentry = 0;
-      if (inWindow(marks.prepareNextTurn)) {
-        const toolBeforeReentry = unionMs(tagged, gapStart, marks.prepareNextTurn!);
-        loopReentry = Math.min(glue, Math.max(0, marks.prepareNextTurn! - gapStart - toolBeforeReentry));
-      }
-      let contextAssemble = 0;
-      if (inWindow(marks.transformContext)) {
-        contextAssemble = Math.min(glue - loopReentry, Math.max(0, marks.onPayload - marks.transformContext!));
-      }
-      const glueOther = Math.max(0, glue - loopReentry - contextAssemble);
-      if (loopReentry > 0) phases.loop_reentry = loopReentry;
-      if (contextAssemble > 0) phases.context_assemble = contextAssemble;
-      if (glueOther > 0) phases.glue_other = glueOther;
-      if (loopReentry > 0 && inWindow(marks.prepareNextTurn)) {
-        const reentryEnd = marks.prepareNextTurn!;
-        const bodySpans = intervals
-          .filter((w) => w.phase === "tool_body")
-          .map((w) => ({ start: Math.max(w.start, gapStart), end: Math.min(w.end, reentryEnd) }))
-          .filter((w) => w.end > w.start);
-        if (bodySpans.length) {
-          const firstEntry = Math.min(...bodySpans.map((w) => w.start));
-          const lastExit = Math.max(...bodySpans.map((w) => w.end));
-          const bodyUnion = unionMs(bodySpans, gapStart, reentryEnd);
-          const taggedInside = unionMs(tagged, firstEntry, lastExit);
-          const preTool = Math.min(loopReentry, Math.max(0, firstEntry - gapStart));
-          const inToolUntagged = Math.min(loopReentry - preTool, Math.max(0, bodyUnion - taggedInside));
-          const postTool = Math.min(loopReentry - preTool - inToolUntagged, Math.max(0, reentryEnd - lastExit));
-          if (preTool > 0) phases.pre_tool = preTool;
-          if (inToolUntagged > 0) {
-            phases.in_tool_untagged = inToolUntagged;
-            const byTool = new Map<string, Array<{ start: number; end: number }>>();
-            for (const w of intervals) {
-              if (w.phase !== "tool_body") continue;
-              const clamped = { start: Math.max(w.start, gapStart), end: Math.min(w.end, reentryEnd) };
-              if (clamped.end <= clamped.start) continue;
-              const key = w.tool ?? "unknown";
-              const arr = byTool.get(key) ?? [];
-              arr.push(clamped);
-              byTool.set(key, arr);
-            }
-            for (const [name, arr] of byTool) {
-              const ms = unionMs(arr, gapStart, reentryEnd);
-              if (ms > 0) phases[`tool_body.${name}`] = ms;
-            }
-          }
-          if (postTool > 0) phases.post_tool = postTool;
-        }
-      }
-    }
-  }
-  if (marks?.onResponse !== undefined && marks.messageStart !== undefined) {
-    const open = Math.max(0, marks.messageStart - marks.onResponse);
-    if (open > 0) {
-      phases.stream_open = open;
-      attributed += open;
-    }
-  }
-  const persistSpans = intervals.filter((w) => w.phase === "persist").map((w) => ({ start: w.start, end: w.end }));
-  if (persistSpans.length) {
-    const ms = unionMs(persistSpans, gapStart, gapEnd);
-    if (ms > 0) phases.persist = ms;
-  }
-  phases.residual = Math.max(0, gap - attributed);
-  return phases;
-}
-
-export function piUsageToCallUsage(
-  u: Partial<Usage> | undefined,
-  model: Model<Api> | undefined,
-  fast: boolean | undefined,
-): LlmCallUsage | null {
-  if (!u) return null;
-  const row: LlmCallUsage = {
-    input: u.input ?? 0,
-    output: u.output ?? 0,
-    cacheRead: u.cacheRead ?? 0,
-    cacheWrite: u.cacheWrite ?? 0,
-    totalTokens: u.totalTokens ?? 0,
-    costUsd: u.cost?.total ?? 0,
-  };
-  if (!fast || !model?.cost) return row;
-  const priced: Usage = {
-    input: row.input,
-    output: row.output,
-    cacheRead: row.cacheRead,
-    cacheWrite: row.cacheWrite,
-    ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
-    totalTokens: row.totalTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  const card = fast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : model;
-  row.costUsd = calculateCost(card, priced).total;
-  return row;
-}
-
-function sumCacheUsage(
-  stats: ReadonlyArray<{ usage: LlmCallUsage | null }>,
-): { cacheRead: number; cacheWrite: number; uncachedInput: number } | null {
-  let saw = false;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let uncachedInput = 0;
-  for (const s of stats) {
-    if (!s.usage) continue;
-    saw = true;
-    cacheRead += s.usage.cacheRead;
-    cacheWrite += s.usage.cacheWrite;
-    uncachedInput += s.usage.input;
-  }
-  return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
 }
 
 interface IsolatedResources {
@@ -1705,15 +1511,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
         applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
 
-        const toolWallByStep: number[][] = [];
-        const gapWork: GapWork[] = [];
-        const collectGapWork = (work: GapWork): void => {
-          gapWork.push(work);
-          if (work.phase === "exec") {
-            const bucket = toolWallByStep[toolWallByStep.length - 1];
-            if (bucket) bucket.push(Math.max(0, work.end - work.start));
-          }
-        };
+        const telemetry = createCallTelemetry(turn, entry);
+        const { collectGapWork, callStats } = telemetry;
         turn.onGapWork?.(collectGapWork);
         entry.ref.onGapWork = collectGapWork;
         const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
@@ -1768,11 +1567,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entryCount: turn.history.length,
         });
 
-        const callStats: Array<PerCallStat> = [];
-        let curStart: number | undefined;
-        let curFirst: number | undefined;
-        let prevStepEnd: number | undefined;
-        const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
         let thinkTail: Promise<unknown> = Promise.resolve();
         let triggerSeen = continueTurn;
         const toolAbort = new AbortController();
@@ -1818,95 +1612,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (e.type === "message_end") noteDocumentRejection(e.message);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
-        const unsubscribe = entry.agentSession.subscribe((event) => {
-          if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
-            steps.startStreaming();
-            curStart = Date.now();
-            curFirst = undefined;
-            const last = entry.ref.modelDispatch?.at(-1);
-            if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
-            turn.onTextBlockStart?.();
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
-            const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
-            if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-            if (curFirst === undefined) curFirst = Date.now();
-            turn.onDelta?.(event.assistantMessageEvent.delta);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
-            const { contentIndex, delta, partial } = event.assistantMessageEvent;
-            const block = partial.content[contentIndex];
-            if (block?.type === "thinking" && !block.redacted)
-              turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
-          } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-            const end = Date.now();
-            const u = (event.message as { usage?: Partial<Usage> }).usage;
-            const stepModel = entry.agentSession.model;
-            const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-            meterGrindCall(grindMeter, usage);
-            const meteredGoal = entry.ref.goal;
-            if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
-            callStats.push({
-              ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
-              durationMs: curStart !== undefined ? end - curStart : null,
-              stepGapMs: stepGapMs(prevStepEnd, curStart),
-              usage,
-            });
-            stepWindows.push({
-              ...(prevStepEnd !== undefined ? { gapStart: prevStepEnd } : {}),
-              gapEnd: curStart ?? end,
-            });
-            prevStepEnd = end;
-            toolWallByStep.push([]);
-            curStart = undefined;
-            curFirst = undefined;
-          }
-        });
-        const drainCaptured = async (): Promise<void> => {
-          const captured = entry.ref.llmCapture ?? [];
-          entry.ref.llmCapture = undefined;
-          if (!turn.recordLlmRequest) return;
-          const statsAligned = callStats.length === captured.length;
-          const dispatch = entry.ref.modelDispatch ?? [];
-          const dispatchWork: GapWork[] = dispatch
-            .filter((d): d is { start: number; first: number } => d.first !== undefined)
-            .map((d) => ({ phase: "model_dispatch" as const, start: d.start, end: d.first }));
-          const marksAligned = dispatch.length === captured.length;
-          entry.ref.modelDispatch = undefined;
-          const allGapWork = [...gapWork, ...dispatchWork];
-          for (let step = 0; step < captured.length; step++) {
-            const stat = statsAligned ? callStats[step] : undefined;
-            const d = marksAligned ? dispatch[step] : undefined;
-            const marks: DispatchMarks | undefined = d && {
-              onPayload: d.start,
-              onResponse: d.first,
-              messageStart: d.streamStart,
-              prepareNextTurn: d.prepareNextTurn,
-              transformContext: d.transformContext,
-            };
-            const gapPhases = statsAligned
-              ? decomposeGapPhases(stepWindows[step], allGapWork, stat?.stepGapMs ?? null, marks)
-              : undefined;
-            try {
-              await turn.recordLlmRequest({
-                turnSeq: userEntry?.seq ?? null,
-                step,
-                model: captured[step]!.transport?.modelId ?? effectiveModel,
-                promptEnvelope: captured[step]!.envelope,
-                truncated: captured[step]!.truncated,
-                transport: captured[step]!.transport ?? null,
-                ttftMs: stat?.ttftMs ?? null,
-                durationMs: stat?.durationMs ?? null,
-                stepGapMs: stat?.stepGapMs ?? null,
-                toolWallMs: toolWallByStep[step] ?? null,
-                gapPhases: gapPhases ?? null,
-                usage: stat?.usage ?? null,
-              });
-            } catch (e) {
-              swallow("pi: llm request record", e);
-            }
-          }
-        };
+        const unsubscribe = entry.agentSession.subscribe(telemetry.onSessionEvent(steps, grindMeter));
         let wallClock!: TurnWallClockOutcome;
         const messagesBefore = entry.agentSession.messages.length;
         entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
@@ -2202,7 +1908,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           activeSteps = undefined;
           entry.ref.emit = turn.emit;
           await thinkTail;
-          await drainCaptured();
+          await telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel);
           entry.ref.onGapWork = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;

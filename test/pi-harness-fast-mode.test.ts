@@ -4,7 +4,6 @@ import {
   applyTurnEffort,
   applyFastSpeed,
   applyThinkingBinding,
-  piUsageToCallUsage,
   scaleCost,
   withRequestHeaders,
   FAST_COST_MULTIPLIER,
@@ -12,6 +11,7 @@ import {
   wantsFastMode,
   createPiHarness,
 } from "../src/harness/pi-harness.ts";
+import { piUsageToCallUsage } from "../src/harness/call-telemetry.ts";
 import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { storedItem, type NewItem } from "../src/sessions/items.ts";

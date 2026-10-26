@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stepGapMs, decomposeGapPhases } from "../src/harness/pi-harness.ts";
+import { stepGapMs, decomposeGapPhases } from "../src/harness/call-telemetry.ts";
 import type { GapWork } from "../src/sessions/session-store.ts";
 
 test("stepGapMs: null on the first step (no prior step to glue from)", () => {
