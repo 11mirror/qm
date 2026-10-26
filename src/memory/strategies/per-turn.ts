@@ -45,16 +45,12 @@ async function extractFacts(
   turns: Array<{ input: string; reply: string }>,
 ): Promise<{ facts: string[]; sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]> }> {
   if (!harness.oneShot) return { facts: [], sensitivity: "unknown" };
-  try {
-    const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
-    return {
-      facts: parseFacts(out ?? ""),
-      sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
-    };
-  } catch {
-    return { facts: [], sensitivity: "unknown" };
-  }
+  const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
+  return {
+    facts: parseFacts(out ?? ""),
+    sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
+  };
 }
 
 interface Burst extends MemoryCaptureMetadata {

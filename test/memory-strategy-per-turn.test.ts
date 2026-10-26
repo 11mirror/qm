@@ -59,13 +59,13 @@ test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("-"), []);
 });
 
-test("per-turn swallows extraction failures and captures nothing", async () => {
+test("per-turn surfaces extraction failures and captures nothing", async () => {
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+  await assert.rejects(strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" }), /model down/);
   assert.equal(await memory.read(SCOPE), "", "nothing captured");
 });
 
