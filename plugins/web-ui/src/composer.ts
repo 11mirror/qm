@@ -50,7 +50,7 @@ import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
-import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { clearDraft, newChatDraftKey, parsePairs, readStorage, saveDraft, writeStorage } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
@@ -74,18 +74,7 @@ export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
 const THREAD_PICKS_CAP = 50;
 function loadThreadPicks(): Map<string, ModelOptionValue> {
-  try {
-    const raw: unknown = JSON.parse(localStorage.getItem(THREAD_PICKS_STORAGE_KEY) ?? "[]");
-    if (Array.isArray(raw)) {
-      const pairs = raw.filter(
-        (p): p is [string, string] => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "string",
-      );
-      return new Map(pairs.slice(-THREAD_PICKS_CAP));
-    }
-  } catch {
-    void 0;
-  }
-  return new Map();
+  return parsePairs(readStorage(THREAD_PICKS_STORAGE_KEY), THREAD_PICKS_CAP);
 }
 
 let threadModelPicks = loadThreadPicks();
@@ -108,13 +97,13 @@ function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
   merged.set(threadRef, value);
   while (merged.size > THREAD_PICKS_CAP) merged.delete(merged.keys().next().value as string);
   threadModelPicks = merged;
-  persistPreference(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...merged]));
+  writeStorage(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...merged]));
 }
 
 function forgetThreadPick(threadRef: string): void {
   threadModelPicks = loadThreadPicks();
   threadModelPicks.delete(threadRef);
-  persistPreference(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...threadModelPicks]));
+  writeStorage(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...threadModelPicks]));
 }
 
 function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void {
@@ -124,14 +113,6 @@ function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void
 
 function modelOptionFor(value: ModelOptionValue, scopeKey?: string | null): ModelOption | undefined {
   return getModelOptions(scopeKey).find((option) => option.value === value);
-}
-
-function persistPreference(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    void 0;
-  }
 }
 
 export interface SkillItem {
@@ -205,9 +186,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let fastModeOverride: boolean | undefined;
   let restoredLoadout: LoadoutEntry | undefined;
   let loadoutRestored = false;
-  let modelSelectionRevision = 0;
-  let effortSelectionRevision = 0;
-  let fastSelectionRevision = 0;
+  const revision = { model: 0, effort: 0, fast: 0 };
 
   function isUnsentNewChat(): boolean {
     return (
@@ -248,7 +227,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
-      ++effortSelectionRevision;
+      ++revision.effort;
       effortOverride = value;
     },
     get fastMode(): boolean | undefined {
@@ -260,7 +239,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return fast && modelSupportsFastMode(scopeKey(), selected?.model.id);
     },
     set fastMode(value: boolean | undefined) {
-      ++fastSelectionRevision;
+      ++revision.fast;
       fastModeOverride = value;
     },
     pasteView: null as { id: string; text: string; initial: string; dirty: boolean } | null,
@@ -275,9 +254,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return (threadRef ? queuedRuns.get(threadRef) : undefined) ?? [];
   }
 
+  function putRuns<T>(map: Map<string, T[]>, threadRef: string, runs: T[]): void {
+    if (runs.length) map.set(threadRef, runs);
+    else map.delete(threadRef);
+  }
+
   function setQueuedRuns(threadRef: string, runs: QueuedRun[]): void {
-    if (runs.length) queuedRuns.set(threadRef, runs);
-    else queuedRuns.delete(threadRef);
+    putRuns(queuedRuns, threadRef, runs);
   }
 
   function forgetQueuedRun(threadRef: string, runId: string): void {
@@ -300,8 +283,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }),
     );
     const waiting = settled ? [] : steering.filter((run) => !intakes.has(run.ts));
-    if (waiting.length) steeringRuns.set(threadRef, waiting);
-    else steeringRuns.delete(threadRef);
+    putRuns(steeringRuns, threadRef, waiting);
     return waiting;
   }
 
@@ -316,15 +298,17 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function resetComposer(): void {
-    composerState.draft = "";
-    composerState.attachments = [];
-    composerState.pasteView = null;
+    Object.assign(composerState, {
+      draft: "",
+      attachments: [],
+      pasteView: null,
+      error: "",
+      processingFiles: false,
+      openMenu: null,
+      slashDismissed: false,
+    });
     pastedTextIds.clear();
-    composerState.error = "";
-    composerState.processingFiles = false;
-    composerState.openMenu = null;
     slashActiveIndex = 0;
-    composerState.slashDismissed = false;
   }
 
   function scopeKey(): string | null {
@@ -455,23 +439,17 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.error = "";
     const current = preserveSelection ? currentModelOption() : undefined;
     const settings = current ? activeLoadoutEntry(current) : undefined;
-    const modelRevision = modelSelectionRevision;
-    const effortRevision = effortSelectionRevision;
-    const fastRevision = fastSelectionRevision;
+    const before = { ...revision };
     try {
       await saveRuntimeConfig(scopeId, change);
       if (request !== runtimeRequest || scopeId !== scopeKey()) return;
-      if (modelSelectionRevision === modelRevision) {
+      if (revision.model === before.model) {
         if (current && settings) {
-          if (effortSelectionRevision === effortRevision) effortOverride = settings.effort;
-          if (fastSelectionRevision === fastRevision) fastModeOverride = settings.fast;
+          if (revision.effort === before.effort) effortOverride = settings.effort;
+          if (revision.fast === before.fast) fastModeOverride = settings.fast;
           if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, current.value);
           rememberActiveTweaks(current);
-        } else if (
-          !change.keep &&
-          effortSelectionRevision === effortRevision &&
-          fastSelectionRevision === fastRevision
-        ) {
+        } else if (!change.keep && revision.effort === before.effort && revision.fast === before.fast) {
           clearChatSelection();
         }
       }
@@ -595,7 +573,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                                 @click=${() => openImagePreview(a)}
                               >
                                 <img
-                                  src=${a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`}
+                                  src=${attachmentSrc(a)}
                                   alt=${a.fileName}
                                   @error=${(event: Event) => {
                                     (event.currentTarget as HTMLImageElement).parentElement!.hidden = true;
@@ -757,12 +735,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.pasteView = null;
     removeAttachment(view.id, agent);
     resizeComposer();
-    requestAnimationFrame(() => {
-      const input = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".composer-input");
-      if (!input) return;
-      input.focus();
-      input.setSelectionRange(cursor, cursor);
-    });
+    requestAnimationFrame(() => focusField(".composer-input", cursor));
+  }
+
+  function focusField(selector: string, cursor?: number): void {
+    const input = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(selector);
+    input?.focus();
+    input?.setSelectionRange(cursor ?? input.value.length, cursor ?? input.value.length);
   }
 
   function sendControls(agent: Agent): TemplateResult {
@@ -879,14 +858,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                       ctx.chat.drawActiveChat(agent);
                       requestAnimationFrame(() => {
                         if (
-                          queuedEdit !== edit ||
-                          ctx.chat.state.threadRef !== edit.threadRef ||
-                          ctx.chat.state.agent !== agent
+                          queuedEdit === edit &&
+                          ctx.chat.state.threadRef === edit.threadRef &&
+                          ctx.chat.state.agent === agent
                         )
-                          return;
-                        const input = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".queued-edit-input");
-                        input?.focus();
-                        input?.setSelectionRange(input.value.length, input.value.length);
+                          focusField(".queued-edit-input");
                       });
                     }}
                   >
@@ -915,52 +891,31 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const decide = (decision: ApprovalDecision): void => {
       if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
     };
+    const choices = [
+      { label: "Deny", className: "approval-btn deny", approved: false },
+      { label: "Allow once", className: "approval-btn", approved: true, scope: "once" },
+      { label: "Allow for session", className: "approval-btn primary", approved: true, scope: "session" },
+      { label: "Allow always", className: "approval-btn", approved: true, scope: "always" },
+    ] as const;
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
       ${approvals.map(
         (a) =>
           html`<div class="composer-approval">
             <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
             <div class="approval-actions">
-              <button
-                class="approval-btn deny"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: false })}
-              >
-                Deny
-              </button>
-              <button
-                class="approval-btn"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
-              >
-                Allow once
-              </button>
-              ${
-                a.grantModes?.session === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn primary"
+              ${choices
+                .filter((c) => !("scope" in c) || c.scope === "once" || a.grantModes?.[c.scope] !== false)
+                .map(
+                  ({ label, className, ...choice }) =>
+                    html`<button
+                      class=${className}
                       type="button"
                       ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
+                      @click=${() => decide({ requestId: a.requestId, ...choice })}
                     >
-                      Allow for session
-                    </button>`
-              }
-              ${
-                a.grantModes?.always === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
-                    >
-                      Allow always
-                    </button>`
-              }
+                      ${label}
+                    </button>`,
+                )}
             </div>
           </div>`,
       )}
@@ -1112,7 +1067,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     focusComposerEnd();
   }
 
-  function fillSuggestedPrompt(prompt: string, agent: Agent): void {
+  function fillSuggestedPrompt(prompt: string, agent: Agent): boolean {
     if (
       agent !== ctx.chat.state.agent ||
       agent.state.isStreaming ||
@@ -1120,12 +1075,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       composerState.attachments.length ||
       composerState.processingFiles
     )
-      return;
+      return false;
     composerState.draft = prompt;
     composerState.error = "";
     persistDraft();
     ctx.chat.drawActiveChat(agent);
     focusComposerEnd();
+    return true;
   }
 
   let pendingComposerFocus = false;
@@ -1225,6 +1181,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resizeComposer();
   }
 
+  function approvalPending(): boolean {
+    return ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0;
+  }
+
   function composerCanSend(): boolean {
     if (!currentModelOption()) return false;
     return (
@@ -1232,8 +1192,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       !composerState.processingFiles &&
       !submitting &&
       getRuntimeConfig(scopeKey()) !== null &&
-      ctx.chat.state.resolvingApprovals.size === 0 &&
-      !ctx.chat.hasUnresolvedApproval()
+      !approvalPending()
     );
   }
 
@@ -1266,14 +1225,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
       if (slash.matches.length) {
         const count = slash.matches.length;
-        if (e.key === "ArrowDown") {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
-          slashActiveIndex = (clampedActive(count) + 1) % count;
-          return ctx.chat.drawActiveChat(agent);
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          slashActiveIndex = (clampedActive(count) - 1 + count) % count;
+          slashActiveIndex = (clampedActive(count) + (e.key === "ArrowDown" ? 1 : count - 1)) % count;
           return ctx.chat.drawActiveChat(agent);
         }
         if (!e.shiftKey && (e.key === "Enter" || e.key === "Tab")) {
@@ -1350,9 +1304,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function restoreStagedOnFailure(text: string, staged: Attachment[], note: string): void {
     const typedSince = composerState.draft.trim();
     composerState.draft = !typedSince || typedSince === text ? text : `${text}\n${composerState.draft}`;
-    const { kept, note: capNote } = mergeStagedAttachments(staged, composerState.attachments);
-    composerState.attachments = kept;
-    composerState.error = combineNote(note, capNote);
+    restageAttachments(staged, note);
   }
 
   async function enqueueTurn(
@@ -1444,9 +1396,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function unmarkSteering(threadRef: string, runId: string): void {
-    const rest = (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId);
-    if (rest.length) steeringRuns.set(threadRef, rest);
-    else steeringRuns.delete(threadRef);
+    putRuns(
+      steeringRuns,
+      threadRef,
+      (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId),
+    );
   }
 
   async function steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
@@ -1577,43 +1531,33 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
       ctx.chat.scrollToBottom();
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
-      restoreBlockedSend(agent, sentFromThread, text, attachments);
-      restoreFailedAttachments(agent, text, attachments);
+      restoreFailedSend(agent, sentFromThread, text, attachments);
     } catch (err) {
-      ctx.chat.state.pendingSend = null;
-      if (ctx.chat.state.threadRef && ctx.chat.state.sessionId === null) dropPendingSession(ctx.chat.state.threadRef);
-      renderList();
+      abandonPendingSend();
       composerState.error = errMessage(err, "Could not send message.");
       ctx.chat.drawActiveChat(agent);
     }
   }
 
-  function restoreFailedAttachments(agent: Agent, text: string, attachments: Attachment[]): void {
+  function abandonPendingSend(): void {
+    ctx.chat.state.pendingSend = null;
+    if (ctx.chat.state.threadRef && ctx.chat.state.sessionId === null) dropPendingSession(ctx.chat.state.threadRef);
+    renderList();
+  }
+
+  function unwindSend(agent: Agent, text: string, attachments: Attachment[], note: string): void {
     const messages = agent.state.messages;
-    const last = messages[messages.length - 1] as
-      { role?: string; sendFailed?: string; droppedAttachmentIds?: string[] } | undefined;
-    if (last?.role !== "assistant" || last.sendFailed !== "attachments" || agent !== ctx.chat.state.agent) return;
-    const dropped = new Set(last.droppedAttachmentIds ?? []);
-    const retryable = attachments.filter((a) => !dropped.has(a.id));
     messages.pop();
     const prompt = messages[messages.length - 1] as { role?: string } | undefined;
     if (prompt?.role === "user" || prompt?.role === "user-with-attachments") messages.pop();
     (agent.state as { errorMessage?: string }).errorMessage = undefined;
-    ctx.chat.state.pendingSend = null;
-    if (ctx.chat.state.threadRef && ctx.chat.state.sessionId === null) dropPendingSession(ctx.chat.state.threadRef);
-    renderList();
-    restoreStagedOnFailure(
-      text,
-      retryable,
-      retryable.length
-        ? "Couldn't attach the files, so the message wasn't sent. Try again."
-        : "Nothing could be attached, so the message wasn't sent.",
-    );
+    abandonPendingSend();
+    restoreStagedOnFailure(text, attachments, note);
     persistDraft();
     ctx.chat.drawActiveChat(agent);
   }
 
-  function restoreBlockedSend(
+  function restoreFailedSend(
     agent: Agent,
     sentFromThread: string | null,
     text: string,
@@ -1621,26 +1565,32 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   ): void {
     const messages = agent.state.messages;
     const last = messages[messages.length - 1] as
-      { role?: string; sendBlocked?: string; errorMessage?: string } | undefined;
-    if (last?.role !== "assistant" || last.sendBlocked !== "pending_approval") return;
-    if (agent !== ctx.chat.state.agent) {
+      | {
+          role?: string;
+          sendBlocked?: string;
+          sendFailed?: string;
+          errorMessage?: string;
+          droppedAttachmentIds?: string[];
+        }
+      | undefined;
+    if (last?.role !== "assistant") return;
+    if (last.sendBlocked === "pending_approval") {
+      if (agent === ctx.chat.state.agent)
+        return unwindSend(agent, text, attachments, last.errorMessage || PENDING_APPROVAL_REASON);
       if (sentFromThread) saveDraft(sentFromThread, text);
       return;
     }
-    messages.pop();
-    const prompt = messages[messages.length - 1] as { role?: string } | undefined;
-    if (prompt?.role === "user" || prompt?.role === "user-with-attachments") messages.pop();
-    (agent.state as { errorMessage?: string }).errorMessage = undefined;
-    ctx.chat.state.pendingSend = null;
-    if (ctx.chat.state.threadRef && ctx.chat.state.sessionId === null) dropPendingSession(ctx.chat.state.threadRef);
-    renderList();
-    const typedSince = composerState.draft.trim();
-    composerState.draft = !typedSince || typedSince === text ? text : `${text}\n${composerState.draft}`;
-    const { kept, note } = mergeStagedAttachments(attachments, composerState.attachments);
-    composerState.attachments = kept;
-    composerState.error = combineNote(last.errorMessage || PENDING_APPROVAL_REASON, note);
-    persistDraft();
-    ctx.chat.drawActiveChat(agent);
+    if (last.sendFailed !== "attachments" || agent !== ctx.chat.state.agent) return;
+    const dropped = new Set(last.droppedAttachmentIds ?? []);
+    const retryable = attachments.filter((a) => !dropped.has(a.id));
+    unwindSend(
+      agent,
+      text,
+      retryable,
+      retryable.length
+        ? "Couldn't attach the files, so the message wasn't sent. Try again."
+        : "Nothing could be attached, so the message wasn't sent.",
+    );
   }
 
   const LARGE_PASTE_CHARS = 2000;
@@ -1659,26 +1609,27 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     const text = data.getData("text/plain");
     if (text.length <= LARGE_PASTE_CHARS) return;
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0 || composerState.processingFiles)
-      return;
+    if (approvalPending() || composerState.processingFiles) return;
     if (composerState.attachments.length >= MAX_FILES_PER_MESSAGE) return;
     e.preventDefault();
     const names = new Set(composerState.attachments.map((a) => a.fileName));
     let n = 1;
     while (names.has(n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`)) n++;
-    const bytes = new TextEncoder().encode(text);
-    const attachment: Attachment = {
-      id: `paste_${Date.now()}_${Math.random()}`,
-      type: "document",
-      fileName: n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`,
-      mimeType: "text/plain",
-      size: bytes.length,
-      content: bytesToBase64(bytes),
-      extractedText: text,
-    };
+    const attachment = textAttachment(
+      `paste_${Date.now()}_${Math.random()}`,
+      n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`,
+      "text/plain",
+      text,
+    );
     pastedTextIds.add(attachment.id);
     composerState.attachments = [...composerState.attachments, attachment];
     ctx.chat.drawActiveChat(agent);
+  }
+
+  function textAttachment(id: string, fileName: string, mimeType: string, text: string): Attachment {
+    const bytes = new TextEncoder().encode(text);
+    const content = bytesToBase64(bytes);
+    return { id, type: "document", fileName, mimeType, size: bytes.length, content, extractedText: text };
   }
 
   async function onFilesSelected(e: Event, agent: Agent): Promise<void> {
@@ -1709,36 +1660,17 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function restageAttachments(attachments: Attachment[], note: string): void {
-    if (!attachments.length) {
-      composerState.error = note;
-      return;
-    }
-    const { kept, note: capNote } = mergeStagedAttachments(attachments, composerState.attachments);
-    composerState.attachments = kept;
-    composerState.error = combineNote(note, capNote);
+    const merged = [...attachments, ...composerState.attachments].filter(
+      (a, i, all) => all.findIndex((b) => b.id === a.id) === i,
+    );
+    const dropped = merged.slice(MAX_FILES_PER_MESSAGE);
+    composerState.attachments = merged.slice(0, MAX_FILES_PER_MESSAGE);
+    composerState.error = combineNote(note, dropped.length ? tooManyFilesNote(dropped.map((a) => a.fileName)) : null);
   }
 
   function combineNote(existing: string, note: string | null): string {
     if (!note) return existing;
     return existing ? `${existing} ${note}` : note;
-  }
-
-  function capOverflowNote(dropped: readonly { fileName: string }[]): string | null {
-    return dropped.length ? tooManyFilesNote(dropped.map((a) => a.fileName)) : null;
-  }
-
-  function mergeStagedAttachments(
-    restored: Attachment[],
-    current: Attachment[],
-  ): { kept: Attachment[]; note: string | null } {
-    const seen = new Set<string>();
-    const merged: Attachment[] = [];
-    for (const a of [...restored, ...current]) {
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      merged.push(a);
-    }
-    return { kept: merged.slice(0, MAX_FILES_PER_MESSAGE), note: capOverflowNote(merged.slice(MAX_FILES_PER_MESSAGE)) };
   }
 
   function planAdmission(files: File[], folderCount: number): { files: File[]; folders: number; note: string | null } {
@@ -1760,12 +1692,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = []): Promise<void> {
-    if (
-      (!files.length && !folders.length) ||
-      ctx.chat.hasUnresolvedApproval() ||
-      ctx.chat.state.resolvingApprovals.size > 0
-    )
-      return;
+    if ((!files.length && !folders.length) || approvalPending()) return;
     if (composerState.processingFiles) {
       composerState.error = "Still preparing the previous drop. Try again in a moment.";
       ctx.chat.drawActiveChat(agent);
@@ -1826,8 +1753,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function pickFiles(): void {
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (approvalPending()) return;
     ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
+  }
+
+  function attachmentSrc(a: Attachment): string {
+    return a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`;
   }
 
   function openImagePreview(attachment: Attachment): void {
@@ -1843,9 +1774,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       { once: true },
     );
     document.body.append(dialog);
-    const src = attachment.content.startsWith("data:")
-      ? attachment.content
-      : `data:${attachment.mimeType};base64,${attachment.content}`;
     render(
       html`
         <div class="attachment-preview-head">
@@ -1858,7 +1786,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             aria-label="Toggle actual image size"
             @click=${(event: Event) => (event.currentTarget as HTMLElement).classList.toggle("actual-size")}
           >
-            <img src=${src} alt=${attachment.fileName} />
+            <img src=${attachmentSrc(attachment)} alt=${attachment.fileName} />
           </button>
         </div>
       `,
@@ -1889,7 +1817,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function selectModel(value: string, agent: Agent): void {
     const option = getModelOptions(scopeKey()).find((candidate) => candidate.value === value);
     if (!option) return;
-    ++modelSelectionRevision;
+    ++revision.model;
     const previousDefaultEffort = defaultEffortForModel(currentModelOption()?.model);
     if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, option.value);
     agent.state.model = option.model;
@@ -1911,7 +1839,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (approvalPending()) return;
     if (selected && isUltrafastModel(selected.model.id)) {
       const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
       if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
@@ -2002,13 +1930,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       remove = false,
     ): Promise<boolean> => {
       const agent = ctx.chat.state.agent;
-      if (
-        !agent ||
-        composerState.processingFiles ||
-        ctx.chat.hasUnresolvedApproval() ||
-        ctx.chat.state.resolvingApprovals.size > 0
-      )
-        return false;
+      if (!agent || composerState.processingFiles || approvalPending()) return false;
       const prefix = `annotation_${annotationId}_`;
       const retained = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
       if (remove) {
@@ -2024,19 +1946,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         if (agent !== ctx.chat.state.agent) return false;
         const remaining = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
         if (remaining.length + 1 + loaded.length > MAX_FILES_PER_MESSAGE) return false;
-        const bytes = new TextEncoder().encode(text);
-        const annotation: Attachment = {
-          id: prefix + "context",
-          type: "document",
-          fileName: "App annotation.md",
-          mimeType: "text/markdown",
-          size: bytes.length,
-          content: bytesToBase64(bytes),
-          extractedText: text,
-        };
         composerState.attachments = [
           ...remaining,
-          annotation,
+          textAttachment(prefix + "context", "App annotation.md", "text/markdown", text),
           ...loaded.map((attachment, index) => ({ ...attachment, id: prefix + index })),
         ];
         composerState.error = "";
@@ -2050,16 +1962,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
     },
     sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
-      if (
-        agent !== ctx.chat.state.agent ||
-        agent.state.isStreaming ||
-        composerState.draft ||
-        composerState.attachments.length ||
-        composerState.processingFiles
-      )
-        return;
-      fillSuggestedPrompt(prompt, agent);
-      await sendPrompt(agent);
+      if (fillSuggestedPrompt(prompt, agent)) await sendPrompt(agent);
     },
     resizeComposer,
     currentModelOption,

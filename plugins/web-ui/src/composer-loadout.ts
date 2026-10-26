@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
 import { EFFORT_LEVELS, type EffortLevel, type ModelOption } from "./model-options.ts";
+import { readStorage, writeStorage } from "./drafts.ts";
 
 export interface LoadoutEntry {
   value: string;
@@ -105,19 +106,11 @@ export function modelLoadoutOptions(options: readonly ModelOption[], entries: re
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
 export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
-  try {
-    return parseLoadout(localStorage.getItem(key));
-  } catch {
-    return [];
-  }
+  return parseLoadout(readStorage(key));
 }
 
 export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
-  } catch {
-    return;
-  }
+  writeStorage(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
 }
 
 export function loadoutActions(
