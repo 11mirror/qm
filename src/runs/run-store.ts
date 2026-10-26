@@ -77,7 +77,6 @@ export interface Run {
   lastStop?: RunStop | null;
   engine?: RunEngine;
   absurdQueue?: string | null;
-  fairKey?: string | null;
   absurdTaskId?: string | null;
   absurdRunId?: string | null;
 }
