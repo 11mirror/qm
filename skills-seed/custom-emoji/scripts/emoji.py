@@ -189,10 +189,39 @@ def frame(src, t, motion, size=128):
     if m["rot"]:
         layer = layer.rotate(m["rot"], resample=Image.BICUBIC, expand=True)
     canvas = Image.new("RGBa", (big, big))
-    x = (big - layer.width) // 2 + int(m["dx"] * big)
+    x = (big - layer.width) // 2 + round(m["dx"] * size) * (big // size)
     base = big - layer.height - int(big * 0.04) if m["ground"] else (big - layer.height) // 2
-    canvas.paste(layer, (x, base + int(m["dy"] * big)))
-    return canvas.resize((size, size), Image.LANCZOS).convert("RGBA")
+    canvas.paste(layer, (x, base + round(m["dy"] * size) * (big // size)))
+    shot = canvas.resize((size, size), Image.LANCZOS).convert("RGBA")
+    alpha = shot.getchannel("A")
+    rgb = shot.convert("RGB")
+    rgb.paste(rgb.filter(ImageFilter.MinFilter(3)), mask=alpha.point(lambda a: 255 if 0 < a < 255 else 0))
+    rgb.putalpha(alpha.point(lambda a: 255 if a >= 128 else 0))
+    return rgb
+
+
+def flat_palette(src, share=0.004, merge=40):
+    rgb = src.convert("RGB")
+    rgb.paste((255, 0, 255), mask=src.getchannel("A").point(lambda a: 255 if a < 255 else 0))
+    buckets = {}
+    for n, c in rgb.getcolors(1 << 16):
+        if c != (255, 0, 255):
+            b = buckets.setdefault(tuple(v >> 4 for v in c), [0, 0, 0, 0])
+            b[0] += n
+            for i in range(3):
+                b[i + 1] += n * c[i]
+    opaque = sum(b[0] for b in buckets.values())
+    pal = []
+    for n, r, g, b in sorted(buckets.values(), reverse=True):
+        c = (r // n, g // n, b // n)
+        if n < share * opaque:
+            break
+        if all(sum((x - y) ** 2 for x, y in zip(c, pal[i:i + 3])) > merge ** 2 for i in range(0, len(pal), 3)):
+            pal += c
+    pal += [255, 0, 255]
+    img = Image.new("P", (1, 1))
+    img.putpalette(pal + [0] * (768 - len(pal)))
+    return img, len(pal) // 3 - 1
 
 
 def animate(src_path, out, motion, frames=10, loop_ms=700):
@@ -201,20 +230,15 @@ def animate(src_path, out, motion, frames=10, loop_ms=700):
     src = Image.open(src_path).convert("RGBA")
     if src.width < 256:
         src = src.resize((512, 512), Image.LANCZOS)
-    shots = [frame(src, i / frames, motion) for i in range(frames)]
-    masks = [s.getchannel("A").point(lambda a: 255 if a >= 128 else 0) for s in shots]
-    strip = Image.new("RGB", (128 * frames, 128), (0, 0, 0))
-    for i, (s, m) in enumerate(zip(shots, masks)):
-        strip.paste(s.convert("RGB"), (128 * i, 0), m)
-    pal = strip.quantize(31, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    pal.putpalette(pal.getpalette()[: 31 * 3] + [255, 0, 255])
+    pal, clear = flat_palette(src)
     out_frames = []
-    for s, m in zip(shots, masks):
-        q = s.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
-        q.paste(31, mask=m.point(lambda a: 255 - a))
+    for i in range(frames):
+        shot = frame(src, i / frames, motion)
+        q = shot.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
+        q.paste(clear, mask=shot.getchannel("A").point(lambda a: 255 - a))
         out_frames.append(q)
     out_frames[0].save(out, save_all=True, append_images=out_frames[1:], duration=round(loop_ms / frames),
-                       loop=0, disposal=2, transparency=31, optimize=False)
+                       loop=0, disposal=2, transparency=clear, optimize=False)
     return out
 
 
