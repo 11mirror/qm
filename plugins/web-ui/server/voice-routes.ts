@@ -65,36 +65,35 @@ export async function handleVoiceRoute(
 ): Promise<void> {
   const { user } = identity;
   const enabled = voiceEnabled(user) && !identity.impersonator;
+  const fail = (status: number, error: string, message?: string) =>
+    json(res, status, message ? { error, message } : { error });
   res.setHeader("cache-control", "no-store");
   if (req.method === "GET" && path === "/api/dictation")
     return json(res, 200, { enabled, provider: enabled ? "OpenAI" : null });
   if (req.method === "GET" && path === "/api/voice") return json(res, 200, { enabled, model: LIVE_MODEL });
-  if (req.method !== "POST" || path === "/api/voice") return json(res, 405, { error: "method_not_allowed" });
+  if (req.method !== "POST" || path === "/api/voice") return fail(405, "method_not_allowed");
 
   const dictation = path === "/api/dictation";
   if (!enabled)
     return dictation
-      ? json(res, 404, { error: "dictation_disabled", message: "Dictation is not enabled for this account." })
-      : json(res, 404, { error: "voice_disabled" });
-  if (!voiceRequestAllowed(req, config.publicUrl, identity.portalVerified))
-    return json(res, 403, { error: "unexpected_origin" });
+      ? fail(404, "dictation_disabled", "Dictation is not enabled for this account.")
+      : fail(404, "voice_disabled");
+  if (!voiceRequestAllowed(req, config.publicUrl, identity.portalVerified)) return fail(403, "unexpected_origin");
   const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
   let sdp = "";
   if (dictation) {
-    if (!Object.hasOwn(dictationFormats, mimeType)) return json(res, 415, { error: "unsupported_audio" });
+    if (!Object.hasOwn(dictationFormats, mimeType)) return fail(415, "unsupported_audio");
   } else {
     let offer: { sdp?: unknown } | null;
     try {
       offer = JSON.parse((await readBodyBytes(req, 65_536)).toString("utf8")) as { sdp?: unknown } | null;
     } catch (error) {
-      if (error instanceof PayloadTooLargeError) {
-        res.setHeader("connection", "close");
-        return json(res, 413, { error: "offer_too_large" });
-      }
-      return json(res, 400, { error: "invalid_offer" });
+      if (!(error instanceof PayloadTooLargeError)) return fail(400, "invalid_offer");
+      res.setHeader("connection", "close");
+      return fail(413, "offer_too_large");
     }
     if (typeof offer?.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60_000)
-      return json(res, 400, { error: "invalid_offer" });
+      return fail(400, "invalid_offer");
     sdp = offer.sdp;
   }
 
@@ -119,7 +118,7 @@ export async function handleVoiceRoute(
       const clientGone = controller.signal.aborted;
       reportVoiceError(error, "dictation_upload", clientGone);
       if (clientGone) return;
-      return json(res, 503, { error: "dictation_unavailable", message: "The server could not store the recording." });
+      return fail(503, "dictation_unavailable", "The server could not store the recording.");
     }
     let text: string | null = null;
     try {
@@ -127,7 +126,7 @@ export async function handleVoiceRoute(
     } finally {
       await rm(audio.file, { force: true }).catch((error: unknown) => reportVoiceError(error, "dictation_cleanup"));
     }
-    return text === null ? json(res, 400, { error: "empty_audio" }) : json(res, 200, { text });
+    return text === null ? fail(400, "empty_audio") : json(res, 200, { text });
   } catch (error) {
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
     if (controller.signal.aborted) return;
@@ -135,30 +134,25 @@ export async function handleVoiceRoute(
     if (provider?.status === 429 && provider.code !== "insufficient_quota") {
       if (provider.retryAfterS !== undefined)
         res.setHeader("retry-after", String(Math.min(provider.retryAfterS, MAX_RETRY_AFTER_S)));
-      return json(res, 429, {
-        error: "provider_rate_limit",
-        message: "OpenAI is rate limiting requests. Try again shortly.",
-      });
+      return fail(429, "provider_rate_limit", "OpenAI is rate limiting requests. Try again shortly.");
     }
     if (dictation && provider?.status === 413)
-      return json(res, 413, { error: "audio_too_large", message: "OpenAI says this recording is too large." });
+      return fail(413, "audio_too_large", "OpenAI says this recording is too large.");
     if (
       dictation &&
       provider?.status === 400 &&
       (provider.code === "unsupported_format" || (provider.code === "invalid_value" && provider.param === "file"))
     )
-      return json(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
+      return fail(400, "invalid_audio", "OpenAI could not read this recording.");
     if (provider?.status !== undefined && REJECTED_STATUSES.has(provider.status))
-      return json(res, 502, {
-        error: dictation ? "dictation_rejected" : "voice_rejected",
-        message: "OpenAI rejected the request. Retrying will not help.",
-      });
+      return fail(
+        502,
+        `${dictation ? "dictation" : "voice"}_rejected`,
+        "OpenAI rejected the request. Retrying will not help.",
+      );
     return dictation
-      ? json(res, 503, {
-          error: "dictation_unavailable",
-          message: "Could not transcribe the recording. Please try again.",
-        })
-      : json(res, 503, { error: "voice_unavailable", message: "Voice could not connect. Please try again." });
+      ? fail(503, "dictation_unavailable", "Could not transcribe the recording. Please try again.")
+      : fail(503, "voice_unavailable", "Voice could not connect. Please try again.");
   } finally {
     finished.abort();
     res.off("close", disconnect);
