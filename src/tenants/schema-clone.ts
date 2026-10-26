@@ -1,4 +1,4 @@
-import type { Client } from "pg";
+import pg, { type Client } from "pg";
 import { copyRows, quoteIdent, qualified, type TableRef } from "./row-copy.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -74,7 +74,10 @@ async function typeStatements(source: Client): Promise<string[]> {
       GROUP BY n.nspname, t.typname, t.oid ORDER BY t.oid`,
   );
   return [
-    ...enums.map(({ name, labels }) => `CREATE TYPE ${name} AS ENUM (${labels.map(literal).join(", ")})`),
+    ...enums.map(
+      ({ name, labels }) =>
+        `CREATE TYPE ${name} AS ENUM (${labels.map((label) => pg.escapeLiteral(label)).join(", ")})`,
+    ),
     ...domains.map(
       ({ name, base, notnull, def, checks }) =>
         `CREATE DOMAIN ${name} AS ${base}${def === null ? "" : ` DEFAULT ${def}`}${notnull ? " NOT NULL" : ""}${checks
@@ -285,7 +288,7 @@ async function sequenceValueStatements(source: Client): Promise<string[]> {
       source,
       `SELECT last_value::text, is_called FROM ${name}`,
     );
-    if (state) statements.push(`SELECT setval(${literal(name)}, ${state.last_value}, ${state.is_called})`);
+    if (state) statements.push(`SELECT setval(${pg.escapeLiteral(name)}, ${state.last_value}, ${state.is_called})`);
   }
   const owned = await rows<{ sequence: string; table: string; column: string }>(
     source,
@@ -301,10 +304,6 @@ async function sequenceValueStatements(source: Client): Promise<string[]> {
     ...statements,
     ...owned.map(({ sequence, table, column }) => `ALTER SEQUENCE ${sequence} OWNED BY ${table}.${quoteIdent(column)}`),
   ];
-}
-
-function literal(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 export async function assertEmptyDatabase(client: Client): Promise<void> {

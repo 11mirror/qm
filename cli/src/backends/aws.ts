@@ -28,6 +28,7 @@ import {
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   awsWorkloadArchitecture,
+  IMAGE_TAG,
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
@@ -760,7 +761,7 @@ function releaseCandidate(config: QmConfig, path: string): AwsReleaseCandidate {
     candidate.accountId !== aws.accountId ||
     candidate.region !== aws.region ||
     typeof candidate.label !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(candidate.label) ||
+    !IMAGE_TAG.test(candidate.label) ||
     !candidate.images ||
     typeof candidate.images !== "object" ||
     Array.isArray(candidate.images) ||
@@ -2238,7 +2239,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   }
   if (opts.buildOnly && !opts.imageLabel) throw new CliError("--build-only requires --image-label <label>");
   if (opts.buildOnly && !opts.candidateOut) throw new CliError("--build-only requires --candidate-out <path>");
-  if (opts.imageLabel && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(opts.imageLabel)) {
+  if (opts.imageLabel && !IMAGE_TAG.test(opts.imageLabel)) {
     throw new CliError("--image-label must be a valid ECR tag");
   }
   if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
