@@ -1,15 +1,8 @@
-const DECISION_HOOK_POINTS = {
-  user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
-  tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
-  turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
-  goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
-} as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
-export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
-type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
-const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start"];
-const rank = (hook: DecisionHook, action: string) =>
-  (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
+const DECISION_ACTIONS = ["keep", "use_runtime"] as const;
+const DECISION_HOOKS = ["turn_start"] as const;
+export type DecisionHook = (typeof DECISION_HOOKS)[number];
+type DecisionAction = (typeof DECISION_ACTIONS)[number];
+const rank = (action: string) => (DECISION_ACTIONS as readonly string[]).indexOf(action);
 
 interface RuntimeParams {
   modelId: string;
@@ -120,8 +113,6 @@ export function parseDecisionRule(
   if (typeof r.id !== "string" || !RULE_ID.test(r.id)) return { error: `rule id must match ${RULE_ID}` };
   if (!DECISION_HOOKS.includes(r.hook as DecisionHook))
     return { error: `${r.id}: hook must be one of ${DECISION_HOOKS.join(", ")}` };
-  if (!LIVE_DECISION_HOOKS.includes(r.hook as DecisionHook))
-    return { error: `${r.id}: hook ${String(r.hook)} is not available yet; use ${LIVE_DECISION_HOOKS.join(", ")}` };
   if (typeof r.question !== "string" || !r.question.trim()) return { error: `${r.id}: question is required` };
   if (!DECISION_MODES.includes(r.mode as DecisionRule["mode"]))
     return { error: `${r.id}: mode must be one of ${DECISION_MODES.join(", ")}` };
@@ -133,9 +124,8 @@ export function parseDecisionRule(
     const o = opt as Record<string, unknown> | null;
     if (typeof o?.description !== "string" || !o.description.trim() || o.description.length > MAX_TEXT_CHARS)
       return { error: `${r.id}.${key}: description is required` };
-    const allowed = DECISION_HOOK_POINTS[r.hook as DecisionHook].actions as readonly string[];
-    if (!allowed.includes(o.action as string))
-      return { error: `${r.id}.${key}: action at ${String(r.hook)} must be one of ${allowed.join(", ")}` };
+    if (!(DECISION_ACTIONS as readonly string[]).includes(o.action as string))
+      return { error: `${r.id}.${key}: action at ${String(r.hook)} must be one of ${DECISION_ACTIONS.join(", ")}` };
     if (o.message !== undefined && (typeof o.message !== "string" || o.message.length > MAX_TEXT_CHARS))
       return { error: `${r.id}.${key}: message must be a string of at most ${MAX_TEXT_CHARS} characters` };
     const rt = o.runtime as Record<string, unknown> | undefined;
@@ -193,10 +183,7 @@ export function checkRuleSet(all: readonly DecisionRule[]): string | undefined {
   const rules = all.filter((r) => r.mode !== "off");
   if (rules.length > MAX_RULES) return `at most ${MAX_RULES} active decision rules`;
   const confidentHook = rules.find(
-    (r, i) =>
-      r.mode === "enforce" &&
-      DECISION_HOOK_POINTS[r.hook].decide === "most_confident" &&
-      rules.some((o, j) => j < i && o.hook === r.hook && o.mode === "enforce"),
+    (r, i) => r.mode === "enforce" && rules.some((o, j) => j < i && o.hook === r.hook && o.mode === "enforce"),
   );
   if (confidentHook)
     return `${confidentHook.id}: ${confidentHook.hook} allows one enforcing rule; set the others to observe`;
@@ -210,7 +197,7 @@ export function checkRuleSet(all: readonly DecisionRule[]): string | undefined {
 }
 
 export const decisionCatalog = () => ({
-  hooks: LIVE_DECISION_HOOKS.map((id) => ({ id, actions: DECISION_HOOK_POINTS[id].actions })),
+  hooks: DECISION_HOOKS.map((id) => ({ id, actions: DECISION_ACTIONS })),
   protocols: DECISION_PROTOCOLS,
   modes: DECISION_MODES,
 });
@@ -220,7 +207,7 @@ function pick(rule: DecisionRule, probabilities: Record<string, number>): string
   let bestP = -1;
   for (const [key, opt] of Object.entries(rule.options)) {
     const p = probabilities[key] ?? 0;
-    const restrictive = rank(rule.hook, opt.action) > rank(rule.hook, rule.options[best]!.action);
+    const restrictive = rank(opt.action) > rank(rule.options[best]!.action);
     if (p > bestP || (p === bestP && restrictive)) {
       best = key;
       bestP = p;
@@ -312,11 +299,7 @@ export async function runHook(
     groups.set(key, [...(groups.get(key) ?? []), rule]);
   }
   const results = (await Promise.all([...groups.values()].map((g) => runGroup(g, state, backend, signal)))).flat();
-  const confident = DECISION_HOOK_POINTS[hook].decide === "most_confident";
-  const weight = (r: DecisionResult) => {
-    if (!confident) return rank(hook, r.action);
-    return r.error ? -1 : (r.probabilities[r.option] ?? 0);
-  };
+  const weight = (r: DecisionResult) => (r.error ? -1 : (r.probabilities[r.option] ?? 0));
   let decisive: DecisionResult | undefined;
   for (const result of results) {
     if (result.mode !== "enforce") continue;
