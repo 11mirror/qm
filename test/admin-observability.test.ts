@@ -837,13 +837,21 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
       200,
       "a channel scope can pin its own model",
     );
-    assert.equal(built.config.getBaseModel("channel:C1"), "claude-opus-4-8", "the channel override is stored");
-    assert.equal(built.config.getBaseModel("org:default-org"), null, "the channel pin does not touch the org default");
+    assert.equal(
+      built.config.getRuntimeSelection("channel:C1")?.modelId ?? null,
+      "claude-opus-4-8",
+      "the channel override is stored",
+    );
+    assert.equal(
+      built.config.getRuntimeSelection("org:default-org")?.modelId ?? null,
+      null,
+      "the channel pin does not touch the org default",
+    );
 
     assert.equal((await putModel("org:default-org", "claude-opus-4-8", ALICE)).status, 200);
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, "claude-opus-4-8");
     assert.equal(
-      built.config.getBaseModel("org:default-org"),
+      built.config.getRuntimeSelection("org:default-org")?.modelId ?? null,
       "claude-opus-4-8",
       "the store the harness reads sees the change",
     );
@@ -855,7 +863,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     });
     assert.equal(nonString.status, 400, "a non-string modelId is rejected, not treated as a clear");
     assert.equal(
-      built.config.getBaseModel("org:default-org"),
+      built.config.getRuntimeSelection("org:default-org")?.modelId ?? null,
       "claude-opus-4-8",
       "the override is untouched by a malformed body",
     );

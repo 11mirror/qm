@@ -551,7 +551,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildTestApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setRuntimeSelection("org:default-org", { modelId: "gpt-5.6-sol" });
   built.runtime.start();
   try {
     const container = "C-admin-base";

@@ -762,7 +762,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
     deps.config.settingDurable("webuiModels", tenant().orgScope),
-    deps.config.getBaseModelDurable(tenant().orgScope),
+    deps.config.getRuntimeSelectionDurable(tenant().orgScope).then((selection) => selection?.modelId ?? null),
     deps.config.settingDurable("externalSlackParticipants", tenant().orgScope),
     resolveBranding(deps.config, tenant().orgScope, deps.brandingDefault),
   ]);
@@ -835,14 +835,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const config = ctx.deps.config;
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
-    const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
-    else {
-      const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
-        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
-      }
-    }
+    if (await config.getRuntimeSelectionDurable(target.scope)) await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))

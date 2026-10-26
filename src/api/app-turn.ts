@@ -204,10 +204,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
           let orgRuntime;
           let runtime;
           try {
-            const orgModel =
-              storedOrgRuntime?.modelId ??
-              (await deps.config.getBaseModelOwnDurable(orgRuntimeScope)) ??
-              runtimeFallback.modelId;
+            const orgModel = storedOrgRuntime?.modelId ?? runtimeFallback.modelId;
             orgRuntime = modelUnavailableReason(orgModel)
               ? { modelId: orgModel }
               : await resolveRuntimeChoiceDurable(deps.config, orgRuntimeScope, orgRuntimeScope, runtimeFallback);

@@ -289,7 +289,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
       body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
     });
     assert.equal(selected.status, 200);
-    assert.equal(srv.built.config.getBaseModel("org:default-org"), "stealth/ox-alpha");
+    assert.equal(srv.built.config.getRuntimeSelection("org:default-org")?.modelId ?? null, "stealth/ox-alpha");
 
     const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
     assert.equal(governance.status, 200);
@@ -346,7 +346,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     }),
   );
   try {
-    await srv.built.config.setBaseModel("org:default-org", "anthropic/claude-sonnet-4.5");
+    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "anthropic/claude-sonnet-4.5" });
     const turn = (threadRef: string, model: string) =>
       srv.built.app.turn({
         surface: "web",

@@ -40,8 +40,7 @@ function storedChoice(stored: RuntimeChoice): RuntimeChoice {
 }
 
 export function resolveRuntimeChoice(
-  config: Pick<ScopedConfigStore, "getRuntimeSelection" | "getBaseModel"> &
-    Partial<Pick<ScopedConfigStore, "getPurposeRuntime">>,
+  config: Pick<ScopedConfigStore, "getRuntimeSelection"> & Partial<Pick<ScopedConfigStore, "getPurposeRuntime">>,
   orgScopeId: ScopeId,
   scope: ScopeId,
   fallback: RuntimeChoice,
@@ -65,21 +64,17 @@ export function resolveRuntimeChoice(
     requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
 
   const orgStored = config.getRuntimeSelection(orgScopeId);
-  const orgLegacy = config.getBaseModel(orgScopeId);
-  const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: orgLegacy ?? fallback.modelId };
+  const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: fallback.modelId };
   const configuredId =
     requested?.modelId ??
-    (scope !== orgScopeId ? (config.getRuntimeSelection(scope)?.modelId ?? config.getBaseModel(scope)) : null) ??
+    (scope !== orgScopeId ? config.getRuntimeSelection(scope)?.modelId : null) ??
     configuredOrg.modelId;
   const unavailableReason = modelUnavailableReason(configuredId);
   if (unavailableReason) throw new NonRetryableTurnError(`${configuredId}: ${unavailableReason}`);
   const safeFallback = modelSupported(fallback.modelId) ? fallback : { modelId: defaultModel(fallback.modelId) };
   const org = modelSupported(configuredOrg.modelId) ? configuredOrg : safeFallback;
   const scopedStored = scope === orgScopeId ? null : config.getRuntimeSelection(scope);
-  const scopedLegacy = scope === orgScopeId ? null : config.getBaseModel(scope);
-  let inherited: RuntimeChoice = org;
-  if (scopedStored) inherited = storedChoice(scopedStored);
-  else if (scopedLegacy) inherited = { modelId: scopedLegacy };
+  const inherited: RuntimeChoice = scopedStored ? storedChoice(scopedStored) : org;
   const choice = { ...inherited, ...requested };
   if (!modelSupported(choice.modelId)) {
     if (requested?.modelId) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
@@ -97,26 +92,20 @@ export async function resolveRuntimeChoiceDurable(
   hydrateModelCatalog?: () => Promise<unknown>,
   purpose?: RuntimePurpose,
 ): Promise<RuntimeChoice> {
-  const [orgStored, scopedStored, orgLegacy, scopedLegacy, purposeRuntime] = await Promise.all([
+  const [orgStored, scopedStored, purposeRuntime] = await Promise.all([
     config.getRuntimeSelectionDurable(orgScopeId),
     scope === orgScopeId ? null : config.getRuntimeSelectionDurable(scope),
-    config.getBaseModelOwnDurable(orgScopeId),
-    scope === orgScopeId ? null : config.getBaseModelOwnDurable(scope),
     purpose ? config.getPurposeRuntimeDurable(purpose) : undefined,
   ]);
   if (hydrateModelCatalog) {
     const candidates = [requested?.modelId, purposeRuntime?.modelId, scopedStored?.modelId, orgStored?.modelId];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
   }
-  const view: Pick<ScopedConfigStore, "getRuntimeSelection" | "getBaseModel" | "getPurposeRuntime"> = {
+  const view: Pick<ScopedConfigStore, "getRuntimeSelection" | "getPurposeRuntime"> = {
     getPurposeRuntime: () => purposeRuntime,
     getRuntimeSelection: (id: ScopeId) => {
       if (id === orgScopeId) return orgStored;
       return id === scope ? scopedStored : null;
-    },
-    getBaseModel: (id: ScopeId) => {
-      if (id === orgScopeId) return orgLegacy;
-      return id === scope ? scopedLegacy : null;
     },
   };
   return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested, purpose);
