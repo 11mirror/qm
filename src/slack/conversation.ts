@@ -108,6 +108,7 @@ export interface ConversationView {
   contextNote?: string;
   channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
   members: readonly ConversationMember[];
+  membersOmitted?: number;
   messages: readonly RecentMessage[];
   here: { kind: "thread"; youOpenedIt: boolean; starterName?: string; openerText?: string } | { kind: "top-level" };
   files: ReadonlyArray<{ name: string }>;
@@ -165,7 +166,10 @@ export function renderConversationView(view: ConversationView) {
     return `@${m.name}${tags.length ? ` (${tags.join(", ")})` : ""}`;
   };
   const who = view.members.length
-    ? "People here: " + view.members.map((m) => (m.isYou ? "you" : mentionable(m))).join(", ") + "."
+    ? "People here: " +
+      view.members.map((m) => (m.isYou ? "you" : mentionable(m))).join(", ") +
+      (view.membersOmitted ? `, and ${view.membersOmitted} others` : "") +
+      "."
     : "";
   let here: string;
   if (view.here.kind === "top-level") here = "You are replying to a top-level message (not in a thread).";
