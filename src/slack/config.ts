@@ -57,15 +57,10 @@ export interface SlackPluginConfig {
 }
 
 export function parseAckEmoji(raw: string | undefined): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const part of (raw ?? "").split(/[\s,]+/)) {
-    const name = part.replace(/^:+/, "").replace(/:+$/, "").trim().toLowerCase();
-    if (!name || seen.has(name) || !/^[a-z0-9_+-]+$/.test(name)) continue;
-    seen.add(name);
-    out.push(name);
-  }
-  return out;
+  const names = (raw ?? "")
+    .split(/[\s,]+/)
+    .map((part) => part.replace(/^:+/, "").replace(/:+$/, "").trim().toLowerCase());
+  return [...new Set(names.filter((name) => /^[a-z0-9_+-]+$/.test(name)))];
 }
 
 export function slackPluginConfigFromEnv(

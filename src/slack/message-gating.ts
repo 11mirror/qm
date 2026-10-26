@@ -31,18 +31,13 @@ export function threadHasBotStake(
   botUserId: string,
   ownBotId = "",
 ): boolean {
-  if (!botUserId && !ownBotId) return false;
-  return messages.some((m) => {
-    const user = m.user ? String(m.user) : "";
-    const bot = m.bot_id ? String(m.bot_id) : "";
-    const text = m.text ? String(m.text) : "";
-    return Boolean(
+  return messages.some((m) =>
+    Boolean(
       m.mentionsSelf ||
-      (botUserId && user === botUserId) ||
-      (ownBotId && bot === ownBotId) ||
-      (botUserId && mentionsBot(text, botUserId)),
-    );
-  });
+      (botUserId && (m.user === botUserId || mentionsBot(m.text ? String(m.text) : "", botUserId))) ||
+      (ownBotId && m.bot_id === ownBotId),
+    ),
+  );
 }
 
 export function shouldProcessMessage(
@@ -120,14 +115,10 @@ const THREAD_NO_STAKE_TTL_MS = 5 * 60_000;
 export function createThreadTracker(opts: { negativeTtlMs?: number } = {}): ThreadTracker {
   const negativeTtlMs = opts.negativeTtlMs ?? THREAD_NO_STAKE_TTL_MS;
   const cache = new LRUCache<string, boolean>({ max: 10_000 });
-  const keyOf = (channel: string, threadTs: string): string => `${channel}:${threadTs}`;
   return {
-    get(channel, threadTs) {
-      return cache.get(keyOf(channel, threadTs));
-    },
-    mark(channel, threadTs, present) {
-      cache.set(keyOf(channel, threadTs), present, present ? undefined : { ttl: negativeTtlMs });
-    },
+    get: (channel, threadTs) => cache.get(`${channel}:${threadTs}`),
+    mark: (channel, threadTs, present) =>
+      void cache.set(`${channel}:${threadTs}`, present, present ? undefined : { ttl: negativeTtlMs }),
   };
 }
 
