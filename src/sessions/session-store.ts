@@ -134,6 +134,22 @@ export interface TranscriptImport {
   entries: readonly ImportedEntry[];
 }
 
+export function entriesNotYetImported(
+  entries: readonly ImportedEntry[],
+  latestAt: number,
+  alreadyAtLatest: number,
+): ImportedEntry[] {
+  let skip = alreadyAtLatest;
+  return entries.filter((entry) => {
+    if (entry.createdAt < latestAt) return false;
+    if (entry.createdAt === latestAt && skip > 0) {
+      skip -= 1;
+      return false;
+    }
+    return true;
+  });
+}
+
 export function transcriptImportScope(spec: TranscriptImport): ScopeId {
   if (
     !spec.principalId.trim() ||

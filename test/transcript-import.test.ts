@@ -193,6 +193,46 @@ test("an import only targets the principal's own personal web thread", async () 
   });
 });
 
+test("messages sharing a timestamp are imported once each, including across reruns", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const tied = [
+      { role: "user", text: "Same second one", createdAt: T0 },
+      { role: "assistant", text: "Same second two", createdAt: T0 },
+      { role: "user", text: "Same second three", createdAt: T0 },
+    ];
+    const [first] = await Array.fromAsync(
+      importTranscripts(store, [line("ada@example.com", thread, tied.slice(0, 2))]),
+    );
+    assert.equal(first!.appended, 2);
+    const [second] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, tied)]));
+    assert.equal(second!.appended, 1);
+    const [third] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, tied)]));
+    assert.equal(third!.appended, 0);
+    assert.deepEqual(
+      (await store.visibleEntries(first!.session.id, "ada@example.com")).map(
+        (entry) => (entry.payload as { text: string }).text,
+      ),
+      tied.map((entry) => entry.text),
+    );
+  });
+});
+
+test("extending an imported conversation within a minute moves its activity to the new message", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const quick = [
+      { role: "user", text: "One", createdAt: T0 },
+      { role: "assistant", text: "Two", createdAt: T0 + 5_000 },
+      { role: "user", text: "Three", createdAt: T0 + 20_000 },
+    ];
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, quick.slice(0, 1))]));
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, quick)]));
+    const page = await store.listParticipantPage("ada@example.com", { limit: 10 });
+    assert.equal(page.sessions[0]!.lastActivityAt, T0 + 20_000);
+  });
+});
+
 test("transcript lines are rejected unless they are well-formed", () => {
   const ok = { principalId: "ada@example.com", threadRef: "web:ada@example.com:t1", entries: conversation };
   assert.equal(parseTranscriptImport(JSON.stringify(ok)).entries[0]!.scopeLabel, "personal:ada@example.com");
@@ -202,7 +242,6 @@ test("transcript lines are rejected unless they are well-formed", () => {
     ["role", { ...ok, entries: [{ role: "tool", text: "x", createdAt: T0 }] }],
     ["text", { ...ok, entries: [{ role: "user", text: " ", createdAt: T0 }] }],
     ["ascending", { ...ok, entries: [conversation[1], conversation[0]] }],
-    ["ascending", { ...ok, entries: [conversation[0], { ...conversation[1], createdAt: T0 }] }],
     ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: T0 + 0.5 }] }],
     ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: 9e15 }] }],
   ];

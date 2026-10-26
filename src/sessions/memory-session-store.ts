@@ -45,6 +45,7 @@ import {
   userMessagePreview,
   isWebThread,
   transcriptImportScope,
+  entriesNotYetImported,
 } from "./session-store.ts";
 import { entryFromItem, itemFromEntry } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
@@ -323,8 +324,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         byThread.set(spec.threadRef, session.id);
       }
       const log = entries.get(session.id) ?? [];
-      const after = log.reduce((latest, entry) => Math.max(latest, entry.createdAt), -Infinity);
-      const fresh = spec.entries.filter((entry) => entry.createdAt > after);
+      const latestAt = log.reduce((latest, entry) => Math.max(latest, entry.createdAt), -Infinity);
+      const fresh = entriesNotYetImported(
+        spec.entries,
+        latestAt,
+        log.filter((entry) => entry.createdAt === latestAt).length,
+      );
       if (!log.length && fresh.length) session.createdAt = fresh[0]!.createdAt;
       if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
       const appended = record(session.id, fresh);

@@ -53,6 +53,7 @@ import {
   isOverheardEntry,
   DuplicateCallError,
   transcriptImportScope,
+  entriesNotYetImported,
 } from "./session-store.ts";
 import {
   entryFromItem,
@@ -1105,6 +1106,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     sessionId: string,
     entries: readonly (NewEntry & { createdAt?: number })[],
     turnId?: string,
+    exactActivity = false,
   ): Promise<SessionEntry[]> => {
     if (!entries.length) return [];
     const max = await client.query(
@@ -1169,7 +1171,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     await client.query(
       `UPDATE sessions
-          SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
+          SET last_activity = CASE WHEN NOT $10::boolean AND last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
                                    THEN last_activity
                                    ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
               messages = $3,
@@ -1192,6 +1194,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
         items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
         userActivityAt,
+        exactActivity,
       ],
     );
     return full;
@@ -1717,20 +1720,25 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [sessionId, spec.principalId],
         );
         const latest = await client.query(
-          `SELECT (EXTRACT(EPOCH FROM MAX(created_at)) * 1000)::bigint AS at FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,
+          `WITH newest AS (SELECT MAX(created_at) AS at FROM items WHERE tenant_id = ${TENANT} AND session_id = $1)
+           SELECT (EXTRACT(EPOCH FROM newest.at) * 1000)::bigint AS at,
+                  (SELECT count(*)::int FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.created_at = newest.at) AS n
+             FROM newest`,
           [sessionId],
         );
-        const after = latest.rows[0]?.at == null ? -Infinity : Number(latest.rows[0].at);
-        const fresh = spec.entries.filter((entry) => entry.createdAt > after);
+        const empty = latest.rows[0]?.at == null;
+        const fresh = empty
+          ? [...spec.entries]
+          : entriesNotYetImported(spec.entries, Number(latest.rows[0].at), Number(latest.rows[0].n));
         await client.query(
           `UPDATE sessions
               SET title = COALESCE(title, $2),
                   created_at = CASE WHEN $3::bigint IS NULL THEN created_at ELSE $3::bigint END,
                   last_activity = CASE WHEN $3::bigint IS NULL THEN last_activity ELSE NULL END
             WHERE id = $1`,
-          [sessionId, spec.title?.trim() || null, after === -Infinity ? (fresh[0]?.createdAt ?? null) : null],
+          [sessionId, spec.title?.trim() || null, empty ? (fresh[0]?.createdAt ?? null) : null],
         );
-        const appended = await insertEntries(client, sessionId, fresh);
+        const appended = await insertEntries(client, sessionId, fresh, undefined, true);
         const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
         return { session: rowToSession(row.rows[0]!), appended: appended.length };
       });
