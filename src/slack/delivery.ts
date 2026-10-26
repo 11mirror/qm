@@ -2,6 +2,7 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
+import { parseScopeId } from "../types.ts";
 
 export interface BotIdentityOverride {
   username?: string;
@@ -53,10 +54,11 @@ export function slackReplyArgs(
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
   const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
   if (!base || !scopeId) return undefined;
-  const personal = /^personal:([^@]+)@/.exec(scopeId);
-  if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
-  const shared = /^(channel|group):(.+)$/.exec(scopeId);
-  if (shared?.[1] && shared[2]) return `${base}/projects/${shared[1]}/${encodeURIComponent(shared[2])}`;
+  const { kind, ref } = parseScopeId(scopeId);
+  const [handle, domain] = ref.split("@");
+  if (kind === "personal" && handle && domain !== undefined && /^[a-z0-9._-]+$/i.test(handle))
+    return `${base}/projects/${handle.toLowerCase()}`;
+  if ((kind === "channel" || kind === "group") && ref) return `${base}/projects/${kind}/${encodeURIComponent(ref)}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
 }
 

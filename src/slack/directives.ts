@@ -1,4 +1,5 @@
-const CODE_REGION = /```[\s\S]*?```|`[^`\n]*`/g;
+import { codeRegions } from "../util/markdown.ts";
+
 const CODE_PLACEHOLDER = /\u0000CODE(\d+)\u0000/g;
 
 export function extractDirectives<T>(
@@ -9,7 +10,13 @@ export function extractDirectives<T>(
 ): { text: string; matches: T[] } {
   if (!reply) return { text: reply ?? "", matches: [] };
   const code: string[] = [];
-  const masked = reply.replace(CODE_REGION, (m) => `\u0000CODE${code.push(m) - 1}\u0000`);
+  let masked = "";
+  let cursor = 0;
+  for (const [start, end] of codeRegions(reply)) {
+    masked += `${reply.slice(cursor, start)}\u0000CODE${code.push(reply.slice(start, end)) - 1}\u0000`;
+    cursor = end;
+  }
+  masked += reply.slice(cursor);
   const matches: T[] = [];
   let changed = false;
   let text = masked.replace(directiveRe, (_m: string, ...rest: unknown[]) => {

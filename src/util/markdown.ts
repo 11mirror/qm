@@ -62,28 +62,32 @@ function codeSpans(line: string): Array<[number, number]> {
   return spans;
 }
 
-function rewriteLine(line: string, baseUrl: string): string {
-  const spans = codeSpans(line);
-  let next = 0;
-  return line.replace(APP_LINK, (match: string, label: string, path: string, index: number) => {
-    while (next < spans.length && spans[next]![1] <= index) next++;
-    const inSpan = next < spans.length && spans[next]![0] <= index;
-    return inSpan ? match : `[${label}](${new URL(path, baseUrl).href})`;
-  });
+export function codeRegions(text: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  const spansIn = (from: number, to: number) => {
+    let at = from;
+    for (const line of text.slice(from, to).split("\n")) {
+      for (const [start, end] of codeSpans(line)) regions.push([at + start, at + end]);
+      at += line.length + 1;
+    }
+  };
+  let cursor = 0;
+  for (const block of fencedCodeBlocks(text)) {
+    spansIn(cursor, block.start);
+    regions.push([block.start, block.end]);
+    cursor = block.end;
+  }
+  spansIn(cursor, text.length);
+  return regions;
 }
 
 export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
   if (!baseUrl) return text;
-  const prose = (segment: string) =>
-    segment
-      .split("\n")
-      .map((line) => rewriteLine(line, baseUrl))
-      .join("\n");
-  let out = "";
-  let cursor = 0;
-  for (const block of fencedCodeBlocks(text)) {
-    out += prose(text.slice(cursor, block.start)) + text.slice(block.start, block.end);
-    cursor = block.end;
-  }
-  return out + prose(text.slice(cursor));
+  const regions = codeRegions(text);
+  let next = 0;
+  return text.replace(APP_LINK, (match: string, label: string, path: string, index: number) => {
+    while (next < regions.length && regions[next]![1] <= index) next++;
+    const inCode = next < regions.length && regions[next]![0] <= index;
+    return inCode ? match : `[${label}](${new URL(path, baseUrl).href})`;
+  });
 }
