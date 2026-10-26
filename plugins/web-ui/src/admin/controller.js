@@ -849,24 +849,11 @@ export function startAdmin(host, env) {
     const r = await api("GET", viewUrl(scope, requestedView));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
     if (!r.ok) {
-      if (requestedView === "credentials") {
-        settings.credentialLoading(
-          r.status === 403 ? "You don't administer this scope." : "Could not load credentials.",
-          true,
-        );
-      }
-      if (requestedView === "governance" && governanceReadyScope !== requestedScope) {
-        $("governance-loading").textContent =
-          r.status === 403
-            ? "You don't administer this scope."
-            : "Could not load settings. Select Governance to retry.";
-      }
-      setStatus(
-        "st-policy",
-        r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
-        "err",
-      );
-      return;
+      const denied = r.status === 403 ? "You don't administer this scope." : null;
+      if (requestedView === "credentials") settings.credentialLoading(denied || "Could not load credentials.", true);
+      if (requestedView === "governance" && governanceReadyScope !== requestedScope)
+        $("governance-loading").textContent = denied || "Could not load settings. Select Governance to retry.";
+      return setStatus("st-policy", denied || r.data?.message || "Failed to load.", "err");
     }
     if (requestedView === "governance") {
       renderEnvironmentNotice(r.data);
@@ -908,14 +895,11 @@ export function startAdmin(host, env) {
       void api("GET", viewUrl(requestedScope, requestedView) + "&catalog=refresh")
         .then((fresh) => {
           if (!fresh.ok || requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
-          const append = (target, incoming) => {
-            for (const model of incoming || []) {
-              const existing = target.findIndex((candidate) => candidate.id === model.id);
-              if (existing < 0) target.push(model);
-              else target[existing] = model;
-            }
-          };
-          append(opts, fresh.data.baseModelOptions);
+          for (const model of fresh.data.baseModelOptions || []) {
+            const existing = opts.findIndex((candidate) => candidate.id === model.id);
+            if (existing < 0) opts.push(model);
+            else opts[existing] = model;
+          }
           if (requestedView === "governance") governanceUI.updateCatalog(fresh.data);
           settings.updateCatalog(r.data);
           initCustomDropdowns($("view-governance"));
@@ -1061,17 +1045,15 @@ export function startAdmin(host, env) {
     if (r.ok) {
       resetScForm();
       await loadScope();
-      setStatus("st-service-credentials", "Deleted", "ok");
-    } else {
-      const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-      let message = r.data?.message || "Delete failed.";
-      if (r.status === 409) {
-        message = conflictState
-          ? "Credential changed; the latest state is shown. Review it before deleting."
-          : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
-      }
-      setStatus("st-service-credentials", message, "err");
+      return setStatus("st-service-credentials", "Deleted", "ok");
     }
+    const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
+    let message = r.data?.message || "Delete failed.";
+    if (r.status === 409 && conflictState)
+      message = "Credential changed; the latest state is shown. Review it before deleting.";
+    else if (r.status === 409)
+      message = "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
+    setStatus("st-service-credentials", message, "err");
   }
   scAddButton.onclick = () => {
     resetScForm();
@@ -1381,15 +1363,14 @@ export function startAdmin(host, env) {
   async function saveSetting(key, btn) {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
+    const stale = () => requestedScope !== scope || requestedGeneration !== governanceReq;
     let body;
     try {
       body = governanceUI.collect(key);
     } catch (err) {
-      setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
-      return;
+      return setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
     }
-    if (!(await governanceSaveReview(key, body)) || requestedScope !== scope || requestedGeneration !== governanceReq)
-      return;
+    if (!(await governanceSaveReview(key, body)) || stale()) return;
     const saveRequest = String(++governanceSaveSeq);
     if (btn) {
       btn.dataset.saveRequest = saveRequest;
@@ -1401,54 +1382,45 @@ export function startAdmin(host, env) {
     const r = await api("PUT", scopeUrl(requestedScope, "/" + (isBranding ? "branding" : key)), brandingBody);
     if (requestedGeneration !== governanceReq) return;
     if (requestedScope !== scope) {
-      if (!btn || btn.dataset.saveRequest === saveRequest) {
-        if (btn) {
-          delete btn.dataset.saveRequest;
-          btn.disabled = !btn.classList.contains("dirty");
-        }
-        setStatus(statusIdOf(key), "", "");
+      if (btn && btn.dataset.saveRequest !== saveRequest) return;
+      if (btn) {
+        delete btn.dataset.saveRequest;
+        btn.disabled = !btn.classList.contains("dirty");
       }
-      return;
+      return setStatus(statusIdOf(key), "", "");
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
-    if (r.ok) {
-      governanceUI.commit(key, body);
-      sectionSnapshots.set(key, JSON.stringify(body));
-      if (isBranding) {
-        savedBranding = brandingBody;
-        if (!hasGovernanceDraft()) location.reload();
-        return;
-      }
-      if (key === "soul") {
-        const fresh = await api("GET", viewUrl(requestedScope, "customize"));
-        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-        if (fresh.ok) {
-          settings.refreshSoul(fresh.data);
-          sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-          if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-        } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-        return;
-      }
-      if (key === "command-policy") loadedCommandPolicyPresent = true;
-      if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-        const fresh = await api("GET", viewUrl(requestedScope, "governance"));
-        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-        if (fresh.ok && !governanceUI.states.get(key).dirty) {
-          governanceUI.load(fresh.data, requestedScope, key);
-          sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-          governanceUI.status(key, "Saved", "ok");
-        }
-      }
-    } else {
-      if (key === "soul" && r.status === 409) await refreshSoulConflict();
+    if (!r.ok) {
+      const soulConflict = key === "soul" && r.status === 409;
+      if (soulConflict) await refreshSoulConflict();
       let message = r.data?.message || "Save failed.";
-      if (key === "soul" && r.status === 409) {
-        message = "SOUL changed; latest revision loaded and your draft was preserved.";
-      } else if (r.status === 403) {
-        message = "Not authorized for this scope.";
-      }
-      setStatus(statusIdOf(key), message, "err");
+      if (soulConflict) message = "SOUL changed; latest revision loaded and your draft was preserved.";
+      else if (r.status === 403) message = "Not authorized for this scope.";
+      return setStatus(statusIdOf(key), message, "err");
     }
+    governanceUI.commit(key, body);
+    sectionSnapshots.set(key, JSON.stringify(body));
+    if (isBranding) {
+      savedBranding = brandingBody;
+      if (!hasGovernanceDraft()) location.reload();
+      return;
+    }
+    if (key === "soul") {
+      const fresh = await api("GET", viewUrl(requestedScope, "customize"));
+      if (stale()) return;
+      if (!fresh.ok) return governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+      settings.refreshSoul(fresh.data);
+      sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+      if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+      return;
+    }
+    if (key === "command-policy") loadedCommandPolicyPresent = true;
+    if (!["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) return;
+    const fresh = await api("GET", viewUrl(requestedScope, "governance"));
+    if (stale() || !fresh.ok || governanceUI.states.get(key).dirty) return;
+    governanceUI.load(fresh.data, requestedScope, key);
+    sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+    governanceUI.status(key, "Saved", "ok");
   }
   document.querySelectorAll("[data-save]").forEach((btn) => {
     btn.onclick = () => saveSetting(btn.dataset.save, btn);
