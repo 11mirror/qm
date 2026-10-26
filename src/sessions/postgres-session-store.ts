@@ -52,7 +52,7 @@ import {
   isWebThread,
   isOverheardEntry,
   DuplicateCallError,
-  transcriptImportScope,
+  transcriptImportEntries,
   entriesNotYetImported,
 } from "./session-store.ts";
 import {
@@ -1681,9 +1681,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async importTranscript(spec): Promise<TranscriptImportResult> {
-      const scope = transcriptImportScope(spec);
+      const { scope, entries: incoming } = transcriptImportEntries(spec);
       return withPgTransaction(await pool(), async (client) => {
-        const createdAt = spec.entries[0]?.createdAt ?? now();
+        const createdAt = incoming[0]!.createdAt;
         await client.query(
           "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,NULL,0,0,$7,$8) ON CONFLICT (thread_ref) DO NOTHING",
           [
@@ -1719,17 +1719,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              SET valid_from = 0, valid_to = NULL, valid_from_seq = 0, valid_to_seq = NULL`,
           [sessionId, spec.principalId],
         );
-        const latest = await client.query(
-          `WITH newest AS (SELECT MAX(created_at) AS at FROM items WHERE tenant_id = ${TENANT} AND session_id = $1)
-           SELECT (EXTRACT(EPOCH FROM newest.at) * 1000)::bigint AS at,
-                  (SELECT count(*)::int FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.created_at = newest.at) AS n
-             FROM newest`,
-          [sessionId],
-        );
-        const empty = latest.rows[0]?.at == null;
-        const fresh = empty
-          ? [...spec.entries]
-          : entriesNotYetImported(spec.entries, Number(latest.rows[0].at), Number(latest.rows[0].n));
+        const newestStored = (
+          await client.query(
+            `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
+              WHERE i.tenant_id = ${TENANT} AND i.session_id = $1
+                AND i.created_at = (SELECT MAX(created_at) FROM items WHERE tenant_id = ${TENANT} AND session_id = $1)
+              ORDER BY i.seq`,
+            [sessionId],
+          )
+        ).rows.map(rowToEntry);
+        const empty = newestStored.length === 0;
+        const fresh = entriesNotYetImported(incoming, newestStored);
         await client.query(
           `UPDATE sessions
               SET title = COALESCE(title, $2),

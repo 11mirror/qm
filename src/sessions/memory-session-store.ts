@@ -44,7 +44,7 @@ import {
   sessionOrigin,
   userMessagePreview,
   isWebThread,
-  transcriptImportScope,
+  transcriptImportEntries,
   entriesNotYetImported,
 } from "./session-store.ts";
 import { entryFromItem, itemFromEntry } from "./items.ts";
@@ -298,7 +298,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async importTranscript(spec) {
-      const scope = transcriptImportScope(spec);
+      const { scope, entries: incoming } = transcriptImportEntries(spec);
       const existing = byThread.get(spec.threadRef);
       let session = existing ? sessions.get(existing) : undefined;
       if (session && session.scopeId !== scope)
@@ -316,7 +316,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           type: "dm",
           scopeId: scope,
           threadRef: spec.threadRef,
-          createdAt: spec.entries[0]?.createdAt ?? now(),
+          createdAt: incoming[0]!.createdAt,
           surface: "web",
         };
         sessions.set(session.id, session);
@@ -326,9 +326,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(session.id) ?? [];
       const latestAt = log.reduce((latest, entry) => Math.max(latest, entry.createdAt), -Infinity);
       const fresh = entriesNotYetImported(
-        spec.entries,
-        latestAt,
-        log.filter((entry) => entry.createdAt === latestAt).length,
+        incoming,
+        log.filter((entry) => entry.createdAt === latestAt),
       );
       if (!log.length && fresh.length) session.createdAt = fresh[0]!.createdAt;
       if (spec.title?.trim() && !session.title) session.title = spec.title.trim();

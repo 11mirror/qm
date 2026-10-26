@@ -123,7 +123,9 @@ export interface NewEntry {
   author?: string;
 }
 
-export interface ImportedEntry extends NewEntry {
+export interface ImportedMessage {
+  role: "user" | "assistant";
+  text: string;
   createdAt: number;
 }
 
@@ -131,38 +133,67 @@ export interface TranscriptImport {
   threadRef: string;
   principalId: string;
   title?: string;
-  entries: readonly ImportedEntry[];
+  messages: readonly ImportedMessage[];
 }
 
-export function entriesNotYetImported(
-  entries: readonly ImportedEntry[],
-  latestAt: number,
-  alreadyAtLatest: number,
-): ImportedEntry[] {
-  let skip = alreadyAtLatest;
-  return entries.filter((entry) => {
-    if (entry.createdAt < latestAt) return false;
-    if (entry.createdAt === latestAt && skip > 0) {
-      skip -= 1;
-      return false;
-    }
-    return true;
-  });
+export interface TranscriptImportResult {
+  session: Session;
+  appended: number;
 }
 
-export function transcriptImportScope(spec: TranscriptImport): ScopeId {
+type ImportedEntry = NewEntry & { createdAt: number };
+
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
+export function transcriptImportEntries(spec: TranscriptImport): { scope: ScopeId; entries: ImportedEntry[] } {
   if (
     !spec.principalId.trim() ||
     !spec.threadRef.startsWith(`web:${spec.principalId}:`) ||
     spec.threadRef.length <= spec.principalId.length + 5
   )
     throw new Error("importTranscript: threadRef must be a web thread owned by principalId");
-  return personalScope(spec.principalId);
+  if (!spec.messages.length) throw new Error("importTranscript: messages are required");
+  const scope = personalScope(spec.principalId);
+  let previous = -Infinity;
+  const entries = spec.messages.map((message): ImportedEntry => {
+    if (message.role !== "user" && message.role !== "assistant")
+      throw new Error("importTranscript: message role must be user or assistant");
+    if (typeof message.text !== "string" || !message.text.trim())
+      throw new Error("importTranscript: message text is required");
+    if (
+      !Number.isSafeInteger(message.createdAt) ||
+      message.createdAt < 0 ||
+      message.createdAt > MAX_DATE_MS ||
+      message.createdAt < previous
+    )
+      throw new Error("importTranscript: message times must be ascending epoch milliseconds");
+    previous = message.createdAt;
+    const payload = { text: message.text };
+    return message.role === "user"
+      ? { type: "user", payload, scopeLabel: scope, author: spec.principalId, createdAt: message.createdAt }
+      : { type: "assistant", payload, scopeLabel: scope, createdAt: message.createdAt };
+  });
+  return { scope, entries };
 }
 
-export interface TranscriptImportResult {
-  session: Session;
-  appended: number;
+const entryText = (entry: { payload: unknown }): unknown => (entry.payload as { text?: unknown } | null)?.text;
+
+export function entriesNotYetImported(
+  entries: readonly ImportedEntry[],
+  newestStored: readonly SessionEntry[],
+): ImportedEntry[] {
+  const latestAt = newestStored[0]?.createdAt;
+  if (latestAt === undefined) return [...entries];
+  const tied = entries.filter((entry) => entry.createdAt === latestAt);
+  const later = entries.filter((entry) => entry.createdAt > latestAt);
+  const continues = newestStored.every(
+    (stored, index) =>
+      tied[index] !== undefined && stored.type === tied[index].type && entryText(stored) === entryText(tied[index]),
+  );
+  if (continues) return [...tied.slice(newestStored.length), ...later];
+  if (tied.length || later.length)
+    throw new Error("importTranscript: the transcript does not continue the conversation's latest messages");
+  return [];
 }
 
 interface ParticipantViewPatch {

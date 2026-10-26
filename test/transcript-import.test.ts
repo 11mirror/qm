@@ -233,17 +233,53 @@ test("extending an imported conversation within a minute moves its activity to t
   });
 });
 
-test("transcript lines are rejected unless they are well-formed", () => {
-  const ok = { principalId: "ada@example.com", threadRef: "web:ada@example.com:t1", entries: conversation };
-  assert.equal(parseTranscriptImport(JSON.stringify(ok)).entries[0]!.scopeLabel, "personal:ada@example.com");
-  const bad: [string, Record<string, unknown>][] = [
-    ["principalId", { ...ok, principalId: 7 }],
-    ["entries", { ...ok, entries: [] }],
-    ["role", { ...ok, entries: [{ role: "tool", text: "x", createdAt: T0 }] }],
-    ["text", { ...ok, entries: [{ role: "user", text: " ", createdAt: T0 }] }],
-    ["ascending", { ...ok, entries: [conversation[1], conversation[0]] }],
-    ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: T0 + 0.5 }] }],
-    ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: 9e15 }] }],
-  ];
-  for (const [what, value] of bad) assert.throws(() => parseTranscriptImport(JSON.stringify(value)), new RegExp(what));
+test("an import rejects messages that are not ordered user and assistant text", async () => {
+  await withStores(async (store) => {
+    const bad: [string, unknown[]][] = [
+      ["required", []],
+      ["role", [{ role: "tool", text: "x", createdAt: T0 }]],
+      ["text", [{ role: "user", text: " ", createdAt: T0 }]],
+      ["ascending", [conversation[1], conversation[0]]],
+      ["ascending", [{ role: "user", text: "x", createdAt: T0 + 0.5 }]],
+      ["ascending", [{ role: "user", text: "x", createdAt: 9e15 }]],
+    ];
+    for (const [what, entries] of bad)
+      await assert.rejects(
+        Array.fromAsync(
+          importTranscripts(store, [
+            JSON.stringify({
+              principalId: "ada@example.com",
+              threadRef: `web:ada@example.com:${randomUUID()}`,
+              entries,
+            }),
+          ]),
+        ),
+        new RegExp(what),
+      );
+    assert.throws(
+      () => parseTranscriptImport(JSON.stringify({ principalId: 7, threadRef: "web:x:y", entries: [] })),
+      /principalId/,
+    );
+    assert.deepEqual((await store.listParticipantPage("ada@example.com", { limit: 10 })).sessions, []);
+  });
+});
+
+test("an import refuses a transcript that does not continue the conversation's newest messages", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    await Array.fromAsync(
+      importTranscripts(store, [line("ada@example.com", thread, [{ role: "user", text: "A", createdAt: T0 }])]),
+    );
+    await assert.rejects(
+      Array.fromAsync(
+        importTranscripts(store, [
+          line("ada@example.com", thread, [
+            { role: "user", text: "Different", createdAt: T0 },
+            { role: "assistant", text: "B", createdAt: T0 },
+          ]),
+        ]),
+      ),
+      /does not continue/,
+    );
+  });
 });
