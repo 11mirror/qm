@@ -3,7 +3,6 @@
   "treatConfigHintsAsErrors": true,
   "ignoreBinaries": ["tail", "cloudflared", "pg_dump", "pg_restore"],
   "ignoreIssues": {
-    "scripts/migrate-principals-to-email.d.mts": ["files"],
     "src/slack/lib.ts": ["exports", "types"]
   },
   "workspaces": {
@@ -22,7 +21,6 @@
         "scripts/dev/twin-instance.ts",
         "scripts/dev/twin-multiws-check.ts",
         "scripts/dev/twin-pump.ts",
-        "scripts/migrate-principals-to-email.mjs",
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
         "scripts/slack-user-token.ts",
