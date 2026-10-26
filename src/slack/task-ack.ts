@@ -21,6 +21,9 @@ interface ReactionClient {
   };
 }
 
+type Next = { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean };
+const retire = (state: TaskAckState): string[] => [...new Set([...state.previous, state.target])].filter(Boolean);
+
 export function createTaskAcknowledgements(
   store: DurableMap<TaskAckState>,
   lease: LeaderLease,
@@ -29,16 +32,8 @@ export function createTaskAcknowledgements(
   if (!store.update) throw new Error("Task acknowledgements require atomic updates");
   const update = store.update.bind(store);
   const queue = createKeyedQueue<string>();
-  const change = (
-    client: ReactionClient,
-    runId: string,
-    next?: { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean },
-  ) => queue(runId, () => apply(client, runId, next));
-  async function apply(
-    client: ReactionClient,
-    runId: string,
-    next?: { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean },
-  ) {
+  const change = (client: ReactionClient, runId: string, next?: Next) => queue(runId, () => apply(client, runId, next));
+  async function apply(client: ReactionClient, runId: string, next?: Next) {
     const started = Date.now();
     while (Date.now() - started < 15_000) {
       const result = await lease.hold(`slack:task-ack:${runId}`, async (lost) => {
@@ -66,20 +61,10 @@ export function createTaskAcknowledgements(
         }
         if (leaseLost) return false;
         state = await update(runId, (current) => {
-          if (!next && !current.finished)
-            return {
-              ...current,
-              finished: true,
-              synced: false,
-              previous: [...new Set([...current.previous, current.target])].filter(Boolean),
-            };
-          if (next && !current.finished && current.channel === next.channel && Number(next.ts) > Number(current.target))
-            return {
-              ...current,
-              target: next.ts,
-              synced: false,
-              previous: [...new Set([...current.previous, current.target])].filter(Boolean),
-            };
+          if (current.finished) return current;
+          if (!next) return { ...current, finished: true, synced: false, previous: retire(current) };
+          if (current.channel === next.channel && Number(next.ts) > Number(current.target))
+            return { ...current, target: next.ts, synced: false, previous: retire(current) };
           return current;
         });
         if (!state || leaseLost) return false;

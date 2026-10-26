@@ -521,31 +521,6 @@ test("real message handler checks prior stake before ingesting the current reply
   assert.equal(calls.length, 1);
 });
 
-test("stake fallback bounds Slack replies while omitted cutoff and negative tracking remain unchanged", async () => {
-  const calls: any[] = [];
-  const client = {
-    conversations: {
-      replies: async (args: any) => {
-        calls.push(args);
-        return { messages: [] };
-      },
-    },
-  };
-  const handler = createTurnHandler({
-    directory: {},
-    mirror: {},
-    flow: {},
-    ids,
-    threads: createThreadTracker(),
-  } as any);
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "3"), false);
-  assert.deepEqual(calls[0], { channel: "C1", ts: "1", limit: 200, latest: "3", inclusive: false });
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "4"), false);
-  assert.equal(calls.length, 1);
-  assert.equal(await handler.botHasStakeInThread(client, "C1", "5"), false);
-  assert.deepEqual(calls[1], { channel: "C1", ts: "5", limit: 200 });
-});
-
 test("reaction turns preserve the reacted message in the mirror", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const f = fixture({

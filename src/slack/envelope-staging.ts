@@ -1,6 +1,7 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { AckGate } from "./deferred-ack.ts";
 
 export interface StagedEnvelope {
   body: Record<string, unknown>;
@@ -10,16 +11,11 @@ export interface StagedEnvelope {
   claimedUntil?: number;
 }
 
-interface ReplayGate {
-  persisted(): void;
-  failed(reason?: string): void;
-}
-
 export interface EnvelopeStaging {
   keyFor(body: Record<string, unknown>): string | null;
   stage(key: string, body: Record<string, unknown>): Promise<boolean>;
   accepted(key: string): void;
-  sweep(replay: (body: Record<string, unknown>, gate: ReplayGate) => Promise<void>): Promise<number>;
+  sweep(replay: (body: Record<string, unknown>, gate: AckGate) => Promise<void>): Promise<number>;
 }
 
 const STAGE_TIMEOUT_MS = 300;
@@ -99,7 +95,7 @@ export function createEnvelopeStaging(
           );
         replayed++;
         let failed = false;
-        const gate: ReplayGate = {
+        const gate: AckGate = {
           persisted: () => clear(key),
           failed: () => {
             failed = true;
