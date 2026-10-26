@@ -57,7 +57,7 @@ import {
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { fetchCoreText, signedHeaders, withSourceAuthNonce, type HttpMethod } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -131,15 +131,34 @@ function refreshSurfaceConfig(): Promise<void> {
   }
   return surfaceConfigInflight ?? Promise.resolve();
 }
+async function coreCall<T extends object>(
+  method: HttpMethod,
+  path: string,
+  o: { body?: string; headers?: Record<string, string>; signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; status: number; body: Partial<T> }> {
+  const r = await fetchCoreText({ origin: CORE, secret: CORE_SIGNING_SECRET, method, path, ...o });
+  let body: unknown;
+  try {
+    body = JSON.parse(r.text);
+  } catch {
+    body = undefined;
+  }
+  return {
+    ok: r.status >= 200 && r.status < 300,
+    status: r.status,
+    body: body && typeof body === "object" ? body : {},
+  };
+}
+
 async function fetchSurfaceConfig(): Promise<void> {
   try {
-    const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(2_000),
-    });
+    const r = await coreCall<{ branding?: { accent?: unknown }; modelProviderConfigured?: unknown }>(
+      "GET",
+      "/v1/surface-config",
+      { signal: AbortSignal.timeout(2_000) },
+    );
     if (r.ok) {
-      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
+      const body = r.body;
       brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
@@ -265,18 +284,15 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
-    const path = withSourceAuthNonce("/v1/admin/whoami", CORE_SIGNING_SECRET);
-    const headers = {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      "x-admin-actor": `${sub}@${ORG}`,
-      ...portalIdentityHeaders(sub),
-    };
-    const r = await fetch(`${CORE}${path}`, { headers, signal: ctrl.signal });
+    const r = await coreCall<{ isAdmin: unknown }>("GET", "/v1/admin/whoami", {
+      headers: { "x-admin-actor": `${sub}@${ORG}`, ...portalIdentityHeaders(sub) },
+      signal: ctrl.signal,
+    });
     if (!r.ok) {
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
       return null;
     }
-    const j = (await r.json()) as { isAdmin?: unknown };
+    const j = r.body;
     if (typeof j.isAdmin !== "boolean") {
       console.warn("[portal] admin probe returned an invalid admin status");
       return null;
@@ -313,17 +329,15 @@ const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICA
 async function canonicalPrincipal(sub: string): Promise<string | null> {
   const hit = canonicalCache.get(sub);
   if (hit !== undefined) return hit;
-  const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
   try {
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    const r = await coreCall<{ canonicalId: unknown }>("GET", `/v1/principals/${encodeURIComponent(sub)}/canonical`, {
       signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
     });
     if (!r.ok) {
       console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
       return null;
     }
-    const body = (await r.json()) as { canonicalId?: unknown };
+    const body = r.body;
     const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
     canonicalCache.set(sub, canonical);
     return canonical;
@@ -530,16 +544,13 @@ async function handleConsentRedeem(
   res: ServerResponse,
   o: { corePath: string; session: SessionClaims },
 ): Promise<void> {
-  const path = withSourceAuthNonce(o.corePath, CORE_SIGNING_SECRET);
-  const headers = {
-    ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-    "x-consent-clicker": o.session.sub,
-    "x-consent-clicker-org": o.session.org,
-  };
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
-    const r = await fetch(`${CORE}${path}`, { headers });
-    data = (await r.json().catch(() => ({}))) as typeof data;
+    data = (
+      await coreCall<typeof data>("GET", o.corePath, {
+        headers: { "x-consent-clicker": o.session.sub, "x-consent-clicker-org": o.session.org },
+      })
+    ).body;
   } catch {
     return sendHtml(
       res,
@@ -570,23 +581,6 @@ async function handleConsentRedeem(
   }
 }
 
-function readRequestBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let b = "";
-    let over = false;
-    req.on("data", (c) => {
-      if (over) return;
-      b += c;
-      if (b.length > maxBytes) {
-        over = true;
-        reject(new Error("body too large"));
-      }
-    });
-    req.on("end", () => !over && resolve(b));
-    req.on("error", reject);
-  });
-}
-
 async function handleSecretDrop(
   req: IncomingMessage,
   res: ServerResponse,
@@ -596,7 +590,7 @@ async function handleSecretDrop(
   let rawBody = "";
   if (isPost) {
     try {
-      rawBody = await readRequestBody(req);
+      rawBody = await readBody(req, 64 * 1024);
     } catch {
       return json(res, 413, { error: "too_large", message: "that value is too large" });
     }
@@ -635,15 +629,13 @@ async function handleSecretDrop(
 async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
   const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
-  const path = withSourceAuthNonce(
-    `/v1/connectors/oauth/${encodeURIComponent(o.provider)}/start?${qs.toString()}`,
-    CORE_SIGNING_SECRET,
-  );
   try {
-    const r = await fetch(`${CORE}${path}`, {
-      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
-    });
-    const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
+    const r = await coreCall<{ authorizeUrl: string; message: string }>(
+      "GET",
+      `/v1/connectors/oauth/${encodeURIComponent(o.provider)}/start?${qs.toString()}`,
+      { headers: portalIdentityHeaders(o.session.sub) },
+    );
+    const data = r.body;
     if (!r.ok) console.warn(`[portal] self-connect start returned HTTP ${r.status}: ${data.message ?? "no message"}`);
     if (data.authorizeUrl) {
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
@@ -669,17 +661,16 @@ async function coreImpersonate(
   admin: string,
   target: string,
 ): Promise<{ ok: boolean; status: number; displayName?: string; message?: string }> {
-  const path = withSourceAuthNonce(`/v1/admin/impersonate${action === "stop" ? "/stop" : ""}`, CORE_SIGNING_SECRET);
-  const body = JSON.stringify({ target });
-  const headers = {
-    ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-    "x-admin-actor": `${admin}@${ORG}`,
-    ...portalIdentityHeaders(admin),
-  };
   try {
-    const r = await fetch(`${CORE}${path}`, { method: "POST", headers, body });
-    const j = (await r.json().catch(() => ({}))) as { displayName?: string; message?: string };
-    return { ok: r.ok, status: r.status, displayName: j.displayName, message: j.message };
+    const r = await coreCall<{ displayName: string; message: string }>(
+      "POST",
+      `/v1/admin/impersonate${action === "stop" ? "/stop" : ""}`,
+      {
+        body: JSON.stringify({ target }),
+        headers: { "x-admin-actor": `${admin}@${ORG}`, ...portalIdentityHeaders(admin) },
+      },
+    );
+    return { ok: r.ok, status: r.status, displayName: r.body.displayName, message: r.body.message };
   } catch (e) {
     return { ok: false, status: 502, message: errMessage(e) };
   }
@@ -923,16 +914,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = currentSession(req);
       if (!session || session.anon) return json(res, 401, { error: "sign in" });
       if (!PORTAL_IDENTITY_SECRET) return json(res, 503, { error: "not_configured" });
-      const path = withSourceAuthNonce("/v1/auth/broker/sessions/revoke", CORE_SIGNING_SECRET);
-      const body = JSON.stringify({ email: session.sub });
       try {
-        const response = await fetch(`${CORE}${path}`, {
-          method: "POST",
-          headers: {
-            ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-            ...portalIdentityHeaders(session.sub),
-          },
-          body,
+        const response = await coreCall("POST", "/v1/auth/broker/sessions/revoke", {
+          body: JSON.stringify({ email: session.sub }),
+          headers: portalIdentityHeaders(session.sub),
           signal: AbortSignal.timeout(4_000),
         });
         if (!response.ok) return json(res, 503, { error: "revocation_failed" });
@@ -1367,27 +1352,23 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
     throw error;
   }
   if (!token || token.length > 4096) return sendHtml(res, 400, signInErrorHtml("This invitation is invalid."));
-  const path = withSourceAuthNonce("/v1/auth/invitations/redeem", CORE_SIGNING_SECRET);
-  const body = JSON.stringify({ token });
   try {
-    const r = await fetch(`${CORE}${path}`, {
-      method: "POST",
-      headers: signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-      body,
+    const r = await coreCall<{ email: string }>("POST", "/v1/auth/invitations/redeem", {
+      body: JSON.stringify({ token }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!r.ok)
+    const unavailable = r.ok || r.status >= 500;
+    if (!r.ok || typeof r.body.email !== "string")
       return sendHtml(
         res,
-        r.status >= 500 ? 503 : 400,
+        unavailable ? 503 : 400,
         signInErrorHtml(
-          r.status >= 500
+          unavailable
             ? "Sign-in is temporarily unavailable. Please try again."
             : "This invitation is expired, revoked, or already used. Ask your administrator for a new one.",
         ),
       );
-    const data = (await r.json()) as { email: string };
-    setAuthenticatedSession(res, data.email);
+    setAuthenticatedSession(res, r.body.email);
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
   } catch {
