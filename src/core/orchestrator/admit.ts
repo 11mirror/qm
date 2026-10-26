@@ -181,7 +181,7 @@ export async function admitTurn(
     const externalAllowed =
       external ||
       (input.surface === "slack" &&
-        (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenant().orgScope) : false));
+        (deps.config ? await deps.config.settingDurable("externalSlackParticipants", tenant().orgScope) : false));
     if (!externalAllowed) {
       return {
         refused: {

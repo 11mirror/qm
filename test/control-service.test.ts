@@ -966,7 +966,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
+  await built.config.setSetting("webuiModels", ["gpt-6-astra"], "org:default-org");
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
@@ -988,7 +988,7 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
     assert.equal(result.run.request.fastMode, false);
-    await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
+    await built.config.setSetting("webuiModels", ["gpt-6-astra"], "org:default-org");
     return result;
   });
   await assert.rejects(

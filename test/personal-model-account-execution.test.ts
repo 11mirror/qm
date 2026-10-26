@@ -140,7 +140,7 @@ test("personal web selections reject wrong providers, policy exclusions and disc
       model,
     });
   for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
-  await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
+  await built.config.setSetting("webuiModels", ["gpt-5.6-sol"], "org:default-org");
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
   assert.equal((await submit("gpt-5.6-sol")).status, "refused");

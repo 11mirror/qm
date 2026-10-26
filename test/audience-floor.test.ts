@@ -8,7 +8,7 @@ const ORG = scopeId("org", "default-org");
 
 async function configWithOrgHosts(hosts: string[]) {
   const config = testConfigStore("default-org");
-  await config.setEgress(ORG, { allowedHosts: hosts });
+  await config.setSetting("egress", { allowedHosts: hosts }, ORG);
   return config;
 }
 
@@ -19,7 +19,7 @@ test("audienceEgressFloor fails closed for an EMPTY audience (no org allowlist l
 
 test("audienceEgressFloor for a single principal = that principal's full reach (org ∪ personal)", async () => {
   const config = await configWithOrgHosts(["org-host.test"]);
-  await config.setEgress(scopeId("personal", "U1"), { allowedHosts: ["personal-host.test"] });
+  await config.setSetting("egress", { allowedHosts: ["personal-host.test"] }, scopeId("personal", "U1"));
   const alice: Principal = { id: "U1", type: "internal" };
   const floor = audienceEgressFloor([alice], config, ORG);
   assert.deepEqual([...floor].sort(), ["org-host.test", "personal-host.test"]);
@@ -27,8 +27,8 @@ test("audienceEgressFloor for a single principal = that principal's full reach (
 
 test("audienceEgressFloor for several principals = the INTERSECTION of their reaches", async () => {
   const config = await configWithOrgHosts(["org-host.test"]);
-  await config.setEgress(scopeId("personal", "U1"), { allowedHosts: ["only-alice.test"] });
-  await config.setEgress(scopeId("personal", "U2"), { allowedHosts: ["only-bob.test"] });
+  await config.setSetting("egress", { allowedHosts: ["only-alice.test"] }, scopeId("personal", "U1"));
+  await config.setSetting("egress", { allowedHosts: ["only-bob.test"] }, scopeId("personal", "U2"));
   const alice: Principal = { id: "U1", type: "internal" };
   const bob: Principal = { id: "U2", type: "internal" };
   assert.deepEqual(audienceEgressFloor([alice, bob], config, ORG), ["org-host.test"]);
@@ -36,9 +36,9 @@ test("audienceEgressFloor for several principals = the INTERSECTION of their rea
 
 test("audienceDeniedFloor is the UNION across the audience (a deny by anyone applies to the room)", async () => {
   const config = testConfigStore("default-org");
-  await config.setEgress(ORG, { allowedHosts: [], deniedHosts: ["org-bad.test"] });
-  await config.setEgress(scopeId("personal", "U1"), { allowedHosts: [], deniedHosts: ["alice-bad.test"] });
-  await config.setEgress(scopeId("personal", "U2"), { allowedHosts: [], deniedHosts: ["bob-bad.test"] });
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["alice-bad.test"] }, scopeId("personal", "U1"));
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["bob-bad.test"] }, scopeId("personal", "U2"));
   const alice: Principal = { id: "U1", type: "internal" };
   const bob: Principal = { id: "U2", type: "internal" };
   assert.deepEqual(audienceDeniedFloor([alice, bob], config, ORG).sort(), [
@@ -50,13 +50,13 @@ test("audienceDeniedFloor is the UNION across the audience (a deny by anyone app
 
 test("audienceDeniedFloor carries the org-floor deny even to a single principal with none of their own", async () => {
   const config = testConfigStore("default-org");
-  await config.setEgress(ORG, { allowedHosts: [], deniedHosts: ["org-bad.test"] });
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
   const alice: Principal = { id: "U1", type: "internal" };
   assert.deepEqual(audienceDeniedFloor([alice], config, ORG), ["org-bad.test"]);
 });
 
 test("audienceDeniedFloor for an EMPTY audience is empty", async () => {
   const config = testConfigStore("default-org");
-  await config.setEgress(ORG, { allowedHosts: [], deniedHosts: ["org-bad.test"] });
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
   assert.deepEqual(audienceDeniedFloor([], config, ORG), []);
 });

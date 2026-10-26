@@ -106,7 +106,7 @@ export async function runtimeConfigBody(
     : (scopeOverride ?? orgDefault);
   const purposeDefault = purpose ? await config.getPurposeRuntimeDurable(purpose) : undefined;
   const selected = [orgDefault, scopeOverride, effective, purposeDefault].filter((choice) => choice != null);
-  const allowlist = await config.getWebuiModelsDurable(org);
+  const allowlist = await config.settingDurable("webuiModels", org);
   const offered =
     allowlist != null
       ? allowlist.filter((id) => modelSupported(id))
@@ -152,7 +152,7 @@ export async function runtimeConfigBody(
       : {}),
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: fastModeModelIds(),
-    interactiveFastMode: await config.getInteractiveFastModeDurable(),
+    interactiveFastMode: await config.settingDurable("interactiveFastMode"),
   };
 }
 
@@ -172,7 +172,7 @@ export async function webuiModelEnabled(
 ): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config;
-  const picker = await config.getWebuiModelsDurable(tenant().orgScope);
+  const picker = await config.settingDurable("webuiModels", tenant().orgScope);
   if (picker == null || picker.includes(modelId)) return true;
   if (picker.length === 0) return false;
   const org = tenant().orgScope;

@@ -34,8 +34,7 @@ function fixture(
   const config = {
     resolveSharingPostureDurable: async () => (state.open ? "open" : "isolated"),
     refreshSecurity: async () => {},
-    getCommandPolicy: () => state.targetPolicy,
-    getEgress: () => state.targetEgress,
+    setting: (name: string) => (name === "commandPolicy" ? state.targetPolicy : state.targetEgress),
   };
   const sandbox = {
     provision: async (...args: unknown[]) => {

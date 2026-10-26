@@ -544,7 +544,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setSetting("webuiModels", ["claude-sonnet-4-6"], "org:default-org");
     await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "claude-haiku-4-5" });
     const turn = (threadRef: string, model?: string) =>
       srv.built.app.turn({
@@ -574,7 +574,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setSetting("webuiModels", ["claude-sonnet-4-6"], "org:default-org");
     const rejected = await srv.built.app.turn({
       surface: "loop",
       actor: { externalId: "alice" },

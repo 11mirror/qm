@@ -42,12 +42,14 @@ export function sanitizeBranding(raw: {
 }
 
 export async function resolveBranding(
-  config: Pick<ScopedConfigStore, "getBrandingDurable"> | undefined,
+  config: Pick<ScopedConfigStore, "settingDurable"> | undefined,
   orgScope: ScopeId,
   dflt?: OrgBranding,
 ): Promise<OrgBranding> {
   const stored = config
-    ? await config.getBrandingDurable(orgScope).catch(swallowAs<OrgBranding | null>("branding: durable read", null))
+    ? await config
+        .settingDurable("branding", orgScope)
+        .catch(swallowAs<OrgBranding | null>("branding: durable read", null))
     : null;
   return (
     sanitizeBranding({

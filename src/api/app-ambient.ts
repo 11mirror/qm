@@ -95,7 +95,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const watchReason =
       (policy?.orders ?? "").trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
     let ambientOffReason: string | null = null;
-    if ((await deps.config?.getOrgAmbientDurable()) === false) {
+    if ((await deps.config?.settingDurable("orgAmbient")) === false) {
       ambientOffReason = "ambient is switched off org-wide";
     } else if (policy?.ambientEnabled === false) {
       ambientOffReason = "ambient is switched off for this channel";

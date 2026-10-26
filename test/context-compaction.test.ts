@@ -1048,7 +1048,7 @@ test("human child continuations respect non-fast category defaults", async () =>
     ),
   );
   const built = buildOrchestrator(router);
-  await built.config.setInteractiveFastMode(true);
+  await built.config.setSetting("interactiveFastMode", true);
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
   const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);

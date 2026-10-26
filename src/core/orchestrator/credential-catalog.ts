@@ -332,7 +332,7 @@ export async function buildCredentialCatalog(
     // Env delivery is gated by the same service-cred grants as the broker: the env var rides
     // only when every internal participant in this conversation is entitled to the credential.
 
-    const browseSteps = deps.config?.getBrowseMaxSteps(tenant().orgScope);
+    const browseSteps = deps.config?.setting("browseMaxSteps", tenant().orgScope);
     if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
       connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
   }
