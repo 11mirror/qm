@@ -13,7 +13,7 @@ interface ActiveConversation {
 
 export const PRODUCT_TITLE = "QM · Web";
 
-const VIEW_TITLES: Record<View, string> = {
+export const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
   inbox: "Inbox",
   calendar: "Calendar",
