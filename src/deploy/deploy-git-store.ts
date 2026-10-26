@@ -222,11 +222,8 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
 
   async function blob(deploymentId: string, sha: string): Promise<Uint8Array | null> {
     const repo = await ensureRepo(deploymentId);
-    try {
-      return await git(["--git-dir", repo, "cat-file", "-p", sha]);
-    } catch {
-      return null;
-    }
+    const exists = await gitResult(["--git-dir", repo, "cat-file", "-e", sha], { okExitCodes: [0, 1] });
+    return exists.code === 0 ? await git(["--git-dir", repo, "cat-file", "-p", sha]) : null;
   }
 
   return {
@@ -295,11 +292,8 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     },
     async refOf(deploymentId, ref) {
       const repo = await ensureRepo(deploymentId);
-      try {
-        return (await git(["--git-dir", repo, "rev-parse", "--verify", ref])).toString("utf8").trim();
-      } catch {
-        return null;
-      }
+      const r = await gitResult(["--git-dir", repo, "rev-parse", "--verify", "--quiet", ref], { okExitCodes: [0, 1] });
+      return r.code === 0 ? r.stdout.toString("utf8").trim() : null;
     },
     blob,
     repoUrl: ensureRepo,

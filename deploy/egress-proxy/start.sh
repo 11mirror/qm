@@ -3,8 +3,8 @@ set -eu
 
 firewall() {
   bin="$1"; shift
-  if command -v "$bin" >/dev/null 2>&1 && "$bin" "$@" 2>/dev/null; then return 0; fi
-  echo "[egress] WARN: could not install metadata firewall ($bin $*) — NET_ADMIN missing?" >&2
+  if command -v "$bin" >/dev/null 2>&1 && "$bin" "$@"; then return 0; fi
+  echo "[egress] WARN: could not install metadata firewall ($bin $*); see the error above" >&2
 }
 firewall iptables -A OUTPUT -d 169.254.0.0/16 -j REJECT
 firewall ip6tables -A OUTPUT -d fd00:ec2::254 -j REJECT

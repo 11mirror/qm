@@ -105,7 +105,17 @@ static_resources:
                               handle:respond({ [":status"] = "407", ["proxy-authenticate"] = "Basic realm=\"egress\"" }, "proxy authentication required\n")
                               return
                             end
-                            if not ok or status ~= "200" then
+                            if not ok then
+                              handle:logErr("egress authz call failed: " .. tostring(status))
+                              handle:respond({ [":status"] = "503" }, "egress authorization unavailable\n")
+                              return
+                            end
+                            if status ~= "200" and status ~= "403" then
+                              handle:logErr("egress authz returned " .. tostring(status))
+                              handle:respond({ [":status"] = "503" }, "egress authorization unavailable\n")
+                              return
+                            end
+                            if status ~= "200" then
                               handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
                               return
                             end

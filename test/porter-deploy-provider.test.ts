@@ -150,19 +150,17 @@ test("apply uploads each tree as one bundle and removes it after unpacking", asy
   assert.deepEqual(readdirSync(fake.volumeDir("qmt-app-dep-bundle-data")), []);
 });
 
-test("apply writes files one at a time when the bundle upload fails", async () => {
+test("apply fails when the bundle upload fails", async () => {
   fake.client.volumes.raw.writeFile = async () => {
     throw new Error("upload refused");
   };
-  const execsBefore = fake.execScripts().length;
-  await provider.apply(
-    deployment("dep-fallback", "fallback"),
-    version({ ...bulkFiles(), "server.js": SERVER }, "node server.js"),
+  await assert.rejects(
+    provider.apply(
+      deployment("dep-fallback", "fallback"),
+      version({ ...bulkFiles(), "server.js": SERVER }, "node server.js"),
+    ),
+    /upload refused/,
   );
-  const scripts = fake.execScripts().slice(execsBefore);
-  assert.equal(scripts.filter((s) => s.includes("tar -xmf")).length, 0);
-  assert.ok(scripts.some((s) => s.includes("base64 -d")));
-  assert.match(await fetchText("/"), /^hello from .*-app v\?$/);
 });
 
 test("explicit public visibility opts the domain out of the private default", async () => {

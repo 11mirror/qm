@@ -32,7 +32,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
-import { execFailure, swallow, swallowAs } from "../util/errors.ts";
+import { execFailure, swallow } from "../util/errors.ts";
 
 const APP_DIR = "/app";
 const HOME_DIR = "/root";
@@ -92,7 +92,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       ...(opts.token ? { token: opts.token } : {}),
       ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
     });
-  const { execRaw, writeAbsBytes } = createPorterExec(client, async (id) => id);
+  const { execRaw } = createPorterExec(client, async (id) => id);
   const resolveCache = new LRUCache<string, DeployEndpoint>({
     max: RESOLVE_CACHE_MAX,
     ttl: Math.max(1, resolveCacheMs),
@@ -127,13 +127,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     const entries = await bundleEntries(dir);
     if (!entries.length) return;
     const bundle = `${BUNDLE_DIR}/${randomUUID()}.tar`;
-    const uploaded = await client.volumes.raw
-      .writeFile(volumeId, await makeTar(entries), { path: `/${bundle}` }, { timeoutMs: BUNDLE_UPLOAD_TIMEOUT_MS })
-      .then(() => true, swallowAs("porter-deploy: bundle upload failed, writing files one at a time", false));
-    if (!uploaded) {
-      for (const entry of entries) await writeAbsBytes(sandboxId, posixJoin(guestDir, entry.path), entry.data);
-      return;
-    }
+    await client.volumes.raw.writeFile(
+      volumeId,
+      await makeTar(entries),
+      { path: `/${bundle}` },
+      { timeoutMs: BUNDLE_UPLOAD_TIMEOUT_MS },
+    );
     const guestBundle = posixJoin(DATA_DIR, bundle);
     const r = await execRaw(
       sandboxId,
