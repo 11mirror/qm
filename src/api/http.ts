@@ -48,6 +48,11 @@ const TEXTUAL_MIME_TYPES = new Set([
   "application/toml",
 ]);
 
+export function isTextualContentType(contentType: string): boolean {
+  const essence = contentType.split(";", 1)[0]!.trim().toLowerCase();
+  return essence.startsWith("text/") || TEXTUAL_MIME_TYPES.has(essence) || /\+(json|xml|yaml)$/.test(essence);
+}
+
 export function contentTypeWithUtf8Charset(contentType: string): string {
   let parameterStart = -1;
   let inQuotes = false;
@@ -66,9 +71,7 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
     }
   }
   if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart))) return contentType;
-  const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
-  const textual = mime.startsWith("text/") || TEXTUAL_MIME_TYPES.has(mime) || /\+(json|xml|yaml)$/.test(mime);
-  return textual ? `${contentType}; charset=utf-8` : contentType;
+  return isTextualContentType(contentType) ? `${contentType}; charset=utf-8` : contentType;
 }
 
 export function pipeToResponse(

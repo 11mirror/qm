@@ -14,7 +14,7 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallow, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { refusal, sendJson, verifySignedRoute } from "../http.ts";
+import { isTextualContentType, refusal, sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -1201,8 +1201,6 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
 }
 
-const TEXT_CONTENT_TYPE = /^text\/|(?:^|\/)(?:json|xml|javascript)(?:;|$)|\+(?:json|xml)(?:;|$)/i;
-
 const LOGS_DEFAULT_TAIL_LINES = 200;
 const LOGS_MAX_TAIL_LINES = 2000;
 
@@ -1240,7 +1238,7 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
-    const text = TEXT_CONTENT_TYPE.test(contentType);
+    const text = isTextualContentType(contentType);
     return sendJson(res, 200, {
       status: response.status,
       contentType,

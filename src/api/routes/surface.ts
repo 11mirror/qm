@@ -12,7 +12,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
 import {
@@ -226,7 +226,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
   res.writeHead(200, {
     "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),
     "content-length": String(opened.sizeBytes),
-    "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
+    "content-disposition": contentDispositionAttachment(opened.name, "inline"),
   });
   pipeToResponse(res, opened.stream, "file read failed");
 }

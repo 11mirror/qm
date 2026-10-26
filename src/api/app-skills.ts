@@ -69,10 +69,8 @@ async function planPack(deps: AppDeps, repo: Parameters<typeof planIngest>[0], p
   return planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
 }
 
-function groupBy<K, V>(entries: Iterable<[K, V]>): Map<K, V[]> {
-  const groups = new Map<K, V[]>();
-  for (const [key, value] of entries) groups.set(key, [...(groups.get(key) ?? []), value]);
-  return groups;
+function groupBy<K, V>(entries: ReadonlyArray<readonly [K, V]>): Map<K, V[]> {
+  return new Map([...Map.groupBy(entries, ([key]) => key)].map(([key, group]) => [key, group.map(([, v]) => v)]));
 }
 
 async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Promise<Set<string>> {

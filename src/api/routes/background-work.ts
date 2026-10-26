@@ -1,5 +1,5 @@
 import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
-import { timingSafeEqual } from "node:crypto";
+import { constantTimeEqual } from "../../util/crypto.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
@@ -35,9 +35,7 @@ export function requireDeploymentControl(ctx: ApiCtx): true | null {
   )
     return refuse(ctx.res, 503, { error: "background_control_unavailable" });
   const bearer = ctx.req.headers.authorization;
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+  if (!constantTimeEqual(typeof bearer === "string" ? bearer : "", `Bearer ${secret}`))
     return refuse(ctx.res, 401, { error: "unauthorized" });
   return true;
 }
