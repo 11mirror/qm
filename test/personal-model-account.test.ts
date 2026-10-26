@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createServer } from "../src/api/server.ts";
@@ -35,7 +32,7 @@ test("personal account choice persists across instances without changing anyone 
 });
 
 test("account API binds choice to the signed-in person, preserves connections, and fails closed after disconnect", async () => {
-  const built = stopAtEnd(buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) })));
+  const built = stopAtEnd(buildApp(testConfig()));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
@@ -91,7 +88,7 @@ test("account API binds choice to the signed-in person, preserves connections, a
 });
 
 test("personal provider choice is durable and controls the submitted run independently of the company model", async () => {
-  const built = stopAtEnd(buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-routing-")) })));
+  const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setApiKey("U1", "anthropic", "test-anthropic-key");
   await built.userModelCredentials.setApiKey("U1", "openai", "test-openai-key");
   await built.config.setPersonalModelAuth("U1", true, "openai");
@@ -116,7 +113,7 @@ test("personal provider choice is durable and controls the submitted run indepen
 });
 
 test("shared chat messages queue instead of borrowing another person's account", async () => {
-  const built = stopAtEnd(buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-steering-")) })));
+  const built = stopAtEnd(buildApp(testConfig()));
   const message = (user: string) => ({
     surface: "slack",
     actor: { externalId: user },

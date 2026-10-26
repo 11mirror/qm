@@ -2,9 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildTestApp } from "./support/test-app.ts";
@@ -41,12 +38,7 @@ describe("agent → teammate DM: cron recipients and the reach route (§10)", ()
     });
 
   before(async () => {
-    built = buildTestApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dm-relay-")),
-        signingSecret: SECRET,
-      }),
-    );
+    built = buildTestApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
@@ -342,7 +334,7 @@ describe("agent → teammate DM: cron recipients and the reach route (§10)", ()
 
 describe("agent → teammate DM: delivery events in the recipient's session (anti-amnesia, §10)", () => {
   const slackDm = () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dm-relay-events-")) }));
+    const built = buildApp(testConfig());
     built.outbound.register(["principal", "slack"], async () => ({ recipientThreadRef: "dm:D-alice" }));
     return built;
   };

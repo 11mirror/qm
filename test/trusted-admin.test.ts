@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -19,13 +16,7 @@ const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
 function start(enabled = true) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
-      orgId: "default-org",
-      ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
-    }),
-  );
+  const built = buildApp(testConfig({ orgId: "default-org", ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}) }));
   const server = createServer(built.app, {
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),

@@ -3,9 +3,6 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -18,7 +15,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "blob-auth-secret".repeat(3);
 
 function start(): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")), signingSecret: SECRET }));
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,

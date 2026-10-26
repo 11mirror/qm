@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
@@ -26,7 +23,7 @@ async function start(
   fetchImpl: FetchLike,
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): Promise<{ base: string; built: BuiltApp; close: () => Promise<void> }> {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "consent", isPrivate: false },

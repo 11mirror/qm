@@ -32,12 +32,7 @@ function credentialLayer(): string {
 }
 
 function start(withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
-      ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
-    }),
-  );
+  const built = buildApp(testConfig({ ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}) }));
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,

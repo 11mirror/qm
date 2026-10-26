@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -26,7 +23,7 @@ function externalChannelTurn(surface: string): TurnRequest {
 }
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "esp-")) }));
+  return buildApp(testConfig());
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {

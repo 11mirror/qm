@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -13,11 +10,7 @@ import { testConfig } from "./support/test-config.ts";
 const URL = process.env.DATABASE_URL;
 
 test("admin list endpoints accept fractional limit values", { skip: !URL }, async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "admin-paging-")),
-    databaseUrl: URL,
-    adminGrants: "admin-alice:org_admin",
-  });
+  const config = testConfig({ databaseUrl: URL, adminGrants: "admin-alice:org_admin" });
   const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,

@@ -1,15 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-mirror-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,

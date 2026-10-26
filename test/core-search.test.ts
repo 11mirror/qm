@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createCoreSearch, type SearchBackend } from "../src/search/core-search.ts";
 import { createIntersectionBackend } from "../src/search/backends.ts";
 import { createServer } from "../src/api/server.ts";
@@ -59,7 +56,7 @@ test("intersection backend requires visibility to every principal", async () => 
 });
 test("POST /v1/search derives principals from capability and shared scopes fail closed", async () => {
   const secret = "search-route-secret".repeat(3);
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-")), signingSecret: secret }));
+  const built = buildApp(testConfig({ signingSecret: secret }));
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "private", isPrivate: true },
@@ -121,7 +118,7 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
 });
 
 test("file backend applies the principal visibility intersection to real file rows", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-files-")) }));
+  const built = buildApp(testConfig());
   const id = "0123456789abcdef0123456789abcdef";
   await built.files.put({
     id,
@@ -149,7 +146,7 @@ test("file backend applies the principal visibility intersection to real file ro
 });
 
 test("slack backend intersects private-channel visibility across all principals", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-slack-")) }));
+  const built = buildApp(testConfig());
   await built.directory.replaceChannels(
     [
       { channelId: "C-SHARED", name: "shared", isPrivate: true },
@@ -174,7 +171,7 @@ test("slack backend intersects private-channel visibility across all principals"
 });
 
 test("file search retains common artifact identities when viewers own different copies", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-copies-")) }));
+  const built = buildApp(testConfig());
   const project = scopeId("group", "search-copy-project");
   const ids = ["shared-copy-alice", "shared-copy-bob"];
   for (const [index, author] of principals.entries()) {
@@ -221,7 +218,7 @@ test("file search retains common artifact identities when viewers own different 
 });
 
 test("file search still reaches shared artifacts outside the first document page", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-shared-pages-")) }));
+  const built = buildApp(testConfig());
   const ownerScopeId = scopeId("personal", "carol@example.com");
   for (let n = 0; n < 205; n++) {
     const id = "shared-search-" + n;

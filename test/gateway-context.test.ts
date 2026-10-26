@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { renderGatewayContext } from "../src/core/gateway-context.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
@@ -58,9 +55,7 @@ test("empty when there is nothing to say", () => {
 });
 
 function freshApp() {
-  const config: Config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
-  });
+  const config: Config = testConfig({});
   return buildApp(config);
 }
 

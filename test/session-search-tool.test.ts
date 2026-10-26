@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
@@ -17,9 +14,7 @@ const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };
 
 test("session search reuses indexed search with participant intersection, tenure windows and bounded references", async () => {
-  const { app, sessions } = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-search-tool-")), publicWebUrl: "https://qm.example" }),
-  );
+  const { app, sessions } = buildApp(testConfig({ publicWebUrl: "https://qm.example" }));
   const scope = scopeId("group", "room");
   const current = await sessions.getOrCreateByThread("web:room", "group", scope);
   const source = await sessions.getOrCreateByThread("web:source", "group", scopeId("group", "source"));

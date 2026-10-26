@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -13,7 +10,7 @@ import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
+  const config = testConfig({ ...overrides });
   const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
@@ -614,7 +611,7 @@ test("session deep links resolve by id even when the scope filter does not match
 });
 
 test("the Files view is the document store (write-tool artifacts), not the sandbox backup", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-fly-")) }));
+  const built = buildApp(testConfig());
   const scope = "channel:C_FILE_FIXTURE";
   await built.files.put({
     id: "deck-1",
@@ -685,7 +682,7 @@ test("the files listing filters by name server-side with q", async () => {
 });
 
 test("a saved document is read and downloaded by artifact id", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-doc-")) }));
+  const built = buildApp(testConfig());
   const scope = "personal:U1";
   await built.files.put({
     id: "csv-1",
@@ -745,7 +742,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
 });
 
 test("admin governance reports the sandbox's actual egress enforcement capability", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-capability-")) }));
+  const built = buildApp(testConfig());
   const read = async (declared: "none" | "ip_port" | "domain", effective: "none" | "ip_port" | "domain") => {
     const server = createInsecureTestServer(built.app, {
       admin: built.admin,
@@ -802,7 +799,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
 });
 
 test("admin governance: base model round-trips per-scope, validates ids", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-model-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
@@ -871,7 +868,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
 });
 
 test("admin governance: browse step limit round-trips, validates, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsesteps-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
@@ -921,13 +918,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
 });
 
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-oa-")),
-      modelId: "gpt-5.6-sol",
-      openaiApiKey: "sk-openai-test",
-    }),
-  );
+  const built = buildApp(testConfig({ modelId: "gpt-5.6-sol", openaiApiKey: "sk-openai-test" }));
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
@@ -964,7 +955,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
 });
 
 test("admin governance: browse model round-trips, validates, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
@@ -1118,7 +1109,7 @@ test("admin governance: Auto flagger model and rubric round-trip and reset", asy
 
 test("the Auto flagger test run replays real screenings and reports a flag rate, never their content", async () => {
   const seen: string[] = [];
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-flagtest-")) });
+  const config = testConfig();
   const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,

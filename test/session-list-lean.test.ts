@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
@@ -23,7 +20,7 @@ test("participantScopes leaves out sessions whose content predates the participa
 });
 
 test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "lean-list-")) }));
+  const built = buildApp(testConfig());
   const child = await built.sessions.getOrCreateByThread("subagent:root:2", "dm", "personal:U1", undefined, "web", [
     { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
   ]);

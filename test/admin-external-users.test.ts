@@ -5,9 +5,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -45,12 +42,7 @@ function stubMailer(fail?: string): { sent: Sent[]; mailer: Mailer } {
 function start(
   opts: { mailer?: Mailer; signed?: boolean; emailAuthDomain?: string; emailAuthPrincipals?: string[] } = {},
 ) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-external-users-")),
-      ...(opts.signed ? { signingSecret: SECRET } : {}),
-    }),
-  );
+  const built = buildApp(testConfig({ ...(opts.signed ? { signingSecret: SECRET } : {}) }));
   const deps = {
     admin: built.admin,
     sessions: built.sessions,

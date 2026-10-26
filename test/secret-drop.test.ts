@@ -2,9 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
@@ -235,7 +233,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   const linkToken = (formPath: string) => new URL(formPath, "http://x").searchParams.get("t");
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [
@@ -651,9 +649,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
 describe("/v1/keychain/drops — sibling-aware resume", () => {
   it("first redeem reports its pending sibling; the last redeem fires clean", async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
-    );
+    const built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [{ channelId: "C1", principalId: "U_A" }],

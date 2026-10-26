@@ -9,9 +9,6 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { gzipAccepted, json as sendJson, sendBuffered } from "../plugins/chassis/src/http.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -189,7 +186,7 @@ test(
 );
 
 test("the core API server compresses a response written through Fastify's hijacked reply", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "compression-")) }));
+  const built = buildApp(testConfig());
   const s = listen(createInsecureTestServer(built.app));
   try {
     const path = `/v1/${"x".repeat(1200)}`;

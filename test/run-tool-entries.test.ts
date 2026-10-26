@@ -3,9 +3,6 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -33,7 +30,7 @@ async function settled(built: ReturnType<typeof buildApp>, runId: string) {
 }
 
 test("a run's tool entries are read from the session, bounded by its turn and its viewer", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-")) }));
+  const built = buildApp(testConfig());
   built.runtime.start();
   try {
     await selectDefaultSandbox(built, "U1", "personal:U1");
@@ -58,7 +55,7 @@ test("a run's tool entries are read from the session, bounded by its turn and it
 });
 
 test("a run's tool entries include rounds after a mid-run goal prompt and stop at the next run", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-goal-")) }));
+  const built = buildApp(testConfig());
   built.runtime.start();
   try {
     await selectDefaultSandbox(built, "U1", "personal:U1");
@@ -103,7 +100,7 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
 });
 
 test("each tool entry nudges the run stream once it is durable", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-nudge-")) }));
+  const built = buildApp(testConfig());
   const log: string[] = [];
   const append = built.sessions.append.bind(built.sessions);
   built.sessions.append = async (lease, entry) => {

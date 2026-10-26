@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
@@ -963,7 +960,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [
         { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
@@ -1247,13 +1244,7 @@ function execScriptsMention(needle: string, since = 0): boolean {
 }
 
 test("turn e2e: prompt lists exact handles and keychain env credentials are never ambient", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "kc-e2e-")),
-      signingSecret: SECRET,
-      apiBaseUrl: "http://core.test",
-    }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET, apiBaseUrl: "http://core.test" }));
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
   built.keychain.materializeOwn = async () => {
     throw new Error("eager owner materialization is forbidden");

@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { computeRetention } from "../src/admin/retention.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -64,7 +61,7 @@ test("computeRetention: empty input yields zeros, never NaN", () => {
 });
 
 function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-ret-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,

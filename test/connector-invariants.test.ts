@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -33,7 +30,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 test("C3 — no catalog host has a shared service token (least privilege)", () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-")) }));
+  const built = buildApp(testConfig());
   return Promise.all(CATALOG_HOSTS.map((h) => built.connectorTokens.connectorAccessToken(h, "nobody"))).then(
     (tokens) => {
       assert.ok(
@@ -49,7 +46,7 @@ const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "g
 
 test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -83,7 +80,7 @@ test("cross-org — the callback rejects sealed state minted for a different org
 });
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -112,7 +109,7 @@ test("empty-token guard — an adapter returning no access token fails the conne
 });
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
+  const built = buildApp(testConfig());
   await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
@@ -149,7 +146,7 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 }
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")), ...BROKER }));
+  const built = buildApp(testConfig({ ...BROKER }));
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const absent = `!run test -z "$AGENT_CREDENTIAL_TOKEN" && echo absent`;
@@ -178,7 +175,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 
 for (const surface of ["cron", "loop"]) {
   test(`personal ${surface} selects owner credentials without grants`, async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")), ...BROKER }));
+    const built = buildApp(testConfig({ ...BROKER }));
     await selectDefaultSandbox(built, "U1", "personal:U1");
     await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
     const saved = await built.keychain!.save({
@@ -218,7 +215,7 @@ for (const surface of ["cron", "loop"]) {
 }
 
 test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
+  const built: BuiltApp = buildApp(testConfig());
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
 
   fakeSprites.reset();
@@ -232,9 +229,7 @@ test("a read-only wake never reaches the sandbox (execute stripped), so no exec 
 
 for (const expiredPersonal of [false, true]) {
   test(`connector catalog exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1, ...BROKER }),
-    );
+    const built = buildApp(testConfig({ maxAttempts: 1, ...BROKER }));
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const host = "gmail.googleapis.com";
     await built.connectorTokens.setConnectorToken(
@@ -272,9 +267,7 @@ for (const expiredPersonal of [false, true]) {
 }
 
 test("explicit default OAuth accounts remain discoverable through bulk metadata", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1, ...BROKER }),
-  );
+  const built = buildApp(testConfig({ maxAttempts: 1, ...BROKER }));
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const host = "gmail.googleapis.com";
   await built.connectorTokens.setConnectorToken(

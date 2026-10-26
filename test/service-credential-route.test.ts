@@ -3,9 +3,6 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
@@ -31,7 +28,7 @@ const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
+  const built = buildApp(testConfig());
   const acl = wrapAcl?.(built.acl) ?? built.acl;
   const server = createInsecureTestServer(built.app, {
     config: built.config,
@@ -47,9 +44,7 @@ function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Bu
 }
 
 function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
@@ -70,9 +65,7 @@ function startGitBroker(credentialHttpFetch: CredentialHttpFetch): {
   built: BuiltApp;
   close: () => Promise<void>;
 } {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
@@ -1024,14 +1017,7 @@ const dm = (text: string): TurnRequest => ({
 });
 
 function buildWithCapture() {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
-      maxAttempts: 1,
-      signingSecret: SECRET,
-      apiBaseUrl: "http://core.internal",
-    }),
-  );
+  const built = buildApp(testConfig({ maxAttempts: 1, signingSecret: SECRET, apiBaseUrl: "http://core.internal" }));
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = async (layers, opts) => {

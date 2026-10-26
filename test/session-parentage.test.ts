@@ -1,15 +1,12 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
+  const built = buildApp(testConfig());
   await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
   const channels = [{ channelId: "C1", name: "private", isPrivate: true }];
   await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }]);
@@ -29,7 +26,7 @@ test("detaching a subagent session requires current channel membership", async (
 });
 
 test("direct child enqueues share the tree cap across concurrent callers", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-cap-")) }));
+  const built = buildApp(testConfig());
   const root = await built.sessions.getOrCreateByThread("web:U1:root", "dm", "personal:U1");
   const children = await Promise.all(
     Array.from({ length: SUBAGENT_TREE_RUN_CAP + 1 }, async (_, i) => {
@@ -59,7 +56,7 @@ test("direct child enqueues share the tree cap across concurrent callers", async
 });
 
 test("a late child steer remains pending when admission fails, then replays once", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) }));
+  const built = buildApp(testConfig());
   const root = await built.sessions.getOrCreateByThread("web:U1:signal-root", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:signal-child", "dm", "personal:U1");
   await built.sessions.setParentSession(child.id, root.id);
@@ -104,7 +101,7 @@ test("a late child steer remains pending when admission fails, then replays once
 });
 
 test("late human child messages retain their sender and revalidate access", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
+  const built = buildApp(testConfig());
   await built.app.upsertDirectory([
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
@@ -155,7 +152,7 @@ test("late human child messages retain their sender and revalidate access", asyn
 });
 
 test("ordinary sessions are not subject to the subagent tree queue limit", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ordinary-queue-")) }));
+  const built = buildApp(testConfig());
   const actor = { id: "U1", type: "internal" as const };
   const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", "personal:U1");
   assert.equal(await built.featureFlags.enabled("persistent_subagents", "personal:U1"), false);

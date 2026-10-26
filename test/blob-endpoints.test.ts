@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -12,7 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, { blobTransfer: built.blobTransfer });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

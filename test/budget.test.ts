@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { estimateCostUsd } from "../src/ratelimit/budget.ts";
 import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -43,10 +40,7 @@ test("the org cap holds across principals", async () => {
 });
 
 test("a principal over budget is refused by the app", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-bud-")),
-    budgetUsdPerWindow: 0.00001,
-  });
+  const config = testConfig({ budgetUsdPerWindow: 0.00001 });
   const { app } = buildApp(config);
   const dm = (text: string): TurnRequest => ({
     surface: "test",

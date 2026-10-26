@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -15,13 +12,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 function start() {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "skills-http-")),
-      orgId: "acme",
-      seedSkills: false,
-    }),
-  );
+  const built = buildApp(testConfig({ orgId: "acme", seedSkills: false }));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -421,14 +412,7 @@ test("a personal skill of the same name does NOT collide across principals", asy
 
 async function startSecure() {
   const SECRET = "skills-http-cap-secret".repeat(3);
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "skills-http-cap-")),
-      orgId: "acme",
-      seedSkills: false,
-      signingSecret: SECRET,
-    }),
-  );
+  const built = buildApp(testConfig({ orgId: "acme", seedSkills: false, signingSecret: SECRET }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,

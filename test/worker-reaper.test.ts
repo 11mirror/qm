@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
@@ -389,9 +386,7 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
 });
 
 test("shutdown mid-turn through the harness leaves no stop marker, and the resumed attempt finishes the work", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "harness-resume-")), workers: 1, shutdownDrainMs: 30 }),
-  );
+  const built = buildApp(testConfig({ workers: 1, shutdownDrainMs: 30 }));
   const threadRef = "harness-shutdown-resume";
   const queued = await built.app.turn({
     surface: "test",
@@ -504,12 +499,7 @@ test("stop() lets an in-flight turn finish inside the drain budget — the run c
 });
 
 test("runtime.stop() drains the in-flight run even with the queue non-empty", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-    workers: 1,
-    leaseTtlMs: 5_000,
-    reaperIntervalMs: 60_000,
-  });
+  const config = testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 });
   const built = buildApp(config);
   const a = await built.app.turn({
     surface: "test",
@@ -541,14 +531,7 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
 });
 
 test("a worker pool drains a queued run end-to-end", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
+  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -571,13 +554,7 @@ test("a worker pool drains a queued run end-to-end", async () => {
 
 test("runtime.start() leaves queued runs idle when background work is disabled", async () => {
   const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      backgroundWorkEnabled: false,
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
+    testConfig({ backgroundWorkEnabled: false, workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }),
   );
   built.runtime.start();
   try {
@@ -681,9 +658,7 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
 });
 
 test("runtime pauses without closing stores and restores worker capacity after a busy rollback", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wr-pause-")), workers: 1, leaseTtlMs: 5_000 }),
-  );
+  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000 }));
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -735,13 +710,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
 });
 
 test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
-      backgroundDeploymentId: "controlled-test",
-      workers: 1,
-    }),
-  );
+  const built = buildApp(testConfig({ backgroundDeploymentId: "controlled-test", workers: 1 }));
   let admitted = true;
   built.runtime.setBackgroundAdmission(
     () => admitted,
@@ -797,11 +766,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
 });
 
 test("final shutdown waits for an already-started completion instead of releasing its lease", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
-    workers: 1,
-    shutdownDrainMs: 30,
-  });
+  const config = testConfig({ workers: 1, shutdownDrainMs: 30 });
   const built = buildApp(config);
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -895,11 +860,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
 });
 
 test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")),
-    workers: 1,
-    shutdownDrainMs: 200,
-  });
+  const config = testConfig({ workers: 1, shutdownDrainMs: 200 });
   const built = buildApp(config);
   const blocked = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();

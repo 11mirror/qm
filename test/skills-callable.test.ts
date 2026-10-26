@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
@@ -17,9 +14,7 @@ async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
 }
 
 function freshApp() {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-skill-")),
-  });
+  const config = testConfig({});
   return buildApp(config);
 }
 

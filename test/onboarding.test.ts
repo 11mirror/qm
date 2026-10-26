@@ -2,8 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
@@ -17,11 +15,7 @@ const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
 
 function freshApp(overrides: Partial<Config> = {}) {
-  const config: Config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-onboarding-")),
-    pluginSkillDirs: [onboardingSkillDir],
-    ...overrides,
-  });
+  const config: Config = testConfig({ pluginSkillDirs: [onboardingSkillDir], ...overrides });
   return buildApp(config);
 }
 

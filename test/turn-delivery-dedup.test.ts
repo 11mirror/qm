@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -11,7 +8,7 @@ import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator
 import { storedItem, type NewItem } from "../src/sessions/items.ts";
 
 function freshApp() {
-  return buildTestApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
+  return buildTestApp(testConfig());
 }
 
 const actor = { externalId: "U1" };

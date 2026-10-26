@@ -8,9 +8,6 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -34,7 +31,6 @@ const ORG = scopeId("org", "default-org");
 async function start(withConfig = true) {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
       signingSecret: SECRET,
       capabilitySecret: SECRET,
       apiBaseUrl: "http://core.example.test",

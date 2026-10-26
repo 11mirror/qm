@@ -100,7 +100,7 @@ function makeRepoWithLayerCollision(): { dir: string; sha: string } {
 }
 
 function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reg-routes-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,

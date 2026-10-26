@@ -198,9 +198,7 @@ test("concurrent upserts of the same scope+name serialize into one record (no du
 });
 
 test("a fresh app advertises and materializes only admin-enabled connector skills", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "seeded-skills-")),
-  });
+  const config = testConfig({});
   const built = buildApp(config);
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
   await built.config.setConnectorClient(scopeId("org", "default-org"), "google", {

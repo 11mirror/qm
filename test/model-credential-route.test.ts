@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
@@ -27,10 +24,7 @@ function start(
   built: BuiltApp;
   close: () => Promise<void>;
 } {
-  const appConfig = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
-    ...config,
-  });
+  const appConfig = testConfig({ ...config });
   const built = buildApp(appConfig, { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
     config: built.config,

@@ -2,9 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
@@ -33,12 +30,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
   const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "env-routes-")),
-        signingSecret: SECRET,
-      }),
-    );
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C-eng", name: "eng", isPrivate: false }],
       [{ channelId: "C-eng", principalId: "U-owner" }],

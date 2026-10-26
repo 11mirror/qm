@@ -3,9 +3,6 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -190,13 +187,7 @@ test("deployment credentials win lookups in their org and reserve their slugs ag
 });
 
 function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploymentCreds()) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "deploy-broker-")),
-      signingSecret: SECRET,
-      brokerCredentials,
-    }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET, brokerCredentials }));
   const deps = {
     config: built.config,
     serviceCreds: built.serviceCreds,
@@ -304,7 +295,6 @@ const dm = (text: string): TurnRequest => ({
 test("org members' agents get a deployment credential by broker only, as if granted org-wide", async () => {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "deploy-broker-stamp-")),
       maxAttempts: 1,
       signingSecret: SECRET,
       apiBaseUrl: "http://core.internal",

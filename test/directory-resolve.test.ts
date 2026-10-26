@@ -2,9 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -29,7 +26,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   );
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-resolve-")), signingSecret: SECRET }));
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -176,13 +173,7 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["dana@acme.com"],
-      }),
-    );
+    built = buildApp(testConfig({ signingSecret: SECRET, emailAuthPrincipals: ["dana@acme.com"] }));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

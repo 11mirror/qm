@@ -1,14 +1,11 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function fresh() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
+  return buildApp(testConfig({ seedSkills: false }));
 }
 
 test("resource search filters private data, includes owned drafts, and bounds snippets", async () => {

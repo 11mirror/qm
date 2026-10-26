@@ -2,9 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
@@ -28,7 +25,7 @@ describe("capability tokens verify under the core-only capability secret, not th
     );
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-iso-")), signingSecret: SOURCE }));
+    built = buildApp(testConfig({ signingSecret: SOURCE }));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
@@ -57,7 +54,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 describe("createServer refuses to boot enforcement that a surface could bypass", () => {
   let built: BuiltApp;
   before(() => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-failclosed-")), signingSecret: SOURCE }));
+    built = buildApp(testConfig({ signingSecret: SOURCE }));
   });
 
   const boot = (extra: Record<string, unknown>) =>

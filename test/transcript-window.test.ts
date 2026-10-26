@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
@@ -150,7 +147,7 @@ test("windowedTranscript: conversation text is never truncated — only tool pay
 });
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "transcript-window-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,

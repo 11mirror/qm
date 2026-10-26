@@ -1,8 +1,5 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -20,9 +17,7 @@ after(() => ff.cleanup());
 const actor = { externalId: "U1" };
 
 async function setup() {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
-  );
+  const built = buildApp(testConfig({ signingSecret: "own-cred-test" }));
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
   const credential = await built.keychain!.save({
     ownerId: "U1",
