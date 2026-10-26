@@ -409,9 +409,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         },
         partial,
       );
-      if (applied && membershipRows !== undefined) {
-        await q("UPDATE directory_sync SET channel_members_synced = TRUE WHERE org_id = $1", [tenant().orgId]);
-      }
       return applied;
     },
 
