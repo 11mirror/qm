@@ -1,23 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { Tenant } from "../tenant.ts";
-import type {
-  ActorAssertion,
-  ConversationKind,
-  DeliveryProvenance,
-  Destination,
-  OutgoingAttachment,
-  ScopeId,
-} from "../types.ts";
-import type { PostReceipt } from "../surfaces/outbound.ts";
-import type { SlackNative } from "./slack.ts";
-
-interface SurfaceCapabilities {
-  threads: boolean;
-  edits: boolean;
-  reactions: boolean;
-  richCards: boolean;
-  format: "mrkdwn" | "markdown" | "plain";
-}
+import type { ActorAssertion, ConversationKind } from "../types.ts";
+import type { SurfaceSender } from "../surfaces/outbound.ts";
 
 export interface SurfaceUser {
   id: string;
@@ -66,33 +50,11 @@ export interface SurfaceRequest {
 export type InboundOutcome =
   { status: 401; reason: string } | { status: 400; reason: string } | { status: 200; messages: InboundMessage[] };
 
-interface DeliveryCtx {
-  tenant: Tenant;
-  scopeId?: ScopeId;
-  destination: Destination;
-  idempotencyKey: string;
-  provenance?: DeliveryProvenance;
-  createdAt?: number;
-  retry?: boolean;
-}
-
-interface OutboundItem {
-  text: string;
-  attachments?: OutgoingAttachment[];
-}
-
-interface SurfaceNatives {
-  slack: SlackNative;
-}
-
 export interface Surface {
-  readonly kind: string;
   readonly name: string;
   readonly label: string;
   readonly destinationTypes: readonly string[];
-  readonly capabilities: SurfaceCapabilities;
   normalize?(request: SurfaceRequest): Promise<InboundOutcome>;
-  deliver(ctx: DeliveryCtx, item: OutboundItem): Promise<PostReceipt | void>;
+  deliver: SurfaceSender;
   principalFor(user: SurfaceUser): ActorAssertion;
-  native<K extends keyof SurfaceNatives>(kind: K): SurfaceNatives[K] | null;
 }
