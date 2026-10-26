@@ -25,7 +25,7 @@ let appUrl = "";
 
 async function bootStub(
   env: NodeJS.ProcessEnv,
-  serve: (server: Server | null, config: Config) => Promise<void>,
+  serve: (server: Server, config: Config) => Promise<void>,
 ): Promise<BootedTenant> {
   const config = { port: 0, publicUrl: env.PUBLIC_API_URL } as Config;
   const server = createServer((_req, res) =>

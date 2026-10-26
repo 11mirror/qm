@@ -10,25 +10,19 @@ import { startMultitenant } from "./tenants/host.ts";
 async function bootSingleTenant(): Promise<{ tenants: BootedTenant[]; servers: Server[] }> {
   const servers: Server[] = [];
   const booted = await bootTenant(process.env, async (server, config) => {
-    if (server) {
-      servers.push(server);
-      await new Promise<void>((resolve) => server.listen(config.port, resolve));
-      console.log(
-        `[qm] listening on :${config.port} (roles=${config.roles.join(",")}, org=${config.orgId}, ` +
-          `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(config.port, resolve));
+    console.log(
+      `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+        `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    );
+    if (config.publicPort)
+      servers.push(
+        ...(await startWebEdge(
+          { publicPort: config.publicPort, corePort: config.port, orgId: config.orgId },
+          process.env,
+        )),
       );
-      if (config.publicPort)
-        servers.push(
-          ...(await startWebEdge(
-            { publicPort: config.publicPort, corePort: config.port, orgId: config.orgId },
-            process.env,
-          )),
-        );
-    } else {
-      console.log(
-        `[qm] running without the api role (roles=${config.roles.join(",")}, org=${config.orgId}, workers=${config.workers})`,
-      );
-    }
   });
   return { tenants: [booted], servers };
 }

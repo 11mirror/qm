@@ -278,7 +278,7 @@ function statefulAws(
       const host = new URL(api).hostname.toLowerCase().replace(/\.$/, "");
       if (host !== new URL(configured.publicUrl).hostname.toLowerCase()) coreHosts.push(host);
     }
-    const apps = configured.env.core?.AWS_DEPLOY_APPS_DOMAIN;
+    const apps = configured.env.core?.DEPLOY_APPS_DOMAIN;
     if (apps) coreHosts.push(`*.${apps.toLowerCase().replace(/\.$/, "")}`);
   }
   const pinned = configured.aws!.services.core?.targetGroup;
@@ -1139,7 +1139,7 @@ test("AWS portal ALB adopts core's pinned front-door target group and requires e
     ...(hosts.apiUrl ? { apiUrl: hosts.apiUrl } : {}),
     env: {
       ...config.env,
-      core: { ...config.env.core, ...(hosts.appsDomain ? { AWS_DEPLOY_APPS_DOMAIN: hosts.appsDomain } : {}) },
+      core: { ...config.env.core, ...(hosts.appsDomain ? { DEPLOY_APPS_DOMAIN: hosts.appsDomain } : {}) },
     },
     aws: {
       ...config.aws!,
@@ -1201,7 +1201,7 @@ test("AWS portal ALB adopts core's pinned front-door target group and requires e
     await run(
       hostSplitConfig({ appsDomain: "*.apps.agent.acme.example" }),
       undefined,
-      /env\.core\.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN.* does not derive a valid ALB host-header hostname/,
+      /env\.core\.DEPLOY_APPS_DOMAIN\).* does not derive a valid ALB host-header hostname/,
     );
     await run(
       hostSplitConfig(bothHosts),

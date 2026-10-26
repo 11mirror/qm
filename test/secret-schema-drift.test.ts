@@ -42,20 +42,20 @@ test('deploy/core/Dockerfile pins NODE_ENV=production — the "production" secre
   assert.match(dockerfile, /^ENV NODE_ENV=production$/m);
 });
 
-test("AWS deployment app domains reject a missing or placeholder gate secret", () => {
-  assert.deepEqual(validateCoreSecretEnv({ AWS_DEPLOY_APPS_DOMAIN: "apps.example.com" } as NodeJS.ProcessEnv), [
+test("deployment app domains reject a missing or placeholder gate secret", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_APPS_DOMAIN: "apps.example.com" } as NodeJS.ProcessEnv), [
     "AWS_DEPLOY_GATE_SECRET",
   ]);
   assert.deepEqual(
     validateCoreSecretEnv({
-      AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
       AWS_DEPLOY_GATE_SECRET: "replace-me",
     } as NodeJS.ProcessEnv),
     ["AWS_DEPLOY_GATE_SECRET"],
   );
   assert.deepEqual(
     validateCoreSecretEnv({
-      AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
       AWS_DEPLOY_GATE_SECRET: "short",
     } as NodeJS.ProcessEnv),
     ["AWS_DEPLOY_GATE_SECRET"],
@@ -63,7 +63,7 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   );
   assert.deepEqual(
     validateCoreSecretEnv({
-      AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
       AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
     } as NodeJS.ProcessEnv),
     [],

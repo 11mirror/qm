@@ -15,7 +15,7 @@ import { ensureTenantQueues } from "../turns/absurd-schema.ts";
 
 export interface BootedTenant {
   config: Config;
-  server: Server | null;
+  server: Server;
   beginShutdown(): void;
   stop(): Promise<void>;
   releaseInFlightRuns(): Promise<unknown>;
@@ -23,12 +23,10 @@ export interface BootedTenant {
 
 export async function bootTenant(
   env: NodeJS.ProcessEnv,
-  serve: (server: Server | null, config: Config) => Promise<void>,
+  serve: (server: Server, config: Config) => Promise<void>,
 ): Promise<BootedTenant> {
   const config = loadConfig(env);
-  const servesApi = config.roles.includes("api");
-  const slackIngress =
-    config.roles.includes("surfaces") && config.backgroundWorkEnabled && !config.backgroundDeploymentId;
+  const slackIngress = config.backgroundWorkEnabled && !config.backgroundDeploymentId;
 
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
@@ -45,22 +43,19 @@ export async function bootTenant(
   let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
   if (slackConfig) slackEnvironmentState = "configured";
   else if (envSlackAttempted) slackEnvironmentState = "partial";
-  const managedSlack =
-    env.QM_SLACK_SERVICE_URL && config.roles.includes("surfaces")
-      ? createManagedSlack({
-          serviceUrl: env.QM_SLACK_SERVICE_URL,
-          token: env.QM_SLACK_SERVICE_TOKEN ?? "",
-          appId: env.QM_SLACK_APP_ID ?? "",
-          store: built.slackInstallation,
-          reconcile: slackIngress || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
-        })
-      : undefined;
-  const server = servesApi
-    ? createServer(built.app, {
-        ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
-        managedSlack,
+  const managedSlack = env.QM_SLACK_SERVICE_URL
+    ? createManagedSlack({
+        serviceUrl: env.QM_SLACK_SERVICE_URL,
+        token: env.QM_SLACK_SERVICE_TOKEN ?? "",
+        appId: env.QM_SLACK_APP_ID ?? "",
+        store: built.slackInstallation,
+        reconcile: slackIngress || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
       })
-    : null;
+    : undefined;
+  const server = createServer(built.app, {
+    ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
+    managedSlack,
+  });
 
   await built.start();
   await built.refreshCustomProviders();
