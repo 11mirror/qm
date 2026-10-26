@@ -210,6 +210,18 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   deploymentIdentity: "deployment_identity",
 };
 
+export const MAX_SOUL_CHARS = 100_000;
+
+export class SoulTooLargeError extends Error {
+  constructor() {
+    super(`SOUL must be at most ${MAX_SOUL_CHARS} characters`);
+  }
+}
+
+function assertSoulSize(content: string): void {
+  if (content.length > MAX_SOUL_CHARS) throw new SoulTooLargeError();
+}
+
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
   Object.fromEntries(
     Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
@@ -567,7 +579,8 @@ export function createConfigStore(
       return hydrated;
     },
     getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
+    async setSoul(id, content, updatedBy) {
+      assertSoulSize(content);
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
@@ -606,6 +619,7 @@ export function createConfigStore(
       });
     },
     async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+      assertSoulSize(content);
       return writeQueue(`soul:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedSoulRevision = {
