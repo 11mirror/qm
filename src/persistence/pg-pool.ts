@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
 
@@ -144,18 +144,29 @@ async function withStatementTimeout<T>(
   }
 }
 
+async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
+  try {
+    await client.query("ROLLBACK");
+    return undefined;
+  } catch (error) {
+    swallow(context, error);
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
+  let rollbackError: Error | undefined;
   try {
     await client.query("BEGIN");
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    rollbackError = await rollbackOrReport(client, "pg-pool: rollback transaction");
     throw error;
   } finally {
-    client.release();
+    client.release(rollbackError);
   }
 }
 
@@ -226,6 +237,7 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
+  let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
     await client.query(
@@ -315,7 +327,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         ]);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback migration ${migration.id}`, undefined));
+        discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
         throw error;
       }
     }
@@ -323,7 +335,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
       .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
-    client.release();
+    client.release(discard);
   }
 }
 
@@ -391,6 +403,7 @@ export function registeredPgMigrations(connectionString: string): readonly PgMig
 async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[]): Promise<void> {
   if (!maintenance.length) return;
   const client = await pool.connect();
+  let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-maintenance");
     for (const operation of maintenance) {
@@ -399,7 +412,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
         for (const statement of operation.statements) await client.query(statement);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback maintenance ${operation.id}`, undefined));
+        discard = await rollbackOrReport(client, `pg-pool: rollback maintenance ${operation.id}`);
         throw error;
       }
     }
@@ -407,7 +420,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
       .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
-    client.release();
+    client.release(discard);
   }
 }
 
