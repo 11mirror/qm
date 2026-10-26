@@ -1,6 +1,6 @@
 import type { ScopeId } from "../types.ts";
 import { outermostJsonObject } from "../util/text.ts";
-import type { MemoryStrategy, MemoryStrategyKind } from "./strategy.ts";
+import type { MemoryStrategy } from "./strategy.ts";
 
 export interface BenchConversation {
   id: string;
@@ -16,14 +16,14 @@ export interface JudgeVerdict {
 }
 
 export interface BenchResult {
-  kind: MemoryStrategyKind;
+  kind: string;
   conversationId: string;
   notebook: string;
   verdict: JudgeVerdict;
 }
 
 export interface BenchSummaryRow {
-  kind: MemoryStrategyKind;
+  kind: string;
   conversations: number;
   signalToNoise: number;
   staleness: number;
@@ -99,7 +99,7 @@ export function parseJudgeVerdict(out: string): JudgeVerdict {
 }
 
 export function summarize(results: BenchResult[]): BenchSummaryRow[] {
-  const byKind = new Map<MemoryStrategyKind, BenchResult[]>();
+  const byKind = new Map<string, BenchResult[]>();
   for (const r of results) {
     const list = byKind.get(r.kind) ?? [];
     list.push(r);

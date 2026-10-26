@@ -110,7 +110,6 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   t.after(() => close(provider));
   const built = buildApp(
     testConfig({
-      memoryStrategy: "agent-only",
       databaseUrl,
       openaiApiKey: "test-key",
     }),
@@ -222,7 +221,6 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   const built = buildApp(
     testConfig({
       sharingPosture: "open",
-      memoryStrategy: "agent-only",
       databaseUrl,
       openaiApiKey: "test",
     }),

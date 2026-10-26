@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
 import { loadConfig } from "../src/config.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";
+import { classifiedMemory } from "../src/memory/classification.ts";
+import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import {
   DEFAULT_STRATEGY_FLOORS,
   floorFailures,
@@ -23,18 +24,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const KNOWN_KINDS: MemoryStrategyKind[] = ["per-turn", "agent-only"];
-const requested = (process.env.MEMORY_BENCH_KINDS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-const kinds: MemoryStrategyKind[] = requested.length ? (requested as MemoryStrategyKind[]) : KNOWN_KINDS;
-for (const k of kinds) {
-  if (!KNOWN_KINDS.includes(k)) {
-    console.error(`unknown strategy kind '${k}' (known: ${KNOWN_KINDS.join(", ")})`);
-    process.exit(1);
-  }
-}
+const kind = "per-turn";
 
 const fixtureDir = fileURLToPath(new URL("../test/memory-bench/conversations/", import.meta.url));
 const conversations = readdirSync(fixtureDir)
@@ -53,14 +43,14 @@ if (!harness.models.oneShot) {
 const oneShot = harness.models.oneShot.bind(harness.models);
 
 const results: BenchResult[] = [];
-for (const kind of kinds) {
+{
   for (const conversation of conversations) {
     const memory = createPostgresMemoryService(databaseUrl);
-    const { strategy } = createMemoryStrategy(kind, { harness: harness.models, memory });
+    const strategy = createPerTurnStrategy({
+      harness: harness.models,
+      memory: classifiedMemory(memory, harness.models),
+    });
     const scopeId = `user:bench-${kind}-${conversation.id}-${Date.now()}`;
-    if (!strategy.onTurnEnd) {
-      console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
-    }
     await replayConversation(strategy, scopeId, conversation);
     const notebook = await memory.read(scopeId);
     const judgeOut = await oneShot(JUDGE_PROMPT, renderJudgeInput(conversation, notebook));
@@ -82,12 +72,12 @@ if (outPath) {
   console.log(`report written to ${outPath}`);
 }
 
-const defaultRow = rows.find((r) => r.kind === DEFAULT_MEMORY_STRATEGY);
+const defaultRow = rows.find((r) => r.kind === kind);
 if (defaultRow) {
   const failures = floorFailures(defaultRow);
   if (failures.length) {
     console.error(
-      `default strategy '${DEFAULT_MEMORY_STRATEGY}' is below its quality floors ` +
+      `memory capture is below its quality floors ` +
         `(${JSON.stringify(DEFAULT_STRATEGY_FLOORS)}): ${failures.join("; ")}`,
     );
     process.exit(2);

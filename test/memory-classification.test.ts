@@ -2,10 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifiedMemory } from "../src/memory/classification.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+
+const perTurn = (deps: Parameters<typeof createPerTurnStrategy>[0]) =>
+  createPerTurnStrategy({ ...deps, memory: classifiedMemory(deps.memory, deps.harness) });
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
@@ -22,7 +24,7 @@ const turn = { scopeId: scope, actorId: "alice", input: "I prefer short replies"
 test("production strategy classifies automatic capture in the existing extraction call", async () => {
   const { memory, facts } = await fixture();
   let calls = 0;
-  const { strategy } = createMemoryStrategy("per-turn", {
+  const strategy = perTurn({
     memory,
     harness: {
       oneShot: async () => {
@@ -67,16 +69,13 @@ test("ordinary classification never completes missing provenance or downgrades i
   }
 });
 
-test("explicit captures classify in agent-only mode and classification failures remain unknown", async () => {
+test("explicit captures are classified and classification failures remain unknown", async () => {
   for (const verdict of ["sensitive", "not-a-label", undefined]) {
     const { memory, facts } = await fixture();
-    const { memory: wrapped } = createMemoryStrategy("agent-only", {
-      memory,
-      harness: {
-        oneShot: async () => {
-          if (verdict === undefined) throw new Error("unavailable");
-          return verdict;
-        },
+    const wrapped = classifiedMemory(memory, {
+      oneShot: async () => {
+        if (verdict === undefined) throw new Error("unavailable");
+        return verdict;
       },
     });
     await wrapped.capture(scope, ["A synthetic fact"], Date.now(), "alice", { mode: "explicit", inheritedFacts: [] });
