@@ -16,7 +16,6 @@ export * as activity from "./activity.ts";
 export * as history from "./history.ts";
 export * as artifacts from "./artifacts.ts";
 export * as slackActivity from "./slack-activity.ts";
-export * as shared from "./shared.ts";
 export { charForName } from "../emoji-picker.ts";
 
 const modules = [governance, settings, integrations];

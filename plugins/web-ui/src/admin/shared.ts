@@ -1,5 +1,6 @@
 import { html, render, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { repeat } from "lit/directives/repeat.js";
 
 export function node(template: unknown): HTMLElement {
   const fragment = document.createDocumentFragment();
@@ -7,9 +8,11 @@ export function node(template: unknown): HTMLElement {
   return fragment.firstElementChild as HTMLElement;
 }
 
-export function badge(text: unknown, kind = "") {
-  return html`<span class=${"badge" + (kind ? " " + kind : "")}>${text}</span>`;
+export function badge(text: unknown, kind = "", title = "") {
+  return html`<span class=${"badge" + (kind ? " " + kind : "")} title=${ifDefined(title || undefined)}>${text}</span>`;
 }
+
+export const empty = (text: unknown) => html`<p class="empty">${text}</p>`;
 
 function cell(value: any): unknown {
   if (value?.node) return value.node;
@@ -114,38 +117,43 @@ export function renderer(root: HTMLElement) {
 export function denseList(items: any[], rowOf: (item: any) => any, open: (item: any) => void, empty: string) {
   if (!items.length) return html`<p class="empty">${empty}</p>`;
   return html`<div class="dense-list">
-    ${items.map((item) => {
-      const r = rowOf(item);
-      const content = html`${r.icon ? html`<span class="dense-icon">${r.icon}</span>` : nothing}<span class="dense-name"
-          >${r.name}</span
-        ><span class="dense-preview">${r.preview ?? ""}</span
-        >${r.time != null ? html`<span class="dense-time">${r.time}</span>` : nothing}`;
-      const click = (e: MouseEvent) => {
-        if (r.href && (r.target || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
-        if (r.href) e.preventDefault();
-        open(item);
-      };
-      return r.href
-        ? html`<a
-            class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-            href=${r.href}
-            target=${ifDefined(r.target)}
-            rel=${ifDefined(r.target ? "noopener" : undefined)}
-            @click=${click}
-            >${content}</a
-          >`
-        : html`<div
-            class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-            tabindex="0"
-            role="button"
-            @click=${click}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key === "Enter") open(item);
-            }}
-          >
-            ${content}
-          </div>`;
-    })}
+    ${repeat(
+      items,
+      (item) => item.id || item.scopeId || item.container || item,
+      (item) => {
+        const r = rowOf(item);
+        const content = html`${r.icon ? html`<span class="dense-icon">${r.icon}</span>` : nothing}<span
+            class="dense-name"
+            >${r.name}</span
+          ><span class="dense-preview">${r.preview ?? ""}</span
+          >${r.time != null ? html`<span class="dense-time">${r.time}</span>` : nothing}`;
+        const click = (e: MouseEvent) => {
+          if (r.href && (r.target || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
+          if (r.href) e.preventDefault();
+          open(item);
+        };
+        return r.href
+          ? html`<a
+              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
+              href=${r.href}
+              target=${ifDefined(r.target)}
+              rel=${ifDefined(r.target ? "noopener" : undefined)}
+              @click=${click}
+              >${content}</a
+            >`
+          : html`<div
+              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
+              tabindex="0"
+              role="button"
+              @click=${click}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") open(item);
+              }}
+            >
+              ${content}
+            </div>`;
+      },
+    )}
   </div>`;
 }
 

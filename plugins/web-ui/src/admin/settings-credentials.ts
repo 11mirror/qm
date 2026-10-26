@@ -1,4 +1,4 @@
-import { mountTemplate } from "./shared.ts";
+import { badge, mountTemplate } from "./shared.ts";
 import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -238,7 +238,6 @@ export function loadCredentials(rows: Data[], directory: Data[], channels: Data[
   credentialState.render();
 }
 const plural = (n: number, label: string) => n + " " + label + (n === 1 ? "" : "s");
-const badge = (text: string, tone: string) => html`<span class=${"badge " + tone}>${text}</span>`;
 function credentialUsage(c: Data) {
   if (c.usageUnavailable) return "Usage unavailable";
   if (c.usageCount == null) return "Loading usage…";

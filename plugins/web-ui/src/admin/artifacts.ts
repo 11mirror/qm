@@ -1,7 +1,6 @@
 import { html, nothing, render } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { card, bareCard, table, renderer } from "./shared.ts";
+import { card, bareCard, table, renderer, empty, denseList as dense } from "./shared.ts";
 import { mountPacks, skillDetail, removeSkill } from "./artifacts-skills.ts";
 export type Data = Record<string, any>;
 export type Context = Record<string, any>;
@@ -14,50 +13,7 @@ type Row = {
   cls?: string;
   icon?: unknown;
 };
-const empty = (text: string) => html`<p class="empty">${text}</p>`;
 const queries = new Map<string, string>();
-export function dense(items: Data[], rowOf: (item: Data) => Row, open: (item: Data) => void, message: string) {
-  if (!items.length) return empty(message);
-  return html`<div class="dense-list">
-    ${repeat(
-      items,
-      (item) => item.id || item.scopeId || item,
-      (item) => {
-        const r = rowOf(item);
-        const content = html`${r.icon ? html`<span class="dense-icon">${r.icon}</span>` : nothing}<span
-            class="dense-name"
-            >${r.name}</span
-          ><span class="dense-preview">${r.preview ?? ""}</span
-          >${r.time != null ? html`<span class="dense-time">${r.time}</span>` : nothing}`;
-        const click = (e: MouseEvent) => {
-          if (r.href && (r.target || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
-          if (r.href) e.preventDefault();
-          open(item);
-        };
-        return r.href
-          ? html`<a
-              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-              href=${r.href}
-              target=${ifDefined(r.target)}
-              rel=${ifDefined(r.target ? "noopener" : undefined)}
-              @click=${click}
-              >${content}</a
-            >`
-          : html`<div
-              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-              tabindex="0"
-              role="button"
-              @click=${click}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") open(item);
-              }}
-            >
-              ${content}
-            </div>`;
-      },
-    )}
-  </div>`;
-}
 function scopeList(items: Data[], c: Context, noun: string, latest: (r: Data) => number, message: string) {
   const groups = new Map<string, Data>();
   for (const item of items) {

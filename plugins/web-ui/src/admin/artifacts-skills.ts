@@ -1,9 +1,7 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { card, table, renderer } from "./shared.ts";
+import { badge, card, table, renderer } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
-const badge = (text: unknown, tone = "muted", title = "") =>
-  html`<span class=${"badge " + tone} title=${ifDefined(title || undefined)}>${text}</span>`;
 const stacked = (name: unknown, desc: unknown) =>
   html`<div>
     <div class="primaryline">${name}</div>
@@ -62,7 +60,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
       "",
       html`<div>
         <div class="badges">
-          ${c.statusBadge(k.status)}${badge("v" + k.version)}${badge(by)}${badge("skill " + c.shortId(k.id, 16))}
+          ${c.statusBadge(k.status)}${badge("v" + k.version, "muted")}${badge(by, "muted")}${badge("skill " + c.shortId(k.id, 16), "muted")}
         </div>
         ${k.description ? html`<p class="metric-note">${k.description}</p>` : nothing}${card(
           "Scopes (" + group.length + ")",
@@ -85,7 +83,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
                 {
                   node:
                     g.status === "archived"
-                      ? badge("archived")
+                      ? badge("archived", "muted")
                       : html`<button type="button" class="rowbtn danger" @click=${() => removeSkill(g, c)}>
                           Remove
                         </button>`,
