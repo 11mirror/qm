@@ -2276,14 +2276,22 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
+        const settleGoal = async (pause = false): Promise<void> => {
+          const g = entry.ref.goal;
+          if (!g) return;
+          bankGoalTurn(g, grindMeter.startedAt);
+          if (pause && g.status === "active") {
+            g.status = "paused";
+            g.updatedAt = Date.now();
+          }
+          await turn.saveGoal?.(g);
+          if (g.status === "complete") entry.ref.goal = null;
+        };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;
           if (persistError) throw persistError;
-          if (entry.ref.goal) {
-            bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-            await turn.saveGoal?.(entry.ref.goal);
-          }
+          await settleGoal();
           return {
             reply: "",
             runtimeHandoff: entry.ref.runtimeHandoff,
@@ -2303,17 +2311,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
           const reply = partial.trim() ? partial : "(stopped)";
-          if (entry.ref.goal) {
-            const g = entry.ref.goal;
-
-            bankGoalTurn(g, grindMeter.startedAt);
-            if (userAborted && g.status === "active") {
-              g.status = "paused";
-              g.updatedAt = Date.now();
-            }
-            await turn.saveGoal?.(g);
-            if (g.status === "complete") entry.ref.goal = null;
-          }
+          await settleGoal(userAborted);
           await recordStoppedTurn(
             turn,
             partial,
@@ -2329,12 +2327,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           return cacheUsage ? { ...base, cacheUsage } : base;
         }
 
-        if (entry.ref.goal) {
-          const g = entry.ref.goal;
-          bankGoalTurn(g, grindMeter.startedAt);
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        }
+        await settleGoal();
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
         // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
         const reply = entry.ref.silentRequested ? "" : closingText;
