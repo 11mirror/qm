@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { Webhook } from "../types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
+import { isObj } from "../util/objects.ts";
 
 export interface VerifierInput {
   secret?: string;
@@ -27,7 +28,6 @@ function bodyHash(rawBody: string): string {
   return createHash("sha256").update(rawBody).digest("hex");
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 function signedBodyId(rawBody: string, field: string): string {
   try {

@@ -8,11 +8,11 @@ import { safeChunks } from "../../slack/safe-cut.ts";
 import { applyReactions, normalizeReaction } from "../../slack/reactions.ts";
 import { slackErrorCode } from "../../slack/payloads.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isObj } from "../../util/objects.ts";
 import {
   clip,
   clipOpt,
   draftOf,
-  isObj,
   parseCommonFields,
   parseReplyDraft,
   tokenFor,
