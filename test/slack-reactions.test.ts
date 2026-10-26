@@ -501,3 +501,18 @@ test("extractReactions stays linear-time on a flood of unterminated directives",
   assert.equal(r.text, flood.slice(0, -opener.length), "only the trailing unterminated directive is stripped");
   assert.deepEqual(extractReactions("[[react: eyes [[react: tada]]").reactions, [{ names: ["tada"] }]);
 });
+
+test("extractReactions leaves directives inside any code form alone", () => {
+  for (const code of [
+    "~~~\n[[react: eyes]]\n~~~",
+    "````\n```\n[[react: eyes]]\n```\n````",
+    "``a ` [[react: eyes]]``",
+  ]) {
+    const { text, reactions } = extractReactions(`${code}\n[[react: tada]]`);
+    assert.equal(text, code);
+    assert.deepEqual(
+      reactions.map((r) => r.names),
+      [["tada"]],
+    );
+  }
+});
