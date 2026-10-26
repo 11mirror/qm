@@ -1,6 +1,7 @@
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
+import { perTenant } from "../tenant.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { parseScopeId } from "../types.ts";
 
@@ -26,13 +27,13 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   return botIdentity(env.SLACK_BOT_DISPLAY_NAME?.trim(), env.SLACK_BOT_ICON_EMOJI?.trim());
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity = perTenant(() => ({ args: {} as BotIdentityOverride }));
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity().args = botIdentity(identity?.username, identity?.icon_emoji);
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  return botIdentity(defaultIdentity.username, defaultIdentity.icon_emoji);
+  return defaultIdentity().args;
 }
 
 export function slackReplyArgs(
