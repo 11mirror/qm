@@ -1,11 +1,33 @@
 import { tenantLockKey, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { swallow } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 
 export interface LeaderLease {
   hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
 }
 
 const NEVER = new Promise<void>(() => {});
+
+export async function holdUntilDone(
+  lease: LeaderLease,
+  key: string,
+  timeoutMessage: string,
+  fn: (lost: () => boolean) => Promise<boolean>,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < 15_000) {
+    const done = await lease.hold(key, async (lostSignal) => {
+      let lost = false;
+      void lostSignal.then(() => {
+        lost = true;
+      });
+      return fn(() => lost);
+    });
+    if (done) return;
+    await sleep(50);
+  }
+  throw new Error(timeoutMessage);
+}
 
 export function createNoopLeaderLease(): LeaderLease {
   return {
