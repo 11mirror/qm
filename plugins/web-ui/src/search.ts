@@ -1,14 +1,18 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
-import { api, fetchSessionRow, userSendMessage, type CoreSession } from "./core-bridge";
-import { startNewChat } from "./sessions";
+import { api, fetchSessionRow, userSendMessage } from "./core-bridge";
 import { recencyGroup } from "./session-list";
-import { searchGroup } from "./search-group";
 import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
-import { openSession, sessionsState, sessionTitle } from "./sessions";
+import { openSession, sessionsState, sessionTitle, startNewChat } from "./sessions";
 import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
-import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
+import {
+  resourceResults,
+  matchResources,
+  searchGroup,
+  type ResourceHit,
+  type ResourceSearchResponse,
+} from "./search-resources";
 import { icon } from "./icons";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 
@@ -54,8 +58,7 @@ export function registerChatSearchHotkey(): void {
   document.addEventListener("keydown", (e) => {
     if (e.key.toLowerCase() === "k" && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault();
-      if (searchState.open) closeChatSearch();
-      else openChatSearch();
+      (searchState.open ? closeChatSearch : openChatSearch)();
     }
   });
 }
@@ -82,17 +85,13 @@ function cancelSearch(): void {
   inflight = null;
 }
 
-function ensureHost(): HTMLDivElement {
+function draw(): void {
   if (!host) {
     host = document.createElement("div");
     host.className = "chat-search-host";
     document.body.appendChild(host);
   }
-  return host;
-}
-
-function draw(): void {
-  render(searchState.open ? paletteTpl() : nothing, ensureHost());
+  render(searchState.open ? paletteTpl() : nothing, host);
 }
 
 function resourceHits(): ResourceHit[] {
@@ -128,38 +127,29 @@ function onQueryInput(e: InputEvent): void {
   debounceTimer = setTimeout(() => void runSearch(q), DEBOUNCE_MS);
 }
 
-async function runSearch(q: string): Promise<void> {
-  inflight?.abort();
-  const ctl = new AbortController();
-  inflight = ctl;
-  const seq = ++fetchSeq;
-  void runResourceSearch(q, ctl, seq);
+async function fetchSearch<T>(label: string, path: string, q: string, apply: (r: T | null) => void): Promise<void> {
+  const ctl = inflight!;
+  const seq = fetchSeq;
   try {
-    const r = await api<{ hits: ChatSearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
+    const r = await api<T>(`${path}?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
     if (seq !== fetchSeq || !searchState.open) return;
-    const hits = groupHitsBySession(r.hits ?? []);
-    if (searchState.selectionMoved && searchState.sel === resourceHits().length + searchState.hits.length) {
-      searchState.sel += hits.length - searchState.hits.length;
-    }
-    searchState.hits = hits;
-    searchState.failed = false;
+    apply(r);
   } catch (e) {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
-    swallow("web-ui: chat search", e);
-    searchState.hits = [];
-    searchState.failed = true;
+    swallow(label, e);
+    apply(null);
   }
-  searchState.loading = false;
   clampSel();
   draw();
 }
 
-async function runResourceSearch(q: string, ctl: AbortController, seq: number): Promise<void> {
-  try {
-    const response = await api<ResourceSearchResponse>(`/api/resources/search?q=${encodeURIComponent(q)}`, {
-      signal: ctl.signal,
-    });
-    if (seq !== fetchSeq || !searchState.open) return;
+async function runSearch(q: string): Promise<void> {
+  inflight?.abort();
+  inflight = new AbortController();
+  fetchSeq++;
+  void fetchSearch<ResourceSearchResponse>("web-ui: resource search", "/api/resources/search", q, (response) => {
+    searchState.resourcesLoading = false;
+    if (!response) return void (searchState.resourceFailures = ["resources"]);
     const result = resourceResults(response, UI_BASE);
     const resourceCount = resourceHits().length;
     if (
@@ -171,30 +161,23 @@ async function runResourceSearch(q: string, ctl: AbortController, seq: number): 
     searchState.resources = result.hits;
     searchState.resourcesLimited = Boolean(response.limited?.length);
     searchState.resourceFailures = result.failed;
-  } catch (e) {
-    if (seq !== fetchSeq || ctl.signal.aborted) return;
-    swallow("web-ui: resource search", e);
-    searchState.resourceFailures = ["resources"];
-  }
-  searchState.resourcesLoading = false;
-  clampSel();
-  draw();
+  });
+  await fetchSearch<{ hits: ChatSearchHit[] }>("web-ui: chat search", "/api/search", q, (r) => {
+    const hits = groupHitsBySession(r?.hits ?? []);
+    if (r && searchState.selectionMoved && searchState.sel === resourceHits().length + searchState.hits.length) {
+      searchState.sel += hits.length - searchState.hits.length;
+    }
+    searchState.hits = hits;
+    searchState.failed = !r;
+    searchState.loading = false;
+  });
 }
 
 function groupHitsBySession(hits: ChatSearchHit[]): ChatSearchHit[] {
-  const order: string[] = [];
   const bySession = new Map<string, ChatSearchHit[]>();
-  for (const hit of hits) {
-    const list = bySession.get(hit.sessionId);
-    if (list) list.push(hit);
-    else {
-      order.push(hit.sessionId);
-      bySession.set(hit.sessionId, [hit]);
-    }
-  }
-  const live = order.filter((id) => !bySession.get(id)![0]!.archived);
-  const archived = order.filter((id) => bySession.get(id)![0]!.archived);
-  return [...live, ...archived].flatMap((id) => bySession.get(id)!);
+  for (const hit of hits) bySession.set(hit.sessionId, [...(bySession.get(hit.sessionId) ?? []), hit]);
+  const groups = [...bySession.values()];
+  return [...groups.filter((g) => !g[0]!.archived), ...groups.filter((g) => g[0]!.archived)].flat();
 }
 
 function onPaletteKeydown(e: KeyboardEvent): void {
@@ -222,12 +205,8 @@ function onPaletteKeydown(e: KeyboardEvent): void {
     if (searchState.loading) return;
     const hit = searchState.hits[searchState.sel - resources.length];
     if (hit) return void openHit(hit);
-    if (
-      !searchState.resourcesLoading &&
-      askRowShown() &&
-      searchState.sel === resources.length + searchState.hits.length
-    )
-      return void askQm();
+    const askIndex = resources.length + searchState.hits.length;
+    if (!searchState.resourcesLoading && askRowShown() && searchState.sel === askIndex) return void askQm();
   }
 }
 
@@ -236,9 +215,9 @@ function scrollSelectedIntoView(): void {
 }
 
 async function openHit(hit: ChatSearchHit): Promise<void> {
-  const find = (): CoreSession | undefined => sessionsState.list.find((s) => s.id === hit.sessionId);
   const session =
-    find() ?? (await fetchSessionRow({ id: hit.sessionId }).catch(swallowAs("web-ui: open search hit", null)));
+    sessionsState.list.find((s) => s.id === hit.sessionId) ??
+    (await fetchSessionRow({ id: hit.sessionId }).catch(swallowAs("web-ui: open search hit", null)));
   if (!session) return;
   closeChatSearch();
   await openSession(session);
@@ -277,96 +256,81 @@ function hitTitle(hit: ChatSearchHit): string {
   return session ? sessionTitle(session) : (hit.channelName ?? "Untitled chat");
 }
 
-function resultRows(): TemplateResult[] {
-  const rows: TemplateResult[] = [];
-  let lastSession: string | null = null;
-  searchState.hits.forEach((hit, index) => {
-    const i = resourceHits().length + index;
-    if (hit.sessionId !== lastSession) {
-      lastSession = hit.sessionId;
-      rows.push(searchGroup(hitTitle(hit), Boolean(hit.archived), recencyGroup(hit.createdAt)));
-    }
-    rows.push(html`
-      <button
-        type="button"
-        class="chat-search-row ${i === searchState.sel ? "selected" : ""} ${hit.archived ? "archived" : ""}"
-        @click=${() => void openHit(hit)}
-        @pointermove=${() => {
-          if (searchState.sel !== i) {
-            searchState.selectionMoved = true;
-            searchState.sel = i;
-            draw();
-          }
-        }}
-      >
-        <span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}" dir="auto"
-          >${(hit.entryType === "user" ? (hit.author ?? "You") : "QM").slice(0, 1).toUpperCase()}</span
-        >
-        <span class="chat-search-text">
-          <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
-          <span class="chat-search-meta"
-            ><bdi>${hit.entryType === "user" ? (hit.author ?? "you") : "agent"}</bdi> ·
-            ${new Date(hit.createdAt).toLocaleDateString()}</span
-          >
-        </span>
-      </button>
-    `);
-  });
-  return rows;
+function row(i: number, className: string, open: () => void, content: TemplateResult): TemplateResult {
+  return html`<button
+    type="button"
+    class=${className}
+    @click=${open}
+    @pointermove=${() => {
+      if (searchState.sel !== i) {
+        searchState.selectionMoved = true;
+        searchState.sel = i;
+        draw();
+      }
+    }}
+  >
+    ${content}
+  </button>`;
 }
 
-function resourceRows(): TemplateResult[] {
-  let group = "";
-  return resourceHits().flatMap((hit, i) => {
-    const heading = group !== hit.group ? [searchGroup(hit.group, false, "")] : [];
-    group = hit.group;
+const selected = (i: number) => (i === searchState.sel ? "selected" : "");
+
+function resultRows(): TemplateResult[] {
+  const offset = resourceHits().length;
+  return searchState.hits.flatMap((hit, index) => {
+    const i = offset + index;
     return [
-      ...heading,
-      html`<button
-        type="button"
-        class="chat-search-row ${i === searchState.sel ? "selected" : ""}"
-        @click=${() => openResource(hit)}
-        @pointermove=${() => {
-          if (searchState.sel !== i) {
-            searchState.selectionMoved = true;
-            searchState.sel = i;
-            draw();
-          }
-        }}
-      >
-        <span class="chat-search-who">${icon(Search, 14)}</span>
-        <span class="chat-search-text"
-          ><span class="chat-search-snippet">${highlight(hit.title)}</span>
-          <span class="chat-search-meta chat-search-snippet">${highlight(hit.description)}</span></span
-        >
-      </button>`,
+      ...(hit.sessionId === searchState.hits[index - 1]?.sessionId
+        ? []
+        : [searchGroup(hitTitle(hit), Boolean(hit.archived), recencyGroup(hit.createdAt))]),
+      row(
+        i,
+        `chat-search-row ${selected(i)} ${hit.archived ? "archived" : ""}`,
+        () => void openHit(hit),
+        html`<span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}" dir="auto"
+            >${(hit.entryType === "user" ? (hit.author ?? "You") : "QM").slice(0, 1).toUpperCase()}</span
+          >
+          <span class="chat-search-text">
+            <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
+            <span class="chat-search-meta"
+              ><bdi>${hit.entryType === "user" ? (hit.author ?? "you") : "agent"}</bdi> ·
+              ${new Date(hit.createdAt).toLocaleDateString()}</span
+            >
+          </span>`,
+      ),
     ];
   });
 }
 
+function resourceRows(): TemplateResult[] {
+  return resourceHits().flatMap((hit, i, hits) => [
+    ...(hit.group === hits[i - 1]?.group ? [] : [searchGroup(hit.group, false, "")]),
+    row(
+      i,
+      `chat-search-row ${selected(i)}`,
+      () => openResource(hit),
+      html`<span class="chat-search-who">${icon(Search, 14)}</span>
+        <span class="chat-search-text"
+          ><span class="chat-search-snippet">${highlight(hit.title)}</span>
+          <span class="chat-search-meta chat-search-snippet">${highlight(hit.description)}</span></span
+        >`,
+    ),
+  ]);
+}
+
 function askRow(): TemplateResult {
   const i = resourceHits().length + searchState.hits.length;
-  return html`
-    <button
-      type="button"
-      class="chat-search-row chat-search-ask ${searchState.sel === i ? "selected" : ""}"
-      @click=${() => askQm()}
-      @pointermove=${() => {
-        if (searchState.sel !== i) {
-          searchState.selectionMoved = true;
-          searchState.sel = i;
-          draw();
-        }
-      }}
-    >
-      <span class="chat-search-who ask">+</span>
+  return row(
+    i,
+    `chat-search-row chat-search-ask ${selected(i)}`,
+    askQm,
+    html`<span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
         <span class="chat-search-snippet">Ask QM to find it: <b dir="auto">“${searchState.query.trim()}”</b></span>
         <span class="chat-search-meta">starts a new chat where QM finds the matching resource and links it</span>
       </span>
-      <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>
-    </button>
-  `;
+      <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>`,
+  );
 }
 
 function paletteTpl(): TemplateResult {
@@ -378,9 +342,7 @@ function paletteTpl(): TemplateResult {
     body = html`<div class="chat-search-empty">Searching…</div>`;
   } else if (searchState.failed) {
     body = html`<div class="chat-search-empty chat-search-failed">Search failed. Try again.</div>`;
-  } else if (resourceHits().length || searchState.resourcesLoading) {
-    body = html`${resultRows()}`;
-  } else if (!searchState.hits.length) {
+  } else if (!searchState.hits.length && !resourceHits().length && !searchState.resourcesLoading) {
     body = html`<div class="chat-search-empty">No results match “${q}”.</div>`;
   } else {
     body = html`${resultRows()}`;

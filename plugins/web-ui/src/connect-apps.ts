@@ -15,7 +15,6 @@ import { webFetch } from "./core-bridge";
 import { connectorLogo } from "./connector-logo";
 import type { Me } from "./shell-state";
 import "./connect-apps.css";
-import "./onboarding-slack";
 import "./slack-account";
 
 interface ConnectedAccount {
