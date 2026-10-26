@@ -2212,12 +2212,13 @@ export function buildApp(
     run: (req: TurnRequest) => app.turn(req),
     directory,
     resolveRecipient,
+    currentScopeMembers,
+    sessions,
   };
-  const scopedTriggerDeps = { ...triggerDeps, currentScopeMembers, sessions };
   const askResolution = (ask: KeychainAsk, grant?: KeychainGrant) =>
     fireAskResolution(
       {
-        ...scopedTriggerDeps,
+        ...triggerDeps,
         getCron: (id) => crons.get(id),
         getAsk: (id) => keychain.getAsk(id),
         getGrant: (id) => keychain.getGrant(id),
@@ -2232,7 +2233,7 @@ export function buildApp(
     record: recordInboxEvent,
     chat: createInboxChat({
       items: inboxItems,
-      trigger: scopedTriggerDeps,
+      trigger: triggerDeps,
     }),
   };
   const sweepAsks = createAskExpirySweep({ keychain, fire: askResolution, auditLog });
@@ -2251,7 +2252,7 @@ export function buildApp(
     deleteCron: (id) => app.deleteCron(id),
     advisoryLock,
     crons,
-    ...scopedTriggerDeps,
+    ...triggerDeps,
     leaderLease,
     jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
     sweepAsks,
@@ -2303,7 +2304,7 @@ export function buildApp(
           monitors,
           processes,
           sandbox,
-          ...scopedTriggerDeps,
+          ...triggerDeps,
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
@@ -2319,7 +2320,6 @@ export function buildApp(
     webhooks,
     ...triggerDeps,
     jobs,
-    currentScopeMembers,
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
