@@ -29,20 +29,12 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
           }),
         }
       : {}),
-    slackInstallationFetch: (async (input: string | URL | Request) => {
-      const url = String(input);
-      return new Response(
-        JSON.stringify(
-          url.endsWith("/auth.test")
-            ? { ok: true, team_id: "T-ACME", team: "Acme", app_id: "A-ACME" }
-            : { ok: true, url: "wss://example.invalid" },
-        ),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        },
-      );
-    }) as typeof fetch,
+    slackWebClient: () => ({
+      apiCall: async (method: string) =>
+        method === "auth.test"
+          ? { ok: true, team_id: "T-ACME", team: "Acme", app_id: "A-ACME" }
+          : { ok: true, url: "wss://example.invalid" },
+    }),
     slackInstallationSocketAppId: async () => socketAppId,
     resolveClient: built.resolveClient,
     config: built.config,
