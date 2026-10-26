@@ -9,8 +9,8 @@ STYLE = (
     "character or object with real personality and one big, readable expression or gesture. Composition: one compact, chunky "
     "silhouette, centered, with a small even margin; nothing touches or crosses the edge of the canvas. Built from a handful of "
     "big simple shapes so it still reads at 22 pixels. Flat colour only: no gradients, no glossy highlights, no shading, no "
-    "texture. Bright saturated colours with a clean dark outline of even weight. No text, no smoke, sparkles, motion lines, "
-    "scenery or drop shadow. Transparent background."
+    "texture. Bright saturated colours. Either no outline at all, or a thin outline in a darker shade of each fill colour; "
+    "never a black outline. No text, no smoke, sparkles, motion lines, scenery or drop shadow. Transparent background."
 )
 REFS = [
     "1643514680/6827/blob_aww.png", "1643514688/6901/blob_rofl.png", "1643514693/6950/blob_wave.png",
@@ -85,10 +85,13 @@ def finish(im, colors=32):
     return out
 
 
-def process(src, out):
+def process(src, out, opaque=None):
     hi = square(strip_background(Image.open(src)), 512)
     hi.save(out.removesuffix(".png") + ".src.png")
-    finish(square(hi, 128)).save(out, optimize=True)
+    im = finish(square(hi, 128))
+    if opaque:
+        im = Image.alpha_composite(Image.new("RGBA", im.size, opaque + (255,)), im)
+    im.save(out, optimize=True)
     return out
 
 
@@ -161,7 +164,8 @@ def judge(cands, subject):
         rounds = list(pool.map(lambda s: panel(cands, refs, s), [1, 2]))
     bar = statistics.median(s for r in rounds for k, s, _ in r if k == "ref") if refs else 7
     depicts = {k: d for k, _, d in rounds[0] if k != "ref"}
-    match = ask(f'Intended emoji: "{subject}". For each description below, does it clearly depict that subject? '
+    match = ask(f'Intended emoji: "{subject}". Each line below is a judge\'s short description of one candidate. Does the '
+                'candidate show the same main subject and gesture? Ignore colour, style and small details. '
                 'Reply JSON: {"match": {"<key>": true}}\n' + json.dumps(depicts), [], "low")["match"]
     result = {}
     for k in cands:
@@ -177,6 +181,7 @@ MOTIONS = {
     "pulse": lambda t: dict(scale=0.84 + 0.12 * (0.5 - 0.5 * math.cos(2 * math.pi * t))),
     "shake": lambda t: dict(dx=0.04 * math.sin(4 * math.pi * t), rot=4 * math.sin(4 * math.pi * t + 1), scale=0.88),
     "rumble": lambda t: dict(dx=0.025 * math.sin(6 * math.pi * t), dy=-0.02 * abs(math.sin(4 * math.pi * t)), scale=0.9),
+    "nod": lambda t: dict(rot=-7 * max(0.0, math.sin(2 * math.pi * t)), dy=0.05 * max(0.0, math.sin(2 * math.pi * t)), scale=0.86),
     "spin": lambda t: dict(rot=-360 * t, scale=0.7),
     "hover": lambda t: dict(dy=0.05 * math.sin(2 * math.pi * t), rot=3 * math.sin(2 * math.pi * t + 1), scale=0.86),
 }
@@ -231,13 +236,22 @@ def flat_palette(src, share=0.004, merge=40):
     return img, len(pal) // 3 - 1
 
 
-def animate(src_path, out, motion, frames=10, loop_ms=700, matte=None):
+def animate(src_path, out, motion, frames=10, loop_ms=700, matte=(140, 140, 140), opaque=None):
     if not 8 <= frames <= 12 or not 300 <= loop_ms <= 900:
         sys.exit("use 8-12 frames and a 300-900 ms loop")
     src = Image.open(src_path).convert("RGBA")
     if src.width < 256:
         src = src.resize((512, 512), Image.LANCZOS)
-    shots = [frame(src, i / frames, motion, matte=matte) for i in range(frames)]
+    shots = [frame(src, i / frames, motion, matte=None if opaque else matte) for i in range(frames)]
+    if opaque:
+        shots = [Image.alpha_composite(Image.new("RGBA", s.size, opaque + (255,)), s) for s in shots]
+        strip = Image.new("RGB", (128 * frames, 128))
+        for i, s in enumerate(shots):
+            strip.paste(s.convert("RGB"), (128 * i, 0))
+        pal = strip.quantize(64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        out_frames = [s.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE) for s in shots]
+        out_frames[0].save(out, save_all=True, append_images=out_frames[1:], duration=round(loop_ms / frames), loop=0, optimize=False)
+        return out
     if matte:
         strip = Image.new("RGB", (128 * frames, 128), matte)
         for i, s in enumerate(shots):
@@ -276,7 +290,7 @@ def make(a):
     keys = [chr(65 + i) for i in range(a.n)]
     with ThreadPoolExecutor(a.n) as pool:
         raws = dict(zip(keys, pool.map(lambda k: generate(a.subject, a.image_model, f"{a.out}/{a.name}-{k}.raw.png"), keys)))
-    cands = {k: process(raws[k], f"{a.out}/{a.name}-{k}.png") for k in keys}
+    cands = {k: process(raws[k], f"{a.out}/{a.name}-{k}.png", a.opaque) for k in keys}
     scores, bar = judge(cands, a.subject)
     for k in keys:
         scores[k]["defects"] = defects(raws[k])
@@ -287,7 +301,7 @@ def make(a):
     Image.open(cands[best]).save(final)
     result["png"] = final
     if a.motion:
-        result["gif"] = animate(f"{a.out}/{a.name}-{best}.src.png", f"{a.out}/{a.name}.gif", a.motion, a.frames, a.loop_ms)
+        result["gif"] = animate(f"{a.out}/{a.name}-{best}.src.png", f"{a.out}/{a.name}.gif", a.motion, a.frames, a.loop_ms, a.matte, a.opaque)
         result["motion_review"] = review_motion(result["gif"], a.subject)
     for k in ("png", "gif"):
         if k in result and os.path.getsize(result[k]) > 128 * 1024:
@@ -295,6 +309,10 @@ def make(a):
     print(json.dumps(result, indent=2))
     if not result["passes"]:
         sys.exit(2)
+
+
+def colour(text):
+    return None if text == "flat" else tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def main():
@@ -309,9 +327,12 @@ def main():
     m.add_argument("--frames", type=int, default=10)
     m.add_argument("--loop-ms", type=int, default=700)
     m.add_argument("--image-model", default="gpt-image-1.5")
+    m.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
+    m.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
     pr = sub.add_parser("process")
     pr.add_argument("src")
     pr.add_argument("out")
+    pr.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
     an = sub.add_parser("animate")
     an.add_argument("src")
     an.add_argument("out")
@@ -319,7 +340,8 @@ def main():
     an.add_argument("--motion", choices=sorted(MOTIONS), required=True)
     an.add_argument("--frames", type=int, default=10)
     an.add_argument("--loop-ms", type=int, default=700)
-    an.add_argument("--matte", help="hex mid-tone to blend the silhouette edge toward, e.g. 8c8c8c")
+    an.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
+    an.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
     jd = sub.add_parser("judge")
     jd.add_argument("subject")
     jd.add_argument("images", nargs="+")
@@ -327,10 +349,9 @@ def main():
     if a.cmd == "make":
         make(a)
     elif a.cmd == "process":
-        print(process(a.src, a.out))
+        print(process(a.src, a.out, a.opaque))
     elif a.cmd == "animate":
-        matte = tuple(int(a.matte[i:i + 2], 16) for i in (0, 2, 4)) if a.matte else None
-        print(json.dumps(review_motion(animate(a.src, a.out, a.motion, a.frames, a.loop_ms, matte), a.subject), indent=2))
+        print(json.dumps(review_motion(animate(a.src, a.out, a.motion, a.frames, a.loop_ms, a.matte, a.opaque), a.subject), indent=2))
     else:
         scores, bar = judge({os.path.basename(i): i for i in a.images}, a.subject)
         print(json.dumps({"reference_median": bar, "candidates": scores}, indent=2))
