@@ -5,14 +5,34 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { validateProviderApiKey } from "./admin/model-providers.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import { audit } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 
-function caller(ctx: ApiCtx): string | null {
-  return ctx.actor?.p ?? null;
+type Store = NonNullable<ApiCtx["deps"]["userModelCredentials"]>;
+
+function signedIn(handle: (ctx: ApiCtx, principal: string) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => (ctx.actor?.p ? handle(ctx, ctx.actor.p) : sendJson(ctx.res, 401, { error: "unauthorized" }));
+}
+
+function withStore(
+  handle: (ctx: ApiCtx, principal: string, store: Store) => Promise<void>,
+): (ctx: ApiCtx) => Promise<void> {
+  return signedIn(async (ctx, principal) => {
+    const store = ctx.deps.userModelCredentials;
+    return store ? handle(ctx, principal, store) : sendJson(ctx.res, 404, { error: "not_found" });
+  });
 }
 
 function bodyObj(ctx: ApiCtx): Record<string, unknown> {
-  return typeof ctx.body === "object" && ctx.body !== null ? (ctx.body as Record<string, unknown>) : {};
+  return isObj(ctx.body) ? ctx.body : {};
+}
+
+function bodyString(ctx: ApiCtx, name: string): string {
+  const value = bodyObj(ctx)[name];
+  return typeof value === "string" ? value : "";
+}
+
+function auditAuth(ctx: ApiCtx, principal: string, action: string, resource: string): void {
+  audit(ctx.deps, { principalId: principal, action: `user-model-auth.${action}`, resource, scopeLabel: principal });
 }
 
 function connectProvider(raw: unknown): ModelProvider | null {
@@ -21,149 +41,95 @@ function connectProvider(raw: unknown): ModelProvider | null {
   return null;
 }
 
-async function getStatus(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
+const getStatus = signedIn(async (ctx, principal) => {
   const required = (await ctx.deps.config?.getIndividualModelAuthDurable()) ?? false;
   const connections = (await ctx.deps.userModelCredentials?.connections(principal)) ?? [];
   const individualModelAuth = (await ctx.deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
   const account = (await ctx.deps.config?.getModelAccountDurable(principal)) ?? "company";
   return sendJson(ctx.res, 200, { individualModelAuth, required, account, connections });
-}
+});
 
-async function setAccount(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.config || !ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  const account = bodyObj(ctx).account;
+const setAccount = withStore(async (ctx, principal, store) => {
+  const config = ctx.deps.config;
+  if (!config) return sendJson(ctx.res, 404, { error: "not_found" });
+  const { account, provider } = bodyObj(ctx);
   if (account !== "personal" && account !== "company") return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (account === "company" && (await ctx.deps.config.getIndividualModelAuthDurable())) {
+  if (account === "company" && (await config.getIndividualModelAuthDurable())) {
     return sendJson(ctx.res, 403, { error: "Your organization requires a personal AI account." });
   }
-  if (account === "personal" && !(await ctx.deps.userModelCredentials.connections(principal)).length) {
+  if (account === "personal" && !(await store.connections(principal)).length) {
     return sendJson(ctx.res, 409, { error: "Connect an AI account first." });
   }
-  const provider = bodyObj(ctx).provider;
   if (provider !== undefined && provider !== "anthropic" && provider !== "openai")
     return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (
-    account === "personal" &&
-    provider &&
-    !(await ctx.deps.userModelCredentials.connections(principal)).some((c) => c.provider === provider)
-  ) {
+  if (account === "personal" && provider && !(await store.connections(principal)).some((c) => c.provider === provider))
     return sendJson(ctx.res, 409, { error: "Connect this AI account first." });
-  }
-  await ctx.deps.config.setPersonalModelAuth(principal, account === "personal", provider);
-  audit(ctx.deps, {
-    principalId: principal,
-    action: "user-model-auth.account",
-    resource: account,
-    scopeLabel: principal,
-  });
+  await config.setPersonalModelAuth(principal, account === "personal", provider);
+  auditAuth(ctx, principal, "account", account);
   return getStatus(ctx);
-}
+});
 
-async function disconnect(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+const PROVIDER_REQUIRED = { error: "bad_request", message: "provider must be claude or chatgpt" };
+
+const disconnect = withStore(async (ctx, principal, store) => {
   const provider = connectProvider(bodyObj(ctx).provider);
-  if (!provider) return sendJson(ctx.res, 400, { error: "bad_request", message: "provider must be claude or chatgpt" });
-  await ctx.deps.userModelCredentials.delete(principal, provider);
-  audit(ctx.deps, {
-    principalId: principal,
-    action: "user-model-auth.disconnect",
-    resource: provider,
-    scopeLabel: principal,
-  });
+  if (!provider) return sendJson(ctx.res, 400, PROVIDER_REQUIRED);
+  await store.delete(principal, provider);
+  auditAuth(ctx, principal, "disconnect", provider);
   return sendJson(ctx.res, 200, { ok: true });
-}
+});
 
-async function putApiKey(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  const body = bodyObj(ctx);
-  const provider = connectProvider(body.provider);
-  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
-  if (!provider) return sendJson(ctx.res, 400, { error: "bad_request", message: "provider must be claude or chatgpt" });
+const putApiKey = withStore(async (ctx, principal, store) => {
+  const provider = connectProvider(bodyObj(ctx).provider);
+  const apiKey = bodyString(ctx, "apiKey").trim();
+  if (!provider) return sendJson(ctx.res, 400, PROVIDER_REQUIRED);
   if (!apiKey) return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
   if (!(await validateProviderApiKey(ctx, provider, apiKey))) {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
-  await ctx.deps.userModelCredentials.setApiKey(principal, provider, apiKey);
-  audit(ctx.deps, {
-    principalId: principal,
-    action: "user-model-auth.api-key",
-    resource: provider,
-    scopeLabel: principal,
-  });
+  await store.setApiKey(principal, provider, apiKey);
+  auditAuth(ctx, principal, "api-key", provider);
   return sendJson(ctx.res, 200, { ok: true });
-}
+});
 
 const codexDeviceLogin = createCodexDeviceLogin();
 
-async function chatgptStart(ctx: ApiCtx): Promise<void> {
-  if (!caller(ctx)) return sendJson(ctx.res, 401, { error: "unauthorized" });
+const chatgptStart = signedIn(async (ctx) => {
   try {
-    const prompt = await codexDeviceLogin.start();
-    return sendJson(ctx.res, 200, prompt);
+    return sendJson(ctx.res, 200, await codexDeviceLogin.start());
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "oauth_start_failed", message: errMessage(e) });
   }
-}
+});
 
-async function chatgptPoll(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  const body = bodyObj(ctx);
-  const deviceAuthId = typeof body.deviceAuthId === "string" ? body.deviceAuthId : "";
+const chatgptPoll = withStore(async (ctx, principal, store) => {
+  const deviceAuthId = bodyString(ctx, "deviceAuthId");
   if (!deviceAuthId) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
     const result = await codexDeviceLogin.poll(deviceAuthId);
     if (result === "pending") return sendJson(ctx.res, 200, { status: "pending" });
-    await ctx.deps.userModelCredentials.setOAuth(principal, "openai", result);
-    audit(ctx.deps, {
-      principalId: principal,
-      action: "user-model-auth.oauth",
-      resource: "openai",
-      scopeLabel: principal,
-    });
+    await store.setOAuth(principal, "openai", result);
+    auditAuth(ctx, principal, "oauth", "openai");
     return sendJson(ctx.res, 200, { status: "connected" });
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "oauth_poll_failed", message: errMessage(e) });
   }
-}
+});
 
-async function claudeStart(ctx: ApiCtx): Promise<void> {
-  if (!caller(ctx)) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  return sendJson(ctx.res, 200, startClaudeLogin());
-}
+const claudeStart = signedIn(async (ctx) => sendJson(ctx.res, 200, startClaudeLogin()));
 
-async function claudeComplete(ctx: ApiCtx): Promise<void> {
-  const principal = caller(ctx);
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  const body = bodyObj(ctx);
-  const code = typeof body.code === "string" ? body.code : "";
-  const verifier = typeof body.verifier === "string" ? body.verifier : "";
+const claudeComplete = withStore(async (ctx, principal, store) => {
+  const code = bodyString(ctx, "code");
+  const verifier = bodyString(ctx, "verifier");
   if (!code || !verifier) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    const tokens = await completeClaudeLogin(code, verifier);
-    await ctx.deps.userModelCredentials.setOAuth(principal, "anthropic", tokens);
-    audit(ctx.deps, {
-      principalId: principal,
-      action: "user-model-auth.oauth",
-      resource: "anthropic",
-      scopeLabel: principal,
-    });
+    await store.setOAuth(principal, "anthropic", await completeClaudeLogin(code, verifier));
+    auditAuth(ctx, principal, "oauth", "anthropic");
     return sendJson(ctx.res, 200, { ok: true });
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "oauth_complete_failed", message: errMessage(e) });
   }
-}
-
+});
 export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/user-model-auth/status", actor: "query.principalId", auth: "source", handle: getStatus },
   ...withActor("body.principalId", [

@@ -2,6 +2,7 @@ import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
+import { twoPaneCanvas } from "./split-canvas-fixture.ts";
 
 export interface Harness {
   requests: string[];
@@ -79,15 +80,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   if (opts.savedCanvas)
     dom.window.localStorage.setItem(
       "web-ui:split-canvas:v1",
-      JSON.stringify({
-        v: 1,
-        active: true,
-        root: {
-          kind: "split",
-          a: { kind: "leaf", threadRef: "web:tester:old-a" },
-          b: { kind: "leaf", threadRef: "web:tester:old-b" },
-        },
-      }),
+      JSON.stringify(twoPaneCanvas({ threadRef: "web:tester:old-a" }, { threadRef: "web:tester:old-b" })),
     );
   if (opts.slackReturn)
     dom.window.sessionStorage.setItem(

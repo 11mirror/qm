@@ -46,22 +46,20 @@ export function createDeploymentMethods(
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
   const invitationLock = deps.advisoryLock;
+  const readableDeployment = async (id: string, principalId: string) => {
+    const deployment = await deps.deploy.getDeployment(id);
+    if (!deployment) return "not_found" as const;
+    return (await principalCanReadDeployment(deployment, principalId)) ? deployment : ("denied" as const);
+  };
+  const recordEnvironment = (action: string, input: { actorId: string; scopeId: string }, resource: string) =>
+    deps.auditLog.record({ at: Date.now(), principalId: input.actorId, action, resource, scopeLabel: input.scopeId });
   return {
-    deploy(input) {
-      return deps.deploy.deploy(input);
-    },
-    redeploy(id, input) {
-      return deps.deploy.redeploy(id, input);
-    },
-    listDeployments() {
-      return deps.deploy.listDeployments();
-    },
-    getDeployment(idOrName) {
-      return deps.deploy.getDeployment(idOrName);
-    },
-    shareDeployment(idOrName, grantee, permission, actor) {
-      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
-    },
+    deploy: (input) => deps.deploy.deploy(input),
+    redeploy: (id, input) => deps.deploy.redeploy(id, input),
+    listDeployments: () => deps.deploy.listDeployments(),
+    getDeployment: (idOrName) => deps.deploy.getDeployment(idOrName),
+    shareDeployment: (idOrName, grantee, permission, actor) =>
+      deps.deploy.shareDeployment(idOrName, grantee, permission, actor),
     async inviteToDeployment(idOrName, rawEmail, actorId) {
       const email = rawEmail.trim().toLowerCase();
       if (!validEmail(email)) throw new Error("a valid email address is required");
@@ -113,9 +111,7 @@ export function createDeploymentMethods(
         };
       });
     },
-    deploymentGrantees(idOrName) {
-      return deps.deploy.deploymentGrantees(idOrName);
-    },
+    deploymentGrantees: (idOrName) => deps.deploy.deploymentGrantees(idOrName),
     async listDeploymentsForViewer(principalId) {
       const deployments = await deps.deploy.listDeployments();
       const enriched = await Promise.all(
@@ -126,45 +122,25 @@ export function createDeploymentMethods(
       );
       return enriched.filter((d): d is ViewerDeployment => d != null);
     },
-    effectiveDeploymentPermission(d, principalId) {
-      return effectiveDeploymentPermission(d, principalId);
-    },
+    effectiveDeploymentPermission,
     async deploymentGitPermissionFor(idOrName, principalId) {
       const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
       return deployment ? principalGitPermission(deployment, principalId) : null;
     },
-    rollbackDeployment(id, version) {
-      return deps.deploy.rollbackDeployment(id, version);
-    },
-    canManageDeployment(idOrName, callerId, actingScopeId) {
-      return deps.deploy.canManageDeployment(idOrName, callerId, actingScopeId);
-    },
-    archiveDeployment(id) {
-      return deps.deploy.archiveDeployment(id);
-    },
-    restoreDeployment(id, actorId) {
-      return deps.deploy.restoreDeployment(id, actorId);
-    },
-    renameDeployment(id, name) {
-      return deps.deploy.renameDeployment(id, name);
-    },
-    setDeploymentDisplayName(id, displayName) {
-      return deps.deploy.setDeploymentDisplayName(id, displayName);
-    },
-    setDeploymentEmbedAncestors(id, embedAncestors) {
-      return deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors);
-    },
-    setDeploymentPublic(idOrName, isPublic, actor) {
-      return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
-    },
-    maintainDeployments() {
-      return deps.deploy.maintainDeployments();
-    },
+    rollbackDeployment: (id, version) => deps.deploy.rollbackDeployment(id, version),
+    canManageDeployment: (idOrName, callerId, actingScopeId) =>
+      deps.deploy.canManageDeployment(idOrName, callerId, actingScopeId),
+    archiveDeployment: (id) => deps.deploy.archiveDeployment(id),
+    restoreDeployment: (id, actorId) => deps.deploy.restoreDeployment(id, actorId),
+    renameDeployment: (id, name) => deps.deploy.renameDeployment(id, name),
+    setDeploymentDisplayName: (id, displayName) => deps.deploy.setDeploymentDisplayName(id, displayName),
+    setDeploymentEmbedAncestors: (id, embedAncestors) => deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors),
+    setDeploymentPublic: (idOrName, isPublic, actor) => deps.deploy.setDeploymentPublic(idOrName, isPublic, actor),
+    maintainDeployments: () => deps.deploy.maintainDeployments(),
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);
-      const deployment = await deps.deploy.getDeployment(id);
-      if (!deployment) return { status: "not_found" };
-      if (!(await principalCanReadDeployment(deployment, principalId))) return { status: "denied" };
+      const deployment = await readableDeployment(id, principalId);
+      if (typeof deployment === "string") return { status: deployment };
       return deps.deploy.reachDeployment(id, principalId, { bypassAcl: true });
     },
     async deploymentLogsFor(
@@ -172,17 +148,12 @@ export function createDeploymentMethods(
       principalId,
       opts,
     ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }> {
-      const deployment = await deps.deploy.getDeployment(id);
-      if (!deployment) return { status: "not_found" };
-      if (!(await principalCanReadDeployment(deployment, principalId))) return { status: "denied" };
+      const deployment = await readableDeployment(id, principalId);
+      if (typeof deployment === "string") return { status: deployment };
       return { status: "ok", logs: await deps.deploy.deploymentLogs(id, opts) };
     },
-    deploymentGitRepoPath(id) {
-      return deps.deploy.gitRepoPath(id);
-    },
-    runDeploymentGitPush(id, runReceivePack) {
-      return deps.deploy.pushGit(id, runReceivePack);
-    },
+    deploymentGitRepoPath: (id) => deps.deploy.gitRepoPath(id),
+    runDeploymentGitPush: (id, runReceivePack) => deps.deploy.pushGit(id, runReceivePack),
     async deploymentGitUrlFor(idOrName, principalId, opts) {
       const d = await deps.deploy.getDeployment(idOrName);
       if (!d) return null;
@@ -223,13 +194,7 @@ export function createDeploymentMethods(
         name: input.name,
         ownerActorId: input.actorId,
       });
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.actorId,
-        action: "environment_create",
-        resource: env.id,
-        scopeLabel: input.scopeId,
-      });
+      recordEnvironment("environment_create", input, env.id);
       return env;
     },
     resolveEnvironmentByName(name) {
@@ -239,13 +204,7 @@ export function createDeploymentMethods(
     async attachScope(input) {
       if (!deps.environments) throw new Error("environments not wired");
       await deps.environments.attach(input.scopeId, input.environmentId, input.actorId);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.actorId,
-        action: "environment_attach",
-        resource: input.environmentId,
-        scopeLabel: input.scopeId,
-      });
+      recordEnvironment("environment_attach", input, input.environmentId);
     },
   };
 }

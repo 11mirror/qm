@@ -4,15 +4,13 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
-import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane } from "./list-page";
-import { ensureContexts, scopeChip } from "./contexts";
-import { appState } from "./shell";
-import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
+import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane, textBtn } from "./list-page";
+import { scopeChip } from "./contexts";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 
 export interface WebhookView {
   id: string;
   ownerScopeId: string;
-  owner: string;
   action: string;
   verification: { scheme: string; secret?: string };
   filters?: Array<{ path: string; in: string[] }>;
@@ -28,32 +26,12 @@ export interface WebhookView {
 type WebhookScheme = "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
 
 const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: string }> = [
-  {
-    value: "hmac-sha256",
-    label: "Generic HMAC-SHA256",
-    guidance: "Send the digest in X-Signature as hex or sha256=<hex>.",
-  },
-  {
-    value: "github",
-    label: "GitHub",
-    guidance: "Use this URL as the payload URL and the signing secret as GitHub's webhook secret.",
-  },
-  {
-    value: "slack",
-    label: "Slack",
-    guidance: "Use the Slack app signing secret. Requests older than five minutes are rejected.",
-  },
-  {
-    value: "stripe",
-    label: "Stripe",
-    guidance: "Use the endpoint signing secret shown by Stripe for this destination.",
-  },
-  {
-    value: "linear",
-    label: "Linear",
-    guidance: "Use the webhook signing secret shown by Linear. Payloads older than one minute are rejected.",
-  },
-];
+  ["hmac-sha256", "Generic HMAC-SHA256", "Send the digest in X-Signature as hex or sha256=<hex>."],
+  ["github", "GitHub", "Use this URL as the payload URL and the signing secret as GitHub's webhook secret."],
+  ["slack", "Slack", "Use the Slack app signing secret. Requests older than five minutes are rejected."],
+  ["stripe", "Stripe", "Use the endpoint signing secret shown by Stripe for this destination."],
+  ["linear", "Linear", "Use the webhook signing secret shown by Linear. Payloads older than one minute are rejected."],
+].map(([value, label, guidance]) => ({ value: value as WebhookScheme, label: label!, guidance: guidance! }));
 
 let webhookList: WebhookView[] = [];
 const page = artifactPage("webhooks", "webhooks-page");
@@ -81,9 +59,6 @@ function refreshWebhooks(showLoading = false): Promise<boolean> {
 }
 
 export async function renderWebhooksPage(): Promise<void> {
-  if (appState.currentView !== "webhooks") return;
-  page.adoptScope();
-  await ensureContexts();
   await page.show({
     load: () => refreshWebhooks(webhookList.length === 0),
     find: findWebhook,
@@ -99,7 +74,6 @@ function drawWebhooksPage(): void {
     .filter((w) => page.inScope(w.ownerScopeId) && page.matches(`${w.action} ${w.verification.scheme}`))
     .sort((a, b) => b.createdAt - a.createdAt)
     .map(webhookPageRow);
-  const flash = page.takeFlash();
   page.paint(
     listPageTpl({
       title: "Webhooks",
@@ -109,15 +83,8 @@ function drawWebhooksPage(): void {
         drawWebhooksPage();
       },
       action: { label: "New webhook", onClick: showNewWebhook },
-      search: {
-        value: page.query,
-        placeholder: "Search webhooks",
-        onInput: (value) => {
-          page.query = value;
-          drawWebhooksPage();
-        },
-      },
-      rows: [...(flash ? [html`<div class="action-notice">${flash}</div>`] : []), ...rows],
+      search: page.search("Search webhooks", drawWebhooksPage),
+      rows: [...page.flashRows(), ...rows],
       empty: page.emptyText("webhooks", webhookList.length === 0),
     }),
     drawWebhooksPage,
@@ -128,36 +95,31 @@ function webhookPageRow(w: WebhookView): TemplateResult {
   let lastRun = "never fired";
   if (w.lastError) lastRun = "error";
   else if (w.lastFiredAt) lastRun = relTime(w.lastFiredAt);
-  return html`
-    <a
-      class="list-row"
-      href=${deepLinkPath(UI_BASE, "webhooks", null, null, w.id)}
-      @click=${(event: MouseEvent) => {
-        if (!isPlainLeftClick(event)) return;
-        event.preventDefault();
-        openWebhook(w, { push: true });
-      }}
-    >
-      <span class="list-row-title" dir="auto">${actionSnippet(w.action)}</span>
+  return page.link(
+    w.id,
+    "list-row",
+    () => openWebhook(w, { push: true }),
+    html`<span class="list-row-title" dir="auto">${actionSnippet(w.action)}</span>
       <span class="list-row-meta">
         ${scopeChip(w.ownerScopeId)}
         <span class="badge">${w.verification.scheme}</span>
         <span class="badge">${w.enabled ? "enabled" : "disabled"}</span>
         <span class="list-row-date">${lastRun}</span>
-      </span>
-    </a>
-  `;
+      </span>`,
+  );
 }
 
-function copyRow(text: string) {
-  return html`
+function copyField(label: string, text: string, hint: string | TemplateResult): TemplateResult {
+  return html`<div class="field">
+    <label>${label}</label>
     <div class="copyrow">
       <code class="mono">${text}</code>
       <button class="btn" @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}>
         <span>Copy</span>
       </button>
     </div>
-  `;
+    <div class="hint">${hint}</div>
+  </div>`;
 }
 
 function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
@@ -171,16 +133,12 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
       back: "Webhooks",
       onBack: drawWebhooksPage,
       title: "Webhook",
-      heading: html`<button class="btn" @click=${showNewWebhook}>${icon(Plus, 15)}<span>New webhook</span></button>`,
+      heading: textBtn("New webhook", Plus, showNewWebhook),
       notice,
       body: html`
         ${fieldTpl("Context", scopeChip(w.ownerScopeId))} ${fieldTpl("Action", w.action, "pre")}
         ${fieldTpl("Verification", w.verification.scheme)} ${fieldTpl("Status", w.enabled ? "Enabled" : "Disabled")}
-        <div class="field">
-          <label>Inbound URL</label>
-          ${copyRow(w.url)}
-          <div class="hint">Configure your sender (GitHub / Stripe / Slack / …) to POST events here.</div>
-        </div>
+        ${copyField("Inbound URL", w.url, "Configure your sender (GitHub / Stripe / Slack / …) to POST events here.")}
         ${w.filters?.length ? fieldTpl("Filters", w.filters.map((f) => `${f.path} ∈ [${f.in.join(", ")}]`).join("\n"), "pre") : nothing}
         ${w.destination ? fieldTpl("Destination", `${w.destination.type} → ${w.destination.target}`) : nothing}
         ${fieldTpl("Last fired", w.lastFiredAt ? new Date(w.lastFiredAt).toLocaleString() : "Never")}
@@ -206,73 +164,61 @@ interface WebhookEventView {
 }
 
 async function loadWebhookEvents(id: string, host: HTMLElement): Promise<void> {
-  render(
-    html`<h3>Message history</h3>
-      <p class="hint" role="status">Loading messages…</p>`,
-    host,
-  );
+  const show = (body: TemplateResult) =>
+    render(
+      html`<h3>Message history</h3>
+        ${body}`,
+      host,
+    );
+  show(html`<p class="hint" role="status">Loading messages…</p>`);
   try {
     const { events } = await api<{ events: WebhookEventView[] }>(`/api/webhooks/${encodeURIComponent(id)}/events`);
     if (!host.isConnected) return;
-    render(
-      html`
-        <h3>Message history</h3>
-        <p class="hint">
-          Latest 50 accepted events. Payloads show what was passed to the agent, capped at 16,000 characters. Earlier
-          events are not backfilled.
-        </p>
-        ${
-          events.length
-            ? events.map(
-                (event) => html`
-                  <details class="code-card">
-                    <summary class="tool-payload-label">
-                      <time datetime=${new Date(event.receivedAt).toISOString()}
-                        >${new Date(event.receivedAt).toLocaleString()}</time
-                      >
-                    </summary>
-                    <pre class="tool-payload-body">${event.payload}</pre>
-                    <div class="code-card-foot">
-                      ${event.sessionId ? html`<a class="btn" href=${deepLinkPath(UI_BASE, "chats", event.sessionId)}>Open session</a>` : html`<span class="hint">No session available.</span>`}
-                    </div>
-                  </details>
-                `,
-              )
-            : html`<p class="hint">No messages recorded yet.</p>`
-        }
-      `,
-      host,
-    );
+    show(html`
+      <p class="hint">
+        Latest 50 accepted events. Payloads show what was passed to the agent, capped at 16,000 characters. Earlier
+        events are not backfilled.
+      </p>
+      ${
+        events.length
+          ? events.map(
+              (event) => html`
+                <details class="code-card">
+                  <summary class="tool-payload-label">
+                    <time datetime=${new Date(event.receivedAt).toISOString()}
+                      >${new Date(event.receivedAt).toLocaleString()}</time
+                    >
+                  </summary>
+                  <pre class="tool-payload-body">${event.payload}</pre>
+                  <div class="code-card-foot">
+                    ${event.sessionId ? html`<a class="btn" href=${deepLinkPath(UI_BASE, "chats", event.sessionId)}>Open session</a>` : html`<span class="hint">No session available.</span>`}
+                  </div>
+                </details>
+              `,
+            )
+          : html`<p class="hint">No messages recorded yet.</p>`
+      }
+    `);
   } catch (error) {
     if (!host.isConnected) return;
-    render(
-      html`<h3>Message history</h3>
-        <p role="alert">${errMessage(error, "Couldn't load messages.")}</p>
+    show(
+      html`<p role="alert">${errMessage(error, "Couldn't load messages.")}</p>
         <button class="btn" @click=${() => void loadWebhookEvents(id, host)}>Retry</button>`,
-      host,
     );
   }
 }
 
 async function setWebhookEnabled(id: string, enabled: boolean): Promise<void> {
-  let notice: string;
-  try {
-    await api(`/api/webhooks/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, { method: "POST" });
-    notice = enabled ? "Webhook re-enabled." : "Webhook disabled.";
-  } catch (e) {
-    notice = errMessage(e, enabled ? "Couldn't re-enable webhook." : "Couldn't disable webhook.");
-  }
+  await page.attempt(
+    () => api(`/api/webhooks/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+    enabled ? "Couldn't re-enable webhook." : "Couldn't disable webhook.",
+    enabled ? "Webhook re-enabled." : "Webhook disabled.",
+  );
   await refreshWebhooks();
-  page.notice = notice;
+  page.notice = page.takeFlash();
   const w = findWebhook(id);
   if (w) openWebhook(w);
   else drawWebhooksPage();
-}
-
-function randomHex(bytes: number): string {
-  const a = new Uint8Array(bytes);
-  crypto.getRandomValues(a);
-  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function webhookForm() {
@@ -346,21 +292,20 @@ function showNewWebhook(): void {
 function selectWebhookScheme(e: Event, scheme: WebhookScheme): void {
   e.stopPropagation();
   const control = (e.currentTarget as HTMLElement).closest(".scheme-control") as HTMLElement | null;
-  const form = control?.closest("form");
-  setFormMenuValue(control, scheme, WEBHOOK_SCHEMES.find((s) => s.value === scheme)?.label ?? scheme);
-  applyWebhookScheme(form, scheme);
+  const found = WEBHOOK_SCHEMES.find((s) => s.value === scheme);
+  setFormMenuValue(control, scheme, found?.label ?? scheme);
+  const guidance = control?.closest("form")?.querySelector(".webhook-scheme-guidance");
+  if (guidance) guidance.textContent = found?.guidance ?? "";
   closeFormMenus();
-}
-
-function applyWebhookScheme(form: Element | null | undefined, scheme: string): void {
-  const guidance = form?.querySelector(".webhook-scheme-guidance");
-  if (guidance) guidance.textContent = WEBHOOK_SCHEMES.find((candidate) => candidate.value === scheme)?.guidance ?? "";
 }
 
 function fillGeneratedSecret(e: Event): void {
   const form = (e.currentTarget as HTMLElement).closest("form");
   const secret = form?.querySelector('input[name="secret"]') as HTMLInputElement | null;
-  if (secret && !secret.disabled) secret.value = randomHex(32);
+  if (secret && !secret.disabled)
+    secret.value = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join(
+      "",
+    );
 }
 
 function parseWebhookFilters(text: string): Array<{ path: string; in: string[] }> {
@@ -384,39 +329,28 @@ function parseWebhookFilters(text: string): Array<{ path: string; in: string[] }
 async function onCreateWebhook(e: Event): Promise<void> {
   e.preventDefault();
   const form = e.currentTarget as HTMLFormElement;
-  const errSlot = form.querySelector(".form-error") as HTMLElement | null;
-  const field = (n: string) =>
-    (form.querySelector(`[name="${n}"]`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ??
-    "";
+  const errSlot = form.querySelector(".form-error") as HTMLElement;
+  const field = (n: string) => (form.elements.namedItem(n) as HTMLInputElement | HTMLTextAreaElement).value;
   const action = field("action").trim();
-  const scheme = field("scheme") || "hmac-sha256";
   const secret = field("secret").trim();
-  let filters: Array<{ path: string; in: string[] }>;
-  if (errSlot) errSlot.textContent = "";
-  if (!action) {
-    if (errSlot) errSlot.textContent = "An action is required.";
-    return;
-  }
+  errSlot.textContent = action ? "" : "An action is required.";
+  if (!action) return;
+  let stage = "Invalid filters.";
   try {
-    filters = parseWebhookFilters(field("filters"));
-  } catch (err) {
-    if (errSlot) errSlot.textContent = errMessage(err, "Invalid filters.");
-    return;
-  }
-  const payload: Record<string, unknown> = {
-    action,
-    verification: { scheme, ...(secret ? { secret } : {}) },
-  };
-  if (filters.length) payload.filters = filters;
-  try {
+    const filters = parseWebhookFilters(field("filters"));
+    stage = "create failed";
     const r = await api<{ webhook: WebhookView; url: string }>("/api/webhooks", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        action,
+        verification: { scheme: field("scheme") || "hmac-sha256", ...(secret ? { secret } : {}) },
+        ...(filters.length ? { filters } : {}),
+      }),
     });
     await refreshWebhooks();
     showWebhookCreated(r.webhook, r.url);
   } catch (err) {
-    if (errSlot) errSlot.textContent = errMessage(err, "create failed");
+    errSlot.textContent = errMessage(err, stage);
   }
 }
 
@@ -429,20 +363,14 @@ function showWebhookCreated(w: WebhookView, url: string): void {
         ${listBackLink("Webhooks", drawWebhooksPage)}
         <h2>Webhook created ✓</h2>
         <div class="warn">Copy the secret now. It won't be shown again.</div>
-        <div class="field">
-          <label>Inbound URL</label>
-          ${copyRow(url)}
-          <div class="hint">Point your sender at this URL.</div>
-        </div>
+        ${copyField("Inbound URL", url, "Point your sender at this URL.")}
         ${
           secret && secret !== "***"
-            ? html`<div class="field">
-                <label>Signing secret</label>
-                ${copyRow(secret)}
-                <div class="hint">
-                  Configure your sender to sign requests with this secret (scheme: ${w.verification.scheme}).
-                </div>
-              </div>`
+            ? copyField(
+                "Signing secret",
+                secret,
+                html`Configure your sender to sign requests with this secret (scheme: ${w.verification.scheme}).`,
+              )
             : html`<div class="field">
                 <div class="hint">No signing secret for scheme <code>${w.verification.scheme}</code>.</div>
               </div>`

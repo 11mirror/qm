@@ -1,11 +1,8 @@
 import { html } from "lit";
 import { Pencil, Trash2 } from "lucide";
 import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./icons";
 import { appState } from "./shell";
-import { artifactPage, listPageTpl } from "./list-page";
-import { tip } from "./tooltip";
+import { artifactPage, iconBtn, listPageTpl } from "./list-page";
 
 interface Fact {
   id: string;
@@ -14,14 +11,13 @@ interface Fact {
 }
 
 let facts: Fact[] = [];
-let notice = "";
 let busy = false;
 let editing: { id: string; text: string } | null = null;
 const page = artifactPage("memory", "memory-page", "memory");
 
 export function resetMemoryState(): void {
   facts = [];
-  notice = "";
+  page.notice = "";
   busy = false;
   page.query = "";
   editing = null;
@@ -29,18 +25,20 @@ export function resetMemoryState(): void {
 
 async function change(method: "PATCH" | "DELETE", body: object, done: string): Promise<void> {
   busy = true;
-  notice = "";
+  page.notice = "";
   drawMemory();
-  try {
+  const save = async () => {
     facts = (await api<{ facts?: Fact[] }>("/api/memory", { method, body: JSON.stringify(body) })).facts ?? [];
-    editing = null;
-    notice = done;
-  } catch (e) {
-    notice = errMessage(e, "Failed to save memory.");
-  } finally {
-    busy = false;
-    drawMemory();
-  }
+  };
+  if (await page.attempt(save, "Failed to save memory.", done)) editing = null;
+  busy = false;
+  page.notice = page.takeFlash();
+  drawMemory();
+}
+
+function edit(next: typeof editing): void {
+  editing = next;
+  drawMemory();
 }
 
 function factRow(fact: Fact) {
@@ -63,16 +61,7 @@ function factRow(fact: Fact) {
         >
           Save
         </button>
-        <button
-          class="btn"
-          type="button"
-          @click=${() => {
-            editing = null;
-            drawMemory();
-          }}
-        >
-          Cancel
-        </button>
+        <button class="btn" type="button" @click=${() => edit(null)}>Cancel</button>
       </div>
     </div>`;
   return html`<div class="list-row memory-fact">
@@ -80,64 +69,35 @@ function factRow(fact: Fact) {
       <div>${text}</div>
       <div class="card-meta">Captured ${new Date(fact.createdAt).toISOString().slice(0, 10)}</div>
     </div>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Edit this fact"
-      ${tip("Edit this fact")}
-      @click=${() => {
-        editing = { id: fact.id, text };
-        drawMemory();
-      }}
-    >
-      ${icon(Pencil, 15)}
-    </button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Forget this fact"
-      ${tip("Forget this fact")}
-      ?disabled=${busy}
-      @click=${() => void change("DELETE", { ids: [fact.id] }, "Forgotten ✓")}
-    >
-      ${icon(Trash2, 15)}
-    </button>
+    ${iconBtn("Edit this fact", Pencil, () => edit({ id: fact.id, text }), { size: 15 })}
+    ${iconBtn("Forget this fact", Trash2, () => void change("DELETE", { ids: [fact.id] }, "Forgotten ✓"), { size: 15, disabled: busy })}
   </div>`;
 }
 
-function drawMemory(loading = false): void {
+function drawMemory(): void {
   page.paint(
     listPageTpl({
       title: "Memory",
-      search: {
-        value: page.query,
-        placeholder: "Search remembered facts",
-        onInput: (value) => {
-          page.query = value;
-          drawMemory();
-        },
-      },
-      notice: notice || (loading ? "Loading…" : ""),
+      search: page.search("Search remembered facts", drawMemory),
+      notice: page.notice || (page.loading ? "Loading…" : ""),
       rows: facts.filter((fact) => page.matches(fact.text)).map(factRow),
       empty: page.query ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet.",
     }),
-    () => drawMemory(),
+    drawMemory,
   );
 }
 
 export async function renderMemory(): Promise<void> {
   if (appState.currentView !== "memory") return;
-  if (editing) return void drawMemory();
-  const seq = appState.viewRenderSeq;
-  notice = "";
-  drawMemory(true);
-  try {
-    const r = await api<{ facts?: Fact[] }>("/api/memory");
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
-    facts = r.facts ?? [];
-  } catch (e) {
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
-    notice = errMessage(e, "Failed to load memory.");
-  }
+  if (editing) return drawMemory();
+  const load = page.refresh(
+    async () => {
+      facts = (await api<{ facts?: Fact[] }>("/api/memory")).facts ?? [];
+    },
+    "Failed to load memory.",
+    true,
+  );
+  drawMemory();
+  await load;
   drawMemory();
 }

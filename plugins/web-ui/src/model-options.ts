@@ -24,10 +24,8 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 function providerLabel(id: string, name: string, provider: string): string {
-  if (provider === "openrouter") {
-    const namedProvider = /^([^:]{2,40}):\s/.exec(name)?.[1]?.trim();
-    if (namedProvider) return namedProvider;
-  }
+  const named = provider === "openrouter" && /^([^:]{2,40}):\s/.exec(name)?.[1]?.trim();
+  if (named) return named;
   const key = provider === "openrouter" ? (id.split("/", 1)[0] ?? provider) : provider;
   return (
     PROVIDER_LABELS[key] ??
@@ -51,36 +49,27 @@ function gatewayPresentation(id: string, provider: string): { label: string; pro
     gpt: { prefix: "GPT-", provider: "openai" },
     gemini: { prefix: "Gemini ", provider: "google" },
   }[family[1] as "claude" | "gpt" | "gemini"];
-  return {
-    label: brand.prefix + title,
-    provider: brand.provider,
-  };
+  return { label: brand.prefix + title, provider: brand.provider };
 }
 
-function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>> = {}): ModelOption | null {
+function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>>): ModelOption | null {
+  const meta = catalog[id];
+  if (!meta) return null;
   try {
-    const dynamic = catalog[id];
-    const meta = dynamic ? { label: dynamic.label, buttonLabel: dynamic.buttonLabel } : null;
-    if (!meta) return null;
-    const model = getBaseModel(id, dynamic);
+    const model = getBaseModel(id, meta);
     const presentation = gatewayPresentation(id, String(model.provider));
+    const present = (label: string) =>
+      presentation && [id, id.slice("gateway/".length)].includes(label) ? presentation.label : label;
     return {
       value: id,
       model,
-      ...meta,
-      ...(presentation
-        ? {
-            label: [id, id.slice("gateway/".length)].includes(meta.label) ? presentation.label : meta.label,
-            buttonLabel: [id, id.slice("gateway/".length)].includes(meta.buttonLabel)
-              ? presentation.label
-              : meta.buttonLabel,
-            displayProvider: presentation.provider,
-          }
-        : {}),
+      label: present(meta.label),
+      buttonLabel: present(meta.buttonLabel),
+      ...(presentation ? { displayProvider: presentation.provider } : {}),
       groupLabel: providerLabel(
         id,
         meta.label,
-        presentation?.provider ?? dynamic?.provider ?? String(model?.provider ?? model?.api ?? "other"),
+        presentation?.provider ?? meta.provider ?? String(model.api ?? "other"),
       ),
     };
   } catch {
@@ -92,36 +81,20 @@ export function runtimeModelOptions(
   ids: readonly string[],
   catalog: Readonly<Record<string, ModelMetadata>> = {},
 ): ModelOption[] {
-  const seen = new Set<string>();
-  const out: ModelOption[] = [];
-  for (const id of ids) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const opt = buildOption(id, catalog);
-    if (opt) out.push(opt);
-  }
-  return out;
+  return [...new Set(ids)].flatMap((id) => buildOption(id, catalog) ?? []);
 }
 
-interface RuntimeOptions {
-  options: ModelOption[];
-  defaultValue: string | null;
-}
+const FALLBACK = { options: [] as ModelOption[], defaultValue: null as string | null };
+const derived = new WeakMap<RuntimeConfig, typeof FALLBACK>();
 
-const FALLBACK: RuntimeOptions = { options: [], defaultValue: null };
-const derived = new WeakMap<RuntimeConfig, RuntimeOptions>();
-
-function runtimeFor(scopeKey?: string | null): RuntimeOptions {
+function runtimeFor(scopeKey?: string | null): typeof FALLBACK {
   const config = getRuntimeConfig(scopeKey);
   if (!config) return FALLBACK;
-  let options = derived.get(config);
-  if (!options) {
-    options = {
-      options: runtimeModelOptions(config.models, config.modelCatalog),
-      defaultValue: config.effective.modelId,
-    };
-    derived.set(config, options);
-  }
+  const options = derived.get(config) ?? {
+    options: runtimeModelOptions(config.models, config.modelCatalog),
+    defaultValue: config.effective.modelId,
+  };
+  derived.set(config, options);
   return options;
 }
 

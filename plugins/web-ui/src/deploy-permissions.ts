@@ -54,22 +54,33 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     if (closeFormMenus()) return;
     close();
   });
-  const change = async (scope: string, value: string, email?: string) => {
-    if (busy) return;
-    closeFormMenus();
+  const run = async (failure: string, task: () => Promise<void>) => {
     busy = true;
     error = "";
     draw();
     try {
-      const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
-        endpoint,
-        {
-          method: "POST",
-          body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
-        },
-      );
-      publicAccess = response.public;
-      grantees = response.grantees;
+      await task();
+    } catch (e) {
+      error = errMessage(e, failure);
+    } finally {
+      busy = false;
+      if (dialog.isConnected) draw();
+    }
+  };
+  const post = async (body: Record<string, unknown>) => {
+    const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
+      endpoint,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    publicAccess = response.public;
+    grantees = response.grantees;
+    return response;
+  };
+  const change = async (scope: string, value: string, email?: string) => {
+    if (busy) return;
+    closeFormMenus();
+    await run("Could not update permissions.", async () => {
+      const response = await post({ ...(email ? { email } : { scope }), access: value });
       if (response.invitation?.emailProblem)
         error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
@@ -77,46 +88,23 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       searched = false;
       searchSequence++;
       matches = [];
-    } catch (e) {
-      error = errMessage(e, "Could not update permissions.");
-    } finally {
-      busy = false;
-      if (dialog.isConnected) draw();
-    }
+    });
   };
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
   const generalAccess = (): GeneralAccess => {
     if (publicAccess) return "public";
     return orgGrant() ? "org" : "restricted";
   };
-  const post = async (body: Record<string, unknown>) => {
-    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    publicAccess = response.public;
-    grantees = response.grantees;
-  };
   const changeGeneral = async (next: GeneralAccess) => {
     if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;
     closeFormMenus();
-    busy = true;
-    error = "";
-    draw();
-    try {
-      if (next === "public") await post({ public: true });
-      else {
-        if (publicAccess) await post({ public: false });
-        const grant = orgGrant();
-        if (next === "org" && !grant) await post({ scope: "org", access: "view" });
-        if (next === "restricted" && grant) await post({ scope: grant.scope, access: "none" });
-      }
-    } catch (e) {
-      error = errMessage(e, "Could not update general access.");
-    } finally {
-      busy = false;
-      if (dialog.isConnected) draw();
-    }
+    await run("Could not update general access.", async () => {
+      if (next === "public") return void (await post({ public: true }));
+      if (publicAccess) await post({ public: false });
+      const grant = orgGrant();
+      if (next === "org" && !grant) await post({ scope: "org", access: "view" });
+      if (next === "restricted" && grant) await post({ scope: grant.scope, access: "none" });
+    });
   };
   const search = async () => {
     const sequence = ++searchSequence;
@@ -164,13 +152,8 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     const email = query.trim().toLowerCase();
     if (!externalSharing) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
-    if (
-      owner.toLowerCase() === `personal:${email}` ||
-      grantees.some((g) => g.scope.toLowerCase() === `personal:${email}`)
-    )
-      return null;
-    if (matches.some((m) => m.principalId.toLowerCase() === email)) return null;
-    return email;
+    const taken = [owner, ...grantees.map((g) => g.scope)].some((s) => s.toLowerCase() === `personal:${email}`);
+    return taken || matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
   };
   const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
     html`<fieldset class="permission-control" ?disabled=${busy}>
@@ -377,16 +360,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     );
   draw();
   dialog.showModal();
-  try {
+  await run("Could not load permissions.", async () => {
     const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(endpoint);
     publicAccess = response.public;
     externalSharing = response.externalSharing !== false;
     grantees = response.grantees;
     loaded = true;
-  } catch (e) {
-    error = errMessage(e, "Could not load permissions.");
-  } finally {
-    busy = false;
-    if (dialog.isConnected) draw();
-  }
+  });
 }

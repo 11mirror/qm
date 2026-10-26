@@ -73,7 +73,7 @@ test("a transient fetch failure mid-poll is retried — the turn still completes
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-r1", freshAcc(clock));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(clock) }, "run-r1");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "stop", "the transient failures did not fail the turn");
@@ -105,7 +105,7 @@ test("a transient 5xx mid-poll is retried — the turn still completes", async (
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-r2", freshAcc(clock));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(clock) }, "run-r2");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "stop");
@@ -125,7 +125,7 @@ test("a 4xx is definitive — the poll fails immediately without retrying", asyn
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-r3", freshAcc(clock));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(clock) }, "run-r3");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error");
@@ -144,7 +144,7 @@ test("persistent transient failures past the idle window fail with a timeout, no
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-r4", freshAcc(clock));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(clock) }, "run-r4");
   const final = await drain(stream);
 
   assert.equal(final.stopReason, "error");
@@ -168,7 +168,7 @@ test("poll requests never put bearer credentials in the URL", async () => {
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-r5", freshAcc(clock));
+  await pollRun({ stream, partial: blankAssistant(), st: freshAcc(clock) }, "run-r5");
   await drain(stream);
 
   assert.equal(urls.length, 1);

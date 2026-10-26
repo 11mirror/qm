@@ -11,10 +11,9 @@ import {
   type AmbientDecision,
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../core/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
@@ -38,16 +37,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
   }
 
   const ambientSelf = new Map<string, { name?: string; mentionId?: string }>();
-  const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
-    void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
-  };
-  async function judgeAmbientContainer(
-    surface: string,
-    container: string,
-    opts?: { reason?: "messages" | "scheduled" },
-  ): Promise<AmbientDecision> {
+  async function judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision> {
     if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
-    const scheduled = opts?.reason === "scheduled";
     const policy = await deps.channelPolicy?.get(container);
     const cursorKey = `${tenant().orgId}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
@@ -70,11 +61,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
           .catch(() => undefined);
     };
-    if (!delta.length && !scheduled) {
+    if (!delta.length) {
       await advanceCursor();
       return { act: false };
     }
-    if (!scheduled && delta.length && delta.every((m) => botModeOf(m) === "rollup")) {
+    if (delta.every((m) => botModeOf(m) === "rollup")) {
       const lastAt = cursor?.lastJudgedAt;
       const held =
         lastAt !== undefined &&
@@ -86,6 +77,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     }
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
+    const recordJudgment = (
+      j: Omit<Parameters<AmbientJudgmentStore["record"]>[0], "surface" | "container" | "createdAt">,
+    ): void => {
+      void deps.ambientJudgments
+        ?.record({
+          surface,
+          container,
+          ...j,
+          ...(tsFrom ? { tsFrom } : {}),
+          ...(tsTo ? { tsTo } : {}),
+          createdAt: Date.now(),
+        })
+        .catch(reportFailureAs("ambient: record judgment", undefined));
+    };
     const watchReason =
       (policy?.orders ?? "").trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
     let ambientOffReason: string | null = null;
@@ -98,29 +103,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         "ambient defaults off — no standing orders or action-bot triggers here, so only @mentions engage";
     }
     if (ambientOffReason) {
-      recordJudgment({
-        surface,
-        container,
-        decision: "ignore",
-        reason: ambientOffReason,
-        ...(tsFrom ? { tsFrom } : {}),
-        ...(tsTo ? { tsTo } : {}),
-        createdAt: Date.now(),
-      });
+      recordJudgment({ decision: "ignore", reason: ambientOffReason });
       await advanceCursor();
       return { act: false };
     }
     const self = ambientSelf.get(`${tenant().orgId}:${surface}`);
     const forJudge = delta.filter((m) => !m.mentionsSelf);
-    if (forJudge.length < delta.length)
-      recordJudgment({
-        surface,
-        container,
-        decision: "fastlane",
-        ...(tsFrom ? { tsFrom } : {}),
-        ...(tsTo ? { tsTo } : {}),
-        createdAt: Date.now(),
-      });
+    if (forJudge.length < delta.length) recordJudgment({ decision: "fastlane" });
     const actionBots = [
       ...new Set(
         delta
@@ -134,7 +123,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       ? [actionLines.join("\n"), policy?.orders ?? ""].filter((s) => s.trim()).join("\n")
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
-    if (forJudge.length || scheduled) {
+    if (forJudge.length) {
       const containerKind = (await deps.surfaceCache.containerState(container).catch(() => null))?.kind;
       const judgeBatch: AmbientBatch = {
         container,
@@ -144,7 +133,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         ...(self ? { self } : {}),
         messages: forJudge,
         ...(backdrop.length ? { backdrop } : {}),
-        ...(scheduled ? { scheduled: true } : {}),
       };
       const prompt = renderAmbientPrompt(judgeBatch);
       const startedAt = Date.now();
@@ -162,17 +150,12 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         judgeBatch,
       ).catch(() => ({ act: false }) as AmbientDecision);
       recordJudgment({
-        surface,
-        container,
         decision: decision.act ? "act" : "ignore",
         ...(decision.reason ? { reason: decision.reason } : {}),
         ...(decision.askedBy ? { askedBy: decision.askedBy } : {}),
         prompt,
         ...(judgeModel ? { model: judgeModel } : {}),
         latencyMs: Date.now() - startedAt,
-        ...(tsFrom ? { tsFrom } : {}),
-        ...(tsTo ? { tsTo } : {}),
-        createdAt: Date.now(),
       });
     }
     await advanceCursor();
@@ -250,28 +233,29 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
     const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const common = {
+      surface: batch.surface,
+      conversation,
+      deliveryTarget: batch.container,
+      surfaceTools: true,
+      async: true,
+      spawned: true,
+      idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
+    };
     const req: TurnRequest = solicited
       ? {
-          surface: batch.surface,
+          ...common,
           actor: {
             externalId: solicited.member.principalId,
             ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
           },
-          conversation,
-          deliveryTarget: batch.container,
           text: solicited.message.text,
           liveActor: true,
           triggerTs: solicited.message.ts,
-          surfaceTools: true,
-          async: true,
-          spawned: true,
-          idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
         }
       : {
-          surface: batch.surface,
+          ...common,
           actor: { externalId: `system:ambient:${tenant().orgId}` },
-          conversation,
-          deliveryTarget: batch.container,
           text: buildWakeEnvelope({
             reason: "ambient",
             surface: batch.surface,
@@ -287,10 +271,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             judgeReason: decision.reason ?? null,
           }),
           triggered: true,
-          surfaceTools: true,
-          async: true,
-          spawned: true,
-          idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
         };
     if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
     await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));

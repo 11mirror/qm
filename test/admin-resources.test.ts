@@ -117,8 +117,8 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("base-model")?.kind, "enum");
     assert.equal(byId.get("base-model")?.target, "any");
     assert.ok((byId.get("base-model")?.enumValues?.length ?? 0) > 0);
-    assert.deepEqual(byId.get("security-posture")?.enumValues, ["dangerous", "auto", "strict"]);
-    assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
+    assert.equal(byId.has("security-posture"), false);
+    assert.equal(byId.has("sharing-posture"), false);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);

@@ -39,7 +39,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     const pane = mountInboxPane({ host, viewId: "all", density: () => "full", onDensityChange: () => {} });
     assert.equal(host.textContent, "");
     pane.dispose();
-    render(inboxChat(), host);
+    render(inboxChat({ kind: "inbox", hasEmail: false, hasSlack: false, hasDrafts: false }), host);
     const deniedSidebar = host.querySelector("qm-inbox-chat") as HTMLElement & { updateComplete: Promise<boolean> };
     await deniedSidebar.updateComplete;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -48,7 +48,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     assert.equal(requests.length, 0);
     render(null, host);
     appState.me.permissions = ["inbox"];
-    render(inboxChat(), host);
+    render(inboxChat({ kind: "inbox", hasEmail: false, hasSlack: false, hasDrafts: false }), host);
     await until(() => Boolean(host.querySelector("textarea")));
     const sidebar = host.querySelector("qm-inbox-chat")!;
     const conversation = allConversations().find(

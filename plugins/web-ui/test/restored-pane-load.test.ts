@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
+import { twoPaneCanvas } from "./split-canvas-fixture.ts";
 
 const session: CoreSession = { ...SESSION, threadRef: "dm:sample", type: "dm", createdAt: 1, canContinue: false };
 const items = [item("AgentMessage", { seq: 1, createdAt: 1, text: "Stored response" })];
@@ -13,15 +14,9 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 function restore(): void {
   localStorage.setItem(
     "web-ui:split-canvas:v1",
-    JSON.stringify({
-      v: 1,
-      active: true,
-      root: {
-        kind: "split",
-        a: { kind: "leaf", sessionId: session.id, threadRef: session.threadRef },
-        b: { kind: "leaf", threadRef: "web:tester:other" },
-      },
-    }),
+    JSON.stringify(
+      twoPaneCanvas({ sessionId: session.id, threadRef: session.threadRef }, { threadRef: "web:tester:other" }),
+    ),
   );
 }
 

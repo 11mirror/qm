@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
 import { EFFORT_LEVELS, type EffortLevel, type ModelOption } from "./model-options.ts";
+import { readStorage, writeStorage } from "./drafts.ts";
 
 export interface LoadoutEntry {
   value: string;
@@ -90,6 +91,11 @@ export function effortLevelsForModel(model?: Model<Api>): Array<{ value: EffortL
   return [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels];
 }
 
+export function supportedEffort(model: Model<Api> | undefined, ...wanted: EffortLevel[]): EffortLevel {
+  const levels = effortLevelsForModel(model);
+  return wanted.find((effort) => levels.some((level) => level.value === effort)) ?? levels[0]!.value;
+}
+
 export function modelLoadoutOptions(options: readonly ModelOption[], entries: readonly LoadoutEntry[]): ModelOption[] {
   const saved = new Map(uniqueLoadout(entries).map((entry) => [presetModelId(entry.value), entry.value]));
   return [...new Set(options.map((option) => presetModelId(option.value)))].flatMap((modelId) => {
@@ -105,19 +111,11 @@ export function modelLoadoutOptions(options: readonly ModelOption[], entries: re
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
 export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
-  try {
-    return parseLoadout(localStorage.getItem(key));
-  } catch {
-    return [];
-  }
+  return parseLoadout(readStorage(key));
 }
 
 export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
-  } catch {
-    return;
-  }
+  writeStorage(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
 }
 
 export function loadoutActions(
@@ -129,10 +127,9 @@ export function loadoutActions(
   const apply = (entry: LoadoutEntry) => {
     const option = options().find((candidate) => candidate.value === entry.value);
     if (!option) return;
-    const levels = effortLevelsForModel(option.model);
     choose(option, {
       value: option.value,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
+      effort: supportedEffort(option.model, entry.effort),
       fast: entry.fast && supportsFast(option.model.id),
     });
   };

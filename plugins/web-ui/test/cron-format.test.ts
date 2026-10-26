@@ -57,8 +57,10 @@ test("calendar schedule without a core-provided next fire degrades to last/never
     schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
   };
   assert.equal(cronNextFire(cron), null);
-  assert.equal(cronRunSummary(cron), "never fired");
-  assert.match(cronRunSummary({ ...cron, lastFiredAt: Date.UTC(2026, 0, 1, 17) }), /^last /);
+  assert.deepEqual(cronRunSummary(cron), { text: "never fired", title: "Never fired" });
+  const fired = cronRunSummary({ ...cron, lastFiredAt: Date.UTC(2026, 0, 1, 17) });
+  assert.match(fired.text, /^last /);
+  assert.match(fired.title, /^Last fired: /);
 });
 
 test("calendar schedule honors a core-provided next fire timestamp", () => {

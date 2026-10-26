@@ -71,8 +71,10 @@ import {
   upsertSessions,
   withPendingSession,
   withoutUnsentPending,
-  type RecentItem,
+  type BackgroundCounts,
   type ChatBrowseStatus,
+  type RecentGroupKind,
+  type RecentItem,
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
@@ -90,6 +92,7 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
+import { quietly } from "./shell-state";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
@@ -111,15 +114,21 @@ import {
 import { liveTurnThreadRef } from "./working-dot";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
-export const sessionsState = {
+const WEB_ONLY_KEY = "web-ui:web-only";
+
+const freshSessionsState = () => ({
   list: [] as CoreSession[],
   loaded: false,
   openMenuId: null as string | null,
   renamingId: null as string | null,
   openingKey: null as string | null,
-  webOnly: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
+});
+
+export const sessionsState = {
+  ...freshSessionsState(),
+  webOnly: quietly(() => localStorage.getItem(WEB_ONLY_KEY) === "1", false),
 };
 
 let selection: SessionSelection = emptySelection();
@@ -144,10 +153,6 @@ export function clearSessionSelection(): boolean {
   return true;
 }
 
-export function hasSessionSelection(): boolean {
-  return selection.ids.size > 0;
-}
-
 let selectColorOpen = false;
 
 function redrawSelection(): void {
@@ -164,15 +169,6 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
-  try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
-  } catch {
-    return false;
-  }
-})();
-
 let sessionsLoading = false;
 let sessionsNotice = "";
 let sessionRefreshSeq = 0;
@@ -182,22 +178,27 @@ let renameDraft = "";
 const refreshingTitleIds = new Set<string>();
 let showArchived = false;
 const SESSION_BATCH_SIZE = 50;
-let activeCursor: string | null = null;
-let activePaged = false;
-let archivedCursor: string | null = null;
-let archivedLoaded = false;
-let pageLoading: "active" | "archived" | null = null;
-let chatsPageRows: CoreSession[] = [];
-let chatsPageCursor: string | null = null;
-let chatsPageLoading = false;
+const freshPaging = () => ({
+  activeCursor: null as string | null,
+  activePaged: false,
+  archivedCursor: null as string | null,
+  archivedLoaded: false,
+  loading: null as "active" | "archived" | null,
+});
+let paging = freshPaging();
 let chatsPageSeq = 0;
-let chatsPageQueryTimer: ReturnType<typeof setTimeout> | null = null;
-
-let chatsPageScope: string | null = null;
-let chatsPageQuery = "";
-let chatsPageStatus: ChatBrowseStatus = "active";
-let chatsPageSurface: "all" | "web" | "slack" = "all";
-let chatsPageHost: HTMLElement | null = null;
+const freshChatsPage = () => ({
+  rows: [] as CoreSession[],
+  cursor: null as string | null,
+  loading: false,
+  queryTimer: null as ReturnType<typeof setTimeout> | null,
+  scope: null as string | null,
+  query: "",
+  status: "active" as ChatBrowseStatus,
+  surface: "all" as "all" | "web" | "slack",
+  host: null as HTMLElement | null,
+});
+let chatsPage = freshChatsPage();
 
 export function resetSessionsState(): void {
   selection = emptySelection();
@@ -206,42 +207,20 @@ export function resetSessionsState(): void {
   sessionPatchEpoch++;
   sessionPatchTails.clear();
   sessionPatchVersions.clear();
-  sessionsState.list = [];
-  sessionsState.loaded = false;
+  Object.assign(sessionsState, freshSessionsState());
   listCurrent = false;
   listRequestedAt = 0;
   sessionsRefreshRunning = false;
   queuedSessionsRefresh = null;
   sessionRefreshSeq++;
-  sessionsState.openMenuId = null;
-  sessionsState.renamingId = null;
-  sessionsState.openingKey = null;
-  sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
-  sessionsState.hasArchived = false;
-  activeCursor = null;
-  activePaged = false;
-  archivedCursor = null;
-  archivedLoaded = false;
-  pageLoading = null;
-  chatsPageRows = [];
-  chatsPageCursor = null;
-  chatsPageLoading = false;
+  paging = freshPaging();
   chatsPageSeq++;
-  if (chatsPageQueryTimer) clearTimeout(chatsPageQueryTimer);
-  chatsPageQueryTimer = null;
-  chatsPageScope = null;
-  chatsPageQuery = "";
-  chatsPageStatus = "active";
-  chatsPageSurface = "all";
-  chatsPageHost = null;
+  if (chatsPage.queryTimer) clearTimeout(chatsPage.queryTimer);
+  chatsPage = freshChatsPage();
   recentContextsRequest = null;
-}
-
-function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -252,7 +231,7 @@ function recentItemActivity(item: RecentItem): number {
 }
 
 function recentItemsFor(sessions: readonly CoreSession[]): RecentItem[] {
-  return groupProjectSessions(sessions, projectSeedsForRecents()).sort(
+  return groupProjectSessions(sessions, recentProjectSeeds(contextsState.list)).sort(
     (a, b) => recentItemActivity(b) - recentItemActivity(a),
   );
 }
@@ -308,9 +287,7 @@ function channelLabel(s: CoreSession): string | null {
 
 export function groupDmTitle(s: CoreSession): TemplateResult | string {
   if (s.title && s.title.trim()) return s.title;
-  if (projectName(s.scopeId)) return defaultSessionTitle(s);
-  if (s.type !== "group") return defaultSessionTitle(s);
-  const label = groupDmLabel(s.channelName);
+  const label = s.type === "group" && !projectName(s.scopeId) ? groupDmLabel(s.channelName) : null;
   if (!label) return defaultSessionTitle(s);
   return html`<span class="group-dm-title" ${tip(label.text)}>
     <span class="group-dm-count">${label.count}</span>
@@ -363,41 +340,21 @@ export function renderList(): void {
           : nothing
       }
       ${groupedRows(activeItems, shownThreads)}
-      ${
-        activeCursor
-          ? html`<button
-              class="archived-toggle"
-              type="button"
-              ?disabled=${pageLoading === "active"}
-              aria-busy=${pageLoading === "active" ? "true" : "false"}
-              @click=${() => void loadMoreSessions("active")}
-            >
-              ${sheenLabel("Show more conversations", pageLoading === "active")}
-            </button>`
-          : nothing
-      }
+      ${paging.activeCursor ? moreSessionsButton("active", "Show more conversations") : nothing}
       ${
         archived.length || sessionsState.hasArchived
           ? html`
               <button class="archived-toggle ${showArchived ? "open" : ""}" @click=${toggleShowArchived}>
                 ${icon(showArchived ? ChevronDown : ChevronRight, 14)}
-                ${sheenLabel("Archived", pageLoading === "archived" && !archivedLoaded)}
+                ${sheenLabel("Archived", paging.loading === "archived" && !paging.archivedLoaded)}
               </button>
               ${
                 showArchived
                   ? html`<div class="archived-children">
                       ${groupedRows(archivedItems, shownThreads)}
                       ${
-                        archivedCursor
-                          ? html`<button
-                              class="archived-toggle"
-                              type="button"
-                              ?disabled=${pageLoading === "archived"}
-                              aria-busy=${pageLoading === "archived" ? "true" : "false"}
-                              @click=${() => void loadMoreSessions("archived")}
-                            >
-                              ${sheenLabel("Show more archived conversations", pageLoading === "archived")}
-                            </button>`
+                        paging.archivedCursor
+                          ? moreSessionsButton("archived", "Show more archived conversations")
                           : nothing
                       }
                     </div>`
@@ -427,6 +384,22 @@ export function renderList(): void {
   notifyPanesChanged();
 }
 
+function moreButton(cls: string, label: string, loading: boolean, run: () => void): TemplateResult {
+  return html`<button
+    class=${cls}
+    type="button"
+    ?disabled=${loading}
+    aria-busy=${loading ? "true" : "false"}
+    @click=${run}
+  >
+    ${sheenLabel(label, loading)}
+  </button>`;
+}
+
+function moreSessionsButton(kind: "active" | "archived", label: string): TemplateResult {
+  return moreButton("archived-toggle", label, paging.loading === kind, () => void loadMoreSessions(kind));
+}
+
 const NEW_CHAT_TOOLTIP = "Start a new chat";
 const PROJECT_OPTIONS_TOOLTIP = "Project options";
 const CHAT_OPTIONS_TOOLTIP = "Chat options";
@@ -435,16 +408,17 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
+const GROUP_LOOK: Record<RecentGroupKind, [IconNode | null, string]> = {
+  personal: [null, "Project"],
+  project: [Folder, "Project"],
+  channel: [Hash, "Channel"],
+  group: [Users, "Group DM"],
+};
+
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
-  let glyph: IconNode | null = Folder;
-  if (item.groupKind === "personal") glyph = null;
-  else if (item.groupKind === "channel") glyph = Hash;
-  else if (item.groupKind === "group") glyph = Users;
-  let fallbackName = "Project";
-  if (item.groupKind === "channel") fallbackName = "Channel";
-  else if (item.groupKind === "group") fallbackName = "Group DM";
+  const [glyph, fallbackName] = GROUP_LOOK[item.groupKind];
   const name = item.name ?? fallbackName;
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
@@ -510,8 +484,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
 }
 
 function toggleRecentProject(scopeId: string): void {
-  if (sessionsState.collapsedProjectScopes.has(scopeId)) sessionsState.collapsedProjectScopes.delete(scopeId);
-  else sessionsState.collapsedProjectScopes.add(scopeId);
+  if (!sessionsState.collapsedProjectScopes.delete(scopeId)) sessionsState.collapsedProjectScopes.add(scopeId);
   renderList();
 }
 
@@ -545,26 +518,8 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
   const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
-      <button
-        class="session-menu-option"
-        type="button"
-        role="menuitem"
-        @click=${() => openProjectFromMenu(item.scopeId)}
-      >
-        ${icon(Folder, 15)}<span>View project</span>
-      </button>
-      ${
-        owned
-          ? html`<button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              @click=${() => beginRename(projectMenuKey(item.scopeId), item.name ?? "")}
-            >
-              ${icon(Pencil, 15)}<span>Rename</span>
-            </button>`
-          : nothing
-      }
+      ${menuOption(Folder, "View project", () => openProjectFromMenu(item.scopeId))}
+      ${owned ? menuOption(Pencil, "Rename", () => beginRename(projectMenuKey(item.scopeId), item.name ?? "")) : nothing}
     </div>
   `;
 }
@@ -577,16 +532,11 @@ function openProjectFromMenu(scopeId: string): void {
 function projectRenameRow(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
   const menuKey = projectMenuKey(item.scopeId);
   return html`<div class="recent-project-head renaming">
-    ${renameInput(menuKey, "Rename project", () => commitProjectRename(item))}
+    ${renameInput(menuKey, "Rename project", (next) => commitProjectRename(item, next))}
   </div>`;
 }
 
-async function commitProjectRename(item: Extract<RecentItem, { kind: "project" }>): Promise<void> {
-  if (sessionsState.renamingId !== projectMenuKey(item.scopeId)) return;
-  const next = renameDraft.trim();
-  sessionsState.renamingId = null;
-  renameDraft = "";
-  renderList();
+async function commitProjectRename(item: Extract<RecentItem, { kind: "project" }>, next: string): Promise<void> {
   const project = projectOf(item.scopeId);
   if (!project || !next || next === project.name) return;
   await renameProject(project, next);
@@ -601,27 +551,27 @@ export async function renderChatsPage(): Promise<void> {
 }
 
 function chatsPageShowing(): boolean {
-  return Boolean(chatsPageHost && appState.mainEl && chatsPageHost.parentElement === appState.mainEl);
+  return Boolean(chatsPage.host && appState.mainEl && chatsPage.host.parentElement === appState.mainEl);
 }
 
 async function loadChatsPage(append: boolean): Promise<void> {
-  if (append && !chatsPageCursor) return;
+  if (append && !chatsPage.cursor) return;
   const seq = ++chatsPageSeq;
-  chatsPageLoading = true;
-  if (!append) chatsPageCursor = null;
+  chatsPage.loading = true;
+  if (!append) chatsPage.cursor = null;
   drawChatsPage();
   try {
     const page = await fetchSessionPage({
       limit: SESSION_BATCH_SIZE,
-      before: append ? chatsPageCursor : null,
-      status: chatsPageStatus,
-      scope: chatsPageScope,
-      q: chatsPageQuery,
-      ...(chatsPageSurface === "all" ? {} : { surface: chatsPageSurface }),
+      before: append ? chatsPage.cursor : null,
+      status: chatsPage.status,
+      scope: chatsPage.scope,
+      q: chatsPage.query,
+      ...(chatsPage.surface === "all" ? {} : { surface: chatsPage.surface }),
     });
     if (seq !== chatsPageSeq) return;
-    chatsPageRows = append ? [...chatsPageRows, ...page.sessions] : [...(page.pinned ?? []), ...page.sessions];
-    chatsPageCursor = page.nextCursor;
+    chatsPage.rows = append ? [...chatsPage.rows, ...page.sessions] : [...(page.pinned ?? []), ...page.sessions];
+    chatsPage.cursor = page.nextCursor;
     sessionsState.list = upsertSessions(sessionsState.list, [...(page.pinned ?? []), ...page.sessions]);
     sessionsNotice = "";
   } catch (e) {
@@ -629,66 +579,54 @@ async function loadChatsPage(append: boolean): Promise<void> {
     sessionsNotice = errMessage(e, "Failed to load conversations.");
   } finally {
     if (seq === chatsPageSeq) {
-      chatsPageLoading = false;
+      chatsPage.loading = false;
       drawChatsPage();
     }
   }
 }
 
-function reloadChatsPage(): void {
-  chatsPageRows = [];
+function reloadChatsPage(filter: Partial<Pick<typeof chatsPage, "scope" | "status" | "surface">> = {}): void {
+  Object.assign(chatsPage, filter, { rows: [] });
   void loadChatsPage(false);
 }
 
 export function drawChatsPage(): void {
   if (appState.currentView !== "chats" || !appState.mainEl || splitState.active) return;
   mainConversation().state.host = null;
-  if (!chatsPageHost || chatsPageHost.parentElement !== appState.mainEl) {
-    chatsPageHost = document.createElement("div");
-    chatsPageHost.className = "pane chats-page";
-    appState.mainEl.replaceChildren(chatsPageHost);
+  if (!chatsPage.host || chatsPage.host.parentElement !== appState.mainEl) {
+    chatsPage.host = Object.assign(document.createElement("div"), { className: "pane chats-page" });
+    appState.mainEl.replaceChildren(chatsPage.host);
   }
   const cached = new Map(sessionsState.list.map((s) => [s.id, s]));
-  const rows = chatsPageRows
+  const rows = chatsPage.rows
     .map((s) => cached.get(s.id) ?? s)
-    .filter((s) => chatBrowseStatusMatches(s, chatsPageStatus))
+    .filter((s) => chatBrowseStatusMatches(s, chatsPage.status))
     .map((s) => chatPageRow(s));
-  if (chatsPageCursor)
+  if (chatsPage.cursor)
     rows.push(
       html`<div class="list-footer">
-        <button
-          class="btn"
-          type="button"
-          ?disabled=${chatsPageLoading}
-          aria-busy=${chatsPageLoading ? "true" : "false"}
-          @click=${() => void loadChatsPage(true)}
-        >
-          ${sheenLabel("Show more conversations", chatsPageLoading)}
-        </button>
+        ${moreButton("btn", "Show more conversations", chatsPage.loading, () => void loadChatsPage(true))}
       </div>`,
     );
   let empty = "No conversations yet. Start a new chat.";
-  if (chatsPageLoading && chatsPageRows.length === 0) empty = "Loading conversations…";
-  else if (chatsPageScope || chatsPageQuery.trim() || chatsPageStatus !== "active" || chatsPageSurface !== "all") {
+  if (chatsPage.loading && chatsPage.rows.length === 0) empty = "Loading conversations…";
+  else if (chatsPage.scope || chatsPage.query.trim() || chatsPage.status !== "active" || chatsPage.surface !== "all") {
     empty = "No conversations match.";
   }
   render(
     listPageTpl({
       title: "Chats",
-      scope: chatsPageScope,
-      onScope: (s) => {
-        chatsPageScope = s;
-        reloadChatsPage();
-      },
+      scope: chatsPage.scope,
+      onScope: (scope) => reloadChatsPage({ scope }),
       action: { label: "New chat", onClick: () => startNewChat() },
       search: {
-        value: chatsPageQuery,
+        value: chatsPage.query,
         placeholder: "Search chats…",
         onInput: (v) => {
-          chatsPageQuery = v;
-          if (chatsPageQueryTimer) clearTimeout(chatsPageQueryTimer);
-          chatsPageQueryTimer = setTimeout(() => {
-            chatsPageQueryTimer = null;
+          chatsPage.query = v;
+          if (chatsPage.queryTimer) clearTimeout(chatsPage.queryTimer);
+          chatsPage.queryTimer = setTimeout(() => {
+            chatsPage.queryTimer = null;
             reloadChatsPage();
           }, 250);
           drawChatsPage();
@@ -702,20 +640,14 @@ export function drawChatsPage(): void {
             { value: "waiting" as const, label: "Waiting" },
             { value: "archived" as const, label: "Archived" },
           ],
-          chatsPageStatus,
-          (value) => {
-            chatsPageStatus = value;
-            reloadChatsPage();
-          },
+          chatsPage.status,
+          (status) => reloadChatsPage({ status }),
         )}
         <div class="list-select">
           ${menuSelect({
-            value: chatsPageSurface,
+            value: chatsPage.surface,
             ariaLabel: "Filter by surface",
-            onSelect: (value) => {
-              chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
-              reloadChatsPage();
-            },
+            onSelect: (value) => reloadChatsPage({ surface: (value ?? "all") as typeof chatsPage.surface }),
             options: [
               { value: "all", label: "All surfaces" },
               { value: "web", label: "Web" },
@@ -727,7 +659,7 @@ export function drawChatsPage(): void {
       rows,
       empty,
     }),
-    chatsPageHost,
+    chatsPage.host,
   );
 }
 
@@ -754,27 +686,31 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-function sessionWorking(s: CoreSession): boolean {
-  return rowIndicators(s, liveThreads()).working;
+export function liveMarks(working: boolean, awaiting: boolean): TemplateResult {
+  return html`${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
+    awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
+  }`;
+}
+
+export function backgroundGlyphs(bg: BackgroundCounts): TemplateResult {
+  return html`${bg.jobs > 0 ? icon(Cog, 11) : nothing}${bg.watches > 0 ? icon(Binoculars, 11) : nothing}${
+    bg.crons > 0 ? icon(Clock3, 11) : nothing
+  }${bg.subagents > 0 ? icon(Bot, 11) : nothing}${bg.goal ? icon(Target, 11) : nothing}`;
 }
 
 function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads());
-  return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
-    ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
-  }${
-    ind.background
+  const { working, awaiting, background } = rowIndicators(s, liveThreads());
+  return html`${liveMarks(working, awaiting)}${
+    background
       ? html`<span
           class="bg-chip"
           role="button"
           tabindex="0"
-          aria-label="${ind.background.label}. Click to inspect"
-          ${tip(`${ind.background.label}. Click to inspect`)}
+          aria-label="${background.label}. Click to inspect"
+          ${tip(`${background.label}. Click to inspect`)}
           @click=${(e: Event) => openBackgroundInspector(e, s)}
           @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
-            ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}${ind.background.goal ? icon(Target, 11) : nothing}</span
+          >${backgroundGlyphs(background)}</span
         >`
       : nothing
   }`;
@@ -821,39 +757,8 @@ function chatPageRow(s: CoreSession): TemplateResult {
       ${
         s.id
           ? html`<span class="chat-row-actions">
-              <button
-                class="icon-btn"
-                type="button"
-                ${tip(s.pinned ? "Unpin" : "Pin")}
-                aria-label=${`${s.pinned ? "Unpin" : "Pin"} ${sessionTitle(s)}`}
-                @click=${() => {
-                  setPinned(s, !s.pinned);
-                  drawChatsPage();
-                }}
-              >
-                ${s.pinned ? icon(PinOff, 13.5) : icon(Pin, 13.5)}
-              </button>
-              <button
-                class="icon-btn"
-                type="button"
-                ${tip("Share conversation")}
-                aria-label=${`Share ${sessionTitle(s)}`}
-                @click=${() => void openSessionShare(s.id)}
-              >
-                ${icon(Link, 13.5)}
-              </button>
-              <button
-                class="icon-btn"
-                type="button"
-                ${tip(s.archived ? "Unarchive" : "Archive")}
-                aria-label=${`${s.archived ? "Unarchive" : "Archive"} ${sessionTitle(s)}`}
-                @click=${() => {
-                  setArchived(s, !s.archived);
-                  drawChatsPage();
-                }}
-              >
-                ${s.archived ? icon(ArchiveRestore, 13.5) : icon(Archive, 13.5)}
-              </button>
+              ${sessionAction("icon-btn", "pin", s)} ${sessionAction("icon-btn", "share", s)}
+              ${sessionAction("icon-btn", "archive", s)}
             </span>`
           : nothing
       }
@@ -976,7 +881,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
-  const working = sessionWorking(s);
+  const working = rowIndicators(s, liveThreads()).working;
   const color = displaySessionColor(s.color);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
@@ -1065,30 +970,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       ${
         saved
           ? html`<div class="session-menu">
-              <button
-                class="session-menu-btn session-share-btn"
-                type="button"
-                ${tip("Share conversation")}
-                aria-label=${`Share ${sessionTitle(s)}`}
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  void openSessionShare(s.id);
-                }}
-              >
-                ${icon(Link, 13.5)}
-              </button>
-              <button
-                class="session-menu-btn session-archive-btn"
-                type="button"
-                ${tip(s.archived ? "Unarchive" : "Archive")}
-                aria-label=${`${s.archived ? "Unarchive" : "Archive"} ${sessionTitle(s)}`}
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  setArchived(s, !s.archived);
-                }}
-              >
-                ${s.archived ? icon(ArchiveRestore, 13.5) : icon(Archive, 13.5)}
-              </button>
+              ${sessionAction("session-menu-btn session-share-btn", "share", s, true)}
+              ${sessionAction("session-menu-btn session-archive-btn", "archive", s, true)}
               <button
                 class="session-menu-btn"
                 data-menu-id=${s.id}
@@ -1183,37 +1066,55 @@ const placeSessionMenu = (el?: Element): void => {
   }
 };
 
+const pinLabel = (s: Pick<CoreSession, "pinned">): string => (s.pinned ? "Unpin" : "Pin");
+const archiveLabel = (s: Pick<CoreSession, "archived">): string => (s.archived ? "Unarchive" : "Archive");
+const archiveGlyph = (s: Pick<CoreSession, "archived">): IconNode => (s.archived ? ArchiveRestore : Archive);
+
+function iconButton(
+  cls: string,
+  hint: string,
+  label: string,
+  glyph: IconNode,
+  run: (e: Event) => void,
+  size = 13.5,
+): TemplateResult {
+  return html`<button class=${cls} type="button" ${tip(hint)} aria-label=${label} @click=${run}>
+    ${icon(glyph, size)}
+  </button>`;
+}
+
+type SessionAction = "pin" | "share" | "archive";
+
+function sessionAction(cls: string, action: SessionAction, s: CoreSession, inSidebar = false): TemplateResult {
+  const looks: Record<SessionAction, [string, string, IconNode, () => void]> = {
+    pin: [pinLabel(s), pinLabel(s), s.pinned ? PinOff : Pin, () => setPinned(s, !s.pinned)],
+    share: ["Share conversation", "Share", Link, () => void openSessionShare(s.id)],
+    archive: [archiveLabel(s), archiveLabel(s), archiveGlyph(s), () => setArchived(s, !s.archived)],
+  };
+  const [hint, verb, glyph, run] = looks[action];
+  return iconButton(cls, hint, `${verb} ${sessionTitle(s)}`, glyph, (e) => {
+    if (inSidebar) e.stopPropagation();
+    run();
+    if (!inSidebar) drawChatsPage();
+  });
+}
+
+export function menuOption(glyph: IconNode, label: string, run: () => void, disabled = false): TemplateResult {
+  return html`<button class="session-menu-option" type="button" role="menuitem" ?disabled=${disabled} @click=${run}>
+    ${icon(glyph, 15)}<span>${label}</span>
+  </button>`;
+}
+
 function sessionMenuPopover(s: CoreSession): TemplateResult {
-  const archived = Boolean(s.archived);
-  const pinned = Boolean(s.pinned);
-  const refreshingTitle = refreshingTitleIds.has(s.id);
+  const refreshing = refreshingTitleIds.has(s.id);
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
-      <button class="session-menu-option" type="button" role="menuitem" @click=${() => void copySessionLink(s)}>
-        ${icon(Link, 15)}<span>Copy link</span>
-      </button>
-      <button class="session-menu-option" type="button" role="menuitem" @click=${() => setUnread(s, !s.unread)}>
-        ${s.unread ? icon(MailOpen, 15) : icon(Mail, 15)}<span>${s.unread ? "Mark as read" : "Mark as unread"}</span>
-      </button>
-      <button class="session-menu-option" type="button" role="menuitem" @click=${() => setPinned(s, !pinned)}>
-        ${pinned ? icon(PinOff, 15) : icon(Pin, 15)}<span>${pinned ? "Unpin" : "Pin"}</span>
-      </button>
-      <button class="session-menu-option" type="button" role="menuitem" @click=${() => startRename(s)}>
-        ${icon(Pencil, 15)}<span>Rename</span>
-      </button>
-      <button
-        class="session-menu-option"
-        type="button"
-        role="menuitem"
-        ?disabled=${refreshingTitle}
-        @click=${() => void refreshSessionTitle(s)}
-      >
-        ${icon(RefreshCw, 15)}<span>${refreshingTitle ? "Refreshing title" : "Refresh title"}</span>
-      </button>
-      <button class="session-menu-option" type="button" role="menuitem" @click=${() => setArchived(s, !archived)}>
-        ${archived ? icon(ArchiveRestore, 15) : icon(Archive, 15)}<span>${archived ? "Unarchive" : "Archive"}</span>
-      </button>
-      ${sessionColorRow(s)}
+      ${menuOption(Link, "Copy link", () => void copySessionLink(s))}
+      ${menuOption(s.unread ? MailOpen : Mail, s.unread ? "Mark as read" : "Mark as unread", () => setUnread(s, !s.unread))}
+      ${menuOption(s.pinned ? PinOff : Pin, pinLabel(s), () => setPinned(s, !s.pinned))}
+      ${menuOption(Pencil, "Rename", () => startRename(s))}
+      ${menuOption(RefreshCw, refreshing ? "Refreshing title" : "Refresh title", () => void refreshSessionTitle(s), refreshing)}
+      ${menuOption(archiveGlyph(s), archiveLabel(s), () => setArchived(s, !s.archived))} ${sessionColorRow(s)}
     </div>
   `;
 }
@@ -1280,11 +1181,19 @@ function sessionColorRow(s: CoreSession): TemplateResult {
 
 function renameRow(s: CoreSession): TemplateResult {
   return html`<div class="session-row renaming">
-    ${renameInput(s.id, "Rename conversation", () => commitRename(s))}
+    ${renameInput(s.id, "Rename conversation", (next) => commitRename(s, next))}
   </div>`;
 }
 
-function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<void>): TemplateResult {
+function renameInput(menuKey: string, ariaLabel: string, commit: (next: string) => Promise<void>): TemplateResult {
+  const finish = (): void => {
+    if (sessionsState.renamingId !== menuKey) return;
+    const next = renameDraft.trim();
+    sessionsState.renamingId = null;
+    renameDraft = "";
+    renderList();
+    void commit(next);
+  };
   return html`
     <input
       class="session-rename-input"
@@ -1297,13 +1206,13 @@ function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<v
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter") {
           e.preventDefault();
-          void commit();
+          finish();
         } else if (e.key === "Escape") {
           e.preventDefault();
           cancelRename(menuKey);
         }
       }}
-      @blur=${() => void commit()}
+      @blur=${finish}
       @click=${(e: Event) => e.stopPropagation()}
     />
   `;
@@ -1311,16 +1220,16 @@ function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<v
 
 function toggleShowArchived(): void {
   showArchived = !showArchived;
-  if (showArchived && !archivedLoaded) void loadMoreSessions("archived");
+  if (showArchived && !paging.archivedLoaded) void loadMoreSessions("archived");
   renderList();
 }
 
 async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
-  if (pageLoading) return;
+  if (paging.loading) return;
   const archived = kind === "archived";
-  const before = archived ? archivedCursor : activeCursor;
+  const before = archived ? paging.archivedCursor : paging.activeCursor;
   if (!archived && !before) return;
-  pageLoading = kind;
+  paging.loading = kind;
   const epoch = sessionPatchEpoch;
   renderList();
   try {
@@ -1332,17 +1241,16 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
     });
     if (epoch !== sessionPatchEpoch) return;
     sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
-    if (archived) {
-      archivedCursor = page.nextCursor;
-      archivedLoaded = true;
-    } else {
-      activeCursor = page.nextCursor;
-      activePaged = true;
-    }
+    Object.assign(
+      paging,
+      archived
+        ? { archivedCursor: page.nextCursor, archivedLoaded: true }
+        : { activeCursor: page.nextCursor, activePaged: true },
+    );
   } catch (e) {
     sessionsNotice = errMessage(e, "Failed to load conversations.");
   } finally {
-    pageLoading = null;
+    paging.loading = null;
     renderList();
   }
 }
@@ -1350,15 +1258,8 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
-  activeCursor = null;
-  activePaged = false;
-  archivedCursor = null;
-  archivedLoaded = false;
+  quietly(() => localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0"), undefined);
+  paging = { ...freshPaging(), loading: paging.loading };
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
@@ -1421,12 +1322,7 @@ export function closeOpenSessionMenu(): boolean {
   return true;
 }
 
-async function commitRename(s: CoreSession): Promise<void> {
-  if (sessionsState.renamingId !== s.id) return;
-  const next = renameDraft.trim();
-  sessionsState.renamingId = null;
-  renameDraft = "";
-  renderList();
+async function commitRename(s: CoreSession, next: string): Promise<void> {
   const resolved = (s.title ?? "").trim();
   if (next === resolved) return;
   const desired = !next || next === defaultSessionTitle(s) ? null : next;
@@ -1457,27 +1353,18 @@ export function sessionSelectionBar(): TemplateResult | null {
       aria-label=${`${n} conversations selected`}
     >
       <span class="multi-select-summary">
-        <button
-          class="icon-btn"
-          type="button"
-          ${tip("Clear selection (Esc)")}
-          aria-label="Clear selection"
-          @click=${() => clearSessionSelection()}
-        >
-          ${icon(X, 14)}
-        </button>
+        ${iconButton("icon-btn", "Clear selection (Esc)", "Clear selection", X, () => clearSessionSelection(), 14)}
         <span class="multi-select-count">${n} selected</span>
       </span>
       <span class="multi-select-actions">
-        <button
-          class="icon-btn"
-          type="button"
-          ${tip(allPinned ? "Unpin selected" : "Pin selected")}
-          aria-label=${allPinned ? "Unpin selected conversations" : "Pin selected conversations"}
-          @click=${() => void bulkPatch({ pinned: !allPinned })}
-        >
-          ${allPinned ? icon(PinOff, 14) : icon(Pin, 14)}
-        </button>
+        ${iconButton(
+          "icon-btn",
+          `${allPinned ? "Unpin" : "Pin"} selected`,
+          `${allPinned ? "Unpin" : "Pin"} selected conversations`,
+          allPinned ? PinOff : Pin,
+          () => void bulkPatch({ pinned: !allPinned }),
+          14,
+        )}
         <span class="multi-select-color">
           <button
             class="icon-btn"
@@ -1495,15 +1382,14 @@ export function sessionSelectionBar(): TemplateResult | null {
             ${icon(Palette, 14)}
           </button>
         </span>
-        <button
-          class="icon-btn"
-          type="button"
-          ${tip(allArchived ? "Unarchive selected" : "Archive selected")}
-          aria-label=${allArchived ? "Unarchive selected conversations" : "Archive selected conversations"}
-          @click=${() => void bulkPatch({ archived: !allArchived })}
-        >
-          ${allArchived ? icon(ArchiveRestore, 14) : icon(Archive, 14)}
-        </button>
+        ${iconButton(
+          "icon-btn",
+          `${archiveLabel({ archived: allArchived })} selected`,
+          `${archiveLabel({ archived: allArchived })} selected conversations`,
+          archiveGlyph({ archived: allArchived }),
+          () => void bulkPatch({ archived: !allArchived }),
+          14,
+        )}
       </span>
       ${selectColorOpen ? colorPopover() : nothing}
     </div>
@@ -1676,21 +1562,10 @@ function queueSessionPatch(id: string, patch: SessionPatch): Promise<CoreSession
         applyResolvedSession(session);
       return session;
     });
-  sessionPatchTails.set(
-    id,
-    request.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  void request.then(
-    () => {
-      if (sessionPatchGeneration === generation) sessionPatchEpoch++;
-    },
-    () => {
-      if (sessionPatchGeneration === generation) sessionPatchEpoch++;
-    },
-  );
+  const settle = (): void => {
+    if (sessionPatchGeneration === generation) sessionPatchEpoch++;
+  };
+  sessionPatchTails.set(id, request.then(settle, settle));
   return request;
 }
 
@@ -1818,7 +1693,7 @@ async function runSessionsRefresh(
     );
     sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
-    if (!activePaged) activeCursor = page.nextCursor;
+    if (!paging.activePaged) paging.activeCursor = page.nextCursor;
     sessionsState.loaded = true;
     listCurrent = true;
     sessionsNotice = "";

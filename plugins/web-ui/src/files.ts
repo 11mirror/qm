@@ -20,7 +20,6 @@ import { browserRenderableImage, formatBytes, relTime } from "./ui";
 import { icon } from "./icons";
 import { ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
-import { fileListNeedsAllPages } from "./file-list";
 import { artifactPage, groupBy, listPageTpl, listSelect } from "./list-page";
 import { isTouch } from "./viewport";
 
@@ -29,15 +28,12 @@ interface FileItem {
   name: string;
   mimetype: string;
   sizeBytes: number;
-  direction: "in" | "out";
   createdAt: number;
   createdInScope?: string;
   ownerScopeId?: string;
   openable: boolean;
 }
-interface FileRow extends FileItem {
-  kind: "Created" | "Uploaded" | "Shared";
-}
+type FileRow = FileItem & { shared: boolean };
 
 const PAGE_SIZE = 60;
 let fileRows: FileRow[] = [];
@@ -63,39 +59,32 @@ function typeOf(f: FileItem): "image" | "document" | "other" {
   return "other";
 }
 
-type FileVisualKind =
-  "image" | "pdf" | "spreadsheet" | "presentation" | "code" | "archive" | "audio" | "video" | "document" | "generic";
+const VISUALS: Array<[string, IconNode, RegExp, RegExp?]> = [
+  ["pdf", FileText, /pdf/, /\.pdf$/],
+  ["spreadsheet", FileSpreadsheet, /spreadsheet|excel|csv|tab-separated/, /\.(csv|tsv|xlsx?|ods)$/],
+  ["presentation", Presentation, /presentation|powerpoint/, /\.(pptx?|key|odp)$/],
+  ["code", FileJson, /json/, /\.json$/],
+  ["archive", FileArchive, /zip|archive|compressed|tar|gzip/, /\.(zip|tar|gz|tgz|rar|7z)$/],
+  ["audio", FileAudio, /^audio\//],
+  ["video", FileVideo, /^video\//],
+  ["code", FileCode, /javascript|typescript|xml|html|css|shell|python/, /\.(jsx?|tsx?|html|css|py|sh|sql|xml|ya?ml)$/],
+];
 
-function fileVisual(f: FileItem): { glyph: IconNode; kind: FileVisualKind } {
+function fileVisual(f: FileItem): { glyph: IconNode; kind: string } {
   const name = f.name.toLowerCase();
   const mime = f.mimetype.toLowerCase();
   if (browserRenderableImage(mime)) return { glyph: FileImage, kind: "image" };
-  if (mime.includes("pdf") || name.endsWith(".pdf")) return { glyph: FileText, kind: "pdf" };
-  if (/(?:spreadsheet|excel|csv|tab-separated)/.test(mime) || /\.(?:csv|tsv|xls|xlsx|ods)$/.test(name))
-    return { glyph: FileSpreadsheet, kind: "spreadsheet" };
-  if (/(?:presentation|powerpoint)/.test(mime) || /\.(?:ppt|pptx|key|odp)$/.test(name))
-    return { glyph: Presentation, kind: "presentation" };
-  if (mime.includes("json") || name.endsWith(".json")) return { glyph: FileJson, kind: "code" };
-  if (/(?:zip|archive|compressed|tar|gzip)/.test(mime) || /\.(?:zip|tar|gz|tgz|rar|7z)$/.test(name))
-    return { glyph: FileArchive, kind: "archive" };
-  if (mime.startsWith("audio/")) return { glyph: FileAudio, kind: "audio" };
-  if (mime.startsWith("video/")) return { glyph: FileVideo, kind: "video" };
-  if (
-    /(?:javascript|typescript|xml|html|css|shell|python)/.test(mime) ||
-    /\.(?:js|ts|tsx|jsx|html|css|py|sh|sql|xml|yaml|yml)$/.test(name)
-  )
-    return { glyph: FileCode, kind: "code" };
+  const [kind, glyph] = VISUALS.find(([, , m, n]) => m.test(mime) || n?.test(name)) ?? [];
+  if (kind && glyph) return { glyph, kind };
   if (mime.startsWith("text/") || typeOf(f) === "document") return { glyph: FileText, kind: "document" };
   return { glyph: File, kind: "generic" };
 }
 
 function visibleFiles(): FileRow[] {
-  const q = page.query.trim().toLowerCase();
   return fileRows
-    .filter((f) => !page.scope || fileScope(f) === page.scope)
-    .filter((f) => filesOwnership === "all" || (filesOwnership === "shared") === (f.kind === "Shared"))
+    .filter((f) => page.inScope(fileScope(f)) && page.matches(`${f.name} ${f.mimetype}`))
+    .filter((f) => filesOwnership === "all" || (filesOwnership === "shared") === f.shared)
     .filter((f) => filesType === "all" || typeOf(f) === filesType)
-    .filter((f) => !q || `${f.name} ${f.mimetype}`.toLowerCase().includes(q))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -108,7 +97,7 @@ function drawFiles(loading = false): void {
   const refilter = (apply: () => void) => {
     apply();
     drawFiles();
-    void loadAllFiles();
+    void loadMoreFiles(true);
   };
   page.paint(
     listPageTpl({
@@ -148,8 +137,8 @@ function drawFiles(loading = false): void {
           @click=${pickFiles}
           @dragenter=${onFileDrag}
           @dragover=${onFileDrag}
-          @dragleave=${onFileDragLeave}
-          @drop=${onFileDrop}
+          @dragleave=${onFileDrag}
+          @drop=${onFileDrag}
         >
           ${icon(Upload, 16)}<span>${dropLabel}</span>
         </button>`,
@@ -213,17 +202,15 @@ async function uploadOne(file: globalThis.File): Promise<void> {
     headers: { "content-type": file.type || "application/octet-stream" },
     body: file,
   });
-  if (!r.ok) {
-    const text = await r.text();
-    let message = `Upload failed (${r.status})`;
-    try {
-      const parsed = JSON.parse(text) as { message?: string; error?: string };
-      message = parsed.message ?? parsed.error ?? message;
-    } catch {
-      if (text.trim()) message = text.trim();
-    }
-    throw new Error(message);
+  if (r.ok) return;
+  const text = (await r.text()).trim();
+  let body: { message?: string; error?: string } | null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { message: text || undefined };
   }
+  throw new Error(body?.message ?? body?.error ?? `Upload failed (${r.status})`);
 }
 
 async function uploadFiles(files: globalThis.File[]): Promise<void> {
@@ -259,106 +246,62 @@ function pickFiles(): void {
   input.click();
 }
 
-function hasFiles(e: DragEvent): boolean {
-  return Array.from(e.dataTransfer?.types ?? []).includes("Files");
-}
-
 function onFileDrag(e: DragEvent): void {
-  if (!hasFiles(e)) return;
-  e.preventDefault();
-  if (!filesDragActive) {
-    filesDragActive = true;
-    drawFiles();
+  if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+  if (e.type !== "dragleave") e.preventDefault();
+  else if (e.relatedTarget instanceof Node && (e.currentTarget as HTMLElement).contains(e.relatedTarget)) return;
+  if (e.type === "drop") {
+    e.stopPropagation();
+    void uploadFiles(Array.from(e.dataTransfer?.files ?? []));
   }
-}
-
-function onFileDragLeave(e: DragEvent): void {
-  if (!hasFiles(e)) return;
-  const current = e.currentTarget as HTMLElement;
-  if (e.relatedTarget instanceof Node && current.contains(e.relatedTarget)) return;
-  filesDragActive = false;
+  const active = e.type === "dragenter" || e.type === "dragover";
+  if (filesDragActive === active) return;
+  filesDragActive = active;
   drawFiles();
 }
 
-function onFileDrop(e: DragEvent): void {
-  if (!hasFiles(e)) return;
-  e.preventDefault();
-  e.stopPropagation();
-  filesDragActive = false;
-  void uploadFiles(Array.from(e.dataTransfer?.files ?? []));
-}
-
-function rowsFromPage(r: { owned?: FileItem[]; shared?: FileItem[] }): FileRow[] {
-  return [
-    ...(r.owned ?? []).map((f): FileRow => ({ ...f, kind: f.direction === "out" ? "Created" : "Uploaded" })),
-    ...(r.shared ?? []).map((f): FileRow => ({ ...f, kind: "Shared" })),
-  ];
-}
-
-async function fetchFilePage(
-  cursor?: string,
-  scope = page.scope,
-): Promise<{ rows: FileRow[]; nextCursor: string | null }> {
+async function fetchFilePage(cursor?: string, scope = page.scope) {
   const q = new URLSearchParams({ limit: String(PAGE_SIZE) });
   if (cursor) q.set("cursor", cursor);
   if (scope) q.set("scope", scope);
   const r = await api<{ owned?: FileItem[]; shared?: FileItem[]; nextCursor?: string }>(`/api/files?${q.toString()}`);
-  return { rows: rowsFromPage(r), nextCursor: r.nextCursor ?? null };
+  const rows: FileRow[] = [
+    ...(r.owned ?? []).map((f) => ({ ...f, shared: false })),
+    ...(r.shared ?? []).map((f) => ({ ...f, shared: true })),
+  ];
+  return { rows, nextCursor: r.nextCursor ?? null };
 }
 
-async function loadMoreFiles(): Promise<void> {
-  if (!filesNextCursor || filesLoadingMore) return;
-  const requestSeq = filesRequestSeq;
-  const scope = page.scope;
-  filesLoadingMore = true;
-  drawFiles();
-  try {
-    const page = await fetchFilePage(filesNextCursor, scope);
-    if (requestSeq !== filesRequestSeq) return;
-    const byId = new Map(fileRows.map((f) => [f.id, f]));
-    for (const row of page.rows) byId.set(row.id, row);
-    fileRows = [...byId.values()];
-    filesNextCursor = page.nextCursor;
-  } catch (e) {
-    if (requestSeq !== filesRequestSeq) return;
-    filesNotice = errMessage(e, "Failed to load more files.");
-  }
-  if (requestSeq !== filesRequestSeq) return;
-  filesLoadingMore = false;
-  drawFiles();
-  if (filesLoadAllQueued) {
-    filesLoadAllQueued = false;
-    void loadAllFiles();
-  }
-}
-
-async function loadAllFiles(): Promise<void> {
-  if (!fileListNeedsAllPages({ query: page.query, type: filesType, ownership: filesOwnership, sort: "newest" })) return;
+async function loadMoreFiles(all = false): Promise<void> {
+  if (all && !page.query.trim() && filesType === "all" && filesOwnership !== "owned") return;
   if (filesLoadingMore) {
-    filesLoadAllQueued = true;
+    filesLoadAllQueued ||= all;
     return;
   }
+  if (!filesNextCursor) return;
   const requestSeq = filesRequestSeq;
   const scope = page.scope;
   filesLoadingMore = true;
   drawFiles();
   try {
-    while (filesNextCursor && requestSeq === filesRequestSeq) {
-      const page = await fetchFilePage(filesNextCursor, scope);
+    do {
+      const next = await fetchFilePage(filesNextCursor, scope);
       if (requestSeq !== filesRequestSeq) return;
-      const byId = new Map(fileRows.map((file) => [file.id, file]));
-      for (const row of page.rows) byId.set(row.id, row);
+      const byId = new Map(fileRows.map((f) => [f.id, f]));
+      for (const row of next.rows) byId.set(row.id, row);
       fileRows = [...byId.values()];
-      filesNextCursor = page.nextCursor;
-    }
+      filesNextCursor = next.nextCursor;
+    } while (all && filesNextCursor);
   } catch (e) {
     if (requestSeq !== filesRequestSeq) return;
-    filesNotice = errMessage(e, "Failed to load all matching files.");
+    filesNotice = errMessage(e, all ? "Failed to load all matching files." : "Failed to load more files.");
   }
   if (requestSeq !== filesRequestSeq) return;
+  const queued = filesLoadAllQueued && !all;
   filesLoadAllQueued = false;
   filesLoadingMore = false;
   drawFiles();
+  if (queued) void loadMoreFiles(true);
 }
 
 async function loadFiles(seq: number): Promise<void> {
@@ -372,7 +315,7 @@ async function loadFiles(seq: number): Promise<void> {
     if (requestSeq !== filesRequestSeq || seq !== appState.viewRenderSeq || appState.currentView !== "files") return;
     fileRows = page.rows;
     filesNextCursor = page.nextCursor;
-    void loadAllFiles();
+    void loadMoreFiles(true);
   } catch (e) {
     if (requestSeq !== filesRequestSeq || seq !== appState.viewRenderSeq || appState.currentView !== "files") return;
     filesNotice = errMessage(e, "Failed to load files.");

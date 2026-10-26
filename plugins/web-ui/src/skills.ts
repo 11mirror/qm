@@ -3,15 +3,6 @@ import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
 import { errMessage } from "../../chassis/src/errors";
 import { appState } from "./shell";
-import { skillActions } from "./skill-actions";
-import {
-  createReviewMatches,
-  isSharedSkillScope,
-  reviewMatches,
-  shouldBlockRepeatedPublishClick,
-  type SkillCreateReview,
-  type SkillEditReview,
-} from "./skill-edit-review";
 import {
   filterSkillGroups,
   groupSkills,
@@ -34,49 +25,27 @@ import {
 import { fieldSelect } from "./ui";
 import { scopeTitle } from "./contexts";
 import { focusDialogCancel, restoreDialogFocus } from "./dialog-focus";
-import { SkillsRefreshSequence } from "./skills-refresh";
-import { SkillsMutationSequence } from "./skills-mutation";
 import { tip } from "./tooltip";
-import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
-let skillSearch = "";
-let scopeFilter = "all";
-let sourceFilter = "all";
-let statusFilter: SkillStatusFilter = "active";
+const filters = { query: "", scope: "all", source: "all", status: "active" as SkillStatusFilter };
 let createScopes: Array<{ scopeId: string; name: string }> = [];
 const page = artifactPage("skills", "skills-page", "skills");
 
-let editing: {
-  id: string;
-  description: string;
-  body: string;
-  originalDescription: string;
-  originalBody: string;
-  scopeId?: string;
-  name: string;
-  review: SkillEditReview | null;
-} | null = null;
+type Draft = { description: string; body: string; scopeId?: string; review: string | null };
+let editing: (Draft & { id: string }) | null = null;
 let editingTarget: SkillItem | null = null;
-let saving = false;
-let editError = "";
+let busy = false;
+let formError = "";
 
-let creating: {
-  name: string;
-  description: string;
-  body: string;
-  scopeId: string;
-  review: SkillCreateReview | null;
-} | null = null;
-let creatingSaving = false;
-let createError = "";
+let creating: (Draft & { name: string; scopeId: string }) | null = null;
 
 let deleting: string | null = null;
 let archiveConfirmation: SkillItem | null = null;
 let editRequestSeq = 0;
-const skillsRefreshes = new SkillsRefreshSequence();
-const skillMutations = new SkillsMutationSequence();
+let refreshSeq = 0;
+let mutationSeq = 0;
 let flowFocusTarget: HTMLElement | null = null;
 let archiveFocusTarget: HTMLElement | null = null;
 
@@ -93,8 +62,29 @@ export function routeSkillsHistory(skillId: string | null): void {
   );
 }
 
-function scopeLabel(scope: string): string {
-  return scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "";
+const $ = (selector: string) => page.host?.querySelector<HTMLElement>(selector) ?? null;
+const activeElement = () => (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+
+function skillButton(selector: string, target: HTMLElement | null, root: ParentNode | null = page.host) {
+  const id = target?.dataset.skillId;
+  return id ? [...(root?.querySelectorAll<HTMLElement>(selector) ?? [])].find((el) => el.dataset.skillId === id) : null;
+}
+
+function setFilters(patch: Partial<typeof filters>): void {
+  Object.assign(filters, patch);
+  drawSkills();
+}
+
+function sharedScope(scopeId?: string): boolean {
+  return Boolean(scopeId && !scopeId.startsWith("personal:"));
+}
+
+function editKey(e: NonNullable<typeof editing>): string {
+  return JSON.stringify([e.description, e.body]);
+}
+
+function createKey(c: NonNullable<typeof creating>): string {
+  return JSON.stringify([c.name.trim(), c.description.trim(), c.body.trim(), c.scopeId]);
 }
 
 function editAudience(scopeId: string | undefined): string {
@@ -102,74 +92,56 @@ function editAudience(scopeId: string | undefined): string {
   return scopeId ? scopeTitle(scopeId) : "this context";
 }
 
+function resetFlow(): void {
+  editRequestSeq += 1;
+  mutationSeq += 1;
+  editing = null;
+  editingTarget = null;
+  creating = null;
+  formError = "";
+  busy = false;
+}
+
 async function startEdit(s: SkillItem): Promise<void> {
   if (!s.id) return;
-  const request = ++editRequestSeq;
-  skillMutations.invalidate();
-  flowFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  creating = null;
-  editing = null;
+  resetFlow();
+  const request = editRequestSeq;
+  flowFocusTarget = activeElement();
   editingTarget = s;
-  editError = "";
   skillsNotice = "Loading skill instructions…";
   drawSkills();
-  queueMicrotask(() => page.host?.querySelector<HTMLElement>(".context-back")?.focus());
+  queueMicrotask(() => $(".context-back")?.focus());
   try {
     const r = await api<{ skill: SkillItem }>(`/api/skills/${encodeURIComponent(s.id)}`);
     if (request !== editRequestSeq) return;
-    editing = {
-      id: s.id,
-      description: r.skill.description,
-      body: r.skill.body ?? "",
-      originalDescription: r.skill.description,
-      originalBody: r.skill.body ?? "",
-      scopeId: r.skill.scopeId,
-      name: r.skill.name,
-      review: null,
-    };
+    const { description, scopeId } = r.skill;
+    editing = { id: s.id, description, body: r.skill.body ?? "", scopeId, review: null };
     editingTarget = r.skill;
     skillsNotice = "";
   } catch (e) {
     if (request !== editRequestSeq) return;
-    editError = errMessage(e, "Failed to load skill details.");
+    formError = errMessage(e, "Failed to load skill details.");
     skillsNotice = "";
   }
   drawSkills();
-  queueMicrotask(() => {
-    const target =
-      page.host?.querySelector<HTMLElement>("#skill-edit-description") ??
-      page.host?.querySelector<HTMLElement>(".context-back");
-    target?.focus();
-  });
+  queueMicrotask(() => ($("#skill-edit-description") ?? $(".context-back"))?.focus());
 }
 
 function restoreFocusedFlow(target: HTMLElement | null): void {
   queueMicrotask(() => {
     if (creating || editingTarget || archiveConfirmation || appState.currentView !== "skills") return;
-    const skillId = target?.dataset.skillId;
-    const matchingEdit = skillId
-      ? [...(page.host?.querySelectorAll<HTMLElement>(".skill-edit-trigger") ?? [])].find(
-          (element) => element.dataset.skillId === skillId,
-        )
-      : null;
-    const search = page.host?.querySelector<HTMLElement>(".list-search input") ?? null;
-    const create = page.host?.querySelector<HTMLElement>(".list-page-action") ?? null;
-    const fallback = skillId ? (matchingEdit ?? search ?? create) : (create ?? search);
-    restoreDialogFocus(target, () => fallback ?? null);
+    const search = $(".list-search input");
+    const create = $(".list-page-action");
+    const fallback = target?.dataset.skillId
+      ? (skillButton(".skill-edit-trigger", target) ?? search ?? create)
+      : (create ?? search);
+    restoreDialogFocus(target, () => fallback);
   });
 }
 
 function closeFocusedFlow(): void {
-  editRequestSeq += 1;
-  skillMutations.invalidate();
-  editing = null;
-  editingTarget = null;
-  creating = null;
-  editError = "";
-  createError = "";
+  resetFlow();
   skillsNotice = "";
-  saving = false;
-  creatingSaving = false;
   const target = flowFocusTarget;
   flowFocusTarget = null;
   drawSkills();
@@ -178,14 +150,9 @@ function closeFocusedFlow(): void {
 
 function startCreate(): void {
   if (creating) return;
-  flowFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  skillMutations.invalidate();
-  editing = null;
-  editingTarget = null;
-  editRequestSeq += 1;
+  flowFocusTarget = activeElement();
+  resetFlow();
   creating = { name: "", description: "", body: "", scopeId: createScopes[0]?.scopeId ?? "", review: null };
-  createError = "";
-  creatingSaving = false;
   drawSkills();
   queueMicrotask(() => document.querySelector<HTMLInputElement>("#skill-create-name")?.focus());
 }
@@ -194,47 +161,30 @@ function skillScopeTitle(s: SkillItem): string {
   if (s.scopeId && (s.scope === "personal" || s.scope === "channel" || s.scope === "group")) {
     return scopeTitle(s.scopeId);
   }
-  return scopeLabel(s.scope);
+  return s.scope ? s.scope.charAt(0).toUpperCase() + s.scope.slice(1) : "";
 }
 
 function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
-  const actions = skillActions(s);
+  const owned = s.editable === true && Boolean(s.id);
   const archived = isArchivedSkill(s);
   let archiveLabel = "Archive";
   if (deleting === s.id) archiveLabel = "Working…";
   else if (archived) archiveLabel = "Restore";
   return html`
     <div class="skill-variant ${archived ? "archived" : ""}">
-      <a
-        class="skill-variant-main"
-        href=${deepLinkPath(UI_BASE, "skills", null, null, s.id ?? null)}
-        aria-label=${`Open /${s.name}`}
-        @click=${(event: MouseEvent) => {
-          if (!isPlainLeftClick(event)) return;
-          event.preventDefault();
-          openSkill(s, { push: true });
-        }}
-      >
-        <code class="skill-variant-name" dir="auto">/${s.name}</code>
-        <span class="skill-variant-description" ${tip(s.description)}>${s.description}</span>
-      </a>
+      ${page.link(
+        s.id ?? null,
+        "skill-variant-main",
+        () => openSkill(s, { push: true }),
+        html`<code class="skill-variant-name" dir="auto">/${s.name}</code>
+          <span class="skill-variant-description" ${tip(s.description)}>${s.description}</span>`,
+        `Open /${s.name}`,
+      )}
       <div class="skill-variant-state">
         ${archived ? html`<span class="badge">Archived</span>` : nothing}
         ${!archived && hasScopeVariants ? html`<span class="badge">Scope variant</span>` : nothing}
-        ${actions.edit && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
-        ${
-          actions.delete
-            ? html`<button
-                class="btn skill-archive-trigger"
-                data-skill-id=${s.id ?? ""}
-                type="button"
-                ?disabled=${deleting === s.id}
-                @click=${(event: Event) => void deleteSkill(s, event.currentTarget as HTMLElement)}
-              >
-                ${archiveLabel}
-              </button>`
-            : nothing
-        }
+        ${owned && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
+        ${owned ? html`<button class="btn skill-archive-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${(event: Event) => void deleteSkill(s, event.currentTarget as HTMLElement)}>${archiveLabel}</button>` : nothing}
       </div>
     </div>
   `;
@@ -260,167 +210,57 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
   );
 }
 
-function skillGroup(skills: SkillItem[]): TemplateResult {
-  const activeVariants = skills.filter((skill) => !isArchivedSkill(skill)).length;
-  const hasScopeVariants = activeVariants > 1;
-  return html`<section class="skill-group" aria-label=${`/${skills[0]?.name ?? "skill"}`}>
-    ${skills.map((skill) => skillVariant(skill, hasScopeVariants))}
-  </section>`;
-}
-
 function editorPane() {
   const e = editing;
   if (!e) {
     return html`<section class="skill-form-page">
-      ${listBackLink("Back to skills", closeFocusedFlow)}
-      <div class="skill-form-heading">
-        <div>
-          <h1 class="pane-title">Edit <bdi>/${editingTarget?.name ?? "skill"}</bdi></h1>
-          <p>${editError ? "Instructions unavailable." : "Loading instructions…"}</p>
-        </div>
-      </div>
-      ${editError ? html`<div class="form-error" role="alert">${editError}</div>` : nothing}
+      ${formHeading(
+        html`Edit <bdi>/${editingTarget?.name ?? "skill"}</bdi>`,
+        formError ? "Instructions unavailable." : "Loading instructions…",
+      )}
+      ${formError ? html`<div class="form-error" role="alert">${formError}</div>` : nothing}
     </section>`;
   }
-  const reviewed = reviewMatches(e.review, e.description, e.body);
-  let saveLabel = "Save";
-  if (saving) saveLabel = "Saving…";
-  else if (reviewed) saveLabel = "Publish change";
-  return html`
-    <form
-      class="skill-form-page"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void saveEdit();
-      }}
-    >
-      ${listBackLink("Back to skills", closeFocusedFlow)}
-      <div class="skill-form-heading">
-        <div>
-          <h1 class="pane-title">Edit <bdi>/${e.name}</bdi></h1>
-          <p>Available to ${editAudience(e.scopeId)}</p>
-        </div>
-        <span class="badge">Editing</span>
-      </div>
-      <label class="skill-field">
-        <span>Description</span>
-        <input
-          id="skill-edit-description"
-          class="skill-desc-input"
-          type="text"
-          .value=${e.description}
-          data-focus-key="skill-edit-description"
-          ?disabled=${saving}
-          @input=${(ev: Event) => {
-            e.description = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
-      <label class="skill-field">
-        <span>Instructions</span>
-        <textarea
-          class="skill-body-input"
-          spellcheck="false"
-          data-focus-key="skill-edit-body"
-          ?disabled=${saving}
-          @input=${(ev: Event) => {
-            e.body = (ev.target as HTMLTextAreaElement).value;
-            drawSkills();
-          }}
-          .value=${e.body}
-        ></textarea>
-      </label>
-      ${editError ? html`<div class="card-meta skill-shadowed">${editError}</div>` : nothing}
-      ${
-        reviewed
-          ? html`<div class="skill-impact" role="alert">
-              <strong>Publish this change to <bdi>${scopeTitle(e.scopeId ?? null)}</bdi>?</strong>
-              <div class="card-meta">
-                Everyone in this context can invoke the updated instructions. Description
-                ${e.description === e.originalDescription ? "unchanged" : "changed"}; instructions
-                ${e.body === e.originalBody ? "unchanged" : "changed"}.
-              </div>
-            </div>`
-          : nothing
-      }
-      <div class="actions skill-form-actions">
-        <button
-          class="btn primary"
-          type="submit"
-          ?disabled=${saving}
-          @click=${(event: MouseEvent) => {
-            if (shouldBlockRepeatedPublishClick(reviewed, event.detail)) event.preventDefault();
-          }}
-        >
-          ${saveLabel}
-        </button>
-        ${
-          reviewed
-            ? html`<button
-                class="btn"
-                type="button"
-                ?disabled=${saving}
-                @click=${() => {
-                  e.review = null;
-                  drawSkills();
-                }}
-              >
-                Review again
-              </button>`
-            : nothing
-        }
-        <button class="btn" type="button" ?disabled=${saving} @click=${closeFocusedFlow}>Cancel</button>
-      </div>
-    </form>
-  `;
+  const reviewed = e.review === editKey(e);
+  return skillForm({
+    title: html`Edit <bdi>/${editingTarget!.name}</bdi>`,
+    sub: `Available to ${editAudience(e.scopeId)}`,
+    badge: "Editing",
+    submit: saveEdit,
+    reviewed,
+    label: reviewed ? "Publish change" : "Save",
+    ready: true,
+    reviewAgain: () => (e.review = null),
+    fields: html`${skillText(e, "description", "Description", "skill-edit-description", { id: "skill-edit-description" })}
+    ${skillText(e, "body", "Instructions", "skill-edit-body", { area: true })}`,
+    impact: html`<strong>Publish this change to <bdi>${scopeTitle(e.scopeId ?? null)}</bdi>?</strong>
+      <div class="card-meta">
+        Everyone in this context can invoke the updated instructions. Description
+        ${e.description === editingTarget!.description ? "unchanged" : "changed"}; instructions
+        ${e.body === (editingTarget!.body ?? "") ? "unchanged" : "changed"}.
+      </div>`,
+  });
 }
 
 function creatorPane() {
   const c = creating!;
-  const ready = c.name.trim() !== "" && c.description.trim() !== "" && c.body.trim() !== "";
-  const reviewed = createReviewMatches(c.review, c.name.trim(), c.description.trim(), c.body.trim(), c.scopeId);
-  let createLabel = "Create skill";
-  if (creatingSaving) createLabel = "Saving…";
-  else if (reviewed) createLabel = "Publish skill";
-  return html`
-    <form
-      class="skill-form-page"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void saveCreate();
-      }}
-    >
-      ${listBackLink("Back to skills", closeFocusedFlow)}
-      <div class="skill-form-heading">
-        <div>
-          <h1 class="pane-title">New skill</h1>
-          <p>Create a reusable procedure for yourself or a shared context.</p>
-        </div>
-        <span class="badge">New</span>
-      </div>
-      <label class="skill-field">
-        <span>Name</span>
-        <input
-          id="skill-create-name"
-          class="skill-desc-input"
-          type="text"
-          placeholder="watch-pipeline"
-          data-focus-key="skill-create-name"
-          .value=${c.name}
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.name = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
+  const reviewed = c.review === createKey(c);
+  return skillForm({
+    title: "New skill",
+    sub: "Create a reusable procedure for yourself or a shared context.",
+    badge: "New",
+    submit: saveCreate,
+    reviewed,
+    label: reviewed ? "Publish skill" : "Create skill",
+    ready: c.name.trim() !== "" && c.description.trim() !== "" && c.body.trim() !== "",
+    reviewAgain: () => (c.review = null),
+    fields: html`${skillText(c, "name", "Name", "skill-create-name", { id: "skill-create-name", placeholder: "watch-pipeline" })}
       <label class="skill-field">
         <span>Available to</span>
         ${fieldSelect({
           className: "skill-scope-select",
           value: c.scopeId,
-          disabled: creatingSaving,
+          disabled: busy,
           onChange: (value) => {
             c.scopeId = value;
             c.review = null;
@@ -430,64 +270,104 @@ function creatorPane() {
         })}
         <small class="card-meta">Everyone in a shared context can invoke and edit this skill.</small>
       </label>
-      <label class="skill-field">
-        <span>Description</span>
-        <input
-          class="skill-desc-input"
-          type="text"
-          placeholder="One line: what it does / when to use it"
-          data-focus-key="skill-create-description"
-          .value=${c.description}
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.description = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
-      <label class="skill-field">
-        <span>Instructions</span>
-        <textarea
-          class="skill-body-input"
-          spellcheck="false"
-          placeholder="The SKILL.md contents: the steps to follow when this skill is used."
-          data-focus-key="skill-create-body"
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.body = (ev.target as HTMLTextAreaElement).value;
-            drawSkills();
-          }}
-          .value=${c.body}
-        ></textarea>
-      </label>
-      ${createError ? html`<div class="card-meta skill-shadowed">${createError}</div>` : nothing}
-      ${
-        reviewed
-          ? html`<div class="skill-impact" role="alert">
-              <strong>Publish <bdi>/${c.name.trim()}</bdi> to <bdi>${scopeTitle(c.scopeId)}</bdi>?</strong>
-              <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>
-            </div>`
-          : nothing
-      }
+      ${skillText(c, "description", "Description", "skill-create-description", { placeholder: "One line: what it does / when to use it" })}
+      ${skillText(c, "body", "Instructions", "skill-create-body", { area: true, placeholder: "The SKILL.md contents: the steps to follow when this skill is used." })}`,
+    impact: html`<strong>Publish <bdi>/${c.name.trim()}</bdi> to <bdi>${scopeTitle(c.scopeId)}</bdi>?</strong>
+      <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>`,
+  });
+}
+
+function skillText<K extends string>(
+  draft: Record<K, string>,
+  key: K,
+  label: string,
+  focusKey: string,
+  o: { id?: string; placeholder?: string; area?: boolean } = {},
+): TemplateResult {
+  const onInput = (ev: Event) => {
+    draft[key] = (ev.target as HTMLInputElement).value;
+    drawSkills();
+  };
+  return html`<label class="skill-field">
+    <span>${label}</span>
+    ${
+      o.area
+        ? html`<textarea
+            class="skill-body-input"
+            spellcheck="false"
+            placeholder=${o.placeholder ?? nothing}
+            data-focus-key=${focusKey}
+            ?disabled=${busy}
+            @input=${onInput}
+            .value=${draft[key]}
+          ></textarea>`
+        : html`<input
+            id=${o.id ?? nothing}
+            class="skill-desc-input"
+            type="text"
+            placeholder=${o.placeholder ?? nothing}
+            data-focus-key=${focusKey}
+            .value=${draft[key]}
+            ?disabled=${busy}
+            @input=${onInput}
+          />`
+    }
+  </label>`;
+}
+
+function formHeading(title: TemplateResult | string, sub: string, badge: TemplateResult | typeof nothing = nothing) {
+  return html`${listBackLink("Back to skills", closeFocusedFlow)}
+    <div class="skill-form-heading">
+      <div>
+        <h1 class="pane-title">${title}</h1>
+        <p>${sub}</p>
+      </div>
+      ${badge}
+    </div>`;
+}
+
+function skillForm(o: {
+  title: TemplateResult | string;
+  sub: string;
+  badge: string;
+  submit: () => unknown;
+  reviewed: boolean;
+  label: string;
+  ready: boolean;
+  reviewAgain: () => void;
+  fields: TemplateResult;
+  impact: TemplateResult;
+}): TemplateResult {
+  return html`
+    <form
+      class="skill-form-page"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        void o.submit();
+      }}
+    >
+      ${formHeading(o.title, o.sub, html`<span class="badge">${o.badge}</span>`)} ${o.fields}
+      ${formError ? html`<div class="card-meta skill-shadowed">${formError}</div>` : nothing}
+      ${o.reviewed ? html`<div class="skill-impact" role="alert">${o.impact}</div>` : nothing}
       <div class="actions skill-form-actions">
         <button
           class="btn primary"
           type="submit"
-          ?disabled=${creatingSaving || !ready}
+          ?disabled=${busy || !o.ready}
           @click=${(event: MouseEvent) => {
-            if (shouldBlockRepeatedPublishClick(reviewed, event.detail)) event.preventDefault();
+            if (o.reviewed && event.detail > 1) event.preventDefault();
           }}
         >
-          ${createLabel}
+          ${busy ? "Saving…" : o.label}
         </button>
         ${
-          reviewed
+          o.reviewed
             ? html`<button
                 class="btn"
                 type="button"
-                ?disabled=${creatingSaving}
+                ?disabled=${busy}
                 @click=${() => {
-                  c.review = null;
+                  o.reviewAgain();
                   drawSkills();
                 }}
               >
@@ -495,7 +375,7 @@ function creatorPane() {
               </button>`
             : nothing
         }
-        <button class="btn" type="button" ?disabled=${creatingSaving} @click=${closeFocusedFlow}>Cancel</button>
+        <button class="btn" type="button" ?disabled=${busy} @click=${closeFocusedFlow}>Cancel</button>
       </div>
     </form>
   `;
@@ -507,26 +387,20 @@ function drawSkills(loading = false): void {
     page.paint(creating ? creatorPane() : editorPane(), () => drawSkills());
     return;
   }
-  const filters = { query: skillSearch, scope: scopeFilter, source: sourceFilter, status: statusFilter };
   const scopedScope = page.scope;
-  let groups = filterSkillGroups(groupSkills(skillRows), filters);
-  if (scopedScope)
-    groups = groups
-      .map((group) => ({
-        ...group,
-        skills: group.skills.filter((skill) => skill.scopeId === scopedScope),
-      }))
-      .filter((group) => group.skills.length > 0);
+  const groups = filterSkillGroups(groupSkills(skillRows), filters).flatMap((group) => {
+    const skills = group.skills.filter((skill) => !scopedScope || skill.scopeId === scopedScope);
+    return skills.length ? [{ ...group, skills }] : [];
+  });
   const filtered = groups.flatMap((group) => group.skills);
   const counts = statusCounts(skillRows);
-  const rows: TemplateResult[] = groups.map((group) => skillGroup(group.skills));
-  const clearFilters = () => {
-    skillSearch = "";
-    scopeFilter = "all";
-    sourceFilter = "all";
-    statusFilter = "all";
-    drawSkills();
-  };
+  const rows = groups.map(({ skills }) => {
+    const hasScopeVariants = skills.filter((skill) => !isArchivedSkill(skill)).length > 1;
+    return html`<section class="skill-group" aria-label=${`/${skills[0]?.name ?? "skill"}`}>
+      ${skills.map((skill) => skillVariant(skill, hasScopeVariants))}
+    </section>`;
+  });
+  const clearFilters = () => setFilters({ query: "", scope: "all", source: "all", status: "all" });
   const emptyState = skillEmptyState(skillRows.length, filtered.length, loading);
   let empty: string | TemplateResult = scopedScope ? "No skills in this context." : "No skills available yet.";
   if (emptyState === "filtered") {
@@ -542,12 +416,9 @@ function drawSkills(loading = false): void {
       title: "Skills",
       action: { label: "New skill", onClick: startCreate },
       search: {
-        value: skillSearch,
+        value: filters.query,
         placeholder: "Search skills…",
-        onInput: (value) => {
-          skillSearch = value;
-          drawSkills();
-        },
+        onInput: (query) => setFilters({ query }),
       },
       filters: html`<div class="skill-registry-controls">
           ${listTabs(
@@ -557,16 +428,13 @@ function drawSkills(loading = false): void {
               { value: "archived" as const, label: "Archived", count: counts.archived },
               { value: "all" as const, label: "All", count: counts.all },
             ],
-            statusFilter,
-            (value) => {
-              statusFilter = value;
-              drawSkills();
-            },
+            filters.status,
+            (status) => setFilters({ status }),
           )}
           <div class="skill-filter-fields">
             ${listSelect(
               "Scope",
-              scopeFilter,
+              filters.scope,
               [
                 ["all", "All scopes"],
                 ["personal", "Personal"],
@@ -575,24 +443,18 @@ function drawSkills(loading = false): void {
                 ["team", "Team"],
                 ["org", "Organization"],
               ],
-              (value) => {
-                scopeFilter = value;
-                drawSkills();
-              },
+              (scope) => setFilters({ scope }),
             )}
             ${listSelect(
               "Source",
-              sourceFilter,
+              filters.source,
               [
                 ["all", "All sources"],
                 ["native", "Local"],
                 ["pack", "Skill packs"],
                 ["overrides", "Overrides"],
               ],
-              (value) => {
-                sourceFilter = value;
-                drawSkills();
-              },
+              (source) => setFilters({ source }),
             )}
           </div>
         </div>
@@ -607,6 +469,14 @@ function drawSkills(loading = false): void {
   );
 }
 
+function dismissArchive(): HTMLElement | null {
+  const target = archiveFocusTarget;
+  archiveConfirmation = null;
+  archiveFocusTarget = null;
+  setSkillsBackgroundInert(false);
+  return target;
+}
+
 function setSkillsBackgroundInert(inert: boolean): void {
   page.host?.querySelectorAll<HTMLElement>(":scope > :not(.project-dialog-backdrop)").forEach((element) => {
     element.inert = inert;
@@ -615,18 +485,11 @@ function setSkillsBackgroundInert(inert: boolean): void {
 
 function closeArchiveDialog(): void {
   if (deleting) return;
-  const target = archiveFocusTarget;
-  archiveConfirmation = null;
-  archiveFocusTarget = null;
+  const target = dismissArchive();
   drawSkills();
-  setSkillsBackgroundInert(false);
   queueMicrotask(() => {
     if (archiveConfirmation || appState.currentView !== "skills") return;
-    const fallback = target?.dataset.skillId
-      ? [...document.querySelectorAll<HTMLElement>(".skill-archive-trigger")].find(
-          (element) => element.dataset.skillId === target.dataset.skillId,
-        )
-      : null;
+    const fallback = skillButton(".skill-archive-trigger", target, document);
     restoreDialogFocus(target, () => fallback);
   });
 }
@@ -649,101 +512,74 @@ function archiveDialog(skill: SkillItem): TemplateResult {
   });
 }
 
-async function saveEdit(): Promise<void> {
-  if (!editing || saving) return;
-  if (isSharedSkillScope(editing.scopeId) && !reviewMatches(editing.review, editing.description, editing.body)) {
-    editing.review = { description: editing.description, body: editing.body };
+async function submitForm(draft: Draft, key: string, path: string, init: RequestInit, failure: string): Promise<void> {
+  if (sharedScope(draft.scopeId) && draft.review !== key) {
+    draft.review = key;
     return drawSkills();
   }
-  const operation = skillMutations.begin();
-  saving = true;
-  editError = "";
+  busy = true;
+  formError = "";
+  const operation = ++mutationSeq;
   drawSkills();
   try {
-    await api(`/api/skills/${encodeURIComponent(editing.id)}`, {
-      method: "PUT",
-      body: JSON.stringify({ description: editing.description, body: editing.body }),
-    });
-    if (!skillMutations.isCurrent(operation)) {
-      await renderSkills();
-      return;
-    }
+    await api(path, init);
+    if (operation !== mutationSeq) return void (await renderSkills());
     const returnTarget = flowFocusTarget;
     flowFocusTarget = null;
     editing = null;
     editingTarget = null;
-    saving = false;
+    creating = null;
+    busy = false;
     await renderSkills();
-    if (!skillMutations.isCurrent(operation)) return;
-    restoreFocusedFlow(returnTarget);
+    if (operation === mutationSeq) restoreFocusedFlow(returnTarget);
   } catch (e) {
-    if (!skillMutations.isCurrent(operation)) return;
-    editError = errMessage(e, "Failed to save skill.");
-    saving = false;
+    if (operation !== mutationSeq) return;
+    formError = errMessage(e, failure);
+    busy = false;
     drawSkills();
   }
 }
 
+async function saveEdit(): Promise<void> {
+  const e = editing;
+  if (!e || busy) return;
+  const body = JSON.stringify({ description: e.description, body: e.body });
+  const path = `/api/skills/${encodeURIComponent(e.id)}`;
+  await submitForm(e, editKey(e), path, { method: "PUT", body }, "Failed to save skill.");
+}
+
 async function saveCreate(): Promise<void> {
-  if (!creating || creatingSaving) return;
-  const name = creating.name.trim();
-  const description = creating.description.trim();
-  const body = creating.body.trim();
+  const c = creating;
+  if (!c || busy) return;
+  const [name, description, body] = [c.name.trim(), c.description.trim(), c.body.trim()];
   if (!name || !description || !body) {
-    createError = "Name, description, and instructions are all required.";
-    drawSkills();
-    return;
-  }
-  if (
-    isSharedSkillScope(creating.scopeId) &&
-    !createReviewMatches(creating.review, name, description, body, creating.scopeId)
-  ) {
-    creating.review = { name, description, body, scopeId: creating.scopeId };
+    formError = "Name, description, and instructions are all required.";
     return drawSkills();
   }
-  const operation = skillMutations.begin();
-  creatingSaving = true;
-  createError = "";
-  drawSkills();
+  const payload = JSON.stringify({ name, description, body, scopeId: c.scopeId });
+  await submitForm(c, createKey(c), "/api/skills", { method: "POST", body: payload }, "Failed to create skill.");
+}
+
+async function changeSkill(id: string, path: string, init: RequestInit, failure: string): Promise<boolean> {
+  deleting = id;
   try {
-    await api("/api/skills", {
-      method: "POST",
-      body: JSON.stringify({ name, description, body, scopeId: creating.scopeId }),
-    });
-    if (!skillMutations.isCurrent(operation)) {
-      await renderSkills();
-      return;
-    }
-    const returnTarget = flowFocusTarget;
-    flowFocusTarget = null;
-    creating = null;
-    creatingSaving = false;
+    await api(`/api/skills/${encodeURIComponent(id)}${path}`, init);
+    deleting = null;
     await renderSkills();
-    if (!skillMutations.isCurrent(operation)) return;
-    restoreFocusedFlow(returnTarget);
+    return true;
   } catch (e) {
-    if (!skillMutations.isCurrent(operation)) return;
-    createError = errMessage(e, "Failed to create skill.");
-    creatingSaving = false;
+    deleting = null;
+    skillsNotice = errMessage(e, failure);
     drawSkills();
+    return false;
   }
 }
 
 async function deleteSkill(s: SkillItem, trigger?: HTMLElement): Promise<void> {
   if (!s.id || deleting) return;
-  if (s.status === "archived") {
-    deleting = s.id;
-    try {
-      await api(`/api/skills/${encodeURIComponent(s.id)}/restore`, { method: "POST", body: "{}" });
-      deleting = null;
-      return void renderSkills();
-    } catch (e) {
-      deleting = null;
-      skillsNotice = errMessage(e, "Failed to restore skill.");
-      return drawSkills();
-    }
-  }
-  archiveFocusTarget = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  if (s.status === "archived")
+    return void changeSkill(s.id, "/restore", { method: "POST", body: "{}" }, "Failed to restore skill.");
+  archiveFocusTarget = trigger ?? activeElement();
   archiveConfirmation = s;
   drawSkills();
   setSkillsBackgroundInert(true);
@@ -755,51 +591,24 @@ async function deleteSkill(s: SkillItem, trigger?: HTMLElement): Promise<void> {
 
 async function performArchive(s: SkillItem): Promise<void> {
   if (!s.id || deleting) return;
-  const focusTarget = archiveFocusTarget;
-  archiveConfirmation = null;
-  archiveFocusTarget = null;
+  const focusTarget = dismissArchive();
   deleting = s.id;
   skillsNotice = "";
   drawSkills();
-  setSkillsBackgroundInert(false);
-  queueMicrotask(() => {
-    const target =
-      page.host?.querySelector<HTMLElement>(".list-search input") ??
-      page.host?.querySelector<HTMLElement>(".list-page-action");
-    target?.focus();
+  queueMicrotask(() => ($(".list-search input") ?? $(".list-page-action"))?.focus());
+  if (await changeSkill(s.id, "", { method: "DELETE" }, "Failed to archive skill.")) return;
+  requestAnimationFrame(() => {
+    const fallback = skillButton(".skill-archive-trigger", focusTarget);
+    restoreDialogFocus(focusTarget, () => fallback ?? $(".list-search input"));
   });
-  try {
-    await api(`/api/skills/${encodeURIComponent(s.id)}`, { method: "DELETE" });
-    deleting = null;
-    await renderSkills();
-  } catch (e) {
-    deleting = null;
-    skillsNotice = errMessage(e, "Failed to archive skill.");
-    drawSkills();
-    requestAnimationFrame(() => {
-      const fallback = focusTarget?.dataset.skillId
-        ? [...(page.host?.querySelectorAll<HTMLElement>(".skill-archive-trigger") ?? [])].find(
-            (element) => element.dataset.skillId === focusTarget.dataset.skillId,
-          )
-        : null;
-      restoreDialogFocus(
-        focusTarget,
-        () => fallback ?? page.host?.querySelector<HTMLElement>(".list-search input") ?? null,
-      );
-    });
-  }
 }
 
 export async function renderSkills(): Promise<void> {
   if (appState.currentView !== "skills") return;
   page.adoptScope();
-  if (!page.host || page.host.parentElement !== appState.mainEl) {
-    archiveConfirmation = null;
-    archiveFocusTarget = null;
-    setSkillsBackgroundInert(false);
-  }
+  if (!page.host || page.host.parentElement !== appState.mainEl) dismissArchive();
   const seq = appState.viewRenderSeq;
-  const request = skillsRefreshes.begin();
+  const request = ++refreshSeq;
   const wanted = page.pending;
   page.pending = null;
   skillsNotice = "";
@@ -809,8 +618,7 @@ export async function renderSkills(): Promise<void> {
       api<{ skills: SkillItem[] }>("/api/skills?includeShadowed=1"),
       api<{ contexts?: CoreContext[] }>("/api/contexts").catch(() => ({ contexts: [] })),
     ]);
-    if (!skillsRefreshes.isCurrent(request) || seq !== appState.viewRenderSeq || appState.currentView !== "skills")
-      return;
+    if (request !== refreshSeq || seq !== appState.viewRenderSeq || appState.currentView !== "skills") return;
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
     const personal = appState.me ? `personal:${appState.me.user}` : "";
     createScopes = [
@@ -824,11 +632,10 @@ export async function renderSkills(): Promise<void> {
         .map((context) => ({ scopeId: context.scopeId, name: context.name || context.scopeId })),
     ].filter((scope) => scope.scopeId);
   } catch (e) {
-    if (!skillsRefreshes.isCurrent(request) || seq !== appState.viewRenderSeq || appState.currentView !== "skills")
-      return;
+    if (request !== refreshSeq || seq !== appState.viewRenderSeq || appState.currentView !== "skills") return;
     skillsNotice = errMessage(e, "Failed to load skills.");
   }
-  if (!skillsRefreshes.isCurrent(request)) return;
+  if (request !== refreshSeq) return;
   const skill = wanted ? skillRows.find((candidate) => candidate.id === wanted) : undefined;
   if (wanted && !skill) skillsNotice = "That skill wasn't found, or you don't have access to it.";
   if (skill) openSkill(skill);

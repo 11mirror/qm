@@ -1,5 +1,6 @@
-import { choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
-import { html, render, type TemplateResult } from "lit";
+import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { html, type TemplateResult } from "lit";
+import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
@@ -7,10 +8,7 @@ export { owns, collect, capture, commit, status, statusKey, load, updateCatalog,
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "card-auto-flagger": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-auto-flagger"
-    >
+    html`<section class=${govClass(s)} id="card-auto-flagger">
       <div class="head">
         <h2>Auto flagger</h2>
         <p>
@@ -81,46 +79,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <span class="status" id="st-auto-flagger-test"></span>
       </div>
     </section>`,
-  "card-approval-grant-modes": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-approval-grant-modes"
-    >
-      <div class="head">
-        <h2>Approval grant options</h2>
-        <p>
-          Which standing options an approval card offers besides "Allow once". Composes tighten-only with the org value;
-          disabling a mode also suspends existing grants of that mode until it is re-enabled. Predeclared command
-          approvals honor this.
-        </p>
-      </div>
-      <div class="body">
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-session"
-            .checked=${s.value("approval-grant-session")}
-            @change=${(event: Event) => changeField(s, "approval-grant-session", event)}
-          />
-          Offer "Allow session" (grant lasts for the conversation)</label
-        >
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-always"
-            .checked=${s.value("approval-grant-always")}
-            @change=${(event: Event) => changeField(s, "approval-grant-always", event)}
-          />
-          Offer "Allow always" (standing grant across turns)</label
-        >
-      </div>
-      ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
   "card-command-policy": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-command-policy"
-    >
+    html`<section class=${govClass(s)} id="card-command-policy">
       <div class="head">
         <h2>Command policy</h2>
       </div>
@@ -157,10 +117,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s, "st-policy")}</div>
     </section>`,
   "card-ambient-policy": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-ambient-policy"
-    >
+    html`<section class=${govClass(s)} id="card-ambient-policy">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>
@@ -224,10 +181,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
     </section>`,
   "card-egress": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-egress"
-    >
+    html`<section class=${govClass(s)} id="card-egress">
       <div class="head">
         <h2>Egress policy</h2>
       </div>
@@ -304,10 +258,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
     </section>`,
   "card-governance-org-ambient": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-governance-org-ambient"
-    >
+    html`<section class=${govClass(s)} id="card-governance-org-ambient">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p>
@@ -351,22 +302,14 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
     </section>`,
 };
 
-export function createCard(id: string): HTMLElement {
-  const template = cards[id];
-  if (!template) throw new Error(`Unknown governance card: ${id}`);
-  const fragment = document.createDocumentFragment();
-  const key = id === "card-governance-org-ambient" ? "org-ambient" : id.slice(5);
-  const state = states.get(key)!;
-  state.render = () => render(template(state), fragment);
-  state.render();
-  return fragment.firstElementChild as HTMLElement;
-}
-
 export function mountCards(): void {
-  document.querySelectorAll<HTMLTemplateElement>("template[data-governance-card]").forEach((placeholder) => {
-    placeholder.replaceWith(createCard(placeholder.dataset.governanceCard!));
-  });
+  for (const [id, template] of Object.entries(cards)) {
+    const state = states.get(id === "card-governance-org-ambient" ? "org-ambient" : id.slice(5))!;
+    state.render = mountTemplate(`template[data-governance-card="${id}"]`, () => template(state));
+  }
 }
+const govClass = (s: GovernanceState, row = false) =>
+  cardClass(s, "sv-governance", { "setting-row": row, "egress-disabled": s.disabled });
 
 function changeField(s: GovernanceState, id: string, event: Event) {
   const input = event.currentTarget as HTMLInputElement;
@@ -429,18 +372,7 @@ function ruleTemplate(s: GovernanceState, r: GovernanceState["rules"][number], i
         s.changed();
       }}
     >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        aria-hidden="true"
-      >
-        <path d="m4 4 8 8M12 4l-8 8" />
-      </svg>
+      ${closeIcon(14)}
     </button>
   </div>`;
 }

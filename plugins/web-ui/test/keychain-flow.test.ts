@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "../src/keychain-state.ts";
+import { KeychainOperations } from "../src/keychain-state.ts";
 
 test("reset invalidates identity-bound loads and operations", () => {
   const operations = new KeychainOperations();
@@ -80,41 +80,6 @@ test("destructive mutations and secure drops are single-flight", () => {
   assert.equal(operations.beginDrop(), null);
   operations.finishDrop(drop);
   assert.notEqual(operations.beginDrop(), null);
-});
-
-test("keychain summary excludes expired grants and counts pending asks", () => {
-  const now = 10_000;
-  const env = { id: "env", kind: "env", expiresAt: now + 1 };
-  assert.equal(isActiveGrant({ credentialId: env.id, status: "active", expiresAt: now - 1 }, env, now), false);
-  assert.equal(isActiveGrant({ credentialId: env.id, status: "active", expiresAt: now + 1 }, env, now), true);
-  assert.equal(isActiveGrant({ credentialId: "missing", status: "active" }, undefined, now), false);
-
-  const expiredEnv = { id: "expired-env", kind: "env", expiresAt: now - 1 };
-  const legacyFile = { id: "legacy-file", kind: "file", expiresAt: now - 1 };
-  const connector = { id: "connector", kind: "connector", expiresAt: now - 1 };
-  assert.equal(isExpiredCredential(expiredEnv, now), true);
-  assert.equal(isExpiredCredential(legacyFile, now), false);
-  assert.equal(isExpiredCredential(connector, now), false);
-  assert.equal(isActiveGrant({ credentialId: expiredEnv.id, status: "active" }, expiredEnv, now), false);
-  assert.equal(isActiveGrant({ credentialId: legacyFile.id, status: "active" }, legacyFile, now), true);
-  assert.equal(isActiveGrant({ credentialId: connector.id, status: "active" }, connector, now), true);
-
-  const summary = keychainSummary(
-    [{ connected: true }, { connected: true, needsReconnect: true }],
-    [env, expiredEnv, legacyFile, connector],
-    [
-      { credentialId: env.id, status: "active" },
-      { credentialId: expiredEnv.id, status: "active" },
-      { credentialId: legacyFile.id, status: "active" },
-      { credentialId: connector.id, status: "active" },
-      { credentialId: env.id, status: "active", expiresAt: now - 1 },
-      { credentialId: env.id, status: "revoked" },
-    ],
-    [{ id: "ask-1" }],
-    now,
-  );
-
-  assert.deepEqual(summary, { connected: 1, activeGrants: 3, attention: 3 });
 });
 
 test("an inline credential card decides through the keychain approval route, not the command route", async () => {

@@ -1,5 +1,6 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin } from "../shared.ts";
+import { audit } from "../shared.ts";
+import { badRequest, orgAdmin } from "./common.ts";
 import type { ApiCtx } from "../route.ts";
 import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-screen.ts";
 import { defaultAutoFlaggerConfig, parseAutoFlaggerDraft, type AutoFlaggerDraft } from "../admin-resources.ts";
@@ -25,10 +26,6 @@ const emptyTotals = (): RunTotals => ({ flagged: 0, allowed: 0, unscreened: 0, e
 const rate = (flagged: number, scored: number): number | null =>
   scored > 0 ? Math.round((flagged / scored) * 10_000) / 10_000 : null;
 
-/**
- * Replay past screenings through one flagger configuration. Verdicts are counted, never returned —
- * the payloads belong to the conversations they came from, and the answer here is a rate.
- */
 async function replay(
   probe: SecurityScreenProbe,
   config: AutoFlaggerDraft,
@@ -77,53 +74,33 @@ async function replay(
   return { totals, verdicts, complete };
 }
 
-/**
- * POST /v1/admin/scopes/:scope/auto-flagger/test — run a candidate flagger over the most recent
- * real screenings and report how often it flags. Org-wide, admin-only, aggregates only.
- */
 export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   const scope = tenant().orgScope;
   const requestedScope = decodeURIComponent(ctx.params.scope ?? scope);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  if (requestedScope !== scope) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "the Auto flagger is org-wide; request an org scope" });
-    return;
-  }
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor } = authz;
+  if (requestedScope !== scope) return badRequest(ctx.res, "the Auto flagger is org-wide; request an org scope");
   await ctx.deps.refreshModels?.();
-  const body = (ctx.body ?? {}) as {
-    window?: unknown;
-    modelId?: unknown;
-    rubric?: unknown;
-    compare?: unknown;
-  };
+  const body = (ctx.body ?? {}) as { window?: unknown; modelId?: unknown; rubric?: unknown; compare?: unknown };
   const requestedWindow = body.window === undefined ? DEFAULT_WINDOW : Number(body.window);
-  if (!Number.isInteger(requestedWindow) || requestedWindow < 1 || requestedWindow > MAX_WINDOW) {
-    sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `window must be an integer between 1 and ${MAX_WINDOW}`,
-    });
-    return;
-  }
+  if (!Number.isInteger(requestedWindow) || requestedWindow < 1 || requestedWindow > MAX_WINDOW)
+    return badRequest(ctx.res, `window must be an integer between 1 and ${MAX_WINDOW}`);
   const { sessions, screenSecurity, config: configStore } = ctx.deps;
-  if (!sessions || !screenSecurity || !configStore) {
-    sendJson(ctx.res, 501, {
+  if (!sessions || !screenSecurity || !configStore)
+    return sendJson(ctx.res, 501, {
       error: "unsupported",
       message: "this deployment has no screening model wired, so the flagger cannot be tested",
     });
-    return;
-  }
   const saved = configStore.getAutoFlaggerConfig();
-  const fallback = defaultAutoFlaggerConfig(ctx.deps);
-  const effective: AutoFlaggerDraft = saved ? { modelId: saved.modelId, rubric: saved.rubric } : fallback;
+  const effective: AutoFlaggerDraft = saved
+    ? { modelId: saved.modelId, rubric: saved.rubric }
+    : defaultAutoFlaggerConfig(ctx.deps);
   const draftGiven = body.modelId !== undefined || body.rubric !== undefined;
   const parsed = draftGiven
     ? await parseAutoFlaggerDraft(ctx.deps, body)
     : ({ value: effective } as { value: AutoFlaggerDraft });
-  if ("error" in parsed) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error });
-    return;
-  }
+  if ("error" in parsed) return badRequest(ctx.res, parsed.error);
   const candidate = parsed.value;
   const samples = await sessions.listScreenSamples(requestedWindow);
   const startedAt = Date.now();
@@ -137,14 +114,13 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       status: "empty",
       detail: JSON.stringify({ window: requestedWindow, sampled: 0 }),
     });
-    sendJson(ctx.res, 200, {
+    return sendJson(ctx.res, 200, {
       scopeId: scope,
       window: requestedWindow,
       sampled: 0,
       modelId: candidate.modelId,
       message: "no past screenings are recorded yet, so there is nothing to replay",
     });
-    return;
   }
   const run = await replay(screenSecurity, candidate, samples, actor.id, deadline);
   const scored = run.totals.flagged + run.totals.allowed;
