@@ -4,6 +4,10 @@
 
 To run and test, see [`README.md`](./README.md).
 
+## Slop-free zone
+
+The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings: the `Slop-free zone` CI check fails a PR when a model review with every lens finds anything in a zone file it touches, or anything new that it adds outside the zone. Run `node scripts/zone-review.ts --base origin/main` before pushing, or `node scripts/zone-review.ts` to re-read the whole zone; both need a model provider key (`OPENAI_API_KEY` by default).
+
 ## Working on the code
 
 Two habits that keep task-focused changes from scarring the rest of the repo:
