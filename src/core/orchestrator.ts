@@ -8,17 +8,13 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
 import { renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
-import type { GapWork, HarnessDetectResult } from "../harness/harness.ts";
+import type { GapWork } from "../harness/harness.ts";
 import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-posture.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { environmentNote, inboundIssuesNote } from "./attachments.ts";
-import { findTrailingPartialTurn, turnAtSeq } from "./turn-resume.ts";
-import type { RecordedTurn } from "./turn-resume.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { absoluteAppLinks } from "../util/markdown.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { personKey } from "../directory/person.ts";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -29,6 +25,7 @@ import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
 import { concludeTurn, mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
+import { detectAmbientDecline, findRecordedTurn, replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
@@ -49,8 +46,6 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
-
-const DETECT_HISTORY_TAIL = 400;
 
 const MIN_SESSION_LEASE_TTL_MS = 15_000;
 
@@ -233,14 +228,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         mirrorRunActivity,
       } = admission.admitted;
       const ctx = await resolveTurnScope(deps, admission.admitted);
-      const {
-        resolution,
-        actorGrants,
-        scopeId,
-        isCurrentSharedScopeMember,
-        filterHistory,
-        reconcileSessionParticipants,
-      } = ctx;
+      const { resolution, actorGrants, scopeId, isCurrentSharedScopeMember, reconcileSessionParticipants } = ctx;
       const screened = await screenInboundTurn(ctx, { classifySecurityData, blobTransfer });
       if ("result" in screened) return screened.result;
       const { securityPolicy, enforceScreen, screenTrace, pendingScreenRequests, recordScreenRequest } =
@@ -319,41 +307,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
-      const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
-        if (!input.runId || !deps.runs) return null;
-        const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
-        if (seq == null) return null;
-        const entries = await deps.sessions.getItems(session.id);
-        if (!entries.some((entry) => entry.seq === seq)) return null;
-        return turnAtSeq(
-          entries.filter((entry) => entry.seq >= seq),
-          seq,
-        );
-      };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
-      if (recordedTurn?.answer) {
-        const recordedAnswer = recordedTurn.answer;
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "turn.already_answered",
-          resource: conversation.threadRef,
-          scopeLabel: scopeId,
-          detail: `attempt ${input.attempt}; replaying the answer the previous attempt recorded at seq ${recordedAnswer.seq}`,
-        });
-        console.error(
-          `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
-        );
-        return recordedAnswer.text.trim()
-          ? {
-              status: "ok",
-              sessionId: session.id,
-              reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
-              sourceUserSeq: recordedTurn.userSeq,
-              sourceAssistantEntrySeq: recordedAnswer.seq,
-            }
-          : { status: "silent", sessionId: session.id };
-      }
+      const recordedTurn = isRetry ? await findRecordedTurn(ctx, session) : null;
+      const recordedReplay = recordedTurn ? replayRecordedAnswer(ctx, session, recordedTurn) : undefined;
+      if (recordedReplay) return recordedReplay;
 
       deps.auditLog.record({
         at: Date.now(),
@@ -555,64 +511,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         systemPrompt = finished.systemPrompt;
         const volatileContext = finished.volatileContext;
 
-        if (
-          ambientTurn &&
-          !sessionTurn &&
-          deps.harness.models.shouldRespond &&
-          !(
-            isRetry &&
-            (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).items, input.runId))
-          )
-        ) {
-          const detectHistory = filterHistory((await historyWindow()).items.slice(-DETECT_HISTORY_TAIL));
-          const decision = await deps.harness.models
-            .shouldRespond({
-              session,
-              message: input.text,
-              recentContext: input.detectContext ?? "",
-              ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
-              systemPrompt: resolution.systemPrompt,
-              ...(input.gatewayContext?.reactionGuidance
-                ? { reactionGuidance: input.gatewayContext.reactionGuidance }
-                : {}),
-              history: detectHistory,
-              recordModelCall: (rec) => {
-                deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-                void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-              },
-            })
-            .catch((e: unknown): HarnessDetectResult => {
-              deps.errors?.record(
-                {
-                  category: "turn",
-                  code: "detection_failed",
-                  message: errMessage(e),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                e,
-              );
-              return { respond: false, reason: `detection failed: ${errMessage(e)}` };
-            });
-          if (!decision.respond) {
-            const reactions = decision.reactions?.length ? decision.reactions : undefined;
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
-              action: reactions ? "turn.react" : "turn.silent",
-              resource: conversation.threadRef,
-              scopeLabel: scopeId,
-              ...(decision.reason ? { detail: decision.reason } : {}),
-            });
-            console.error(
-              `[orchestrator] turn.${reactions ? "react" : "silent"} (detection ${reactions ? `acknowledged emoji=${reactions.join(",")}` : "declined"}) thread=${conversation.threadRef}` +
-                (decision.reason ? ` reason=${JSON.stringify(decision.reason)}` : ""),
-            );
-            return reactions
-              ? { status: "react", sessionId: session.id, reactions }
-              : { status: "silent", sessionId: session.id };
-          }
-        }
+        const declined = await detectAmbientDecline(ctx, {
+          session,
+          isRetry,
+          recordedTurn,
+          historyWindow,
+          transcripts,
+        });
+        if (declined) return declined;
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
