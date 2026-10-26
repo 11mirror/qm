@@ -56,13 +56,7 @@ export const REACTION_DETECT_GUIDANCE =
 
 export const MAX_REACTIONS_PER_TURN = 5;
 
-const SKIN_TONE_BY_MODIFIER: Record<string, string> = {
-  "🏻": "2",
-  "🏼": "3",
-  "🏽": "4",
-  "🏾": "5",
-  "🏿": "6",
-};
+const SKIN_TONE_BY_MODIFIER: Record<string, string> = { "🏻": "2", "🏼": "3", "🏽": "4", "🏾": "5", "🏿": "6" };
 const SKIN_TONE_MODIFIER = /[\u{1F3FB}-\u{1F3FF}]/gu;
 const VARIATION_SELECTOR_16 = /️/g;
 
@@ -119,27 +113,24 @@ export async function applyReactions(
   const added: string[] = [];
   const failed: string[] = [];
   for (const name of normalizeReactions(names)) {
-    let landed = false;
     for (let attempt = 0; ; attempt++) {
       try {
         await client.reactions.add({ channel, timestamp, name });
-        landed = true;
-        break;
       } catch (err) {
         const code = slackErrorCode(err);
-        if (code === "already_reacted") {
-          landed = true;
+        if (code !== "already_reacted") {
+          const delay = REACTION_RETRY_DELAYS_MS[attempt];
+          if (code && REACTION_PROPAGATION_ERRORS.has(code) && delay != null) {
+            await sleep(delay);
+            continue;
+          }
+          failed.push(name);
           break;
         }
-        const delay = REACTION_RETRY_DELAYS_MS[attempt];
-        if (code && REACTION_PROPAGATION_ERRORS.has(code) && delay != null) {
-          await sleep(delay);
-          continue;
-        }
-        break;
       }
+      added.push(name);
+      break;
     }
-    (landed ? added : failed).push(name);
   }
   return { added, failed };
 }
@@ -165,9 +156,8 @@ export function shouldSurfaceReaction(opts: {
   onBotMessage: boolean;
   onFollowedRoot: boolean;
 }): boolean {
-  if (opts.itemType !== "message") return false;
-  if (!opts.reactorId) return false;
-  if (opts.botUserId && opts.reactorId === opts.botUserId) return false;
+  if (opts.itemType !== "message" || !opts.reactorId || (opts.botUserId && opts.reactorId === opts.botUserId))
+    return false;
   return opts.isDM || opts.onBotMessage || opts.onFollowedRoot;
 }
 
@@ -204,25 +194,12 @@ export interface ReactionDirective {
 }
 
 export function parseReactionGroup(inner: string): ReactionDirective {
-  let namesPart = String(inner);
-  let target: string | undefined;
-  let targetId: string | undefined;
-  const at = namesPart.lastIndexOf("@");
-  if (at >= 0) {
-    const candidate = namesPart.slice(at + 1).trim();
-    if (REACTION_ID.test(candidate)) {
-      targetId = candidate;
-      namesPart = namesPart.slice(0, at);
-    } else if (REACTION_TS.test(candidate)) {
-      target = candidate;
-      namesPart = namesPart.slice(0, at);
-    }
-  }
-  const names: string[] = [];
-  for (const n of namesPart.split(/[\s,]+/)) {
-    const t = n.trim();
-    if (t) names.push(t);
-  }
+  const text = String(inner);
+  const at = text.lastIndexOf("@");
+  const candidate = at >= 0 ? text.slice(at + 1).trim() : "";
+  const targetId = REACTION_ID.test(candidate) ? candidate : undefined;
+  const target = !targetId && REACTION_TS.test(candidate) ? candidate : undefined;
+  const names = (targetId || target ? text.slice(0, at) : text).split(/[\s,]+/).filter(Boolean);
   return { names, ...(target ? { target } : {}), ...(targetId ? { targetId } : {}) };
 }
 

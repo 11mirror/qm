@@ -26,12 +26,9 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 
-const MASS_MENTION = /(?<!<)<+!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
-export function neutralizeMassMentions(text: string): string {
-  return text.replace(MASS_MENTION, (_m, word: string) => `@\u200b${word.toLowerCase()}`);
-}
-
 const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
+const MASS_MENTION_KEYS = new Set([...RESERVED_MENTION_NAMES].map((name) => `!${name}`));
+export const neutralizeMassMentions = (text: string): string => neutralizeMentions(text, MASS_MENTION_KEYS);
 
 const mentionIndex = perTenant(() => ({
   idByName: new Map() as ReadonlyMap<string, string>,

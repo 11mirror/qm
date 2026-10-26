@@ -67,38 +67,16 @@ export function isTrustedSlackHost(url: string, extraHost?: string): boolean {
   }
 }
 
-export function attachmentFromBytes(
-  file: SlackFile,
-  bytes: Uint8Array,
-  blobId: string,
-  author?: string,
-): IncomingAttachment {
-  const name = file.name || file.title || file.id || "file";
-  const mimetype = file.mimetype || "application/octet-stream";
-  return {
-    name,
-    mimetype,
-    sizeBytes: bytes.length,
-    blobId,
-    ...(file.id ? { sourceId: file.id } : {}),
-    ...(author ? { author } : {}),
-  };
-}
-
 export const MAX_ATTACHMENTS_PER_TURN = 10;
 
 const CAP_MB = Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000);
 const capLabel = CAP_MB >= 1000 ? `${Math.round(CAP_MB / 1000)} GB` : `${CAP_MB} MB`;
 export const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
 
-export interface DownloadOptions {
-  token?: string;
-  fetchImpl?: typeof fetch;
-  timeoutMs?: number;
-  trustedHost?: string;
-}
-
-export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions = {}): Promise<Uint8Array> {
+export async function downloadSlackFile(
+  file: SlackFile,
+  opts: { token?: string; fetchImpl?: typeof fetch; timeoutMs?: number; trustedHost?: string } = {},
+): Promise<Uint8Array> {
   const url = file.url_private_download || file.url_private;
   if (!url) throw new Error("no url_private");
   if (file.mode === "external" || file.mode === "remote") throw new Error("external/remote files aren't supported");
@@ -117,17 +95,12 @@ export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions =
   return new Uint8Array(await res.arrayBuffer());
 }
 
-export interface ProcessedInbound {
-  attachments: IncomingAttachment[];
-  issues: string[];
-}
-
 export async function processInboundFiles(
   files: readonly SlackFile[],
   download: (file: SlackFile) => Promise<Uint8Array>,
   stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
   resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined,
-): Promise<ProcessedInbound> {
+): Promise<{ attachments: IncomingAttachment[]; issues: string[] }> {
   const attachments: IncomingAttachment[] = [];
   const issues: string[] = [];
   for (const f of files) {
@@ -148,7 +121,14 @@ export async function processInboundFiles(
       }
       const { blobId } = await stage(bytes);
       const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
-      attachments.push(attachmentFromBytes(f, bytes, blobId, author));
+      attachments.push({
+        name: slackFileName(f),
+        mimetype: f.mimetype || "application/octet-stream",
+        sizeBytes: bytes.length,
+        blobId,
+        ...(f.id ? { sourceId: f.id } : {}),
+        ...(author ? { author } : {}),
+      });
     } catch (err) {
       const detail =
         err instanceof BlobTooLargeError
