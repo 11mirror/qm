@@ -386,11 +386,7 @@ async function handleConsentRedeem(
 ): Promise<void> {
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
-    data = (
-      await coreCall<typeof data>("GET", o.corePath, {
-        headers: { "x-consent-clicker": o.session.sub, "x-consent-clicker-org": o.session.org },
-      })
-    ).body;
+    data = (await coreCall<typeof data>("GET", o.corePath, { headers: portalIdentityHeaders(o.session.sub) })).body;
   } catch (error) {
     console.warn(`[portal] consent redeem failed: ${errMessage(error)}`);
     return sendHtml(
