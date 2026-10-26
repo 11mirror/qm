@@ -378,15 +378,15 @@ test("the deploy role can inspect optional secret metadata without reading unman
   assert.match(manage, /aws_secretsmanager_secret\.contract/);
 });
 
-test("the deploy role can run and inspect only stack-scoped deployment canaries", () => {
+test("the deploy role can run and inspect only stack-scoped one-off core tasks (migrations, canaries)", () => {
   const policy = mainTf.match(/resource "aws_iam_role_policy" "github_deploy" \{([\s\S]*?)\n\}/)?.[1] ?? "";
-  const run = policy.match(/Sid\s*= "RunDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
+  const run = policy.match(/Sid\s*= "RunCoreMigrationTask"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(run, /ecs:RunTask/);
   assert.match(run, /task-definition\/\$\{var\.services\["core"\]\.ecs_service\}:\*/);
   assert.match(run, /"ecs:cluster"\s*=\s*aws_ecs_cluster\.this\.arn/);
   assert.doesNotMatch(run, /Resource\s*= "\*"/);
 
-  const inspect = policy.match(/Sid\s*= "InspectDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
+  const inspect = policy.match(/Sid\s*= "InspectMigrationTasks"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(inspect, /ecs:DescribeTasks/);
   assert.doesNotMatch(mainTf, /TaskProtection/);
   assert.match(inspect, /task\/\$\{var\.cluster_name\}\/\*/);
