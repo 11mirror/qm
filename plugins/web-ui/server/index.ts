@@ -153,30 +153,6 @@ function pipeUpstream(res: ServerResponse, up: Response, names: string[], header
   return up.body ? pipeWeb(res, up.body) : res.end();
 }
 
-const runThreadKeys = new Map<string, string>();
-const activeRunsByThread = new Map<string, string[]>();
-
-function threadKey(user: string, threadRef: string): string {
-  return `${user}\0${threadRef}`;
-}
-
-function forgetRun(runId: string): void {
-  const key = runThreadKeys.get(runId);
-  if (key) {
-    const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
-    if (remaining.length) activeRunsByThread.set(key, remaining);
-    else activeRunsByThread.delete(key);
-  }
-  runThreadKeys.delete(runId);
-}
-
-function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runThreadKeys.size > 5000) forgetRun(runThreadKeys.keys().next().value!);
-  const key = threadKey(user, threadRef);
-  runThreadKeys.set(runId, key);
-  activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
-}
-
 const eventClients = new Map<string, Set<ServerResponse>>();
 
 const ownerOfWebThread = (threadRef: string) => /^web:([^:]+):/.exec(threadRef)?.[1];
@@ -712,10 +688,7 @@ async function postTurnAndMint(
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
       runId = parsed.runId;
-      if (runId) {
-        rememberRun(runId, user, threadRef);
-        return json(res, r.status, parsed);
-      }
+      if (runId) return json(res, r.status, parsed);
     } catch {
       void 0;
     }
@@ -1717,30 +1690,17 @@ const apiRoutes: readonly WebRoute[] = [
         ? tryParse<{ runId?: string | null; queued?: Queued[] } | null>(durable.text)
         : undefined;
     const queued = parsed?.queued ?? [];
-    const durableRunId = parsed?.runId ?? null;
-    const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
+    const runId = parsed?.runId;
+    if (runId) {
       const r = await coreFetch("GET", `/v1/runs/${enc(runId)}`);
-      if (r.status < 200 || r.status >= 300) {
-        if (ownedByUser) forgetRun(runId);
-        return false;
+      if (r.status >= 200 && r.status < 300) {
+        const run = tryParse<{ status?: string }>(r.text);
+        if (!run) return json(res, 502, { error: "bad_core_response" });
+        if (run.status !== "done" && run.status !== "failed") {
+          const waiting = queued.filter((q) => q.runId !== runId);
+          return json(res, 200, { runId, run, ...(waiting.length ? { queued: waiting } : {}) });
+        }
       }
-      const run = tryParse<{ status?: string }>(r.text);
-      if (!run) {
-        json(res, 502, { error: "bad_core_response" });
-        return true;
-      }
-      if (run.status === "done" || run.status === "failed") {
-        forgetRun(runId);
-        return false;
-      }
-      rememberRun(runId, user, threadRef);
-      const waiting = queued.filter((q) => q.runId !== runId);
-      json(res, 200, { runId, run, ...(waiting.length ? { queued: waiting } : {}) });
-      return true;
-    };
-    if (durableRunId && (await tryRun(durableRunId, false))) return;
-    for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
-      if (await tryRun(runId)) return;
     }
     json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
     return;
@@ -1774,13 +1734,7 @@ const apiRoutes: readonly WebRoute[] = [
     );
   }),
   relayRoute("PATCH", "/api/runs/:id/input", { read: "strict" }),
-  route("POST", "/api/runs/:id/withdraw", async (c) => {
-    const { res } = c;
-    const id = c.params.id!;
-    const r = await coreFetch("POST", `/v1/runs/${enc(id)}/withdraw`);
-    if (r.status >= 200 && r.status < 300) forgetRun(id);
-    return relay(res, r);
-  }),
+  relayRoute("POST", "/api/runs/:id/withdraw"),
   route("GET", "/api/runs/:id/events", async (c) => {
     const { res } = c;
     const id = c.params.id!;
@@ -1805,14 +1759,7 @@ const apiRoutes: readonly WebRoute[] = [
       }
     }
   }),
-  route("GET", "/api/runs/:id", async (c) => {
-    const { res } = c;
-    const id = c.params.id!;
-    const r = await coreFetch("GET", `/v1/runs/${enc(id)}`);
-    const s = tryParse<{ status?: string }>(r.text)?.status;
-    if (s === "done" || s === "failed") forgetRun(id);
-    return relay(res, r);
-  }),
+  relayRoute("GET", "/api/runs/:id"),
   relayRoute("GET", "/api/inbox/sent/:messageId", {
     core: "/v1/connectors/gmail/sent/:messageId",
     query: (c) => copyParams(c, ["accountType"], {}),
