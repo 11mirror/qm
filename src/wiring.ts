@@ -111,7 +111,7 @@ import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
+import { createPostgresRateLimiter, RATE_LIMIT } from "./ratelimit/postgres-rate-limiter.ts";
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
@@ -289,19 +289,26 @@ import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
 import { repairStaleTurns, routeTurns } from "./turns/turn-engine.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
+import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./harness/agent-tools.ts";
+import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "./connectors/background-exec-broker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
+import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
-import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
+import {
+  createProcessReaper,
+  createReaperKillHook,
+  PROCESS_REAPER_INTERVAL_MS,
+  type ProcessReaper,
+} from "./processes/process-reaper.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
-import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
+import { createMonitorPoller, MONITOR_POLL_MS, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
@@ -659,7 +666,7 @@ export function buildApp(
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+      await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });
       for (const dir of config.pluginSkillDirs) {
         if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
         await installSeedSkills(skills, {
@@ -681,12 +688,10 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
-  const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
+  const rateLimiter = createPostgresRateLimiter(databaseUrl, RATE_LIMIT);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
-    windowMs: config.budgetWindowMs,
   };
   const budget =
     config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
@@ -763,7 +768,7 @@ export function buildApp(
     );
   const sandboxShared = {
     ...config.sandbox,
-    keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
+    keepWarmSec: Math.ceil(BACKGROUND_JOB_TTL_MAX_MS / 1000),
     advisoryLock,
     blobTransfer,
     extraTools: deploymentLayer.advertisedTools,
@@ -1302,8 +1307,8 @@ export function buildApp(
   const maxAttempts = config.maxAttempts;
   const runStore =
     runStoreKind === "postgres"
-      ? createPostgresRunStore(databaseUrl, { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
+      ? createPostgresRunStore(databaseUrl, { maxClaims: RUN_MAX_CLAIMS })
+      : createMemoryRunStore({ maxClaims: RUN_MAX_CLAIMS });
   const turnLedger =
     runStoreKind === "postgres"
       ? createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
@@ -1625,7 +1630,7 @@ export function buildApp(
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
-    staleRunningMs: config.runMaxAgeMs,
+    staleRunningMs: RUN_MAX_AGE_MS,
     fires: cronFires,
   });
   const crons: CronStore = {
@@ -1848,14 +1853,14 @@ export function buildApp(
     admin,
     mcp: mcpToolService,
     ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
-    execTimeoutMs: config.execTimeoutDefaultMs,
-    execTimeoutCeilingMs: config.execTimeoutMaxMs,
+    execTimeoutMs: EXEC_TIMEOUT_DEFAULT_MS,
+    execTimeoutCeilingMs: EXEC_TIMEOUT_MAX_MS,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: config.turnLeaseWaitMs,
     securityScreenTimeoutMs: config.securityScreenTimeoutMs,
     ...(securityScreener ? { securityScreener } : {}),
-    backgroundJobTtlMs: config.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
+    backgroundJobTtlMs: BACKGROUND_JOB_TTL_MS,
+    backgroundJobTtlMaxMs: BACKGROUND_JOB_TTL_MAX_MS,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
@@ -1945,7 +1950,7 @@ export function buildApp(
   const reaper: Reaper = createReaper(runs, sessions, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
-    maxAgeMs: config.runMaxAgeMs,
+    maxAgeMs: RUN_MAX_AGE_MS,
     errors,
   });
   const engaged = createEngagedRegistry();
@@ -2415,7 +2420,6 @@ export function buildApp(
           resolveRecipient,
           leaderLease,
           onProcessExit: finishCredentials,
-          heartbeatMs: config.monitorHeartbeatMs,
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({
@@ -2473,7 +2477,7 @@ export function buildApp(
         ...(turnYields ? { yields: turnYields } : {}),
         canClaim: canClaimRuns,
         errors,
-        maxClaims: config.maxClaims,
+        maxClaims: RUN_MAX_CLAIMS,
       })
     : undefined;
   const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
@@ -2484,7 +2488,6 @@ export function buildApp(
       runs,
       orchestrator,
       leaseTtlMs,
-      heartbeatIntervalMs: config.heartbeatIntervalMs,
       errors,
       pollMs: 250,
       canClaim: canClaimRunSlot,
@@ -2507,7 +2510,7 @@ export function buildApp(
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
-        intervalMs: config.processReaperIntervalMs,
+        intervalMs: PROCESS_REAPER_INTERVAL_MS,
         ...(supportsProcessSessions(sandbox)
           ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
           : {}),
@@ -2563,8 +2566,8 @@ export function buildApp(
     );
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
   const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
-  const deepIdleMachineMs = config.deepIdleMachineMs;
-  const devIdleMachineMs = config.devIdleMachineMs;
+  const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
+  const devIdleMachineMs = 2 * 60 * 60_000;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
   const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && (deepIdleMachineMs > 0 || devIdleMachineMs > 0));
   const deepIdleSweeper = deepIdleReapEnabled
@@ -2603,17 +2606,16 @@ export function buildApp(
       if (!backgroundRunning || generation !== backgroundGeneration) return;
       reaper.start();
       processReaper?.start();
-      monitorPoller?.start(config.monitorPollMs);
+      monitorPoller?.start(MONITOR_POLL_MS);
       void monitorDrained
         .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(config.monitorPollMs);
+          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(MONITOR_POLL_MS);
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
-      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
       fileUploads?.start();
@@ -2914,7 +2916,6 @@ export function serverDeps(
     crons: built.crons,
     inbox: built.inbox,
     deploymentLayer: built.deploymentLayerStore,
-    deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
     ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),

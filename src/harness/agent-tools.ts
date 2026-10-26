@@ -14,7 +14,8 @@ import type { HarnessHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import type { Config } from "../config.ts";
+import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../connectors/background-exec-broker.ts";
 import type { ClientToolDeclaration, CronFireLogEntry, ScopeId } from "../types.ts";
 import type { NewItem } from "../sessions/items.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
@@ -348,6 +349,9 @@ export interface AgentToolsOptions {
   clientTools?: readonly ClientToolDeclaration[];
 }
 
+export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
+export const EXEC_TIMEOUT_MAX_MS = 300_000;
+
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
   "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
@@ -358,10 +362,6 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     scratchExec: config.scratchExecEnabled,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
-    execTimeoutMs: config.execTimeoutDefaultMs,
-    execTimeoutCeilingMs: config.execTimeoutMaxMs,
-    backgroundJobTtlMs: config.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
   };
 }
 
@@ -391,10 +391,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
   const delegateWork = opts?.delegateWork === true;
-  const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
-  const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
-  const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
-  const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
+  const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? EXEC_TIMEOUT_DEFAULT_MS) / 1000);
+  const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? EXEC_TIMEOUT_MAX_MS) / 1000);
+  const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? BACKGROUND_JOB_TTL_MS) / 1000);
+  const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? BACKGROUND_JOB_TTL_MAX_MS) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
   const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;
