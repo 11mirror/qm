@@ -1501,7 +1501,7 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments", actor: "body.createdBy", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", actor: "query.principalId", auth: "either", handle: listDeployments },
-  { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
+  { method: "GET", path: "/v1/deployments/:id", actor: "query.principalId", auth: "either", handle: getDeployment },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },

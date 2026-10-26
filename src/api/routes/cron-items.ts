@@ -621,7 +621,13 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const cronItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/crons/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+  {
+    method: "GET",
+    path: "/v1/crons/:id/items/:itemId/image",
+    actor: "query.principalId",
+    auth: "source",
+    handle: serveItemImage,
+  },
   ...withActor("query.principalId", [
     { method: "POST", path: "/v1/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
     { method: "GET", path: "/v1/crons/:id/items", auth: "either", handle: listItems },
