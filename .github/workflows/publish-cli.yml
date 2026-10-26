@@ -58,9 +58,17 @@ jobs:
           set -euo pipefail
           out=$(jq -n '{sandboxBase: "", services: {}}')
           for service in core egress-proxy sandbox-base; do
-            repo="ghcr.io/yc-software/qm/$service"
-            digest=$(docker buildx imagetools inspect "$repo:$IMAGES_REF" --format '{{json .Manifest}}' | jq -r .digest)
-            ref="$repo@$digest"
+            repo="yc-software/qm/$service"
+            token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | jq -r .token)
+            digest=$(curl -fsS -o /dev/null -D - -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/$repo/manifests/$IMAGES_REF" \
+              | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')
+            if [ -z "$digest" ]; then
+              echo "no published image for $repo at $IMAGES_REF" >&2
+              exit 1
+            fi
+            ref="ghcr.io/$repo@$digest"
             if [ "$service" = sandbox-base ]; then
               out=$(printf '%s' "$out" | jq --arg r "$ref" '.sandboxBase = $r')
             else
@@ -70,7 +78,9 @@ jobs:
           printf '%s\n' "$out" > cli/manifest.json
           cat cli/manifest.json
           jq -e '[.sandboxBase] + [.services[]]
-                 | all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))' cli/manifest.json > /dev/null
+                 | length == 7
+                 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
+                 and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
           printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish
         working-directory: cli
@@ -94,4 +104,7 @@ jobs:
             echo "@yc-software/qm@$version is already on npm pinning these digests; keeping it"
           else
             npm publish --provenance --access public
+          fi
+          if [ "$version" = 0.1.5 ]; then
+            npm deprecate @yc-software/qm@1.0.5 "Published with an incorrect version number; use 0.1.5."
           fi

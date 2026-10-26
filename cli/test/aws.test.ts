@@ -1127,10 +1127,7 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
 test("AWS portal ALB adopts core's pinned front-door target group and requires exactly the env-derived host rules", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-host-split-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
@@ -1218,10 +1215,7 @@ test("AWS portal ALB adopts core's pinned front-door target group and requires e
 test("AWS up scales services to the configured desired count and live check flags drift from it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-desired-count-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const scaled = (desiredCount = 2): QmConfig => {
     const base = oneServiceConfig();
@@ -1274,10 +1268,7 @@ test("AWS up scales services to the configured desired count and live check flag
 test("AWS up reapplies the recorded layer after starting a stopped core", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-stopped-layer-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
@@ -1322,10 +1313,7 @@ test("AWS up reapplies the recorded layer after starting a stopped core", async 
 test("AWS up records a restore point before mutation during storage optimization", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-restore-point-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
@@ -1425,10 +1413,7 @@ test("AWS up refuses to mutate when the database is unavailable, keeps no automa
 test("aws.predeployDbSnapshot false skips the restore-point check without touching RDS", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-disabled-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const base = oneServiceConfig();
   const single: QmConfig = { ...base, aws: { ...base.aws!, predeployDbSnapshot: false } };
@@ -1454,10 +1439,7 @@ test("aws.predeployDbSnapshot false skips the restore-point check without touchi
 test("a no-op re-deploy records no manifest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-noop-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
@@ -1480,10 +1462,7 @@ test("a no-op re-deploy records no manifest", async () => {
 test("AWS up coalesces a requested restart into one deployment even when the task is unchanged", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-restart-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { blueGreenBakePolls: 3 });
@@ -1620,10 +1599,7 @@ test("background mode changes preserve task settings and reject secret-controlle
 test("background activation preserves candidate and manifest without another migration; demotion drains old tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-background-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const base = oneServiceConfig();
   const single = { ...base, env: { ...base.env, core: { ...base.env.core, BACKGROUND_WORK_ENABLED: "false" } } };
@@ -1727,10 +1703,7 @@ test("background activation preserves candidate and manifest without another mig
 test("AWS up renews the deploy lease with a holder-conditioned update while it runs", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-renew-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { transientFailedTaskPolls: 3 });
@@ -2274,7 +2247,7 @@ test("AWS source-plugin provenance records the build source and detects source-m
     },
   };
   const dockerBin = join(dir, "docker");
-  writeFileSync(dockerBin, `#!/bin/sh\necho '{"digest":"sha256:${"a".repeat(64)}"}'\n`);
+  writeFileSync(dockerBin, `#!/bin/sh\necho 'Digest: sha256:${"a".repeat(64)}'\n`);
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
@@ -4082,7 +4055,7 @@ test("AWS live check uses the package-pinned source image without consulting mut
   const dockerBin = join(dir, "docker");
   writeFileSync(
     dockerBin,
-    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
+    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`,
   );
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
@@ -4219,7 +4192,7 @@ test("AWS live check detects prebuilt plugin image drift from current config", a
   const dockerBin = join(dir, "docker");
   writeFileSync(
     dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:" + (process.argv.at(-1).includes("linear") ? "${"b".repeat(64)}" : "${"a".repeat(64)}") }));\n`,
+    `#!/usr/bin/env node\nconsole.log("Digest: sha256:" + (process.argv.at(-1).includes("linear") ? "${"b".repeat(64)}" : "${"a".repeat(64)}"));\n`,
   );
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
@@ -4369,7 +4342,7 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
   const dockerBin = join(dir, "docker");
   writeFileSync(
     dockerBin,
-    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log(JSON.stringify({ digest: "sha256:${"b".repeat(64)}" }));\n`,
+    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log("Digest: sha256:${"b".repeat(64)}");\n`,
   );
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
@@ -4759,10 +4732,7 @@ test("AWS up survives a three-poll failed-task flake that ECS replaces — the w
 test("AWS up survives alternating single-service stale reads — only the same workload's same failure on consecutive polls confirms an abort", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-alternating-stale-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const multi = twoServiceConfig();
   const fake = statefulAws(dir, multi, {}, { alternateStaleReadPolls: 4 });
@@ -4898,10 +4868,7 @@ test("AWS up keeps a healthy rollout and its staging tag when the manifest write
 test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener; any other extra listener still fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-listeners-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
@@ -5085,10 +5052,7 @@ for (const mode of ["stale", "failed"] as const) {
         },
       },
     };
-    writeFileSync(
-      join(dir, "docker"),
-      `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-    );
+    writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
     chmodSync(join(dir, "docker"), 0o755);
     const fake = statefulAws(dir, selected, {}, { ignoreUpdate: mode === "stale", rolloutFailed: mode === "failed" });
     const before = JSON.parse(readFileSync(fake.state, "utf8")).services;
@@ -5122,10 +5086,7 @@ for (const mode of ["stale", "failed"] as const) {
 
 test("AWS private canary reaches core without a core ingress target and refuses missing current tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-private-canary-"));
-  writeFileSync(
-    join(dir, "docker"),
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(join(dir, "docker"), 0o755);
   const fake = statefulAws(dir, config);
   const priorPath = process.env.PATH;
@@ -5819,10 +5780,7 @@ test("AWS deployment progress rejects invalid options before AWS calls", async (
 test("inactive capacity proves the stack is not the owner and its tasks are stable without mutating deployment state", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-capacity-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const base = twoServiceConfig();
   const configured: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
@@ -5993,10 +5951,7 @@ test("inactive capacity proves the stack is not the owner and its tasks are stab
 test("controlled AWS cohorts bind immutable identities and hand over without ECS replacement", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-controlled-background-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const base = oneServiceConfig();
   const single: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
@@ -6188,10 +6143,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
 test("a stopped AWS core cohort is replaceable only while the production route reports another active owner", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-stopped-background-"));
   const dockerBin = join(dir, "docker");
-  writeFileSync(
-    dockerBin,
-    `#!/usr/bin/env node\nconsole.log(JSON.stringify({ digest: "sha256:${"a".repeat(64)}" }));\n`,
-  );
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const base = oneServiceConfig();
   const single: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
