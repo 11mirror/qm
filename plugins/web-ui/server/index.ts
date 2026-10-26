@@ -665,8 +665,6 @@ async function postTurnAndMint(
   req: IncomingMessage,
   res: ServerResponse,
   turn: Record<string, unknown>,
-  user: string,
-  threadRef: string,
 ): Promise<void> {
   const startedAt = performance.now();
   let runId: string | undefined;
@@ -1602,7 +1600,7 @@ export const apiRoutes: readonly WebRoute[] = [
     const replay: Record<string, unknown> = { ...record.request, approval };
     delete replay.idempotencyKey;
     if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
-    return postTurnAndMint(req, res, replay, user, threadRef);
+    return postTurnAndMint(req, res, replay);
   }),
   route("POST", "/api/turn", async (c) => {
     const { req, res, user } = c;
@@ -1660,7 +1658,7 @@ export const apiRoutes: readonly WebRoute[] = [
         : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
     };
-    return postTurnAndMint(req, res, turn, user, threadRef);
+    return postTurnAndMint(req, res, turn);
   }),
   route("GET", "/api/session-events", async (c) => {
     const { req, res, user } = c;
@@ -1685,7 +1683,7 @@ export const apiRoutes: readonly WebRoute[] = [
     return;
   }),
   route("GET", "/api/runs/active", async (c) => {
-    const { res, url, user } = c;
+    const { res, url } = c;
     const threadRef = url.searchParams.get("threadRef") ?? "";
     if (!isWebThread(threadRef)) return json(res, 404, { error: "not_found" });
     const durable = await coreFetch("GET", `/v1/runs?threadRef=${enc(threadRef)}`);
