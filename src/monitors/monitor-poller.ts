@@ -10,7 +10,7 @@ import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs, swallow } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
@@ -60,7 +60,8 @@ function filterLines(chunk: string, pattern: string): string {
   let matches: (line: string) => boolean;
   try {
     matches = compileMonitorPattern(pattern);
-  } catch {
+  } catch (e) {
+    swallow(`monitor: stored pattern no longer compiles, delivering unfiltered output`, e);
     return chunk;
   }
   return chunk

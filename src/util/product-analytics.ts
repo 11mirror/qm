@@ -1,5 +1,6 @@
 import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
+import { swallow } from "./errors.ts";
 
 export function createProductAnalytics(
   companyId: string,
@@ -42,8 +43,9 @@ export function createProductAnalytics(
         }),
       });
       await response.body?.cancel();
-    } catch {
-      return;
+      if (!response.ok) swallow(`product analytics: ${event} capture`, new Error(`HTTP ${response.status}`));
+    } catch (e) {
+      swallow(`product analytics: ${event} capture`, e);
     } finally {
       inFlight--;
     }
