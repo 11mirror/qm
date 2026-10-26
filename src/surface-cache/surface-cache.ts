@@ -153,6 +153,8 @@ export function createPostgresSurfaceCache(
       const now = Date.now();
       const client = await (await pool()).connect();
       let upserted = 0;
+      const files = new Map<string, { container: string; ts: string; rows: Array<Record<string, unknown>> }>();
+      const states: Array<Record<string, unknown>> = [];
       try {
         await client.query("BEGIN");
         for (const event of events) {
@@ -207,34 +209,64 @@ export function createPostgresSurfaceCache(
           );
           upserted += res.rowCount ?? 0;
           if (res.rows[0]?.content_accepted && e.files !== undefined) {
-            await client.query("DELETE FROM channel_files WHERE org_id = $1 AND container = $2 AND ts = $3", [
-              tenant().orgId,
-              e.container,
-              e.ts,
-            ]);
+            // A later accepted event for the same message replaces its files, as the per-event rewrite did.
+            const byId = new Map<string, Record<string, unknown>>();
             for (const f of e.files) {
               if (!f.fileId) continue;
-              await client.query(
-                `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT (${tenantCols("org_id, container, ts, file_id")}) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
-                [
-                  tenant().orgId,
-                  e.container,
-                  e.ts,
-                  f.fileId,
-                  f.name ?? null,
-                  f.mimetype ?? null,
-                  e.createdAt ?? now,
-                  f.title ?? null,
-                  f.size ?? null,
-                ],
-              );
+              byId.set(f.fileId, {
+                container: e.container,
+                ts: e.ts,
+                file_id: f.fileId,
+                name: f.name ?? null,
+                mimetype: f.mimetype ?? null,
+                created_at: e.createdAt ?? now,
+                title: f.title ?? null,
+                size: f.size ?? null,
+              });
             }
+            files.set(`${e.container}\u0000${e.ts}`, { container: e.container, ts: e.ts, rows: [...byId.values()] });
           }
+          states.push({
+            container: e.container,
+            ts: e.ts,
+            name: e.containerName ?? null,
+            kind: e.kind ?? null,
+            members: e.members ?? [],
+            surface: e.surface ?? SLACK,
+          });
+        }
+        if (files.size) {
+          const replaced = [...files.values()];
+          await client.query(
+            `DELETE FROM channel_files f USING unnest($2::text[], $3::text[]) AS m(container, ts)
+             WHERE f.org_id = $1 AND f.container = m.container AND f.ts = m.ts`,
+            [tenant().orgId, replaced.map((m) => m.container), replaced.map((m) => m.ts)],
+          );
+          const rows = replaced.flatMap((m) => m.rows);
+          if (rows.length) {
+            await client.query(
+              `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
+               SELECT $1, container, ts, file_id, name, mimetype, created_at, title, size
+                 FROM jsonb_to_recordset($2::jsonb)
+                   AS b(container text, ts text, file_id text, name text, mimetype text, created_at bigint, title text, size bigint)`,
+              [tenant().orgId, JSON.stringify(rows)],
+            );
+          }
+        }
+        if (states.length) {
+          // One row per container, folded the way successive per-event upserts would have left it:
+          // newest last_ts, numerically oldest oldest_ts, the last name/kind/non-empty member list given,
+          // and the first event's surface for a container seen for the first time.
           await client.query(
             `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface)
-             VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8)
+             SELECT $1, container, max(ts), (array_agg(ts ORDER BY ts::numeric))[1],
+                    (array_agg(name ORDER BY ord DESC) FILTER (WHERE name IS NOT NULL))[1],
+                    (array_agg(kind ORDER BY ord DESC) FILTER (WHERE kind IS NOT NULL))[1],
+                    COALESCE((array_agg(members ORDER BY ord DESC) FILTER (WHERE members <> '[]'::jsonb))[1], '[]'::jsonb),
+                    $3, (array_agg(surface ORDER BY ord))[1]
+               FROM jsonb_to_recordset($2::jsonb)
+                 AS b(ord int, container text, ts text, name text, kind text, members jsonb, surface text)
+              GROUP BY container
              ON CONFLICT (${tenantCols("org_id, container")}) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
@@ -244,16 +276,7 @@ export function createPostgresSurfaceCache(
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
                updated_at = EXCLUDED.updated_at`,
-            [
-              tenant().orgId,
-              e.container,
-              e.ts,
-              e.containerName ?? null,
-              e.kind ?? null,
-              JSON.stringify(e.members ?? []),
-              now,
-              e.surface ?? SLACK,
-            ],
+            [tenant().orgId, JSON.stringify(states.map((state, ord) => ({ ord, ...state }))), now],
           );
         }
         await client.query("COMMIT");
