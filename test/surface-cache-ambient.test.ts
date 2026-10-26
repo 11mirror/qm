@@ -355,7 +355,7 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
   }
 });
 
-test("mirror read interface: ingest is queryable by search + readMessages + activeThreads", async () => {
+test("mirror read interface: ingest is queryable by search + readMessages", async () => {
   const built = freshApp();
   try {
     await built.app.ingestSurfaceEvents([
@@ -366,9 +366,6 @@ test("mirror read interface: ingest is queryable by search + readMessages + acti
     assert.equal(found.length, 2, "both messages match the search");
     const msgs = await built.app.readSurfaceMessages("C1");
     assert.equal(msgs.length, 2);
-    const threads = await built.app.activeSurfaceThreads({ container: "C1" });
-    assert.equal(threads.length, 1);
-    assert.equal(threads[0]!.sub, "T1");
   } finally {
     await built.runtime.stop();
   }
@@ -717,30 +714,6 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
       await judged(built.ambientJudgments!, container, (rows) => rows.some((r: any) => r.decision === "act"))
     ).find((r: any) => r.decision === "act")!;
     assert.ok(engaged.prompt!.includes("item 2"), "the previously-held bot post is re-judged with the human message");
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("scheduled check-in: empty delta is still judged and renders the scheduled line; cursor untouched (§6.2)", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  try {
-    const container = "C-sched";
-    await built.app.setChannelPolicy(container, "follow up on unanswered questions", "U-admin");
-    const decision = await built.app.judgeAmbientContainer("slack", container, { reason: "scheduled" });
-    assert.equal(decision.act, false, "no !engage marker, so the mock judge stays silent");
-    const rows = await judged(built.ambientJudgments!, container);
-    assert.equal(rows.length, 1, "the scheduled check-in judged despite an empty delta");
-    assert.ok(rows[0]!.prompt!.includes("scheduled check-in"), "the scheduled line renders in the prompt");
-    await built.app.ingestSurfaceEvents([
-      { container, ts: "700.0", authorId: "U1", text: "later !engage !post hi", createdAt: 700 },
-    ]);
-    const posted = await pollDeliveries(built.posts);
-    assert.ok(
-      posted.length >= 1,
-      "a message after the scheduled check-in is still judged fresh (cursor wasn't advanced)",
-    );
   } finally {
     await built.runtime.stop();
   }

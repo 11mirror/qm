@@ -13,11 +13,7 @@ import {
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 import { scopeId } from "../types.ts";
 
-export function createResourceSearchMethods(
-  deps: AppDeps,
-  app: App,
-  helpers: AppHelpers,
-): Pick<App, "searchResources"> {
+export function createResourceSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers) {
   const store = deps.resourceSearch;
   return {
     async searchResources(principalId, query) {
@@ -93,5 +89,5 @@ export function createResourceSearchMethods(
         failed: results.flatMap((r, i) => (r.status === "rejected" ? [[...kinds, "contexts"][i]!] : [])),
       };
     },
-  };
+  } satisfies Partial<App>;
 }
