@@ -5,7 +5,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
-import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { errMessage } from "../../chassis/src/errors.ts";
 import { adminRoutes } from "./admin-routes.ts";
 import { createUiDocuments, releaseErrorPage, uiProtocolSupported } from "./ui-releases.ts";
 import { UI_VERSION_HEADER } from "../../chassis/src/ui-release.ts";
@@ -51,6 +51,7 @@ import {
 } from "../../chassis/src/env.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
+const enc = encodeURIComponent;
 const PORT = portFromEnv(8096);
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
@@ -69,7 +70,7 @@ export function isInboxUser(principalId: string, configuredUsers = process.env.I
 
 async function hasInboxLoopPreview(user: string): Promise<boolean> {
   try {
-    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${enc(user)}`, "", 2_000);
     return response.status === 200 && JSON.parse(response.text).enabled === true;
   } catch {
     return false;
@@ -90,13 +91,8 @@ const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
   const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
+  const keys = ["orgName", "accent", "mark", "markUrl", "selfLabel"];
+  return Object.fromEntries(keys.flatMap((key) => (typeof b?.[key] === "string" ? [[key, b[key]]] : [])));
 });
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
@@ -130,6 +126,17 @@ async function brandIndexHtml(html: string): Promise<string> {
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
+
+const portalHeaders = (): Record<string, string> => {
+  const token = portalTokenStore.getStore();
+  return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+};
+
+function fetchCoreGet(path: string, init: RequestInit = {}, portal = true): Promise<Response> {
+  const signed = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
+  const headers = { ...signedHeaders(CORE_SIGNING_SECRET, "GET", signed, ""), ...(portal ? portalHeaders() : {}) };
+  return fetch(`${CORE}${signed}`, { ...init, headers });
+}
 
 const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
@@ -267,16 +274,28 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
   sendBuffered(res, status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }), html);
 }
 
+const SSE_HEADERS = {
+  "content-type": "text/event-stream; charset=utf-8",
+  "cache-control": "no-cache, no-transform",
+  connection: "keep-alive",
+  "x-accel-buffering": "no",
+};
+
+const isWebThread = (value: unknown): value is string =>
+  typeof value === "string" && (value.startsWith("web:") || value.startsWith(SUBAGENT_THREAD_PREFIX));
+
+const approvalScope = (value: unknown) =>
+  value === "once" || value === "session" || value === "always" ? value : undefined;
+
+const channelLabel = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+
 function sseEvent(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function mayManageDeployment(d: { permission?: unknown }): boolean {
-  return d.permission === "write";
-}
-
 async function gateManageDeployment(res: ServerResponse, user: string, id: string): Promise<boolean> {
-  const r = await coreFetch("GET", `/v1/deployments?principalId=${encodeURIComponent(user)}`);
+  const r = await coreFetch("GET", `/v1/deployments?principalId=${enc(user)}`);
   if (r.status !== 200) {
     relay(res, r);
     return false;
@@ -293,7 +312,7 @@ async function gateManageDeployment(res: ServerResponse, user: string, id: strin
     json(res, 404, { error: "not_found" });
     return false;
   }
-  if (!mayManageDeployment(d)) {
+  if (d.permission !== "write") {
     json(res, 403, { error: "forbidden", message: "you do not manage this deployment" });
     return false;
   }
@@ -476,7 +495,7 @@ function unauthorized(res: ServerResponse, req: IncomingMessage): void {
 
 const SESSION_TTL_S = 90 * 24 * 60 * 60;
 function sessionCookie(id: string): string {
-  return `webuiuser=${encodeURIComponent(id)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_S}`;
+  return `webuiuser=${enc(id)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_S}`;
 }
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -532,10 +551,7 @@ async function consumeCoreFeed(
   let dropped = false;
   for (;;) {
     try {
-      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const r = await fetch(`${CORE}${signedPath}`, {
-        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-      });
+      const r = await fetchCoreGet(path, {}, false);
       if (r.status === 200 && r.body) {
         if (dropped) {
           dropped = false;
@@ -624,14 +640,13 @@ async function coreFetch(
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const portalTok = portalTokenStore.getStore();
   return fetchCoreText({
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     method,
     path: pathWithQuery,
     body: rawBody,
-    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    headers: portalHeaders(),
     signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 }
@@ -667,14 +682,13 @@ async function coreFetchCap(
 }
 
 async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  const portalTok = portalTokenStore.getStore();
   return relayCoreStream(res, {
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     method,
     path: pathWithQuery,
     body: rawBody,
-    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    headers: portalHeaders(),
   });
 }
 
@@ -690,15 +704,6 @@ async function relayCap(res: ServerResponse, method: HttpMethod, pathWithQuery: 
   });
 }
 
-/**
- * Read and parse a JSON object body, or answer 400 and return null — a null
- * return always means the response has been sent. Only plain objects come
- * back (a body of `null`, `false`, or a bare string is a 400, never a falsy
- * value a caller could mistake for "already answered"). Routes that
- * historically tolerated an empty body keep that via allowEmpty; strict
- * routes (allowEmpty=false) refuse it, so e.g. a bare POST cannot read as
- * "clear the display name".
- */
 async function readJson<T extends object>(
   req: IncomingMessage,
   res: ServerResponse,
@@ -729,7 +734,7 @@ const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 function namespacedSendKey(user: string, raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const key = raw.trim();
-  return SEND_KEY_PATTERN.test(key) ? `web:${encodeURIComponent(user)}:${key}` : undefined;
+  return SEND_KEY_PATTERN.test(key) ? `web:${enc(user)}:${key}` : undefined;
 }
 
 async function postTurnAndMint(
@@ -780,67 +785,22 @@ async function userPermissions(): Promise<string[]> {
   }
 }
 
-interface CoreWebhook {
-  id: string;
-  ownerScopeId: string;
-  owner: string;
-  createdBy: string;
-  action: string;
-  verification: { scheme: string; secret?: string };
-  filters?: Array<{ path: string; in: string[] }>;
-  destination?: unknown;
-  enabled: boolean;
-  createdAt: number;
-  lastFiredAt?: number;
-  lastDeliveryId?: string;
-  lastError?: string;
-}
-
 async function setWebhookEnabledViaCore(
   res: ServerResponse,
   user: string,
   id: string,
   verb: "disable" | "enable",
 ): Promise<void> {
-  const r = await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
+  const r = await coreFetch("GET", `/v1/webhooks?viewer=${enc(user)}`);
   if (r.status < 200 || r.status >= 300) return relay(res, r);
-  let webhooks: CoreWebhook[] = [];
+  let webhooks: Array<{ id?: unknown }> = [];
   try {
-    webhooks = (JSON.parse(r.text) as { webhooks?: CoreWebhook[] }).webhooks ?? [];
+    webhooks = (JSON.parse(r.text) as { webhooks?: Array<{ id?: unknown }> }).webhooks ?? [];
   } catch {
     void 0;
   }
   if (!webhooks.some((w) => w.id === id)) return json(res, 404, { error: "not_found" });
-  return relayCore(
-    res,
-    "POST",
-    `/v1/webhooks/${encodeURIComponent(id)}/${verb}?principalId=${encodeURIComponent(user)}`,
-  );
-}
-
-interface CoreCron {
-  id: string;
-  ownerScopeId: string;
-  owner: string;
-  createdBy: string;
-  title?: string;
-  action?: string;
-  message?: string;
-  schedule: { everyMs?: number; firstFireAt?: number; cron?: string; timezone?: string };
-  destination?: unknown;
-  enabled: boolean;
-  archived?: boolean;
-  createdAt: number;
-  lastFiredAt?: number;
-  nextFireAt?: number;
-  permission?: "read" | "manage";
-}
-
-interface CoreAttachment {
-  name: string;
-  mimetype: string;
-  sizeBytes: number;
-  blobId: string;
+  return relayCore(res, "POST", `/v1/webhooks/${enc(id)}/${verb}?principalId=${enc(user)}`);
 }
 
 interface CoreApprovalRecord {
@@ -854,10 +814,6 @@ interface CoreApprovalRecord {
     conversation?: { threadRef?: unknown; kind?: unknown };
     text?: unknown;
   } & Record<string, unknown>;
-}
-
-function uploadFileName(url: URL): string {
-  return url.searchParams.get("name")?.trim() || "file";
 }
 
 async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<Response> {
@@ -875,49 +831,19 @@ async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<
   } as RequestInit & { duplex: "half" });
 }
 
-function declaredSha(url: URL): string {
-  return url.searchParams.get("sha") ?? "";
+async function stageFromRequest(c: WebCtx): Promise<{ staged: Response; text: string } | null> {
+  const sha256 = c.url.searchParams.get("sha") ?? "";
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    c.req.resume();
+    json(c.res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
+    return null;
+  }
+  const staged = await stageUploadStream(c.req, sha256);
+  return { staged, text: await staged.text() };
 }
 
-async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, sha256: string): Promise<void> {
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    req.resume();
-    return json(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
-  }
-  const staged = await stageUploadStream(req, sha256);
-  const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
-  return sendBuffered(res, staged.status, headers, await staged.text());
-}
-
-async function uploadFileFromRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  user: string,
-  scope: string | null,
-  sha256: string,
-  name: string,
-): Promise<void> {
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    req.resume();
-    return json(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
-  }
-  const staged = await stageUploadStream(req, sha256);
-  const stagedText = await staged.text();
-  if (!staged.ok) {
-    const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
-    return sendBuffered(res, staged.status, headers, stagedText);
-  }
-  const stagedBody = JSON.parse(stagedText) as { blobId: string };
-  const body = JSON.stringify({
-    principalId: user,
-    ...(scope ? { scopeId: scope } : {}),
-    name,
-    mimetype:
-      typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "application/octet-stream",
-    blobId: stagedBody.blobId,
-  });
-  const registered = await coreFetch("POST", "/v1/files/upload", body);
-  return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
+function sendStaged(res: ServerResponse, { staged, text }: { staged: Response; text: string }): void {
+  sendBuffered(res, staged.status, { "content-type": staged.headers.get("content-type") ?? "application/json" }, text);
 }
 
 async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
@@ -1062,28 +988,17 @@ function scriptCapableContentType(contentType: string): boolean {
   );
 }
 
+function upstreamMissing(res: ServerResponse, status: number): void {
+  res.writeHead(status === 404 ? 404 : 502, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: status === 404 ? "not_found" : "upstream_error" }));
+}
+
 async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
-  const { res, url } = c;
-  const qs = new URLSearchParams({ principalId: c.user });
-  const ctxParam = url.searchParams.get("ctx");
-  const iParam = url.searchParams.get("i");
-  if (ctxParam) qs.set("ctx", ctxParam);
-  if (iParam) qs.set("i", iParam);
-  const corePath = withSourceAuthNonce(
-    `/v1/crons/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
-    CORE_SIGNING_SECRET,
+  const { res } = c;
+  const r = await fetchCoreGet(
+    `${corePathFor("/api/crons/:id/items/:itemId/image", c)}?${copyParams(c, ["ctx", "i"])}`,
   );
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
+  if (!r.ok || !r.body) return upstreamMissing(res, r.status);
   const contentType = r.headers.get("content-type") ?? "application/octet-stream";
   res.writeHead(200, {
     "content-type": contentType.startsWith("image/") ? contentType : "application/octet-stream",
@@ -1097,22 +1012,8 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
 async function serveFileContent(c: WebCtx): Promise<unknown> {
   const { res, user } = c;
   const id = c.params.id!;
-  const corePath = withSourceAuthNonce(
-    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
-    CORE_SIGNING_SECRET,
-  );
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    redirect: "manual",
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
+  const r = await fetchCoreGet(`/v1/files/${enc(id)}/content?viewer=${enc(user)}`, { redirect: "manual" });
+  if (!r.ok || !r.body) return upstreamMissing(res, r.status);
   const contentType = r.headers.get("content-type") ?? "application/octet-stream";
   const csp = scriptCapableContentType(contentType)
     ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
@@ -1126,6 +1027,82 @@ async function serveFileContent(c: WebCtx): Promise<unknown> {
   res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
   return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }
+
+const corePathFor = (template: string, c: WebCtx): string =>
+  template.replace(/^\/api\//, "/v1/").replace(/:(\w+)/g, (_, key: string) => enc(c.params[key]!));
+
+interface Relay {
+  core?: string;
+  to?: HttpMethod;
+  who?: "principalId" | "viewer";
+  query?: (c: WebCtx) => string | Record<string, string> | URLSearchParams;
+  principal?: boolean;
+  body?: object;
+  pick?: readonly string[];
+  strings?: boolean;
+  read?: "json" | "strict";
+  shape?: (p: Record<string, unknown>, c: WebCtx) => object;
+  raw?: boolean;
+  cap?: boolean;
+  noStore?: boolean;
+  gate?: (c: WebCtx) => Promise<boolean>;
+}
+
+async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
+  if (o.raw) return readBody(c.req);
+  if (o.body) return JSON.stringify(o.body);
+  const head = o.principal ? { principalId: c.user } : {};
+  if (!o.pick && !o.shape && !o.read) return o.principal ? JSON.stringify(head) : "";
+  const p = o.read
+    ? await readJson<Record<string, unknown>>(c.req, c.res, o.read === "json")
+    : (JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>);
+  if (o.read && !p) return null;
+  if (o.shape) return JSON.stringify({ ...head, ...o.shape(p!, c) });
+  if (!o.pick) return JSON.stringify(p);
+  const picked = o.pick.filter((k) => !o.strings || typeof p![k] === "string").map((k) => [k, p![k]]);
+  return JSON.stringify({ ...head, ...Object.fromEntries(picked) });
+}
+
+function relayRoute(method: HttpMethod, path: string, o: Relay = {}): WebRoute {
+  return {
+    method,
+    path,
+    handle: async (c) => {
+      if (o.gate && !(await o.gate(c))) return;
+      const body = await relayBody(c, o);
+      if (body === null) return;
+      if (o.noStore) c.res.setHeader("Cache-Control", "no-store");
+      let target = corePathFor(o.core ?? path, c);
+      if (o.who) target += `?${o.who}=${enc(c.user)}`;
+      const query = o.query?.(c);
+      if (query !== undefined)
+        target += `?${typeof query === "string" ? query : new URLSearchParams(query).toString()}`;
+      return (o.cap ? relayCap : relayCore)(c.res, o.to ?? method, target, body);
+    },
+  };
+}
+
+function copyParams(
+  c: WebCtx,
+  keys: readonly string[],
+  init: Record<string, string> = { principalId: c.user },
+  keepEmpty = false,
+  max = Infinity,
+): URLSearchParams {
+  const qs = new URLSearchParams(init);
+  for (const key of keys) {
+    const value = c.url.searchParams.get(key);
+    if (value !== null && (keepEmpty || value)) qs.set(key, value.slice(0, max));
+  }
+  return qs;
+}
+
+const withWebUrl = (d: Record<string, unknown>) => ({ ...d, webUrl: `/deployments/${enc(String(d.id))}/` });
+
+const notImpersonating = async (c: WebCtx) =>
+  !resolveIdentity(c.req)?.impersonator || (json(c.res, 403, { error: "forbidden" }), false);
+
+const managesDeployment = (c: WebCtx) => gateManageDeployment(c.res, c.user, c.params.id!);
 
 const apiRoutes: readonly WebRoute[] = [
   {
@@ -1161,82 +1138,19 @@ const apiRoutes: readonly WebRoute[] = [
         if (!cursor) break;
       }
       if (!match) return json(res, 404, { error: "not_found" });
-      res.writeHead(302, { location: `/api/files/${encodeURIComponent(match.id)}/content` });
+      res.writeHead(302, { location: `/api/files/${enc(match.id)}/content` });
       return res.end();
     },
   },
 
-  {
-    method: "GET",
-    path: "/api/user-model-auth/status",
-    handle: async (c) =>
-      relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/account",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/account",
-        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/api-key",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
-      const body = JSON.stringify({ principalId: c.user, provider: p.provider, apiKey: p.apiKey });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/api-key", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/disconnect",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/disconnect",
-        JSON.stringify({ principalId: c.user, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/poll",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown; userCode?: unknown };
-      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId, userCode: p.userCode });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/poll", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/claude/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/complete",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { code?: unknown; verifier?: unknown };
-      const body = JSON.stringify({ principalId: c.user, code: p.code, verifier: p.verifier });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/claude/complete", body);
-    },
-  },
+  relayRoute("GET", "/api/user-model-auth/status", { who: "principalId" }),
+  relayRoute("POST", "/api/user-model-auth/account", { principal: true, pick: ["account", "provider"] }),
+  relayRoute("POST", "/api/user-model-auth/api-key", { principal: true, pick: ["provider", "apiKey"] }),
+  relayRoute("POST", "/api/user-model-auth/disconnect", { principal: true, pick: ["provider"] }),
+  relayRoute("POST", "/api/user-model-auth/chatgpt/start", { principal: true }),
+  relayRoute("POST", "/api/user-model-auth/chatgpt/poll", { principal: true, pick: ["deviceAuthId", "userCode"] }),
+  relayRoute("POST", "/api/user-model-auth/claude/start", { principal: true }),
+  relayRoute("POST", "/api/user-model-auth/claude/complete", { principal: true, pick: ["code", "verifier"] }),
 
   {
     method: "GET",
@@ -1260,16 +1174,8 @@ const apiRoutes: readonly WebRoute[] = [
       c.res.end();
     },
   },
-  ...["reply-status", "reply"].map((action) => ({
-    method: "POST",
-    path: `/api/composio/slack/${action}`,
-    handle: async (c: WebCtx) => {
-      const body = await readJson(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
-    },
-  })),
-  { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
+  ...["reply-status", "reply"].map((action) => relayRoute("POST", `/api/composio/slack/${action}`, { read: "strict" })),
+  relayRoute("GET", "/api/composio/slack"),
   {
     method: "POST",
     path: "/api/composio/slack/authorize",
@@ -1285,38 +1191,12 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
     },
   },
-  {
-    method: "POST",
-    path: "/api/composio/slack/complete",
-    handle: async (c) => {
-      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/composio/toolkits",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/composio/toolkits?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/composio/connections",
-    handle: async (c) => {
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(
-        c.res,
-        "GET",
-        `/v1/composio/connections?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/composio/slack/complete", { pick: ["ticket"], read: "strict", noStore: true }),
+  relayRoute("GET", "/api/composio/toolkits", { query: (c) => ({ cursor: c.url.searchParams.get("cursor") ?? "" }) }),
+  relayRoute("GET", "/api/composio/connections", {
+    query: (c) => ({ cursor: c.url.searchParams.get("cursor") ?? "" }),
+    noStore: true,
+  }),
   {
     method: "POST",
     path: "/api/composio/authorize",
@@ -1336,16 +1216,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/composio/disconnect",
-    handle: async (c) => {
-      const body = await readJson<{ accountId?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/disconnect", JSON.stringify({ accountId: body.accountId }));
-    },
-  },
+  relayRoute("POST", "/api/composio/disconnect", { pick: ["accountId"], read: "strict", noStore: true }),
   {
     match: (_method, pathname) => pathname === "/me",
     handle: async (c) => {
@@ -1354,9 +1225,7 @@ const apiRoutes: readonly WebRoute[] = [
       const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
         userPermissions(),
         slackWorkspaceUrl(),
-        coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
-          () => null,
-        ),
+        coreFetch("GET", `/v1/user-model-auth/status?principalId=${enc(user)}`, "", 5_000).catch(() => null),
         coreFetch("GET", "/v1/suggested-activities", "", 2_000)
           .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
           .catch(() => false),
@@ -1400,339 +1269,173 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/blobs",
     handle: async (c) => {
-      const { req, res, url } = c;
-      return uploadBlobFromRequest(req, res, declaredSha(url));
+      const upload = await stageFromRequest(c);
+      if (upload) sendStaged(c.res, upload);
     },
   },
   {
     method: "POST",
     path: "/api/files/upload",
     handle: async (c) => {
-      const { req, res, url, user } = c;
-      return uploadFileFromRequest(
-        req,
-        res,
-        user,
-        url.searchParams.get("scope"),
-        declaredSha(url),
-        uploadFileName(url),
-      );
+      const upload = await stageFromRequest(c);
+      if (!upload) return;
+      if (!upload.staged.ok) return sendStaged(c.res, upload);
+      const scope = c.url.searchParams.get("scope");
+      const contentType = c.req.headers["content-type"];
+      const body = JSON.stringify({
+        principalId: c.user,
+        ...(scope ? { scopeId: scope } : {}),
+        name: c.url.searchParams.get("name")?.trim() || "file",
+        mimetype: typeof contentType === "string" ? contentType : "application/octet-stream",
+        blobId: (JSON.parse(upload.text) as { blobId: string }).blobId,
+      });
+      return relay(c.res, await coreFetch("POST", "/v1/files/upload", body));
     },
   },
-  {
-    method: "GET",
-    path: "/api/resources/search",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/resources/search?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/search",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const q = url.searchParams.get("q") ?? "";
-      const limit = url.searchParams.get("limit");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/search?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(q)}${
-          limit ? `&limit=${encodeURIComponent(limit)}` : ""
-        }`,
-      );
+  relayRoute("GET", "/api/resources/search", {
+    query: (c) => `principalId=${enc(c.user)}&q=${enc((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
+  }),
+  relayRoute("GET", "/api/search", {
+    core: "/v1/sessions/search",
+    query: (c) => {
+      const limit = c.url.searchParams.get("limit");
+      return `principalId=${enc(c.user)}&q=${enc(c.url.searchParams.get("q") ?? "")}${limit ? `&limit=${enc(limit)}` : ""}`;
     },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions",
+  }),
+  relayRoute("GET", "/api/sessions", {
+    query: (c) => copyParams(c, ["limit", "before", "status", "surface", "scope", "q"], undefined, true, 500),
+  }),
+  relayRoute("GET", "/api/sessions/row", { query: (c) => copyParams(c, ["id", "threadRef"], undefined, true) }),
+  relayRoute("GET", "/api/sessions/:id/children", { who: "principalId" }),
+  relayRoute("GET", "/api/contexts", { who: "principalId" }),
+  relayRoute("GET", "/api/contexts/:scope/ambient-policy", {
+    core: "/v1/contexts/policy",
+    query: (c) => `principalId=${enc(c.user)}&scope=${enc(c.params.scope!)}`,
+  }),
+  relayRoute("PUT", "/api/contexts/:scope/ambient-policy", {
+    core: "/v1/contexts/policy",
+    read: "json",
+    shape: (p, c) => ({
+      principalId: c.user,
+      scope: c.params.scope,
+      orders: p.orders,
+      bots: p.bots,
+      ambientEnabled: p.ambientEnabled,
+      baseUpdatedAt: p.baseUpdatedAt,
+    }),
+  }),
+  ...(
+    [
+      ["POST", "/api/projects", "name", 200],
+      ["PATCH", "/api/projects/:id", "name", 200],
+      ["POST", "/api/projects/:id/members", "memberId", Infinity],
+      ["PUT", "/api/projects/:id/slack-channel", "channel", 200],
+    ] as const
+  ).map(([method, path, field, max]): WebRoute => ({
+    method,
+    path,
     handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["limit", "before", "status", "surface", "scope", "q"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v.slice(0, 500));
-      }
-      return relayCore(res, "GET", `/v1/sessions?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/row",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["id", "threadRef"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v);
-      }
-      return relayCore(res, "GET", `/v1/sessions/row?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/children",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/children?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/contexts",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/contexts/:scope/ambient-policy",
-    handle: async (c) => {
-      const { res, user } = c;
-      const scope = c.params.scope!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/contexts/policy?principalId=${encodeURIComponent(user)}&scope=${encodeURIComponent(scope)}`,
-      );
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/contexts/:scope/ambient-policy",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const scope = c.params.scope!;
-      const p = await readJson<{ orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown }>(
-        req,
-        res,
-      );
+      const p = await readJson<Record<string, unknown>>(c.req, c.res);
       if (!p) return;
-      return relayCore(
-        res,
-        "PUT",
-        "/v1/contexts/policy",
-        JSON.stringify({
-          principalId: user,
-          scope,
-          orders: p.orders,
-          bots: p.bots,
-          ambientEnabled: p.ambientEnabled,
-          baseUpdatedAt: p.baseUpdatedAt,
-        }),
-      );
+      const value = p[field];
+      const text = typeof value === "string" ? value.trim().slice(0, max) : "";
+      if (!text) return json(c.res, 400, { error: "bad_request", message: `${field} required` });
+      return relayCore(c.res, method, corePathFor(path, c), JSON.stringify({ principalId: c.user, [field]: text }));
     },
-  },
-  {
-    method: "POST",
-    path: "/api/projects",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      return relayCore(res, "POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/projects/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ name?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, name }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/projects/:id/members",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ memberId?: unknown }>(req, res);
-      if (!p) return;
-      const memberId = typeof p.memberId === "string" ? p.memberId.trim() : "";
-      if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
-      return relayCore(
-        res,
-        "POST",
-        `/v1/projects/${encodeURIComponent(id)}/members`,
-        JSON.stringify({ principalId: user, memberId }),
-      );
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ channel?: unknown }>(req, res);
-      if (!p) return;
-      const channel = typeof p.channel === "string" ? p.channel.trim().slice(0, 200) : "";
-      if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user, channel }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/members/:memberId",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      const memberId = c.params.memberId!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  })),
+  relayRoute("DELETE", "/api/projects/:id/slack-channel", { principal: true }),
+  relayRoute("DELETE", "/api/projects/:id/members/:memberId", { principal: true }),
   {
     method: "GET",
     path: "/api/directory/resolve",
-    handle: async (c) => {
-      const { res, url } = c;
-      const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
-      if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
-      return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim().slice(0, 80);
+      if (!q) return json(c.res, 400, { error: "bad_request", message: "q required" });
+      return relayCore(c.res, "GET", `/v1/directory/resolve?q=${enc(q)}`);
     },
   },
-  {
+  ...[
+    { leaf: "", keys: ["timezone", "poll", "refresh"], timeoutMs: 60_000 },
+    { leaf: "/dismiss", keys: ["id"], timeoutMs: 15_000 },
+  ].map(({ leaf, keys, timeoutMs }): WebRoute => ({
     method: "POST",
-    path: "/api/suggested-activities",
+    path: `/api/suggested-activities${leaf}`,
     handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as {
-        timezone?: unknown;
-        poll?: unknown;
-        refresh?: unknown;
+      const input = JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>;
+      const body = {
+        principalId: c.user,
+        ...(leaf ? {} : { seeds: suggestedActivities }),
+        ...Object.fromEntries(keys.map((key) => [key, input[key]])),
       };
-      const response = await coreFetch(
-        "POST",
-        "/v1/suggested-activities",
-        JSON.stringify({
-          principalId: c.user,
-          seeds: suggestedActivities,
-          timezone: input.timezone,
-          poll: input.poll,
-          refresh: input.refresh,
-        }),
-        60_000,
-      );
+      const response = await coreFetch("POST", `/v1/suggested-activities${leaf}`, JSON.stringify(body), timeoutMs);
       return json(c.res, response.status, JSON.parse(response.text));
     },
-  },
-  {
-    method: "POST",
-    path: "/api/suggested-activities/dismiss",
-    handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as { id?: unknown };
-      const response = await coreFetch(
-        "POST",
-        "/v1/suggested-activities/dismiss",
-        JSON.stringify({ principalId: c.user, id: input.id }),
-        15_000,
-      );
-      return json(c.res, response.status, JSON.parse(response.text));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/surface-config",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCore(res, "GET", "/v1/surface-config");
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const key = url.searchParams.get("key") ?? "";
-      const qs = new URLSearchParams({ principalId: user, key });
-      return relayCore(res, "GET", `/v1/ui-state?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
-    },
-  },
+  })),
+  relayRoute("GET", "/api/ui-state", {
+    query: (c) => ({ principalId: c.user, key: c.url.searchParams.get("key") ?? "" }),
+  }),
+  relayRoute("PUT", "/api/ui-state", { read: "json", shape: (p, c) => ({ ...p, principalId: c.user }) }),
   ...adminRoutes({
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
     org: ORG,
-    portalHeaders: (): Record<string, string> => {
-      const token = portalTokenStore.getStore();
-      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
-    },
+    portalHeaders,
     readBody,
     stageUpload: stageUploadStream,
     refreshBranding: () => brandingCache.refreshNow(),
     json,
   }),
-  ...uiCanvasRoutes({
-    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
-    coreFetch,
-    relayCore,
-    relay,
-    json,
-    readJson,
+  relayRoute("GET", "/api/ui-canvas/:sessionId", {
+    gate: notImpersonating,
+    core: "/v1/ui/canvases/:sessionId",
+    query: (c) => ({ principalId: c.user }),
   }),
   {
     method: "GET",
-    path: "/api/inbox",
+    path: "/api/ui-canvas/:sessionId/script.js",
     handle: async (c) => {
-      const { res, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["cursor", "cronId", "view", "itemId", "filter"]) {
-        const value = c.url.searchParams.get(key);
-        if (value) qs.set(key, value);
+      if (!(await notImpersonating(c))) return;
+      const { res, url, user } = c;
+      const sessionId = c.params.sessionId!;
+      const r = await coreFetch(
+        "GET",
+        `/v1/ui/canvases/${enc(sessionId)}?${new URLSearchParams({ principalId: user })}`,
+      );
+      if (r.status !== 200) return relay(res, r);
+      let canvas: { js?: unknown; rev?: unknown } | undefined;
+      try {
+        canvas = (JSON.parse(r.text) as { canvas?: { js?: unknown; rev?: unknown } }).canvas;
+      } catch (error) {
+        console.error("[web-ui] canvas script: bad core response", errMessage(error));
+        return json(res, 502, { error: "bad_core_response", message: errMessage(error) });
       }
-      return relayCore(res, "GET", `/v1/inbox?${qs}`);
+      if (typeof canvas?.js !== "string") return json(res, 404, { error: "not_found" });
+      if (String(canvas.rev) !== url.searchParams.get("rev")) return json(res, 409, { error: "stale_revision" });
+      res.writeHead(200, {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(
+        `((canvas) => {\n${canvas.js}\n})(window.qmUiCanvasTake?.(${JSON.stringify(sessionId)}, ${Number(canvas.rev)}));\n`,
+      );
     },
   },
+  relayRoute("POST", "/api/ui-canvas/observe/:callId", {
+    gate: notImpersonating,
+    core: "/v1/ui/observe/:callId/result",
+    read: "strict",
+    shape: (p, c) => ({ snapshot: p.snapshot, principalId: c.user }),
+  }),
+  relayRoute("POST", "/api/ui-canvas/:sessionId", {
+    gate: notImpersonating,
+    core: "/v1/ui/canvases/:sessionId",
+    read: "strict",
+    shape: (p, c) => ({ pinned: p.pinned, dismiss: p.dismiss, principalId: c.user }),
+  }),
+  relayRoute("GET", "/api/inbox", {
+    query: (c) => copyParams(c, ["cursor", "cronId", "view", "itemId", "filter"]),
+  }),
   {
     method: "POST",
     path: "/api/inbox/sent-chat",
@@ -1742,321 +1445,90 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "POST", "/v1/inbox/sent-chat", await readBody(req));
     },
   },
-  {
-    method: "POST",
-    path: "/api/inbox/selection",
-    handle: async (c) =>
-      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
-  },
-  {
-    method: "POST",
-    path: "/api/inbox/sync-cron",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(res, "POST", `/v1/inbox/sync-cron?principalId=${encodeURIComponent(user)}`, await readBody(req));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/crons/:id/items",
-    handle: async (c) => {
-      const { res, user, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      const state = url.searchParams.get("state");
-      if (state) qs.set("state", state);
-      return relayCore(res, "GET", `/v1/crons/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/crons/:id/items/:itemId",
-    handle: async (c) => {
-      const { res, user, params, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/inbox/selection", { core: "/v1/inbox", to: "PUT", who: "principalId", raw: true }),
+  relayRoute("POST", "/api/inbox/sync-cron", { who: "principalId", raw: true }),
+  relayRoute("GET", "/api/crons/:id/items", { query: (c) => copyParams(c, ["state"]) }),
+  relayRoute("GET", "/api/crons/:id/items/:itemId", {
+    query: (c) => copyParams(c, c.url.searchParams.get("refreshSource") === "1" ? ["refreshSource"] : []),
+  }),
   {
     method: "GET",
     path: "/api/crons/:id/items/:itemId/image",
     handle: serveInboxItemImage,
   },
-  ...(["action", "followup"] as const).map((leaf): WebRoute => ({
-    method: "POST",
-    path: `/api/crons/:id/items/:itemId/${leaf}`,
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
+  ...["action", "followup"].map((leaf) =>
+    relayRoute("POST", `/api/crons/:id/items/:itemId/${leaf}`, { who: "principalId", raw: true }),
+  ),
+  ...["runtime-config", "channel-header-pin"].flatMap((leaf): WebRoute[] => [
+    {
+      method: "GET",
+      path: `/api/${leaf}`,
+      handle: (c) => {
+        const scopeId = c.url.searchParams.get("scopeId") || `personal:${c.user}`;
+        const qs = new URLSearchParams({ principalId: c.user, scopeId });
+        if (leaf === "runtime-config" && c.url.searchParams.get("account") === "company") qs.set("account", "company");
+        return relayCore(c.res, "GET", `/v1/${leaf}?${qs.toString()}`);
+      },
     },
-  })),
-  {
-    method: "GET",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      if (url.searchParams.get("account") === "company") qs.set("account", "company");
-      return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      return relayCore(res, "GET", `/v1/channel-header-pin?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/channel-header-pin", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
+    relayRoute("PUT", `/api/${leaf}`, {
+      read: "json",
+      shape: (p, c) => ({
+        ...p,
+        principalId: c.user,
+        scopeId: typeof p.scopeId === "string" && p.scopeId ? p.scopeId : `personal:${c.user}`,
+      }),
+    }),
+  ]),
   {
     method: "GET",
     path: "/api/scope-resources",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scope = url.searchParams.get("scope");
-      if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
-      const qs = new URLSearchParams({ principalId: user, scope });
-      return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
+    handle: (c) => {
+      const scope = c.url.searchParams.get("scope");
+      if (!scope) return json(c.res, 400, { error: "bad_request", message: "scope required" });
+      return relayCore(c.res, "GET", `/v1/scope-resources?${new URLSearchParams({ principalId: c.user, scope })}`);
     },
   },
-  {
-    method: "GET",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
-      return relayCore(res, "GET", `/v1/skills?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown; description?: unknown; body?: unknown; scopeId?: unknown }>(req, res);
-      if (!p) return;
-      const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
-      if (typeof p.name === "string") draft.name = p.name;
-      if (typeof p.description === "string") draft.description = p.description;
-      if (typeof p.body === "string") draft.body = p.body;
-      if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
-      return relayCore(res, "POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
-      if (!p) return;
-      const patch: { description?: string; body?: string } = {};
-      if (typeof p.description === "string") patch.description = p.description;
-      if (typeof p.body === "string") patch.body = p.body;
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/skills/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/skills/:id/restore",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/skills/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  relayRoute("GET", "/api/skills", {
+    query: (c) => copyParams(c, c.url.searchParams.get("includeShadowed") === "1" ? ["includeShadowed"] : []),
+  }),
+  relayRoute("GET", "/api/skills/:id", { who: "principalId" }),
+  relayRoute("POST", "/api/skills", {
+    principal: true,
+    pick: ["name", "description", "body", "scopeId"],
+    strings: true,
+    read: "json",
+  }),
+  relayRoute("PUT", "/api/skills/:id", { principal: true, pick: ["description", "body"], strings: true, read: "json" }),
+  relayRoute("DELETE", "/api/skills/:id", { principal: true }),
+  relayRoute("POST", "/api/skills/:id/restore", { principal: true }),
   {
     method: "POST",
     path: "/api/sessions/:id/share",
-    handle: async ({ req, res, user, params }: WebCtx) => {
-      res.setHeader("Cache-Control", "no-store");
-      const body = await readJson<{ audience?: unknown }>(req, res);
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      const body = await readJson<{ audience?: unknown }>(c.req, c.res);
       if (!body) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({ principalId: user, audience: body.audience }),
-      );
+      const share = JSON.stringify({ principalId: c.user, audience: body.audience });
+      return relayCore(c.res, "POST", corePathFor("/api/sessions/:id/share", c), share);
     },
   },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/title",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/title`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/detach",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/detach`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/goal/cancel",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/goal/cancel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/fork",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ upToSeq?: unknown }>(req, res);
-      if (!p) return;
-      const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/approvals",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background/:pid/output",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const id = c.params.id!;
-      const pid = c.params.pid!;
-      const sinceCursor = url.searchParams.get("sinceCursor") ?? "0";
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(pid)}/output?viewer=${encodeURIComponent(user)}&sinceCursor=${encodeURIComponent(sinceCursor)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/items/:seq",
-    handle: async (c) => {
-      const { res, user } = c;
-      const { id, seq } = c.params as { id: string; seq: string };
-      if (!/^\d+$/.test(seq)) return json(c.res, 404, { error: "not found" });
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/sessions/:id/title", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/detach", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/goal/cancel", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/fork", {
+    principal: true,
+    read: "json",
+    shape: (p) => (typeof p.upToSeq === "number" ? { upToSeq: p.upToSeq } : {}),
+  }),
+  relayRoute("GET", "/api/sessions/:id/approvals", { who: "viewer" }),
+  relayRoute("GET", "/api/sessions/:id/background/:pid/output", {
+    query: (c) => `viewer=${enc(c.user)}&sinceCursor=${enc(c.url.searchParams.get("sinceCursor") ?? "0")}`,
+  }),
+  relayRoute("GET", "/api/sessions/:id/background", { who: "viewer" }),
+  relayRoute("GET", "/api/sessions/:id/items/:seq", {
+    gate: async (c) => /^\d+$/.test(c.params.seq!) || (json(c.res, 404, { error: "not found" }), false),
+    who: "viewer",
+  }),
   {
     method: "GET",
     path: "/api/sessions/:id",
@@ -2072,15 +1544,14 @@ const apiRoutes: readonly WebRoute[] = [
       const onClose = () => cancel.abort();
       res.once("close", onClose);
       try {
-        const portalTok = portalTokenStore.getStore();
         return relay(
           res,
           await fetchCoreText({
             origin: CORE,
             secret: CORE_SIGNING_SECRET,
             method: "GET",
-            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
-            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            path: `/v1/sessions/${enc(id)}?${qs.toString()}`,
+            headers: portalHeaders(),
             signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
             retrySafeRead: true,
           }),
@@ -2102,107 +1573,43 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/files/:id/content/:name",
     handle: serveFileContent,
   },
-  {
-    method: "GET",
-    path: "/api/files",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ viewer: user });
-      const limit = url.searchParams.get("limit");
-      if (limit) qs.set("limit", limit);
-      const cursor = url.searchParams.get("cursor");
-      if (cursor) qs.set("cursor", cursor);
-      const scope = url.searchParams.get("scope");
-      if (scope) qs.set("scope", scope);
-      return relayCore(res, "GET", `/v1/files?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ facts?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "PATCH", "/v1/memory", JSON.stringify({ principalId: user, facts: p.facts }));
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ ids?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "DELETE", "/v1/memory", JSON.stringify({ principalId: user, ids: p.ids }));
-    },
-  },
+  relayRoute("GET", "/api/files", {
+    query: (c) => copyParams(c, ["limit", "cursor", "scope"], { viewer: c.user }),
+  }),
+  relayRoute("GET", "/api/memory", { who: "principalId" }),
+  relayRoute("PATCH", "/api/memory", { principal: true, pick: ["facts"], read: "strict" }),
+  relayRoute("DELETE", "/api/memory", { principal: true, pick: ["ids"], read: "strict" }),
   {
     method: "POST",
     path: "/api/sessions/:id",
     handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{
-        title?: unknown;
-        archived?: unknown;
-        pinned?: unknown;
-        color?: unknown;
-        unread?: unknown;
-      }>(req, res, false);
+      const p = await readJson<Record<string, unknown>>(c.req, c.res, false);
       if (!p) return;
-      const patch: {
-        title?: string | null;
-        archived?: boolean;
-        pinned?: boolean;
-        color?: string | null;
-        unread?: boolean;
-      } = {};
-      if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
-      if (typeof p.archived === "boolean") patch.archived = p.archived;
-      if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
-      if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
-      if (typeof p.unread === "boolean") patch.unread = p.unread;
-      if (
-        patch.title === undefined &&
-        patch.archived === undefined &&
-        patch.pinned === undefined &&
-        patch.color === undefined &&
-        patch.unread === undefined
-      ) {
-        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, color, or unread required" });
-      }
+      const nullableText = (v: unknown) => v === null || typeof v === "string";
+      const flag = (v: unknown) => typeof v === "boolean";
+      const accepts = { title: nullableText, archived: flag, pinned: flag, color: nullableText, unread: flag };
+      const patch = Object.fromEntries(Object.entries(accepts).flatMap(([k, ok]) => (ok(p[k]) ? [[k, p[k]]] : [])));
+      if (!Object.keys(patch).length)
+        return json(c.res, 400, {
+          error: "bad_request",
+          message: "title, archived, pinned, color, or unread required",
+        });
       return relayCore(
-        res,
+        c.res,
         "POST",
-        `/v1/sessions/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
+        corePathFor("/api/sessions/:id", c),
+        JSON.stringify({ principalId: c.user, ...patch }),
       );
     },
   },
-  {
-    method: "GET",
-    path: "/api/connectors",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("GET", "/api/connectors", { core: "/v1/connectors/oauth/status", who: "principalId" }),
   {
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {
       const { res, user } = c;
       const provider = c.params.provider!;
-      const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
+      const callback = `${PUBLIC_URL}/v1/connectors/oauth/${enc(provider)}/callback`;
       const body = await readJson<{ returnTo?: unknown }>(c.req, res);
       if (!body) return;
       const returnTo =
@@ -2214,7 +1621,7 @@ const apiRoutes: readonly WebRoute[] = [
           ? body.returnTo
           : "/keychain";
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });
-      const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
+      const corePath = `/v1/connectors/oauth/${enc(provider)}/start?${params.toString()}`;
       return relayCore(res, "GET", corePath);
     },
   },
@@ -2232,223 +1639,81 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
     },
   },
-  {
-    method: "GET",
-    path: "/api/keychain/credentials",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/credentials");
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/keychain/overview",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/overview");
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/keychain/approvals/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ decision?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/keychain/approvals/${encodeURIComponent(c.params.id!)}`,
-        JSON.stringify({ principalId: user, decision: p.decision }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/keychain/grants/:id/revoke",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      return relayCap(res, "POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/keychain/drops",
-    handle: async (c) => {
-      const { req, res } = c;
-      const p = await readJson<{ service?: unknown; purpose?: unknown; envKey?: unknown }>(req, res, false);
-      if (!p) return;
-      const draft = {
-        ...(typeof p.service === "string" ? { service: p.service } : {}),
-        ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
-        ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
-      };
-      return relayCap(res, "POST", "/v1/keychain/drops", JSON.stringify(draft));
-    },
-  },
+  relayRoute("GET", "/api/keychain/credentials", { cap: true }),
+  relayRoute("GET", "/api/keychain/overview", { cap: true }),
+  relayRoute("POST", "/api/keychain/approvals/:id", { principal: true, pick: ["decision"], read: "strict" }),
+  relayRoute("POST", "/api/keychain/grants/:id/revoke", { cap: true, body: {} }),
+  relayRoute("POST", "/api/keychain/drops", {
+    cap: true,
+    pick: ["service", "purpose", "envKey"],
+    strings: true,
+    read: "strict",
+  }),
   {
     method: "DELETE",
     path: "/api/keychain/credentials/:id",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      if (!id) return json(res, 400, { error: "bad_request", message: "credential id required" });
-      return relayCap(res, "DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
-    },
+    handle: (c) =>
+      c.params.id
+        ? relayCap(c.res, "DELETE", `/v1/keychain/credentials/${enc(c.params.id)}`)
+        : json(c.res, 400, { error: "bad_request", message: "credential id required" }),
   },
   {
     method: "GET",
     path: "/api/deployments",
-    handle: async (c) => {
-      const { res, user } = c;
-      const r = await coreFetch("GET", `/v1/deployments?principalId=${encodeURIComponent(user)}`);
-      if (r.status !== 200) {
-        return relay(res, r);
-      }
+    handle: async ({ res, user }) => {
+      const r = await coreFetch("GET", `/v1/deployments?principalId=${enc(user)}`);
+      if (r.status !== 200) return relay(res, r);
       let deployments: Array<Record<string, unknown>>;
       try {
-        const parsed = JSON.parse(r.text) as { deployments?: Array<Record<string, unknown>> };
-        deployments = parsed.deployments ?? [];
+        deployments = (JSON.parse(r.text) as { deployments?: Array<Record<string, unknown>> }).deployments ?? [];
       } catch {
         return json(res, 502, { error: "bad_core_response" });
       }
-      return json(res, 200, {
-        deployments: deployments.map((d) => ({ ...d, webUrl: `/deployments/${encodeURIComponent(String(d.id))}/` })),
-      });
+      return json(res, 200, { deployments: deployments.map(withWebUrl) });
     },
   },
   {
     method: "GET",
     path: "/api/deployments/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
+    handle: async ({ res, user, params }) => {
+      const id = params.id!;
       if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      const r = await coreFetch(
-        "GET",
-        `/v1/deployments/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-      );
+      const r = await coreFetch("GET", `/v1/deployments/${enc(id)}?principalId=${enc(user)}`);
       if (r.status !== 200) return relay(res, r);
+      let deployment: Record<string, unknown> | undefined;
       try {
-        const parsed = JSON.parse(r.text) as { deployment?: Record<string, unknown> };
-        if (!parsed.deployment) return json(res, 502, { error: "bad_core_response" });
-        return json(res, 200, {
-          deployment: {
-            ...parsed.deployment,
-            webUrl: `/deployments/${encodeURIComponent(String(parsed.deployment.id))}/`,
-          },
-        });
+        deployment = (JSON.parse(r.text) as { deployment?: Record<string, unknown> }).deployment;
       } catch {
-        return json(res, 502, { error: "bad_core_response" });
+        deployment = undefined;
       }
+      return deployment
+        ? json(res, 200, { deployment: withWebUrl(deployment) })
+        : json(res, 502, { error: "bad_core_response" });
     },
   },
-  {
-    method: "GET",
-    path: "/api/deployments/:id/share",
-    handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/share",
-    handle: async ({ req, res, params }) => {
-      const body = await readJson<{
-        scope?: unknown;
-        recipient?: unknown;
-        email?: unknown;
-        access?: unknown;
-        public?: unknown;
-      }>(req, res, false);
-      if (!body) return;
-      return relayCap(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({
-          scope: body.scope,
-          recipient: body.recipient,
-          email: body.email,
-          access: body.access,
-          public: body.public,
-        }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/display-name",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ displayName?: unknown }>(req, res, false);
-      if (!p) return;
-      const displayName = String(p.displayName ?? "");
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/display-name`,
-        JSON.stringify({ displayName }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/name",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ name?: unknown }>(req, res, false);
-      if (!p) return;
-      const name = String(p.name ?? "");
-      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/embed-ancestors",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ embedAncestors?: unknown }>(req, res, false);
-      if (!p) return;
-      const embedAncestors = Array.isArray(p.embedAncestors) ? p.embedAncestors : [];
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/embed-ancestors`,
-        JSON.stringify({ embedAncestors }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/archive",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/restore",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  relayRoute("GET", "/api/deployments/:id/share", { cap: true }),
+  relayRoute("POST", "/api/deployments/:id/share", {
+    cap: true,
+    pick: ["scope", "recipient", "email", "access", "public"],
+    read: "strict",
+  }),
+  relayRoute("POST", "/api/deployments/:id/display-name", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ displayName: String(p.displayName ?? "") }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/name", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ name: String(p.name ?? "") }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/embed-ancestors", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ embedAncestors: Array.isArray(p.embedAncestors) ? p.embedAncestors : [] }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/archive", { gate: managesDeployment }),
+  relayRoute("POST", "/api/deployments/:id/restore", { gate: managesDeployment, principal: true }),
   {
     method: "POST",
     path: "/api/approvals/:requestId",
@@ -2460,12 +1725,12 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       if (typeof p.approved !== "boolean") return json(res, 400, { error: "bad_request" });
       const approved = p.approved;
-      const scope = p.scope === "once" || p.scope === "session" || p.scope === "always" ? p.scope : undefined;
+      const scope = approvalScope(p.scope);
       const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
 
-      const fetched = await coreFetch("GET", `/v1/approvals/${encodeURIComponent(requestId)}`);
+      const fetched = await coreFetch("GET", `/v1/approvals/${enc(requestId)}`);
       if (fetched.status !== 200) {
-        return sendBuffered(res, fetched.status, { "content-type": "application/json" }, fetched.text);
+        return relay(res, fetched);
       }
       let record: CoreApprovalRecord;
       try {
@@ -2488,10 +1753,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (!threadRef.startsWith(`web:${user}:`)) {
         const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
         const visible = sessionId
-          ? await coreFetch(
-              "GET",
-              `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=${encodeURIComponent(user)}&tailTurns=1`,
-            )
+          ? await coreFetch("GET", `/v1/sessions/${enc(sessionId)}?viewer=${enc(user)}&tailTurns=1`)
           : null;
         if (visible?.status !== 200) return json(res, 404, { error: "not_found" });
         if (delegated) {
@@ -2521,7 +1783,7 @@ const apiRoutes: readonly WebRoute[] = [
       let timezone: string | undefined;
       let scope: string | undefined;
       let channelName: string | undefined;
-      const attachments: CoreAttachment[] = [];
+      const attachments: Array<{ name: string; mimetype: string; sizeBytes: number; blobId: string }> = [];
       let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
       let desktopClientId: string | undefined;
       let proactiveOpener = false;
@@ -2543,18 +1805,12 @@ const apiRoutes: readonly WebRoute[] = [
           approval = {
             requestId: p.approval.requestId,
             approved: p.approval.approved,
-            ...(p.approval.scope === "once" || p.approval.scope === "session" || p.approval.scope === "always"
-              ? { scope: p.approval.scope }
-              : {}),
+            ...(approvalScope(p.approval.scope) ? { scope: p.approval.scope } : {}),
           };
         }
-        if (
-          typeof p.threadRef === "string" &&
-          (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-        )
-          threadRef = p.threadRef;
+        if (isWebThread(p.threadRef)) threadRef = p.threadRef;
         if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
-        if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
+        channelName = channelLabel(p.channelName);
         if (typeof p.model === "string" && p.model) model = p.model;
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
@@ -2601,12 +1857,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/session-events",
     handle: async (c) => {
       const { req, res, user } = c;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
+      res.writeHead(200, SSE_HEADERS);
       res.write(": open\n\n");
       let set = eventClients.get(user);
       if (!set) {
@@ -2633,11 +1884,10 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, url, user } = c;
       const threadRef = url.searchParams.get("threadRef") ?? "";
-      if (!threadRef.startsWith("web:") && !threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-        return json(res, 404, { error: "not_found" });
+      if (!isWebThread(threadRef)) return json(res, 404, { error: "not_found" });
       let queued: Array<{ runId: string; text: string; hasAttachments?: boolean }> = [];
       let durableRunId: string | null = null;
-      const durable = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
+      const durable = await coreFetch("GET", `/v1/runs?threadRef=${enc(threadRef)}`);
       if (durable.status >= 200 && durable.status < 300) {
         try {
           const parsed = JSON.parse(durable.text) as { runId?: string | null; queued?: typeof queued };
@@ -2648,7 +1898,7 @@ const apiRoutes: readonly WebRoute[] = [
         }
       }
       const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
-        const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(runId)}`);
+        const r = await coreFetch("GET", `/v1/runs/${enc(runId)}`);
         if (r.status < 200 || r.status >= 300) {
           if (ownedByUser) forgetRun(runId);
           return false;
@@ -2697,24 +1947,18 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
       const text = typeof p.text === "string" ? p.text : undefined;
-      const threadRef =
-        typeof p.threadRef === "string" &&
-        (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-          ? p.threadRef
-          : "";
+      const threadRef = isWebThread(p.threadRef) ? p.threadRef : "";
       let steerFields: { request: Awaited<ReturnType<typeof webTurnBase>> } | undefined;
       if (kind === "steer" && text !== undefined && threadRef) {
         const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
-        const channelName =
-          typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
-        const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
+        const resolved = await resolveWebConversation(user, threadRef, scope, channelLabel(p.channelName));
         if ("error" in resolved) return json(res, 403, resolved);
         steerFields = { request: await webTurnBase(req, user, resolved.conversation, threadRef, text) };
       }
       return relayCore(
         res,
         "POST",
-        `/v1/runs/${encodeURIComponent(id)}/signal`,
+        `/v1/runs/${enc(id)}/signal`,
         JSON.stringify({
           kind,
           ...(kind === "client_result"
@@ -2727,22 +1971,14 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "PATCH",
-    path: "/api/runs/:id/input",
-    handle: async (c) => {
-      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
-    },
-  },
+  relayRoute("PATCH", "/api/runs/:id/input", { read: "strict" }),
   {
     method: "POST",
     path: "/api/runs/:id/withdraw",
     handle: async (c) => {
       const { res } = c;
       const id = c.params.id!;
-      const r = await coreFetch("POST", `/v1/runs/${encodeURIComponent(id)}/withdraw`);
+      const r = await coreFetch("POST", `/v1/runs/${enc(id)}/withdraw`);
       if (r.status >= 200 && r.status < 300) forgetRun(id);
       return relay(res, r);
     },
@@ -2755,14 +1991,8 @@ const apiRoutes: readonly WebRoute[] = [
       const id = c.params.id!;
       const controller = new AbortController();
       res.on("close", () => controller.abort());
-      const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
-      const portalTok = portalTokenStore.getStore();
       try {
-        const upstream = await fetch(`${CORE}${path}`, {
-          headers: {
-            ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
-            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-          },
+        const upstream = await fetchCoreGet(`/v1/runs/${enc(id)}/events`, {
           signal: controller.signal,
           redirect: "manual",
         });
@@ -2771,12 +2001,7 @@ const apiRoutes: readonly WebRoute[] = [
           json(res, upstream.status, { error: "stream_unavailable" });
           return;
         }
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive",
-          "x-accel-buffering": "no",
-        });
+        res.writeHead(200, SSE_HEADERS);
         const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
         source.on("error", () => res.destroy());
         source.pipe(res);
@@ -2794,7 +2019,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res } = c;
       const id = c.params.id!;
-      const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
+      const r = await coreFetch("GET", `/v1/runs/${enc(id)}`);
       try {
         const s = (JSON.parse(r.text) as { status?: string }).status;
         if (s === "done" || s === "failed") forgetRun(id);
@@ -2807,52 +2032,32 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/inbox/sent/:messageId",
-    handle: async ({ res, user, params, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-      const query = new URLSearchParams();
-      const accountType = url.searchParams.get("accountType");
-      if (accountType) query.set("accountType", accountType);
-      res.setHeader("Cache-Control", "no-store");
+    handle: async (c) => {
+      if (!isInboxUser(c.user)) return json(c.res, 403, { error: "forbidden" });
+      const query = copyParams(c, ["accountType"], {});
+      c.res.setHeader("Cache-Control", "no-store");
       return relayCore(
-        res,
+        c.res,
         "GET",
-        `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}${query.size ? `?${query}` : ""}`,
+        `/v1/connectors/gmail/sent/${enc(c.params.messageId!)}${query.size ? `?${query}` : ""}`,
       );
     },
   },
   {
     method: "GET",
     path: "/api/inbox/sent",
-    handle: async ({ res, user, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-      const params = new URLSearchParams();
-      for (const key of ["pageToken", "accountType"]) {
-        const value = url.searchParams.get(key);
-        if (value) params.set(key, value);
-      }
-      res.setHeader("Cache-Control", "no-store");
-      return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/webhooks",
     handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
+      if (!isInboxUser(c.user)) return json(c.res, 403, { error: "forbidden" });
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "GET", `/v1/connectors/gmail/sent?${copyParams(c, ["pageToken", "accountType"], {})}`);
     },
   },
+  relayRoute("GET", "/api/webhooks", { who: "viewer" }),
   {
     method: "GET",
     path: "/api/webhooks/:id/events",
-    handle: async ({ res, user, params }) =>
-      relay(
-        res,
-        await coreFetch(
-          "GET",
-          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
-        ),
-      ),
+    handle: async (c) =>
+      relay(c.res, await coreFetch("GET", `${corePathFor("/api/webhooks/:id/events", c)}?viewer=${enc(c.user)}`)),
   },
   {
     method: "POST",
@@ -2949,147 +2154,74 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/crons",
-    handle: async (c) => {
-      const { res, user } = c;
-      const r = await coreFetch("GET", `/v1/crons?viewer=${encodeURIComponent(user)}`);
-      if (r.status < 200 || r.status >= 300) {
-        return relay(res, r);
-      }
-      let crons: CoreCron[] = [];
-      let visible: CoreCron[] = [];
+    handle: async ({ res, user }) => {
+      const r = await coreFetch("GET", `/v1/crons?viewer=${enc(user)}`);
+      if (r.status < 200 || r.status >= 300) return relay(res, r);
+      type CronLists = { crons?: unknown[]; visible?: unknown[] } | null;
+      let parsed: CronLists = null;
       try {
-        const parsed = JSON.parse(r.text) as { crons?: CoreCron[]; visible?: CoreCron[] };
-        crons = parsed.crons ?? [];
-        visible = parsed.visible ?? [];
+        parsed = JSON.parse(r.text) as CronLists;
       } catch {
         void 0;
       }
-      return json(res, 200, { crons, visible });
+      return json(res, 200, { crons: parsed?.crons ?? [], visible: parsed?.visible ?? [] });
     },
   },
   {
     method: "GET",
     path: "/api/crons/:id/runs",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relay(
-        res,
-        await coreFetch(
-          "GET",
-          `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
-        ),
-      );
-    },
+    handle: async (c) =>
+      relay(
+        c.res,
+        await coreFetch("GET", `${corePathFor("/api/crons/:id/runs", c)}?principalId=${enc(c.user)}&limit=20`),
+      ),
   },
   {
     method: "PATCH",
     path: "/api/crons/:id",
     handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      let patch: {
-        title?: string;
-        task?: string;
-        schedule?: unknown;
-        enabled?: boolean;
-        archived?: boolean;
-        runtime?: unknown;
-      } = {};
+      const patch: Record<string, unknown> = {};
+      const bad = (message: string) => json(c.res, 400, { error: "bad_request", message });
       try {
-        const p = JSON.parse(await readBody(req)) as {
-          title?: unknown;
-          task?: unknown;
-          schedule?: unknown;
-          enabled?: unknown;
-          archived?: unknown;
-          runtime?: unknown;
-        };
-        if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
+        const p = JSON.parse(await readBody(c.req)) as Record<string, unknown>;
+        if ("runtime" in p) patch.runtime = p.runtime;
         if ("title" in p) {
-          if (typeof p.title !== "string")
-            return json(res, 400, { error: "bad_request", message: "title must be a string" });
-          patch = { ...patch, title: p.title.trim() };
+          if (typeof p.title !== "string") return bad("title must be a string");
+          patch.title = p.title.trim();
         }
         if ("task" in p) {
-          if (typeof p.task !== "string" || !p.task.trim())
-            return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
-          patch = { ...patch, task: p.task.trim() };
+          if (typeof p.task !== "string" || !p.task.trim()) return bad("task must be a non-empty string");
+          patch.task = p.task.trim();
         }
-        if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
-        if ("enabled" in p) {
-          if (typeof p.enabled !== "boolean")
-            return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
-          patch = { ...patch, enabled: p.enabled };
-        }
-        if ("archived" in p) {
-          if (typeof p.archived !== "boolean")
-            return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-          patch = { ...patch, archived: p.archived };
+        if ("schedule" in p) patch.schedule = p.schedule;
+        for (const key of ["enabled", "archived"]) {
+          if (!(key in p)) continue;
+          if (typeof p[key] !== "boolean") return bad(`${key} must be a boolean`);
+          patch[key] = p[key];
         }
       } catch (e) {
         if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request", message: "expected JSON body" });
+        return bad("expected JSON body");
       }
-      if (Object.keys(patch).length === 0)
-        return json(res, 400, {
-          error: "bad_request",
-          message: "expected title, task, schedule, enabled, archived, or runtime",
-        });
-      if (patch.archived === true) patch = { ...patch, enabled: false };
+      if (Object.keys(patch).length === 0) return bad("expected title, task, schedule, enabled, archived, or runtime");
+      if (patch.archived === true) patch.enabled = false;
       return relayCore(
-        res,
+        c.res,
         "PATCH",
-        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+        `/v1/crons/${enc(c.params.id!)}?principalId=${enc(c.user)}`,
         JSON.stringify(patch),
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/crons/:id/disable",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/crons/:id/enable",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-        JSON.stringify({ enabled: true, archived: false }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/crons/:id/run",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "POST", `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/crons/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("POST", "/api/crons/:id/disable", { who: "principalId" }),
+  relayRoute("POST", "/api/crons/:id/enable", {
+    core: "/v1/crons/:id",
+    to: "PATCH",
+    who: "principalId",
+    body: { enabled: true, archived: false },
+  }),
+  relayRoute("POST", "/api/crons/:id/run", { who: "principalId" }),
+  relayRoute("DELETE", "/api/crons/:id", { who: "principalId" }),
 ];
 
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -3148,7 +2280,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   else if (path.startsWith("/connectors/oauth/")) oauthCallbackPrefix = "/connectors/oauth/";
   if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
     const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
-    const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
+    const corePath = `/v1/connectors/oauth/${enc(provider)}/callback${url.search}`;
     let ok: boolean;
     try {
       const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
@@ -3156,7 +2288,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     } catch {
       ok = false;
     }
-    const q = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
+    const q = `view=keychain&connector=${enc(provider)}&status=${ok ? "connected" : "error"}`;
     return sendHtml(res, ok ? 200 : 400, callbackHtml(q));
   }
 
@@ -3166,17 +2298,9 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const external = match[1] === "external";
     const user = external ? null : cookieUser(req);
     if (!external && !user) return json(res, 401, { error: "sign in" });
-    const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${encodeURIComponent(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
+    const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${enc(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
     if (match[3]) {
-      const signedPath = withSourceAuthNonce(corePath, CORE_SIGNING_SECRET);
-      const portalTok = external ? null : portalTokenStore.getStore();
-      const response = await fetch(`${CORE}${signedPath}`, {
-        headers: {
-          ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-          ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-        },
-        redirect: "manual",
-      });
+      const response = await fetchCoreGet(corePath, { redirect: "manual" }, !external);
       const headers: Record<string, string> = {
         "cache-control": "no-store",
         "referrer-policy": "no-referrer",
@@ -3247,12 +2371,11 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
-    const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
+    const corePath = `/d/${enc(id)}${subPath}${url.search}`;
     const headers: Record<string, string> = {
       ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
       "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...portalHeaders(),
     };
     delete headers["content-type"];
     const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
