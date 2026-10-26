@@ -58,7 +58,6 @@ import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BA
 import {
   adoptRemoteSplit,
   beginPaneKindDrag,
-  canvasToast,
   drawCanvas,
   endPaneDrag,
   exitSplitIfActive,
@@ -283,12 +282,15 @@ export async function signOut(): Promise<void> {
   location.href = redirectTo;
 }
 
+let impersonationExitFailed = false;
+
 export async function exitImpersonation(): Promise<void> {
   const stopped = await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } })
     .then((r) => r.ok)
     .catch(swallowAs("web-ui: exit impersonation", false));
   if (!stopped) {
-    canvasToast("Couldn't exit impersonation. Try again.");
+    impersonationExitFailed = true;
+    mountShell();
     return;
   }
   window.location.href = ADMIN_HOME_URL;
@@ -296,11 +298,15 @@ export async function exitImpersonation(): Promise<void> {
 
 function impersonationBanner(by: string) {
   return html`
-    <div class="impersonation-banner" role="status">
-      <span class="impersonation-banner-text"
-        >Viewing the assistant as <b>${appState.me?.user ?? ""}</b>. You are <b>${by}</b></span
+    <div class="top-banner" role="status">
+      <span
+        >${
+          impersonationExitFailed
+            ? "Couldn't exit impersonation. Try again."
+            : html`Viewing the assistant as <b>${appState.me?.user ?? ""}</b>. You are <b>${by}</b>`
+        }</span
       >
-      <button class="impersonation-banner-exit" type="button" @click=${exitImpersonation}>Exit impersonation</button>
+      <button class="top-banner-action" type="button" @click=${exitImpersonation}>Exit impersonation</button>
     </div>
   `;
 }

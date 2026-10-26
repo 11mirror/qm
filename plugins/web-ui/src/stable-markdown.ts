@@ -5,6 +5,7 @@ import { html, ReactiveElement, render, type PropertyValues } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import morphdom from "morphdom";
 import { marked, type Tokens } from "marked";
+import { escapeHtml } from "./html-escape.ts";
 
 function mathExtension(name: string, level: "block" | "inline", displayMode: boolean) {
   return {
@@ -31,7 +32,7 @@ renderer.link = (token) => baseLink(token).replace("<a ", '<a target="_blank" re
 renderer.table = (token) => `<div class="overflow-x-auto my-2 border border-border rounded">${baseTable(token)}</div>`;
 renderer.code = ({ text, lang }) => {
   const code = btoa(String.fromCharCode(...new TextEncoder().encode(`${text.replace(/\n$/, "")}\n`)));
-  return `<div class="mt-2"><code-block language="${lang?.match(/^\w+/)?.[0] ?? "text"}" code="${code}"></code-block></div>\n`;
+  return `<div class="mt-2"><code-block language="${escapeHtml(lang?.match(/^\S+/)?.[0] ?? "text")}" code="${code}"></code-block></div>\n`;
 };
 
 function renderMarkdown(content: string, isThinking: boolean) {

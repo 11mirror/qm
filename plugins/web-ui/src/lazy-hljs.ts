@@ -12,7 +12,17 @@ type Hljs = {
 let real: Hljs | null = null;
 let loading: Promise<void> | null = null;
 
-const LANGS = ["javascript", "typescript", "python", "xml", "css", "json", "bash", "sql", "markdown"] as const;
+const LANGS: Record<string, () => Promise<{ default: unknown }>> = {
+  javascript: () => import("hljs-real-javascript"),
+  typescript: () => import("hljs-real-typescript"),
+  python: () => import("hljs-real-python"),
+  xml: () => import("hljs-real-xml"),
+  css: () => import("hljs-real-css"),
+  json: () => import("hljs-real-json"),
+  bash: () => import("hljs-real-bash"),
+  sql: () => import("hljs-real-sql"),
+  markdown: () => import("hljs-real-markdown"),
+};
 const LANG_ALIASES: Record<string, string> = { html: "xml" };
 
 function rerenderMountedBlocks(): void {
@@ -23,27 +33,13 @@ function rerenderMountedBlocks(): void {
 }
 
 function ensureLoading(): void {
-  loading ??= Promise.all([
-    import("hljs-real"),
-    import("hljs-real-javascript"),
-    import("hljs-real-typescript"),
-    import("hljs-real-python"),
-    import("hljs-real-xml"),
-    import("hljs-real-css"),
-    import("hljs-real-json"),
-    import("hljs-real-bash"),
-    import("hljs-real-sql"),
-    import("hljs-real-markdown"),
-  ])
-    .then(([core, ...langs]: Array<{ default: unknown }>) => {
+  const names = Object.keys(LANGS);
+  loading ??= Promise.all([import("hljs-real"), ...names.map((name) => LANGS[name]!())])
+    .then(([core, ...langs]) => {
       const hljs = core.default as Hljs;
-      LANGS.forEach((name, i) => hljs.registerLanguage(name, (langs[i] as { default: unknown }).default));
-      for (const [alias, target] of Object.entries(LANG_ALIASES)) {
-        hljs.registerLanguage(
-          alias,
-          (langs[LANGS.indexOf(target as (typeof LANGS)[number])] as { default: unknown }).default,
-        );
-      }
+      names.forEach((name, i) => hljs.registerLanguage(name, langs[i]!.default));
+      for (const [alias, target] of Object.entries(LANG_ALIASES))
+        hljs.registerLanguage(alias, langs[names.indexOf(target)]!.default);
       real = hljs;
       rerenderMountedBlocks();
     })
