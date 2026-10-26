@@ -408,6 +408,8 @@ export async function stopImpersonation(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
+const isoToday = () => new Date().toISOString().slice(0, 10);
+
 const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending", "completed", "dismissed"]);
 
 export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
@@ -421,8 +423,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus))
     return badRequest(res, "onboarding requires { status: not_started|pending|completed|dismissed }");
   const personal = makeScopeId("personal", principalId);
-  const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, today, actor.id);
+  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, isoToday(), actor.id);
   authz.audit("user.onboarding.set", `${principalId}/${status}`, personal);
   return sendJson(res, 200, { ok: true, scopeId: personal, status });
 }
@@ -435,16 +436,11 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   if (!deps.memory) return notFound(res);
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
-  const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, "not_started", today, actor.id);
-  let deletedSessions = 0;
-  if (deps.sessions) {
-    const own = (await deps.sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal);
-    for (const s of own) {
-      await deps.sessions.deleteSession(s.id);
-      deletedSessions++;
-    }
-  }
+  await setOnboardingStatus(deps.memory, personal, "not_started", isoToday(), actor.id);
+  const sessions = deps.sessions;
+  const own = sessions ? (await sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal) : [];
+  for (const s of own) await sessions!.deleteSession(s.id);
+  const deletedSessions = own.length;
   authz.audit("user.reset", `${principalId}/sessions=${deletedSessions}`, personal);
   return sendJson(res, 200, { ok: true, scopeId: personal, deletedSessions });
 }

@@ -13,6 +13,8 @@ import { badRequest, notFound, orgAdmin } from "./common.ts";
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
 
+const given = (value: unknown): string | undefined => (typeof value === "string" && value ? value : undefined);
+
 function redact(server: McpServer): Omit<McpServer, "bearerToken" | "clientSecret"> & {
   hasBearerToken: boolean;
   hasClientSecret: boolean;
@@ -130,12 +132,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     auth,
     credentialScope,
     ...(credentialScope === "per-user" ? { credentialHost, credentialAccountType } : {}),
-    ...(auth === "bearer"
-      ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
-      : {}),
+    ...(auth === "bearer" ? { bearerToken: given(b.bearerToken) ?? existing?.bearerToken } : {}),
     ...(oauthUser
       ? {
-          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId.trim() : existing?.clientId,
+          clientId: given(b.clientId)?.trim() ?? existing?.clientId,
           oauthAuthorizeUrl,
           oauthTokenUrl,
           oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? discovered?.scopes ?? [],
@@ -143,8 +143,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       : {}),
     ...(auth === "client-credentials"
       ? {
-          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId : existing?.clientId,
-          clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
+          clientId: given(b.clientId) ?? existing?.clientId,
+          clientSecret: given(b.clientSecret) ?? existing?.clientSecret,
         }
       : {}),
     ...(approval === "annotations" ? {} : { approval }),
