@@ -32,6 +32,18 @@ export function extendBodyDeadline(req: IncomingMessage, ms: number): void {
   (req as DeadlineCarrier)[BODY_DEADLINE]?.rearm(ms);
 }
 
+const TEXTUAL_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/x-javascript",
+  "application/graphql",
+  "application/sql",
+  "application/toml",
+]);
+
 export function contentTypeWithUtf8Charset(contentType: string): string {
   let parameterStart = -1;
   let inQuotes = false;
@@ -51,21 +63,7 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   }
   if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart))) return contentType;
   const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
-  const textual =
-    mime.startsWith("text/") ||
-    mime === "application/json" ||
-    mime === "application/xml" ||
-    mime === "application/yaml" ||
-    mime === "application/x-yaml" ||
-    mime === "application/javascript" ||
-    mime === "application/x-javascript" ||
-    mime === "application/graphql" ||
-    mime === "application/sql" ||
-    mime === "application/toml" ||
-    mime === "image/svg+xml" ||
-    mime.endsWith("+json") ||
-    mime.endsWith("+xml") ||
-    mime.endsWith("+yaml");
+  const textual = mime.startsWith("text/") || TEXTUAL_MIME_TYPES.has(mime) || /\+(json|xml|yaml)$/.test(mime);
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
