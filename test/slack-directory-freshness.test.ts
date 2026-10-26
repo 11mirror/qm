@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { createDirectory } from "../src/slack/directory.ts";
+import { isGatedEnvelope } from "../src/slack/deferred-ack.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -207,4 +208,23 @@ test("a rejected full crawl is retried instead of throttling unpublished rosters
   await a.refresh();
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 2);
+});
+
+test("a member_left revocation that core rejects fails the event so the gated envelope is redelivered", async (t) => {
+  const { core, store } = fixture(t);
+  const a = core([channel("C_ONE", true)]);
+  await a.refresh();
+  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  a.state.rejectPush = true;
+  await assert.rejects(a.directory.forceDirectorySync(a.client, "C_ONE", "U_ONE"), /revocation was not persisted/);
+  a.state.rejectPush = false;
+  await a.directory.forceDirectorySync(a.client, "C_ONE", "U_ONE");
+  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+  assert.equal(
+    isGatedEnvelope({
+      type: "event_callback",
+      event: { type: "member_left_channel", channel: "C_ONE", user: "U_ONE" },
+    }),
+    true,
+  );
 });
