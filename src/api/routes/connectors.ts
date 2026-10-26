@@ -23,7 +23,6 @@ import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
@@ -439,27 +438,6 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function setToken(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  if (!deps.connectorTokens) return notWired(res);
-  const b = body as Record<string, unknown>;
-  const host = typeof b.host === "string" ? b.host : "";
-  const principalId = typeof b.principalId === "string" ? b.principalId : "";
-  const accessToken = typeof b.accessToken === "string" ? b.accessToken : "";
-  const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-  if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
-  if (!host || !principalId || !accessToken) {
-    return sendJson(res, 400, { error: "bad_request", message: "host, principalId, accessToken required" });
-  }
-  await deps.connectorTokens.setConnectorToken(host, principalId, {
-    accessToken,
-    ...(typeof b.refreshToken === "string" ? { refreshToken: b.refreshToken } : {}),
-    ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
-  });
-  audit(deps, { principalId, action: "connector.token.set", resource: host, scopeLabel: principalId });
-  return sendJson(res, 200, { ok: true });
-}
-
 async function catalog(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const entries = await Promise.all(
@@ -553,6 +531,5 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: oauthRevoke,
   },
-  { method: "POST", path: "/v1/connectors/token", actor: "body.principalId", auth: "source", handle: setToken },
   { method: "GET", path: "/v1/connectors/catalog", auth: "source", handle: catalog },
 ];

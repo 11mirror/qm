@@ -11,7 +11,6 @@ test("Slack Stop cancels the durable conversation tree even when the coordinator
         stopped.push(ref);
         return true;
       },
-      activeRunForThread: async () => assert.fail("Stop must not depend on a running coordinator"),
     },
     flow: {
       callCore: async () => assert.fail("Stop must not submit another turn"),

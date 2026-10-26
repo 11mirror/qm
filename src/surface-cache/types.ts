@@ -42,14 +42,6 @@ export interface ContainerState {
   updatedAt: number;
 }
 
-interface ActiveThread {
-  container: string;
-  sub: string;
-  lastTs: string;
-  messageCount: number;
-  lastActivityAt: number;
-}
-
 export interface IngestEvent {
   surface?: string;
   container: string;
@@ -111,7 +103,6 @@ export interface SurfaceCache {
   readMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   revisedSince(container: string, since: number, opts?: RevisedSinceOpts): Promise<CachedMessage[]>;
   search(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
-  activeThreads(opts?: { surface?: string; container?: string; limit?: number }): Promise<ActiveThread[]>;
   members(container: string): Promise<string[]>;
   isMember(container: string, principalId: string): Promise<boolean>;
   containerState(container: string): Promise<ContainerState | null>;

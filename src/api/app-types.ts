@@ -411,7 +411,6 @@ export interface App {
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
   grant(g: Grant): Promise<void>;
-  revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
@@ -508,7 +507,6 @@ export interface App {
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
-  deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;

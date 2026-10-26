@@ -100,8 +100,6 @@ export interface SlackCoreClient {
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
-  activeRunForThread(threadRef: string): Promise<string | undefined>;
-  signalRunAbort(runId: string): Promise<void>;
   stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
@@ -356,16 +354,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       }
     },
 
-    async activeRunForThread(threadRef) {
-      return (await deps.app.activeRunForThread(threadRef))?.runId;
-    },
-
     stopConversation: (threadRef) => deps.app.stopConversation(threadRef),
-
-    async signalRunAbort(runId) {
-      const outcome = await deps.app.signalRun(runId, { kind: "abort" });
-      if (!outcome.accepted) throw new Error(`signal abort not accepted: ${outcome.reason ?? "unknown"}`);
-    },
 
     async ackRunDelivery(runId) {
       await deps.runs.setDeliveryState(runId, null, { postedAt: Date.now() });
