@@ -38,7 +38,7 @@ import {
   deliveryCandidatesFor,
   statusPlaceholderKey,
   encodeDeliveryTarget,
-  type SurfaceHeaderClient,
+  type createSurfaceHeaderEnsurer,
   type PostMessageArgs,
   postWithVerify,
   SLACK_POST_SPLIT_LIMIT,
@@ -100,12 +100,7 @@ interface Incoming {
   };
 }
 
-export interface TurnHandler {
-  handleIncoming(inc: Incoming, client: any): Promise<void>;
-  dispatch(key: string, inc: Incoming, client: any): Promise<void>;
-  handleReactionEvent(evt: SlackReactionEvent, eventId: string | undefined, client: any, added: boolean): Promise<void>;
-  botHasStakeInThread(client: any, channel: string, threadTs: string, before?: string): Promise<boolean>;
-}
+export type TurnHandler = ReturnType<typeof createTurnHandler>;
 
 const compact = <T extends object>(o: T) =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as {
@@ -135,14 +130,8 @@ export function createTurnHandler(deps: {
   markEvent?: () => void;
   botToken: string;
   trustedFileHost?: string;
-  ensureHeader?: (
-    client: SurfaceHeaderClient,
-    channel: string,
-    scopeId: string,
-    kind: "dm" | "channel",
-    ensureOpts?: { pinNew?: boolean },
-  ) => void;
-}): TurnHandler {
+  ensureHeader?: ReturnType<typeof createSurfaceHeaderEnsurer>;
+}) {
   const { core, flow, directory, mirror, serializer, ackEmoji, ids, threads, deduper, externalParticipantsEnabled } =
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
@@ -696,14 +685,15 @@ export function createTurnHandler(deps: {
       return;
     }
 
-    const flightKey = `${channel}:${messageTs}:${emoji}:${reactorId}:${added ? "+" : "-"}`;
+    const sign = added ? "+" : "-";
+    const flightKey = `${channel}:${messageTs}:${emoji}:${reactorId}:${sign}`;
     if (reactionsInFlight.has(flightKey)) return;
     reactionsInFlight.add(flightKey);
     try {
       const key = dedupeKey({
         event_id: eventId,
         channel,
-        ts: `${messageTs}:${emoji}:${added ? "+" : "-"}:${reactorId}:${evt.event_ts ?? ""}`,
+        ts: `${messageTs}:${emoji}:${sign}:${reactorId}:${evt.event_ts ?? ""}`,
       });
       await dedupedRun(
         deduper,
@@ -731,10 +721,10 @@ export function createTurnHandler(deps: {
           const reactorName = reactor.displayName || "Someone";
 
           const msg = await getReactedMessage(client, channel, messageTs, added);
-          let authorName: string | undefined;
-          if (!onBotMessage && msg?.authorId && msg.authorId !== reactorId) {
-            authorName = (await classifyActor(client, msg.authorId)).displayName;
-          }
+          const authorName =
+            !onBotMessage && msg?.authorId && msg.authorId !== reactorId
+              ? (await classifyActor(client, msg.authorId)).displayName
+              : undefined;
 
           const inc: Incoming = compact({
             kind: isDM ? "dm" : "channel",
@@ -760,9 +750,7 @@ export function createTurnHandler(deps: {
           });
           let heardWhere = onBotMessage ? "on my message" : "followed thread";
           if (isDM) heardWhere = "dm";
-          console.log(
-            `[slack-plugin] heard reaction ${added ? "+" : "-"}:${emoji}: from ${reactorName} (${heardWhere}) → turn`,
-          );
+          console.log(`[slack-plugin] heard reaction ${sign}:${emoji}: from ${reactorName} (${heardWhere}) → turn`);
           await handleIncoming(inc, client);
         },
         reportFailureAs("slack: reaction handler", undefined),

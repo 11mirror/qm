@@ -79,8 +79,6 @@ export async function startSlackPlugin(
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
-  const ENVELOPE_REPLAY_SWEEP_MS = 60_000;
-  const ENVELOPE_REPLAY_RETRY_NUM = 99;
   const configuredActorGate = createActorGate(cfg.allowFrom);
   const allowActor = cfg.externalAccess
     ? (actor: import("./identity.ts").ActorAssertion) =>
@@ -97,29 +95,22 @@ export async function startSlackPlugin(
     identityMode: cfg.identityEmail === "0" ? "slack-id" : "email",
   };
 
-  const ACK_OVERRIDE_CACHE_MS = 60_000;
   let ackOverrideCache: { names: string[] | null; fetchedAt: number } | undefined;
   function ackEmojiOverride(): readonly string[] | null {
-    if (!ackOverrideCache || Date.now() - ackOverrideCache.fetchedAt >= ACK_OVERRIDE_CACHE_MS) {
-      const prev = ackOverrideCache;
-      ackOverrideCache = { names: prev?.names ?? null, fetchedAt: Date.now() };
-      core
-        .ackEmojiOverride()
-        .then((names) => {
-          ackOverrideCache = { names: names?.length ? names : null, fetchedAt: Date.now() };
-        })
-        .catch((err) => {
-          swallow("slack: ack-emoji override read", err);
-        });
+    if (!ackOverrideCache || Date.now() - ackOverrideCache.fetchedAt >= 60_000) {
+      ackOverrideCache = { names: ackOverrideCache?.names ?? null, fetchedAt: Date.now() };
+      core.ackEmojiOverride().then(
+        (names) => void (ackOverrideCache = { names: names?.length ? names : null, fetchedAt: Date.now() }),
+        (err) => swallow("slack: ack-emoji override read", err),
+      );
     }
     return ackOverrideCache.names;
   }
 
-  const EXTERNAL_PARTICIPANTS_CACHE_MS = 30_000;
   let externalParticipantsCache: { on: boolean; fetchedAt: number } | undefined;
   async function externalParticipantsEnabled(): Promise<boolean> {
     if (cfg.externalAccess) return true;
-    if (externalParticipantsCache && Date.now() - externalParticipantsCache.fetchedAt < EXTERNAL_PARTICIPANTS_CACHE_MS)
+    if (externalParticipantsCache && Date.now() - externalParticipantsCache.fetchedAt < 30_000)
       return externalParticipantsCache.on;
     try {
       const on = await core.externalSlackParticipants();
@@ -174,12 +165,12 @@ export async function startSlackPlugin(
               app.processEvent({
                 body,
                 ack: async () => {},
-                retryNum: ENVELOPE_REPLAY_RETRY_NUM,
+                retryNum: 99,
                 customProperties: { ackGate },
               }),
             ),
           ),
-        ENVELOPE_REPLAY_SWEEP_MS,
+        60_000,
         { label: "slack envelope replay" },
       )
     : undefined;
@@ -335,44 +326,30 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   approvals.registerActions(app);
-  const inboxMessage = (
-    client: unknown,
-    msg: {
-      channel: string;
-      ts: string;
-      threadTs?: string;
-      text?: string;
-      senderSlackId?: string;
-      isDirectMessage: boolean;
-    },
-  ): void => {
-    void (async () => {
-      let senderEmail: string | undefined;
-      if (msg.senderSlackId) {
-        try {
-          const actor = await directory.classifyActor(client, msg.senderSlackId);
-          if (actor.externalId.includes("@")) senderEmail = actor.externalId;
-        } catch (e) {
-          swallow("slack: classify inbox message sender", e);
-        }
-      }
-      await core.inboxSlackMessage({
-        channel: msg.channel,
-        ts: msg.ts,
-        isDirectMessage: msg.isDirectMessage,
-        ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
-        ...(msg.text ? { text: msg.text } : {}),
-        ...(senderEmail ? { senderEmail } : {}),
-      });
-    })().catch((e) => swallow("slack: forward message to inbox", e));
-  };
   registerSlackEvents(app, {
     handler,
     mirror,
     directory,
     ids,
     deduper,
-    inboxMessage: cfg.externalAccess ? undefined : inboxMessage,
+    inboxMessage: cfg.externalAccess
+      ? undefined
+      : (client, msg) =>
+          void (async () => {
+            const actor = msg.senderSlackId
+              ? await directory
+                  .classifyActor(client, msg.senderSlackId)
+                  .catch(swallowAs("slack: classify inbox message sender", undefined))
+              : undefined;
+            await core.inboxSlackMessage({
+              channel: msg.channel,
+              ts: msg.ts,
+              isDirectMessage: msg.isDirectMessage,
+              threadTs: msg.threadTs,
+              text: msg.text,
+              senderEmail: actor?.externalId.includes("@") ? actor.externalId : undefined,
+            });
+          })().catch((e) => swallow("slack: forward message to inbox", e)),
     allowActor,
     denyResponder,
     webUiPublicUrl: cfg.webUiPublicUrl || undefined,
@@ -466,7 +443,6 @@ export async function startSlackPlugin(
   ackEmoji.refreshAckEmoji(app.client);
   ackEmojiOverride();
 
-  const EMOJI_CATALOG_REFRESH_MS = 6 * 60 * 60_000;
   const publishEmojiCatalog = (): void => {
     if (stopped) return;
     void Promise.resolve(app.client.emoji.list())
@@ -480,7 +456,7 @@ export async function startSlackPlugin(
       .catch(swallowAs("slack: emoji catalog publish", undefined));
   };
   if (CORE_SINGLETON) publishEmojiCatalog();
-  const emojiCatalogTimer = CORE_SINGLETON ? setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS) : undefined;
+  const emojiCatalogTimer = CORE_SINGLETON ? setInterval(publishEmojiCatalog, 6 * 60 * 60_000) : undefined;
 
   statusSweep.start();
   const unregisterSender = core.slack.attach(sendToSlack);
