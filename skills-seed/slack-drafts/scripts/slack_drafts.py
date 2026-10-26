@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Slack draft helper: creates a draft in the user's Slack composer, as the user.
 
-Usage (token from $VAULT_TOKEN_SLACK_COM):
+Usage (select the Slack connected-app credential for the command; the broker adds its token):
   slack_drafts.py create --to '#channel-name' --text 'hello'
   slack_drafts.py create --to '@display-name' --text-file body.txt
   slack_drafts.py create --to C0123ABCDEF --thread-ts 1712345678.000100 --text 'reply'
@@ -20,16 +20,16 @@ import sys
 import urllib.parse
 import uuid
 
-API = "https://slack.com/api"
+API = os.environ.get("AGENT_API_URL", "").rstrip("/") + "/v1/credentials/http/slack.com/api"
 
 
 def call(method: str, body: dict | None = None, query: dict | None = None):
-    tok = os.environ.get("VAULT_TOKEN_SLACK_COM", "")
+    tok = os.environ.get("AGENT_CREDENTIAL_TOKEN", "")
     if not tok:
-        sys.exit("no Slack token: ask the user to connect Slack")
+        sys.exit("no Slack credential: select the Slack connected-app credential for this command, or ask the user to connect Slack")
     url = f"{API}/{method}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
     cmd = ["curl", "-sS", "--fail-with-body", "--max-time", "60",
-           "-H", f"Authorization: Bearer {tok}", url]
+           "-H", f"x-agent-capability: {tok}", url]
     if body is not None:
         cmd += ["-H", "Content-Type: application/json; charset=utf-8", "--data-binary", "@-"]
     proc = subprocess.run(cmd, input=json.dumps(body) if body is not None else None,

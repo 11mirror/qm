@@ -95,15 +95,16 @@ test(
       env: {
         ...process.env,
         PATH: `${dir}:${process.env.PATH}`,
-        VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM: "tok",
+        AGENT_CREDENTIAL_TOKEN: "tok",
+        AGENT_API_URL: "https://core.test/",
         HTTPS_PROXY: "https://proxy.internal:3128",
       },
     });
     assert.deepEqual(JSON.parse(out), { id: "m1", threadId: "t1" });
     const recorded = JSON.parse(readFileSync(argsFile, "utf8"));
     const sendUrl = recorded.argv.find((a: string) => a.startsWith("https://"));
-    assert.equal(sendUrl, "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send");
-    assert.ok(recorded.argv.includes("Authorization: Bearer tok"));
+    assert.equal(sendUrl, "https://core.test/v1/credentials/http/gmail.googleapis.com/gmail/v1/users/me/drafts/send");
+    assert.ok(recorded.argv.includes("x-agent-capability: tok"));
     assert.equal(recorded.stdin, '{"id": "d1"}');
   },
 );
@@ -118,7 +119,12 @@ test("non-2xx responses exit with the status and body excerpt", { skip: !havePyt
   chmodSync(stub, 0o755);
   const res = spawnSync("python3", [SCRIPT, "send-draft", "d1"], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM: "tok" },
+    env: {
+      ...process.env,
+      PATH: `${dir}:${process.env.PATH}`,
+      AGENT_CREDENTIAL_TOKEN: "tok",
+      AGENT_API_URL: "https://core.test",
+    },
   });
   assert.notEqual(res.status, 0);
   assert.ok(res.stderr.includes("gmail api 403"));

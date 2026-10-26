@@ -11,25 +11,29 @@ Use this skill when the user asks about Linear issues, tickets, projects, cycles
 their team's work tracking — finding issues, checking status, filing a bug, leaving a
 comment, or updating an issue.
 
-This is an OAuth connector. The resolved user's Linear token already lives on your
-computer as an environment variable (the way a logged-in CLI's cached credential would):
+This is an OAuth connector used by proxy: the user's token never enters your computer.
+Select the connected-app credential for `api.linear.app` in `execute.credentials` (for
+example `connector:api.linear.app:default`); that command gets `$AGENT_CREDENTIAL_TOKEN`.
+Call `$AGENT_API_URL/v1/credentials/http/<host>/<path>` with `-H "x-agent-capability:
+$AGENT_CREDENTIAL_TOKEN"`; the credential broker adds the user's token and forwards the
+request to `https://<host>/<path>`. If you selected two accounts for the same host, put
+the credential handle where the host goes.
 
-- `$VAULT_TOKEN_API_LINEAR_APP` — for `api.linear.app`
+Linear's API is GraphQL at `https://api.linear.app/graphql`, so post to
+`$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql`. Do not ask the user for a
+token or use another principal's credential.
 
-Linear's API is GraphQL at `https://api.linear.app/graphql`. Pass the token as a bearer
-header (`-H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP"`). Do not ask the user for
-a token, log it, or use another principal's credential.
-
-If the variable is empty or the API returns 401/400 (`authentication`), tell the user they
-need to connect Linear (Connectors page) and stop — don't guess at issue data.
+If no Linear credential is listed, or the broker or API returns 401/410 (`authentication`,
+`connector_unavailable`), tell the user they need to connect Linear (Connectors page) and
+stop — don't guess at issue data.
 
 ## Find / read issues
 
 Query issues by text, assignee, or state:
 
 ```bash
-curl -sS -X POST 'https://api.linear.app/graphql' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"query":"{ issues(first: 20, filter: { title: { containsIgnoreCase: \"login\" } }) { nodes { identifier title state { name } assignee { name } url } } }"}'
 ```
@@ -37,8 +41,8 @@ curl -sS -X POST 'https://api.linear.app/graphql' \
 Read one issue by id/identifier:
 
 ```bash
-curl -sS -X POST 'https://api.linear.app/graphql' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"query":"{ issue(id: \"ENG-123\") { identifier title description state { name } assignee { name } url comments { nodes { body user { name } } } } }"}'
 ```
@@ -48,8 +52,8 @@ Keep issue identifiers and `url`s in your answer so claims can be traced.
 To create or assign an issue you usually need a team id — list them once:
 
 ```bash
-curl -sS -X POST 'https://api.linear.app/graphql' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"query":"{ teams(first: 100) { nodes { id key name } pageInfo { hasNextPage endCursor } } }"}'
 ```
@@ -66,8 +70,8 @@ before running it.
 After approval, create an issue:
 
 ```bash
-curl -sS -X POST 'https://api.linear.app/graphql' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"query":"mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { identifier url } } }","variables":{"input":{"teamId":"TEAM_ID","title":"Login button misaligned on mobile","description":"Reported by a user; repro on iOS Safari."}}}'
 ```
@@ -75,8 +79,8 @@ curl -sS -X POST 'https://api.linear.app/graphql' \
 Add a comment to an existing issue:
 
 ```bash
-curl -sS -X POST 'https://api.linear.app/graphql' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.linear.app/graphql" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"query":"mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { url } } }","variables":{"input":{"issueId":"ISSUE_UUID","body":"Fixed in the latest deploy."}}}'
 ```

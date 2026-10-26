@@ -2,7 +2,7 @@
 """Fetch the user's sent Gmail as a voice corpus: strip quotes/signatures, drop
 automated and trivial messages, write one JSON line per email.
 
-Usage (token from $VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM):
+Usage (select the Gmail connected-app credential for the command; the broker adds its token):
   fetch_sent.py [--limit 300] [--query 'newer_than:2y'] [--out voice/corpus]
 
 Each corpus line: {"id", "date", "to", "cc", "subject", "audience", "body"} where
@@ -22,7 +22,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import getaddresses
 
-API = "https://gmail.googleapis.com/gmail/v1/users/me"
+API = os.environ.get("AGENT_API_URL", "").rstrip("/") + "/v1/credentials/http/gmail.googleapis.com/gmail/v1/users/me"
 
 AUTOMATED_SUBJECT = re.compile(
     r"^(accepted|declined|tentative|canceled|invitation|updated invitation|fwd?):", re.I
@@ -47,10 +47,10 @@ CONSUMER_DOMAINS = {
 
 def call(method: str, path: str, query: dict | None = None):
     url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
-    tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
+    tok = os.environ.get("AGENT_CREDENTIAL_TOKEN", "")
     if not tok:
-        sys.exit("no Gmail token: ask the user to connect Google")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"}, method=method)
+        sys.exit("no Gmail credential: select the Gmail connected-app credential for this command, or ask the user to connect Google")
+    req = urllib.request.Request(url, headers={"x-agent-capability": tok}, method=method)
     try:
         with urllib.request.urlopen(req, timeout=60) as res:
             return json.load(res)

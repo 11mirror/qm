@@ -712,7 +712,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   ) => {
     const commandEnv: Record<string, string> = {};
     const addCommandEnv = (key: string, value: string) => {
-      if (DROPPED_PROXY_ENV.has(key) || Object.hasOwn(handle.env ?? {}, key))
+      if (DROPPED_PROXY_ENV.has(key) || (Object.hasOwn(handle.env ?? {}, key) && handle.env![key] !== value))
         throw new Error(`requested credentials may not override the computer's environment key: ${key}`);
       if (Object.hasOwn(commandEnv, key) && commandEnv[key] !== value)
         throw new Error(`requested credentials provide conflicting environment key: ${key}`);

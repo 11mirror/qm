@@ -11,7 +11,7 @@ import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
-import { connectorTokenNote, envKey } from "./connector-token.ts";
+import { connectorTokenNote } from "./connector-token.ts";
 import { tenant } from "../tenant.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
@@ -435,7 +435,20 @@ interface MaterializedFileCred {
   purpose?: string;
 }
 
-export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
+interface MaterializedConnectorCred {
+  credentialId: string;
+  ownerId: string;
+  service: string;
+  host: string;
+  accountType?: string;
+  grantId?: string;
+  purpose?: string;
+}
+
+export type MaterializedCred =
+  | ({ kind: "env" } & MaterializedEnvCred)
+  | ({ kind: "file" } & MaterializedFileCred)
+  | ({ kind: "connector" } & MaterializedConnectorCred);
 
 export class KeychainError extends Error {
   readonly status: number;
@@ -501,8 +514,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   materializeOwnById(ownerId: string, credentialId: string, scopeId: ScopeId): Promise<MaterializedCred>;
   materializeOwn(ownerId: string): Promise<MaterializedEnvCred[]>;
   materializeOwnFiles(ownerId: string): Promise<MaterializedFileCred[]>;
-
-  materializeStanding(scopeId: ScopeId): Promise<MaterializedEnvCred[]>;
 }
 
 function fingerprintOf(secret: string): string {
@@ -987,23 +998,23 @@ export function createKeychain(deps: {
     return toMeta(rec);
   }
 
-  async function materializeConnectorEnv(
+  async function materializeConnector(
     cred: KeychainCredential,
     extra?: { grantId: string; purpose: string },
   ): Promise<MaterializedCred> {
-    const value = cred.host ? await connectorTokenForRecord(cred) : null;
-    if (!value || !cred.host) {
+    if (!cred.host || !(await connectorTokenForRecord(cred))) {
       throw new KeychainError(
         410,
         "connector token expired and could not be refreshed — its owner must reconnect the app",
       );
     }
     return {
-      kind: "env",
+      kind: "connector",
       credentialId: cred.id,
       ownerId: cred.ownerId,
       service: cred.service,
-      env: [{ key: envKey(cred.host), value }],
+      host: cred.host,
+      ...(cred.refresh?.accountType ? { accountType: cred.refresh.accountType } : {}),
       ...extra,
     };
   }
@@ -1061,14 +1072,9 @@ export function createKeychain(deps: {
     const { grant, cred } = await authorizedGrant(grantId, scopeId);
     const extra = { grantId: grant.id, purpose: grant.purpose };
     const materialized =
-      cred.managed === "connector" ? await materializeConnectorEnv(cred, extra) : materializeDecrypted(cred, extra);
+      cred.managed === "connector" ? await materializeConnector(cred, extra) : materializeDecrypted(cred, extra);
     const version = cred.managed === "connector" ? await deps.creds.get(cred.id) : cred;
-    if (
-      !version ||
-      (cred.managed === "connector" &&
-        (materialized.kind !== "env" || version.fingerprint !== fingerprintOf(materialized.env[0]!.value)))
-    )
-      throw new KeychainError(409, "credential changed while preparing execution; request it again");
+    if (!version) throw new KeychainError(409, "credential changed while preparing execution; request it again");
     return {
       materialized,
       singleUse: grant.mode === "once",
@@ -1536,7 +1542,7 @@ export function createKeychain(deps: {
       if (cred.kind === "broker") {
         throw new KeychainError(403, "broker credentials are used via the credential broker, never materialized");
       }
-      if (cred.managed === "connector") return materializeConnectorEnv(cred);
+      if (cred.managed === "connector") return materializeConnector(cred);
       if (credExpired(cred, now())) throw new KeychainError(410, "credential is expired");
       return materializeDecrypted(cred);
     },
@@ -1561,33 +1567,6 @@ export function createKeychain(deps: {
         .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);
-    },
-
-    async materializeStanding(scopeId) {
-      const out: MaterializedEnvCred[] = [];
-      for (const grant of await activeGrantsFor(scopeId)) {
-        if (grant.mode !== "standing") continue;
-        const cred = await deps.creds.get(grant.credentialId);
-        if (!cred || cred.kind !== "env" || isBackendCredential(cred)) continue;
-        if (cred.managed === "connector") {
-          const value = cred.host ? await connectorTokenForRecord(cred) : null;
-          if (value && cred.host) {
-            out.push({
-              credentialId: cred.id,
-              ownerId: cred.ownerId,
-              service: cred.service,
-              env: [{ key: envKey(cred.host), value }],
-              grantId: grant.id,
-              purpose: grant.purpose,
-            });
-          }
-          continue;
-        }
-        if (cred.managed || credExpired(cred, now())) continue;
-        const mat = tryDecrypt(cred, (c) => decryptToEnv(c, { grantId: grant.id, purpose: grant.purpose }));
-        if (mat) out.push(mat);
-      }
-      return out;
     },
   };
 }

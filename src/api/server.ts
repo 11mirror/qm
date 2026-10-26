@@ -1,4 +1,5 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
+import { CREDENTIAL_HTTP_BROKER_PREFIXES } from "./credential-http-broker.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
@@ -130,7 +131,7 @@ async function verifyCapability(
     !(
       capability.aud === "credential-broker" &&
       ((method === "POST" && pathname === "/v1/credentials/broker") ||
-        ((method === "GET" || method === "POST") && pathname.startsWith("/v1/credentials/git/")))
+        CREDENTIAL_HTTP_BROKER_PREFIXES.some((prefix) => pathname.startsWith(prefix)))
     )
   ) {
     sendJson(res, 403, { error: "forbidden", message: "This operation requires a private conversation." });

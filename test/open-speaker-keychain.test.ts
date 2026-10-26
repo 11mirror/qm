@@ -59,7 +59,12 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
   await assert.rejects(boxes.provisionOwnerAuth!(), /no longer authorized/);
   posture = "open";
   const command = boxes.ownerAuthCommand!("true");
-  assert.match(command, /unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN/);
+  assert.match(command, /^unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN; unset AGENT_CREDENTIAL_TOKEN /);
+  assert.doesNotMatch(
+    boxes.ownerAuthCommand!("true", { AGENT_CREDENTIAL_TOKEN: "selected" }),
+    /unset [^;]*AGENT_CREDENTIAL_TOKEN/,
+    "a selected broker credential survives into the owner command",
+  );
   assert.ok(!JSON.stringify(audits).includes("synthetic-secret"));
   await boxes.reclaimBox();
   assert.deepEqual(releases, [[handle, { destroy: true }]]);

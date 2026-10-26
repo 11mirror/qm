@@ -31,6 +31,16 @@ all compressed tokens have expired or been revoked. Sandbox tokens live 48 hours
 default (see below); other capability audiences may have longer lifetimes, so inventory those
 before rolling back. Leaving the updated verifiers in place is the safe rollback.
 
+## Credential broker tokens
+
+A command that selects shared org credentials or connected apps (`connector:<host>:<account>`,
+or a granted connected-app handle) gets one `AGENT_CREDENTIAL_TOKEN` covering exactly the
+brokered handles it selected. `credentials` lists org credential slugs; `connectors` lists
+each connected app's handle, host, owner, account type and, for another person's grant, the
+grant id. The OAuth token itself never enters the sandbox: `/v1/credentials/http/<host or
+handle>/<path>` looks up the owner's current token (refreshing it when due), rechecks a named
+grant, and streams the request to that host with `Authorization: Bearer` added.
+
 ## Sandbox token lifetime
 
 Turn tokens handed to sandboxes (agent API, credential broker, egress proxy, OAuth

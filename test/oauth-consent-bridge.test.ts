@@ -221,7 +221,7 @@ test("connecting from a channel never re-grants a previously private connector",
     const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(state)}`;
     assert.equal((await fetch(`${srv.base}${cb}`, { redirect: "manual" })).status, 302);
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
-    assert.equal((await srv.built.keychain!.materializeStanding("channel:C9")).length, 0);
+    assert.equal((await srv.built.keychain!.grantsForScope("channel:C9")).length, 0);
   } finally {
     await srv.close();
   }

@@ -73,6 +73,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
   const brokerEnvKeys = [
+    "AGENT_CREDENTIAL_TOKEN",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
@@ -93,7 +94,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           resource: "isolated owner execution",
           scopeLabel: scopeId,
         });
-      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(env)}${command}`;
+      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN; ${unsetBrokerEnv(env)}${command}`;
     };
   }
   const box: {

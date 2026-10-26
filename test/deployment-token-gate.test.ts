@@ -93,7 +93,7 @@ describe("a published app's broker token follows the app it was minted for, on e
         }),
       },
       brokerFetch: async () => ({ status: 200, text: async () => "{}" }),
-      gitHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
+      credentialHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
     } as unknown as Partial<ServerDeps>;
     server = createServer(app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),

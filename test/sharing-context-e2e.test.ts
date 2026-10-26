@@ -478,9 +478,9 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(prompt, /### U2 — no grant for this conversation\n(?:(?!###)[\s\S])*npm/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
-  const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
+  const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("AGENT_CREDENTIAL_TOKEN","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = "U1") =>
-    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), ownerAuth: true, credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
+    `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("AGENT_CREDENTIAL_TOKEN","unset")', `str(bool(os.getenv("AGENT_CREDENTIAL_TOKEN")) and "gmail_${id}" not in os.environ.values())`), ownerAuth: true, credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
   assert.equal(await b.turn(selected(), true), "True|True|file_U1|unset|isolated");
   assert.equal(await b.turn(selected("U2"), true, "U2"), "True|True|file_U2|unset|isolated");
   for (const id of ["U1", "U2", "U1"]) {

@@ -20,7 +20,7 @@ import {
   CREDENTIAL_BROKER_AUD,
 } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
-import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
+import type { CredentialHttpFetch } from "../src/api/credential-http-broker.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -65,7 +65,11 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function startGitBroker(credentialHttpFetch: CredentialHttpFetch): {
+  base: string;
+  built: BuiltApp;
+  close: () => Promise<void>;
+} {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
   );
@@ -77,7 +81,7 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Buil
     acl: built.acl,
     credentialUsage: built.credentialUsage,
     auditLog: built.auditLog,
-    gitHttpFetch,
+    credentialHttpFetch,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

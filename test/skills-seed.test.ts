@@ -244,8 +244,8 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     text: "!skill google-workspace",
   } as TurnRequest);
   assert.match(read.reply ?? "", /Google Workspace/);
-  assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
-  assert.match(read.reply ?? "", /Authorization: Bearer/);
+  assert.match(read.reply ?? "", /\/v1\/credentials\/http\/www\.googleapis\.com/);
+  assert.match(read.reply ?? "", /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
 
   const drive = await app.turn({
     surface: "test",

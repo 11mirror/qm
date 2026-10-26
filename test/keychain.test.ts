@@ -20,7 +20,6 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -284,9 +283,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
   });
   const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
   const conn = await k.materializeOwnById("U1", cid, "personal:U1");
-  assert.ok(
-    conn.kind === "env" && conn.env[0]!.key === envKey("gmail.googleapis.com") && conn.env[0]!.value === "ya29.own",
-  );
+  assert.ok(conn.kind === "connector" && conn.host === "gmail.googleapis.com" && conn.ownerId === "U1");
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
@@ -369,11 +366,9 @@ describe("connectors are grantable like any keychain record", () => {
       purpose: "check my signature emails",
     });
     const m = await materializeGrant(k, grant.id, G1, "carol@x");
-    assert.equal(m.kind, "env");
-    assert.equal(envKey(GMAIL), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM");
-    assert.deepEqual(m.kind === "env" ? m.env : null, [
-      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" },
-    ]);
+    assert.equal(m.kind, "connector");
+    assert.deepEqual(m.kind === "connector" ? [m.host, m.ownerId, m.grantId] : null, [GMAIL, "alex@x", grant.id]);
+    assert.ok(!JSON.stringify(m).includes("ya29.alex"), "the token itself never leaves the keychain");
     await assert.rejects(materializeGrant(k, grant.id, G1, "carol@x"), (e: KeychainError) => e.status === 410);
   });
 
@@ -390,9 +385,8 @@ describe("connectors are grantable like any keychain record", () => {
       purpose: "p",
     });
     const m = await materializeGrant(k, grant.id, G1, "carol@x");
-    assert.deepEqual(m.kind === "env" ? m.env : null, [
-      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.fresh" },
-    ]);
+    assert.equal(m.kind, "connector");
+    assert.equal(await k.connectorAccessToken(GMAIL, "alex@x"), "ya29.fresh");
 
     const k2 = kc();
     await k2.setConnectorToken(GMAIL, "bob@x", { accessToken: "ya29.stale", expiresAt: past });
@@ -421,10 +415,8 @@ describe("connectors are grantable like any keychain record", () => {
       mode: "standing",
       purpose: "p",
     });
-    const m = await materializeGrant(k, g.id, G1, "member@example.com");
-    assert.deepEqual(m.kind === "env" ? m.env : null, [
-      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.fresh" },
-    ]);
+    await materializeGrant(k, g.id, G1, "member@example.com");
+    assert.equal(await k.connectorAccessToken(GMAIL, "alex@x"), "ya29.fresh");
 
     const k2 = kcWithRefresh("ya29.fresh");
     await k2.setConnectorToken(GMAIL, "bob@x", {
@@ -439,38 +431,8 @@ describe("connectors are grantable like any keychain record", () => {
       mode: "standing",
       purpose: "p",
     });
-    const m2 = await materializeGrant(k2, g2.id, G1, "member@example.com");
-    assert.deepEqual(m2.kind === "env" ? m2.env : null, [
-      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.plenty" },
-    ]);
-  });
-
-  it("a standing connector grant auto-injects the host token; a once grant does not", async () => {
-    const k = kc();
-    await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-    await k.createGrant({
-      credentialId: await cidOf(k, "alex@x"),
-      ownerId: "alex@x",
-      audienceScopeId: G1,
-      mode: "standing",
-      purpose: "ongoing",
-    });
-    const injected = await k.materializeStanding(G1);
-    assert.deepEqual(
-      injected.map((m) => m.env),
-      [[{ key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" }]],
-    );
-
-    const k2 = kc();
-    await k2.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-    await k2.createGrant({
-      credentialId: await cidOf(k2, "alex@x"),
-      ownerId: "alex@x",
-      audienceScopeId: G1,
-      mode: "once",
-      purpose: "p",
-    });
-    assert.equal((await k2.materializeStanding(G1)).length, 0);
+    await materializeGrant(k2, g2.id, G1, "member@example.com");
+    assert.equal(await k2.connectorAccessToken(GMAIL, "bob@x"), "ya29.plenty");
   });
 
   it("the manifest lists a participant's connected apps with credential id and grant status", async () => {
@@ -503,14 +465,14 @@ test("standing grants are reusable, revocable, and die with the credential", asy
     purpose: "gh in this channel for qm PRs",
   });
 
-  assert.equal((await k.materializeStanding("channel:C1")).length, 1);
-  assert.equal((await k.materializeStanding("channel:C2")).length, 0);
+  assert.equal((await k.grantsForScope("channel:C1")).length, 1);
+  assert.equal((await k.grantsForScope("channel:C2")).length, 0);
   await materializeGrant(k, grant.id, "channel:C1", "U2");
   await materializeGrant(k, grant.id, "channel:C1", "U3");
 
   assert.equal(await k.revokeGrant("U2", grant.id), false, "only the owner can revoke");
   assert.equal(await k.revokeGrant("U1", grant.id), true);
-  assert.equal((await k.materializeStanding("channel:C1")).length, 0);
+  assert.equal((await k.grantsForScope("channel:C1")).length, 0);
   await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U2"), (e: KeychainError) => e.status === 410);
 
   const grant2 = await k.createGrant({
@@ -552,7 +514,7 @@ test("grantConnectorToScope opens a connector to a channel, is idempotent, and n
     purpose: "shared link",
   });
   assert.ok(g1 && g1.mode === "standing" && g1.ownerId === "alex@x");
-  assert.equal((await k.materializeStanding("channel:C1")).length, 1, "the channel can now use Alex's gmail");
+  assert.equal((await k.grantsForScope("channel:C1")).length, 1, "the channel can now use Alex's gmail");
 
   const g2 = await k.grantConnectorToScope({
     host: "gmail.googleapis.com",
@@ -661,11 +623,6 @@ test("standing file grants are not auto-injected, but remain re-fetchable by use
     purpose: "use my glab here",
   });
 
-  assert.deepEqual(
-    await k.materializeStanding("channel:C1"),
-    [],
-    "standing file grants are not injected into provision env",
-  );
   const first = await materializeGrant(k, grant.id, "channel:C1", "U2");
   const second = await materializeGrant(k, grant.id, "channel:C1", "U2");
   assert.equal(first.kind, "file");
@@ -1114,7 +1071,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
   });
 
-  it("a participant's granted connector is materialized under the host env var", async () => {
+  it("a participant's granted connector materializes as a broker reference, never the token", async () => {
     const GROUP = scopeId("group", "G_CONN");
     await built.keychain!.setConnectorToken("gmail.googleapis.com", "alex@conn", {
       accessToken: "ya29.alex",
@@ -1125,8 +1082,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
     const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
     assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
     const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
-    assert.equal(prepared.materialized.kind, "env");
-    if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
+    assert.equal(prepared.materialized.kind, "connector");
+    assert.ok(!JSON.stringify(prepared.materialized).includes("ya29.alex"));
   });
 
   it("normalizes keychain credential expiry seconds to milliseconds before storing", async () => {
@@ -1301,9 +1258,6 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   built.keychain.materializeOwn = async () => {
     throw new Error("eager owner materialization is forbidden");
   };
-  built.keychain.materializeStanding = async () => {
-    throw new Error("eager standing materialization is forbidden");
-  };
   const resolved: string[] = [];
   const materializeOwnById = built.keychain.materializeOwnById.bind(built.keychain);
   built.keychain.materializeOwnById = async (...args) => {
@@ -1450,7 +1404,6 @@ test("Composio keys remain backend-only across all materialization paths includi
       purpose: "apps",
     });
     assert.deepEqual(await k.materializeOwn("U1"), []);
-    assert.deepEqual(await k.materializeStanding("channel:C1"), []);
     await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U1"), /keys stay in the backend/);
     assert.equal(await k.composioKey("U1", c.id), "project-key");
@@ -1662,7 +1615,7 @@ test("manifest merges credential representations without conflating login identi
   assert.match(rendered, /`connector:gmail\.googleapis\.com:default`(?! \(execute scope)/);
   assert.match(rendered, /NEEDS RECONNECT/);
   assert.match(rendered, /token expires at/);
-  assert.ok(rendered.includes("token in `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`"));
+  assert.ok(rendered.includes("call `$AGENT_API_URL/v1/credentials/http/gmail.googleapis.com/<path>`"));
   assert.match(rendered, /account work, EXPIRED/);
   assert.match(rendered, /account personal, expires at/);
   assert.notEqual(credentialHandle(first), credentialHandle(second));

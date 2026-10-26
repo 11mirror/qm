@@ -5,7 +5,7 @@ Drafts and replies go out as multipart/alternative (the plain-text body plus a
 generated HTML mirror): Gmail shows text/plain-only mail to recipients at an
 altered, narrower width even though the sender's own view looks normal.
 
-Usage (token from $VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM):
+Usage (select the Gmail connected-app credential for the command; the broker adds its token):
   gmail.py search 'newer_than:7d is:unread' [--limit 10]
   gmail.py read MESSAGE_ID [--full]
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
@@ -33,18 +33,18 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses
 
-API = "https://gmail.googleapis.com/gmail/v1/users/me"
+API = os.environ.get("AGENT_API_URL", "").rstrip("/") + "/v1/credentials/http/gmail.googleapis.com/gmail/v1/users/me"
 
 
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
     url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
-    tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
+    tok = os.environ.get("AGENT_CREDENTIAL_TOKEN", "")
     if not tok:
-        sys.exit("no Gmail token: ask the user to connect Google")
+        sys.exit("no Gmail credential: select the Gmail connected-app credential for this command, or ask the user to connect Google")
     # curl, not urllib: the sandbox egress proxy is an https:// CONNECT proxy,
     # which python's urllib cannot tunnel through.
     cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
-           "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
+           "-H", f"x-agent-capability: {tok}", "-H", "Content-Type: application/json",
            "-w", "\n%{http_code}", url]
     if body is not None:
         cmd[1:1] = ["--data-binary", "@-"]

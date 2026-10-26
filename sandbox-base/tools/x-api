@@ -8,11 +8,11 @@ case "${1:-}" in
 esac
 
 org_token="${X_BEARER_TOKEN:-${X_ACCESS_TOKEN:-}}"
-user_token="${VAULT_TOKEN_API_X_COM:-}"
+user_token="${AGENT_CREDENTIAL_TOKEN:-}"
 
 case "$as" in
   org) token="$org_token" ;;
-  me|user) token="$user_token" ;;
+  me|user) token="$user_token"; [ -n "${AGENT_API_URL:-}" ] || token="" ;;
   *) echo "x-api: --as must be 'org' or 'me'" >&2; exit 2 ;;
 esac
 
@@ -21,7 +21,7 @@ if [ -z "$token" ]; then
     echo "x-api: no X auth available for --as=$as. Auth methods present:"
     [ -n "$org_token" ] && echo "  --as=org  org-level app token — broad reads, higher rate limits"
     [ -n "$user_token" ] && echo "  --as=me   your connected X account — acts as you (needed to post as yourself)"
-    [ -z "${org_token}${user_token}" ] && echo "  (none) — connect your X account in the web UI, or set resident X auth (X_BEARER_TOKEN / X_ACCESS_TOKEN)"
+    [ -z "${org_token}${user_token}" ] && echo "  (none) — select your connected X account (connector:api.x.com:…) for the command, connect it in the web UI, or set resident X auth (X_BEARER_TOKEN / X_ACCESS_TOKEN)"
   } >&2
   exit 2
 fi
@@ -34,4 +34,7 @@ fi
 path="${1#/}"
 shift
 
+if [ "$as" != "org" ]; then
+  exec curl -sS -H "x-agent-capability: ${token}" "${AGENT_API_URL%/}/v1/credentials/http/api.x.com/2/${path}" "$@"
+fi
 exec curl -sS -H "authorization: Bearer ${token}" "https://api.x.com/2/${path}" "$@"

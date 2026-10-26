@@ -490,6 +490,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "call a vended org credential's host BY PROXY — secret stays server-side (use $AGENT_CREDENTIAL_TOKEN)",
       },
+      {
+        method: "GET|POST|PUT|PATCH|DELETE",
+        path: "/v1/credentials/http/:credential/:path",
+        summary:
+          "stream one request to a selected connected app's host (name the host or handle) or org credential BY PROXY — the broker adds its auth (send $AGENT_CREDENTIAL_TOKEN as x-agent-capability)",
+      },
     ],
   },
   {
