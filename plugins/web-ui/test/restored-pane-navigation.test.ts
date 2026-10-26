@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
+import { twoPaneCanvas } from "./split-canvas-fixture.ts";
 
 test("a restored load cannot overwrite a newer open of the same session", async () => {
   const session: CoreSession = { ...SESSION, type: "dm", createdAt: 1, threadRef: "dm:sample" };
@@ -10,15 +11,9 @@ test("a restored load cannot overwrite a newer open of the same session", async 
   try {
     localStorage.setItem(
       "web-ui:split-canvas:v1",
-      JSON.stringify({
-        v: 1,
-        active: true,
-        root: {
-          kind: "split",
-          a: { kind: "leaf", sessionId: session.id, threadRef: session.threadRef },
-          b: { kind: "leaf", threadRef: "web:tester:other" },
-        },
-      }),
+      JSON.stringify(
+        twoPaneCanvas({ sessionId: session.id, threadRef: session.threadRef }, { threadRef: "web:tester:other" }),
+      ),
     );
     h.releaseSessions();
     await h.boot();
