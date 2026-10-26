@@ -146,6 +146,7 @@ export interface HarnessTurnInput {
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
+  onModelRequest?(): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;

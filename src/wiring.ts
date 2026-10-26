@@ -22,7 +22,7 @@ import {
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
@@ -1554,13 +1554,15 @@ export function buildApp(
         hydrateModelCatalog,
         input.runtimePurpose,
       );
-    const decision = await decide("turn_start", turnStartState(input), {
-      ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-      scopeLabel: input.scopeLabel,
-      sessionId: input.session.id,
-      ...(input.runId ? { runId: input.runId } : {}),
-      ...(input.cancel ? { cancel: input.cancel } : {}),
-    });
+    const decision = await tracePhase("turn.decision", () =>
+      decide("turn_start", turnStartState(input), {
+        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+        scopeLabel: input.scopeLabel,
+        sessionId: input.session.id,
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.cancel ? { cancel: input.cancel } : {}),
+      }),
+    );
     const routed = await routeTurnRuntime(decision, resolve, async () => {
       if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
         if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))

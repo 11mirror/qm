@@ -1671,6 +1671,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const prior = agent.onPayload;
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+          ref.onModelRequest?.();
           (ref.modelDispatch ??= []).push({
             start: Date.now(),
             ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
@@ -1881,6 +1882,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
+          entry.ref.onModelRequest = turn.onModelRequest;
           entry.ref.pendingPrepareNextTurn = undefined;
           entry.ref.pendingTransformContext = undefined;
           turn.recordModelCall({
@@ -2360,6 +2362,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await thinkTail;
             await drainCaptured();
             entry.ref.onGapWork = undefined;
+            entry.ref.onModelRequest = undefined;
             toolAbort.abort();
             entry.ref.abortSignal = undefined;
             entry.ref.screenToolResult = undefined;
