@@ -221,9 +221,9 @@ test("scope reads, scope writes and the auto flagger test relay to the per-scope
   assert.equal(JSON.parse(read.text).path, `/v1/admin/scopes/${scope}`);
   const exported = await call("GET", `/api/admin/scopes/${scope}/export?secrets=include`);
   assert.equal(pathOf(exported.hops[0]!), `GET /v1/admin/scopes/${scope}/export?secrets=include`);
-  const write = await call("PUT", `/api/admin/scopes/${scope}/security-posture`, { posture: "strict" });
-  assert.equal(pathOf(write.hops[0]!), `PUT /v1/admin/scopes/${scope}/security-posture`);
-  assert.deepEqual(JSON.parse(write.hops[0]!.body), { posture: "strict" });
+  const write = await call("PUT", `/api/admin/scopes/${scope}/approval-grant-modes`, { session: true, always: false });
+  assert.equal(pathOf(write.hops[0]!), `PUT /v1/admin/scopes/${scope}/approval-grant-modes`);
+  assert.deepEqual(JSON.parse(write.hops[0]!.body), { session: true, always: false });
   const flagger = await call("POST", `/api/admin/scopes/${scope}/auto-flagger/test`, { window: 25 });
   assert.equal(pathOf(flagger.hops[0]!), `POST /v1/admin/scopes/${scope}/auto-flagger/test`);
   assert.deepEqual(JSON.parse(flagger.hops[0]!.body), { window: 25 });

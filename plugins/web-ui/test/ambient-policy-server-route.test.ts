@@ -19,7 +19,12 @@ interface Call {
 }
 
 const calls: Call[] = [];
-const policy = { orders: "flag launches", bots: { "General Agent": { mode: "ignore" } }, updatedAt: 42 };
+const policy = {
+  instructions: "flag launches",
+  instructionsVersion: 2,
+  bots: { "General Agent": { mode: "ignore" } },
+  updatedAt: 42,
+};
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -61,13 +66,14 @@ test("GET pins the principal and scope onto the core policy read", async () => {
   assert.match(call.url, /scope=channel%3AC1/);
 });
 
-test("PUT relays orders, bots, and the conflict snapshot under the signed-in principal", async () => {
+test("PUT relays instructions, bots, and the conflict snapshot under the signed-in principal", async () => {
   const before = calls.length;
   const r = await fetch(`${base}/api/contexts/${encodeURIComponent("channel:C1")}/ambient-policy`, {
     method: "PUT",
     headers,
     body: JSON.stringify({
-      orders: "watch deploys",
+      instructions: "watch deploys",
+      instructionsVersion: 2,
       bots: { "General Agent": { mode: "rollup", rollupHours: 4 } },
       baseUpdatedAt: 42,
     }),
@@ -81,7 +87,8 @@ test("PUT relays orders, bots, and the conflict snapshot under the signed-in pri
   );
   assert.equal(call.body.principalId, "alice");
   assert.equal(call.body.scope, "channel:C1");
-  assert.equal(call.body.orders, "watch deploys");
+  assert.equal(call.body.instructions, "watch deploys");
+  assert.equal(call.body.instructionsVersion, 2);
   assert.deepEqual(call.body.bots, { "General Agent": { mode: "rollup", rollupHours: 4 } });
   assert.equal(call.body.baseUpdatedAt, 42);
 });

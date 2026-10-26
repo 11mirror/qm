@@ -59,7 +59,7 @@ test("saving branding merges the saved theme and reloads only when no other draf
     const admin = await mountAdmin("/settings/customize", {
       "/scopes/org:acme": {
         branding: { selfLabel: "Saved name", accent: "#111111", iconUrl: "https://example.com/icon.png" },
-        soul: "Original SOUL",
+        instructions: "Original instructions",
       },
       "PUT /scopes/org:acme/branding": ({ body }) => {
         saves.push(body);
@@ -74,9 +74,9 @@ test("saving branding merges the saved theme and reloads only when no other draf
     accent.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
     accent.dispatchEvent(new admin.window.Event("change", { bubbles: true }));
     if (otherDraft) {
-      const soul = admin.document.querySelector<HTMLTextAreaElement>("#card-instructions textarea")!;
-      soul.value = "Unsaved SOUL";
-      soul.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
+      const draft = admin.document.querySelector<HTMLTextAreaElement>("#card-instructions textarea")!;
+      draft.value = "Unsaved instructions";
+      draft.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
     }
     admin.document.querySelector<HTMLButtonElement>('[data-save="branding"]')!.click();
     await admin.settle();
@@ -87,12 +87,12 @@ test("saving branding merges the saved theme and reloads only when no other draf
     assert.equal(admin.document.querySelector<HTMLButtonElement>('[data-save="branding"]')!.disabled, true);
     assert.equal(
       admin.document.querySelector<HTMLTextAreaElement>("#card-instructions textarea")!.value,
-      otherDraft ? "Unsaved SOUL" : "Original SOUL",
+      otherDraft ? "Unsaved instructions" : "Original instructions",
     );
     assert.equal(
       admin.jsdomErrors.some((message) => /navigation/i.test(message)),
       !otherDraft,
-      otherDraft ? "kept the SOUL draft" : "reloaded",
+      otherDraft ? "kept the instructions draft" : "reloaded",
     );
     admin.close();
   }

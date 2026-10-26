@@ -421,7 +421,6 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
             origin.kind === "ambient" ? null : targetRun.request.actor.id,
             req.text,
           );
-          const injectedText = steerText;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
             deps.orchestrator.observeSecuritySteer({
@@ -439,7 +438,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
             ts: String(Date.now()),
-            text: injectedText,
+            text: steerText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
           };

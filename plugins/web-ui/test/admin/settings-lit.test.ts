@@ -110,18 +110,18 @@ test("feature flag picker offers every server feature and limits personal-only f
   }
 });
 
-test("SOUL conflict keeps draft while replacing saved revision and version", () => {
+test("instructions conflict keeps draft while replacing saved revision and version", () => {
   const dom = setup();
   try {
-    dom.window.eval('settingsUI.load({soul:"old",instructionsVersion:1},"org:test","soul")');
+    dom.window.eval('settingsUI.load({instructions:"old",instructionsVersion:1},"org:test","instructions")');
     dom.window.document.getElementById("instructions-edit")!.click();
-    const input = dom.window.document.getElementById("soul") as HTMLTextAreaElement;
+    const input = dom.window.document.getElementById("instructions") as HTMLTextAreaElement;
     input.value = "draft <img src=x>";
     input.dispatchEvent(new dom.window.Event("input"));
-    dom.window.eval('settingsUI.refreshInstructions({soul:"other",instructionsVersion:2})');
+    dom.window.eval('settingsUI.refreshInstructions({instructions:"other",instructionsVersion:2})');
     assert.equal(input.value, "draft <img src=x>");
     assert.equal(dom.window.document.getElementById("instructions-saved")!.textContent, "other");
-    assert.equal(dom.window.eval('settingsUI.collect("soul").expectedVersion'), 2);
+    assert.equal(dom.window.eval('settingsUI.collect("instructions").expectedVersion'), 2);
     assert.equal(dom.window.document.querySelector("#card-instructions img"), null);
   } finally {
     dom.window.close();
