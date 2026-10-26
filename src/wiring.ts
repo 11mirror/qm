@@ -540,14 +540,6 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
-  const reusedConnectorKey = [
-    ["CORE_SIGNING_SECRET", config.signingSecret],
-    ["CAPABILITY_SECRET", config.capabilitySecret],
-    ["PORTAL_IDENTITY_SECRET", config.portalIdentitySecret],
-  ].find(([, value]) => config.connectorSecretKey && config.connectorSecretKey === value)?.[0];
-  if (reusedConnectorKey) {
-    throw new Error(`CONNECTOR_SECRET_KEY must differ from ${reusedConnectorKey}`);
-  }
   mkdirSync(config.dataDir, { recursive: true });
 
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);

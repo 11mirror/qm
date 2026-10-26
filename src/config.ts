@@ -683,14 +683,6 @@ function modelProviderEnvStrict(env: Env): ModelProvider | undefined {
 }
 
 function resolveStoreKinds(env: Env): Pick<Config, "runStore"> {
-  for (const key of ["RUN_STORE", "ARTIFACT_STORE"] as const) {
-    if (env[key] === "sqlite") {
-      throw new Error(
-        `${key}=sqlite is no longer supported — SQLite was removed. ` +
-          `Set ${key === "ARTIFACT_STORE" ? "DATABASE_URL (Postgres)" : `${key}=postgres (with DATABASE_URL)`}.`,
-      );
-    }
-  }
   const runStore = env.RUN_STORE === "memory" ? "memory" : "postgres";
   if (env.NODE_ENV === "production" && runStore === "memory") {
     throw new Error(
@@ -698,6 +690,40 @@ function resolveStoreKinds(env: Env): Pick<Config, "runStore"> {
     );
   }
   return { runStore };
+}
+
+/** The signing secrets a surface could otherwise use to forge capabilities, portal identity or connector keys must differ. */
+function assertDistinctSecrets(secrets: {
+  signing?: string;
+  capability?: string;
+  portalIdentity?: string;
+  connector?: string;
+  enforcePortalIdentity: boolean;
+}): void {
+  if (secrets.enforcePortalIdentity) {
+    const shared = (name: string, value: string | undefined): string | null => {
+      if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
+      return value === secrets.signing ? `${name} must differ from CORE_SIGNING_SECRET` : null;
+    };
+    const problem =
+      shared("CAPABILITY_SECRET", secrets.capability) ??
+      shared("PORTAL_IDENTITY_SECRET", secrets.portalIdentity) ??
+      (secrets.capability === secrets.portalIdentity
+        ? "PORTAL_IDENTITY_SECRET must differ from CAPABILITY_SECRET"
+        : null);
+    if (problem)
+      throw new Error(
+        `signed portal identity is required but ${problem}. Provision distinct secrets or enforcement is bypassable.`,
+      );
+  }
+  const reusedConnectorKey = (
+    [
+      ["CORE_SIGNING_SECRET", secrets.signing],
+      ["CAPABILITY_SECRET", secrets.capability],
+      ["PORTAL_IDENTITY_SECRET", secrets.portalIdentity],
+    ] as const
+  ).find(([, value]) => secrets.connector && secrets.connector === value)?.[0];
+  if (reusedConnectorKey) throw new Error(`CONNECTOR_SECRET_KEY must differ from ${reusedConnectorKey}`);
 }
 
 function loadDeploymentConfig(env: Env): DeploymentConfig {
@@ -734,6 +760,13 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     });
     throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
+  assertDistinctSecrets({
+    signing: env.CORE_SIGNING_SECRET || undefined,
+    capability: (env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET) || undefined,
+    portalIdentity: (env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET) || undefined,
+    connector: env.CONNECTOR_SECRET_KEY || undefined,
+    enforcePortalIdentity: env.NODE_ENV === "production" || env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
+  });
   const modelProvider = modelProviderEnvStrict(env);
   const { runStore } = resolveStoreKinds(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");

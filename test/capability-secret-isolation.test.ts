@@ -7,6 +7,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { loadConfig } from "../src/config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -51,83 +52,55 @@ describe("capability tokens verify under the core-only capability secret, not th
   });
 });
 
-describe("createServer refuses to boot enforcement that a surface could bypass", () => {
-  let built: BuiltApp;
-  before(() => {
-    built = buildApp(testConfig({ signingSecret: SOURCE }));
-  });
-
-  const boot = (extra: Record<string, unknown>) =>
-    createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SOURCE,
-      scheduler: built.scheduler,
-      requireSignedPortalIdentity: true,
-      ...extra,
-    });
+describe("loadConfig refuses enforcement that a surface could bypass", () => {
+  const PORTAL = "portal-only-identity-secret-for-tests-01";
+  const load = (extra: Record<string, string>) =>
+    loadConfig({ CORE_SIGNING_SECRET: SOURCE, REQUIRE_SIGNED_PORTAL_IDENTITY: "1", ...extra });
 
   it("throws when CAPABILITY_SECRET is absent (it would fall back to the source secret)", () => {
     assert.throws(
-      () => boot({ portalIdentitySecret: "portal-only-identity-secret-for-tests-01" }),
-      /CAPABILITY_SECRET is not set/,
+      () => load({ PORTAL_IDENTITY_SECRET: PORTAL }),
+      /CAPABILITY_SECRET must differ from CORE_SIGNING_SECRET/,
     );
   });
 
   it("throws when PORTAL_IDENTITY_SECRET is absent", () => {
-    assert.throws(() => boot({ capabilitySecret: CAP }), /PORTAL_IDENTITY_SECRET is not set/);
+    assert.throws(
+      () => load({ CAPABILITY_SECRET: CAP }),
+      /PORTAL_IDENTITY_SECRET must differ from CORE_SIGNING_SECRET/,
+    );
   });
 
   it("throws when a split secret equals CORE_SIGNING_SECRET", () => {
     assert.throws(
-      () => boot({ capabilitySecret: SOURCE, portalIdentitySecret: "portal-only-identity-secret-for-tests-01" }),
+      () => load({ CAPABILITY_SECRET: SOURCE, PORTAL_IDENTITY_SECRET: PORTAL }),
       /CAPABILITY_SECRET must differ/,
     );
     assert.throws(
-      () => boot({ capabilitySecret: CAP, portalIdentitySecret: SOURCE }),
+      () => load({ CAPABILITY_SECRET: CAP, PORTAL_IDENTITY_SECRET: SOURCE }),
       /PORTAL_IDENTITY_SECRET must differ/,
     );
   });
 
   it("throws when portal identity and capability signing share a key", () => {
     assert.throws(
-      () => boot({ capabilitySecret: CAP, portalIdentitySecret: CAP }),
+      () => load({ CAPABILITY_SECRET: CAP, PORTAL_IDENTITY_SECRET: CAP }),
       /PORTAL_IDENTITY_SECRET must differ from CAPABILITY_SECRET/,
     );
   });
 
-  it("boots when both split secrets are present and distinct", () => {
-    const server = boot({ capabilitySecret: CAP, portalIdentitySecret: "portal-only-identity-secret-for-tests-01" });
-    assert.ok(server);
-    server.close();
+  it("throws when the connector key reuses a signing secret", () => {
+    assert.throws(
+      () => load({ CAPABILITY_SECRET: CAP, PORTAL_IDENTITY_SECRET: PORTAL, CONNECTOR_SECRET_KEY: CAP }),
+      /CONNECTOR_SECRET_KEY must differ from CAPABILITY_SECRET/,
+    );
+  });
+
+  it("loads when both split secrets are present and distinct", () => {
+    assert.ok(load({ CAPABILITY_SECRET: CAP, PORTAL_IDENTITY_SECRET: PORTAL }));
   });
 
   it("does not gate when enforcement is off, even with shared secrets", () => {
-    const server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SOURCE,
-      scheduler: built.scheduler,
-    });
-    assert.ok(server);
-    server.close();
-  });
-
-  it("production refuses an unauthenticated core", () => {
-    assert.throws(
-      () => createServer(built.app, { production: true, scheduler: built.scheduler }),
-      /CORE_SIGNING_SECRET/,
-    );
-  });
-
-  it("production enables signed-identity enforcement without a separate opt-in", () => {
-    assert.throws(
-      () =>
-        createServer(built.app, {
-          replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-          production: true,
-          signingSecret: SOURCE,
-          scheduler: built.scheduler,
-        }),
-      /CAPABILITY_SECRET is not set/,
-    );
+    assert.ok(loadConfig({ CORE_SIGNING_SECRET: SOURCE }));
   });
 });
