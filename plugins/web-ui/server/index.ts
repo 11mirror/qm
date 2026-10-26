@@ -1168,6 +1168,11 @@ const apiRoutes: readonly WebRoute[] = [
 
   {
     method: "GET",
+    path: "/api/tool-manifest",
+    handle: async (c) => relayCore(c.res, "GET", `/v1/tool-manifest?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "GET",
     path: "/api/user-model-auth/status",
     handle: async (c) =>
       relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),

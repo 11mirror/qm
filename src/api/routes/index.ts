@@ -42,6 +42,7 @@ import { inboxRoutes } from "./inbox.ts";
 import { cronItemRoutes } from "./cron-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
+import { toolManifestRoutes } from "./tool-manifest.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
@@ -120,4 +121,5 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...egressAuditRoutes,
   ...authBrokerRoutes,
   ...userModelAuthRoutes,
+  ...toolManifestRoutes,
 ];
