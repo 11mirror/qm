@@ -536,3 +536,26 @@ test("explicit live reads reject truncated threads instead of returning an unusa
   };
   await assert.rejects(read(client, "C1", "1.0", undefined, false, true), /thread exceeds the history limit/);
 });
+
+test("a room over the member cap lists recent authors first and says how many were left out", async () => {
+  const { cache, readHistory, client } = fixture();
+  await cache.ingest([{ container: "C1", ts: "1000.000001", text: "late joiner speaks", authorId: "U44" }]);
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => false,
+    readHistory,
+  });
+  const audience = Array.from({ length: 45 }, (_, i) => ({ externalId: `U${i}`, displayName: `Member${i}` }));
+  const result = await serializer.serializeSlackConversation(
+    client,
+    { kind: "channel", channel: "C1", ts: "1000.000002", rawText: "trigger", userId: "U0", files: [] },
+    { audience },
+  );
+  const { header } = renderConversationView(result.view);
+  assert.match(
+    header,
+    /People here: @Member0 \(<@U0>\), @Member44 \(<@U44>\), [^\n]*@Member38 \(<@U38>\), and 5 others\./,
+  );
+  assert.doesNotMatch(header, /@Member39\b/);
+});
