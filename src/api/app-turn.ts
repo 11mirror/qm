@@ -199,9 +199,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
           if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
         }
         if (!individualAuth) {
-          const providers = deps.modelCredentials
-            ? await deps.modelCredentials.availability()
-            : (deps.providerKeys ?? deps.modelProviders);
+          const providers = deps.modelCredentials ? await deps.modelCredentials.availability() : deps.providerKeys;
           let orgRuntime;
           let runtime;
           try {

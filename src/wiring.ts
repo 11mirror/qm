@@ -35,6 +35,7 @@ import {
   sessionTreeRunCount,
   sessionTreeWorking,
   stoppableAncestors,
+  SUBAGENT_THREAD_PREFIX,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
@@ -103,6 +104,7 @@ import type {
   ScopeId,
   Session,
   SurfaceContextRequest,
+  TurnRequest,
   Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
@@ -707,13 +709,16 @@ export function buildApp(
         ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
       })
     : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const fileBytes: DurableByteStore = config.s3Bucket
-    ? createS3DurableByteStore({
-        bucket: config.s3Bucket,
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-      })
-    : createLocalDurableByteStore(join(config.dataDir, "docstore"));
+  const s3Bytes = (bucket: string, prefix: string): DurableByteStore =>
+    createS3DurableByteStore({
+      bucket,
+      ...(config.s3Region ? { region: config.s3Region } : {}),
+      prefix: `${config.s3Prefix ?? ""}${prefix}`,
+    });
+  // S3 under `prefix` when a bucket is configured, else local disk under dataDir/localDir.
+  const byteStore = (prefix: string, localDir: string): DurableByteStore =>
+    config.s3Bucket ? s3Bytes(config.s3Bucket, prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
+  const fileBytes = byteStore("", "docstore");
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
   const fileUploads = config.s3Bucket
     ? createDirectFileUploads({
@@ -1099,14 +1104,7 @@ export function buildApp(
   memorySessions.store = sessions;
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
-    bytesFor: (prefix) =>
-      config.s3Bucket
-        ? createS3DurableByteStore({
-            bucket: config.s3Bucket,
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            prefix: `${config.s3Prefix ?? ""}${prefix}`,
-          })
-        : createLocalDurableByteStore(join(config.dataDir, prefix)),
+    bytesFor: (prefix) => byteStore(prefix, prefix),
   });
   const runStoreKind = config.runStore;
   const runSignals: RunSignalStore =
@@ -1424,15 +1422,7 @@ export function buildApp(
     git: {
       repoRoot: config.deployGitDir,
       archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
-      ...(config.s3Bucket
-        ? {
-            archiveBytes: createS3DurableByteStore({
-              bucket: config.s3Bucket,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              prefix: `${config.s3Prefix ?? ""}deploy-git/`,
-            }),
-          }
-        : {}),
+      ...(config.s3Bucket ? { archiveBytes: s3Bytes(config.s3Bucket, "deploy-git/") } : {}),
     },
   });
   const buildAwsDeploy = (): DeployProvider =>
@@ -1615,7 +1605,7 @@ export function buildApp(
         cronOwnerCache.set(event.cronId, owner);
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
-    })().catch(() => {});
+    })().catch(swallowAs("inbox: publish ledger event", undefined));
   };
   const inboxItems = createInboxLedger(artifactMap<InboxItem>("cron_items", ["cronId"]), publishInboxEvent);
   const recordInboxEvent: InboxEventSink = async (item, event) => {
@@ -2002,7 +1992,9 @@ export function buildApp(
           signal,
           recordModelCall: (rec) => {
             modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
+            void budget
+              ?.record(actorId, estimateCostUsd(rec.inputTokens))
+              .catch(swallowAs("budget: record screen spend", undefined));
           },
         })
     : undefined;
@@ -2081,7 +2073,6 @@ export function buildApp(
     judgeModelId,
     runtimeFallback: fallback,
     providerKeys,
-    modelProviders: providerKeys,
     runWaitMs: config.runWaitMs,
     inlineTurns: config.roles.includes("harness"),
   });
@@ -2188,7 +2179,7 @@ export function buildApp(
         throw error;
       });
   runs.onTerminal((run) => {
-    if (run.sessionId.startsWith("agent:main:subagent:"))
+    if (run.sessionId.startsWith(SUBAGENT_THREAD_PREFIX))
       void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });
   const sweepSessionReturns = async () => {
@@ -2281,18 +2272,20 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
+  const triggerDeps = {
+    outbound,
+    idempotency,
+    identity,
+    run: (req: TurnRequest) => app.turn(req),
+    directory,
+    resolveRecipient,
+  };
+  const scopedTriggerDeps = { ...triggerDeps, currentScopeMembers, sessions };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
           {
-            outbound,
-            idempotency,
-            identity,
-            run: (req) => app.turn(req),
-            directory,
-            currentScopeMembers,
-            sessions,
-            resolveRecipient,
+            ...scopedTriggerDeps,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
             getGrant: (id) => keychain.getGrant(id),
@@ -2301,29 +2294,14 @@ export function buildApp(
           grant,
         )
     : undefined;
-  const dropResolution = keychain
-    ? (drop: DropResolution) =>
-        fireDropResolution(
-          { outbound, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
-          drop,
-        )
-    : undefined;
+  const dropResolution = keychain ? (drop: DropResolution) => fireDropResolution(triggerDeps, drop) : undefined;
   const inbox: InboxServiceDeps = {
     lock: advisoryLock,
     items: inboxItems,
     record: recordInboxEvent,
     chat: createInboxChat({
       items: inboxItems,
-      trigger: {
-        outbound,
-        idempotency,
-        identity,
-        run: (req) => app.turn(req),
-        directory,
-        currentScopeMembers,
-        sessions,
-        resolveRecipient,
-      },
+      trigger: scopedTriggerDeps,
     }),
   };
   const sweepAsks =
@@ -2343,15 +2321,8 @@ export function buildApp(
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
-    outbound,
-    idempotency,
-    identity,
-    run: (req) => app.turn(req),
+    ...scopedTriggerDeps,
     leaderLease,
-    directory,
-    currentScopeMembers,
-    sessions,
-    resolveRecipient,
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
     ...(sweepAsks ? { sweepAsks } : {}),
   });
@@ -2403,14 +2374,7 @@ export function buildApp(
           monitors,
           processes,
           sandbox,
-          outbound,
-          idempotency,
-          identity,
-          run: (req) => app.turn(req),
-          directory,
-          currentScopeMembers,
-          sessions,
-          resolveRecipient,
+          ...scopedTriggerDeps,
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
@@ -2424,13 +2388,8 @@ export function buildApp(
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
-    outbound,
-    idempotency,
-    identity,
-    run: (req) => app.turn(req),
-    directory,
+    ...triggerDeps,
     currentScopeMembers,
-    resolveRecipient,
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
@@ -2822,13 +2781,7 @@ export function buildApp(
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
     sessionShares: artifactMap<SessionShare>("session_shares"),
-    sessionShareBytes: config.s3Bucket
-      ? createS3DurableByteStore({
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          prefix: `${config.s3Prefix ?? ""}session-shares/`,
-        })
-      : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
+    sessionShareBytes: byteStore("session-shares/", "session-shares"),
     skillSyncEngine,
     slackCore,
     chatSurfaces,
@@ -2867,7 +2820,6 @@ export function serverDeps(
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
-    modelProviders: providerKeysPresent(config),
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
