@@ -67,4 +67,7 @@ test("the portal cron PATCH applies edits through the same path as the agent's p
   const session = await patch({ session: true });
   assert.equal(session.status, 400, "the portal has no live conversation to tie the cron to");
   assert.equal((await patch({})).status, 400);
+  const typed = await patch({ title: 5 });
+  assert.equal(typed.status, 400, "the route's body schema refuses a mistyped field before the handler runs");
+  assert.match((typed.body as { message?: string }).message ?? "", /^body\.title: /);
 });
