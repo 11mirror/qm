@@ -30,6 +30,7 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
+import { SoulTooLargeError } from "../resolution/config-store.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -268,7 +269,7 @@ function typedFailure(err: unknown): HttpError | null {
   if (err instanceof MemoryDisclosureDenied) return as(403, "forbidden");
   if (err instanceof KeychainError) return as(err.status, "keychain");
   if (err instanceof BackgroundOwnershipConflict) return as(409, "background_ownership_conflict");
-  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError)
+  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError || err instanceof SoulTooLargeError)
     return as(413, "payload_too_large");
   return null;
 }

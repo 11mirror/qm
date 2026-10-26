@@ -29,6 +29,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+import { SoulTooLargeError } from "../resolution/config-store.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -154,7 +155,8 @@ export interface ControlService {
     claims: CapabilityClaims,
     expectedVersion?: number,
   ): Promise<
-    ControlOk<{ version: number }> | ControlErr<"soul_update_denied" | "soul_version_conflict" | "soul_update_failed">
+    | ControlOk<{ version: number }>
+    | ControlErr<"soul_update_denied" | "soul_version_conflict" | "payload_too_large" | "soul_update_failed">
   >;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -609,6 +611,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         if (e instanceof SoulUpdateDeniedError) return fail("soul_update_denied", errMessage(e));
         if (e instanceof SoulVersionConflictError) return fail("soul_version_conflict", errMessage(e));
+        if (e instanceof SoulTooLargeError) return fail("payload_too_large", e.message);
         return fail("soul_update_failed", errMessage(e));
       }
     },

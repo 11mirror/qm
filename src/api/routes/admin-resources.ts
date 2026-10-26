@@ -149,8 +149,6 @@ const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { o
 const trimmedList = (value: unknown): string[] | undefined =>
   Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : undefined;
 
-const MAX_SOUL_CHARS = 100_000;
-
 function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
@@ -312,7 +310,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, actor, scope) => {
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
       if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
-      if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
       if (body.expectedVersion === undefined) {
         await ctx.deps.config.setSoul(scope, body.content, actor.id);
         return { ok: true };

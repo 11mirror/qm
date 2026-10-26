@@ -27,6 +27,7 @@ import { isConfigured, withActor, type ApiCtx, type Route } from "./route.ts";
 import type { ItemKind } from "../../sessions/items.ts";
 import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 import { tenant } from "../../tenant.ts";
+import { SoulTooLargeError } from "../../resolution/config-store.ts";
 
 const SYSTEM_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "ContextCompaction",
@@ -931,6 +932,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)
       return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    if (e instanceof SoulTooLargeError) return sendJson(res, 413, { error: "payload_too_large", message: e.message });
     return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }
