@@ -959,7 +959,6 @@ export function createSessionMethods(
       return isOpenScopeMember({
         actorId: principalId,
         scope,
-        config: deps.config,
         isCurrentSharedScopeMember: principalCanWriteScope,
       });
     },

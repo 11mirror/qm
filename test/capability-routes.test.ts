@@ -228,16 +228,6 @@ describe("capability-token control plane (SOUL)", () => {
     assert.notEqual(ok.status, 403);
   });
 
-  it("Strict capabilities can observe but cannot directly mutate the control plane", async () => {
-    const scope = scopeId("personal", "U-strict");
-    await built.config.setSecurityPosture(scope, "strict");
-    const token = await capFor("U-strict", scope);
-    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
-    const update = await post("/v1/soul", { soul: "must not apply" }, { "x-agent-capability": token });
-    assert.equal(update.status, 403);
-    assert.match(((await update.json()) as { message: string }).message, /direct control-plane mutations/i);
-  });
-
   it("a public channel remains available to an active internal principal outside its current roster", async () => {
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: false }],

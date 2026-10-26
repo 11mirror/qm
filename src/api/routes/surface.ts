@@ -655,7 +655,6 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
     nativeScopes: [viewerScope],
     audience: [actor],
     open: true,
-    config: deps.config,
     isCurrentSharedScopeMember: (person, target) => ctx.app.isCurrentSharedScopeMember(person, target),
     currentScopeMembers: (target) => ctx.app.currentScopeMembers(target),
   });
@@ -1195,7 +1194,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
     { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
     { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
-    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", allowedInStrict: true, handle: restoreSkill },
+    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
   ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },

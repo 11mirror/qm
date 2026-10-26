@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
-import type { SecurityScreenVerdict } from "./security-posture.ts";
+import type { SecurityScreenVerdict } from "./security-screen.ts";
 import { swallow } from "../util/errors.ts";
 import { retryAfterMs } from "../util/async.ts";
 

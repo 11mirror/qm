@@ -834,7 +834,7 @@ test("reverse race: a sanitized mention follows its fresh run after the ambient 
 });
 
 test("screening off delivers ambient updates to the existing run without a classifier", async () => {
-  const built = buildApp(testConfig({ securityScreen: "off" }));
+  const built = buildApp(testConfig({}));
   const first = await built.app.turn(mention("start work", "C-off", "100.1"));
   const follow = await built.app.turn(overheard("build finished", "C-off", "100.1"));
   assert.equal(follow.runId, first.runId);

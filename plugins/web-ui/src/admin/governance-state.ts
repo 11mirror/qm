@@ -3,8 +3,6 @@ export type Rule = { id: number; pattern: string; decision: string; reason: stri
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
 const fieldNames: Record<string, Record<string, string>> = {
-  "security-posture": { "security-posture": "posture" },
-  "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
   "auto-flagger": {
     "auto-flagger-model": "modelId",
@@ -181,8 +179,6 @@ export const states = new Map(Object.keys(fieldNames).map((key) => [key, new Gov
 export const { owns, collect, capture, commit, status } = settingRegistry(states);
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
-    "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
-    "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
     "auto-flagger": [
       scope.startsWith("org:") && "autoFlagger" in data,
       data.autoFlagger || data.autoFlaggerDefault || {},

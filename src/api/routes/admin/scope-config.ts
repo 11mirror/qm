@@ -241,8 +241,6 @@ const SETTINGS_RESOURCES = {
   governance: [
     "baseModel",
     "runtime",
-    "securityPosture",
-    "sharingPosture",
     "autoFlagger",
     "approvalGrantModes",
     "commandPolicy",
@@ -418,29 +416,21 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const resources = ADMIN_RESOURCES.filter(
     (r) => r.readKey && r.get && (!selectedKeys || selectedKeys.includes(r.readKey)),
   );
-  const [
-    entries,
-    environmentMetadata,
-    serviceCredentials,
-    directoryMembers,
-    directoryChannels,
-    sharingPostureOverride,
-    egress,
-  ] = await Promise.all([
-    Promise.all(
-      resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
-    ),
-    view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
-    includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
-    includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("people", () => deps.directory?.list())
-      : undefined,
-    includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("channels", () => deps.directory?.listChannels?.())
-      : undefined,
-    includes("governance") ? deps.config.getSharingPostureOwnDurable(targetScope) : undefined,
-    includes("governance") ? scopeEgress(deps, targetScope) : undefined,
-  ]);
+  const [entries, environmentMetadata, serviceCredentials, directoryMembers, directoryChannels, egress] =
+    await Promise.all([
+      Promise.all(
+        resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
+      ),
+      view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
+      includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
+      includes("credentials") && parseScopeId(targetScope).kind === "org"
+        ? read("people", () => deps.directory?.list())
+        : undefined,
+      includes("credentials") && parseScopeId(targetScope).kind === "org"
+        ? read("channels", () => deps.directory?.listChannels?.())
+        : undefined,
+      includes("governance") ? scopeEgress(deps, targetScope) : undefined,
+    ]);
   const values = Object.fromEntries(entries);
   const modelOptions = needsModels
     ? await read("modelOptions", () =>
@@ -469,7 +459,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     ...(includes("credentials")
       ? { serviceCredentials, directoryMembers: directoryMembers ?? [], directoryChannels: directoryChannels ?? [] }
       : {}),
-    ...(includes("governance") ? { sharingPostureOverride, ...egress } : {}),
+    ...(includes("governance") ? egress : {}),
     ...modelOptions,
   });
 }

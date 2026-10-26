@@ -14,7 +14,6 @@ const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };
 function fixture() {
   let revoked = false;
-  let isolated = false;
   const notebooks = new Map<string, MemoryFact[]>();
   const access: MemoryDisclosure = {
     actor,
@@ -22,10 +21,6 @@ function fixture() {
     nativeScopes: ["group:room", "org:test"],
     audience: [actor, bob],
     open: true,
-    config: {
-      resolveSharingPostureDurable: async (_personal, source) =>
-        isolated && source === "group:source" ? "isolated" : "open",
-    },
     isCurrentSharedScopeMember: async (id, source) => !revoked && id === "alice" && source === "group:source",
   };
   access.currentScopeMembers = async () => [...access.audience];
@@ -67,9 +62,6 @@ function fixture() {
     revoke: () => {
       revoked = true;
     },
-    isolate: () => {
-      isolated = true;
-    },
   };
 }
 
@@ -93,8 +85,6 @@ test("copying a private fact to a readable notebook does not make its audience e
   assert.deepEqual(await view.query("group:room", "PRIVATE_SENTINEL"), []);
   f.access.audience = [actor];
   assert.match(await view.read("group:room"), /PRIVATE_SENTINEL/);
-  f.isolate();
-  assert.equal(await view.read("group:room"), "");
 });
 
 test("private owner reads recheck original membership for copied sensitive facts", async () => {
@@ -137,12 +127,9 @@ test("empty audience and authorization lookup failures fail closed", async () =>
   f.put("personal:alice", "ORDINARY_SENTINEL", "ordinary");
   for (const patch of [
     { audience: [], currentScopeMembers: async () => [] },
-    { config: undefined },
     {
-      config: {
-        resolveSharingPostureDurable: async () => {
-          throw Error("unavailable");
-        },
+      isCurrentSharedScopeMember: async () => {
+        throw Error("unavailable");
       },
     },
   ]) {
@@ -254,23 +241,6 @@ test("each routed provider is filtered independently and a failure does not invo
   assert.doesNotMatch(recallText(await view.recall("personal:alice")), /PRIVATE_SENTINEL/);
   await view.capture("personal:alice", ["new fact"], 1);
   assert.equal(captures, 1);
-});
-
-test("source decisions are shared within one read but never cached across reads", async () => {
-  const f = fixture();
-  let checks = 0;
-  f.access.config = {
-    resolveSharingPostureDurable: async () => {
-      checks++;
-      return "open";
-    },
-  };
-  for (let i = 0; i < 100; i++) f.put("personal:alice", `ORDINARY_${i}`, "ordinary");
-  const view = disclosedMemory(f.raw, f.access);
-  assert.match(await view.read("personal:alice"), /ORDINARY_99/);
-  assert.equal(checks, 2);
-  await view.read("personal:alice");
-  assert.equal(checks, 4);
 });
 
 test("complete memory audience rejects external or unresolved members rather than dropping them", async () => {

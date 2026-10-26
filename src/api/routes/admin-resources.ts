@@ -37,16 +37,10 @@ import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
-import {
-  DEFAULT_SECURITY_SCREEN_RUBRIC,
-  parseSecurityPosture,
-  SECURITY_POSTURES,
-  type SecurityPosture,
-} from "../../security/security-posture.ts";
+import { DEFAULT_SECURITY_SCREEN_RUBRIC } from "../../security/security-screen.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
-import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { tenant } from "../../tenant.ts";
 
 export interface AutoFlaggerDraft {
@@ -143,52 +137,12 @@ function channelContainer(scope: string): string | undefined {
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
-    id: "security-posture",
-    kind: "enum",
-    target: "any",
-    label: "Harness security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
-    readKey: "securityPosture",
-    enumValues: SECURITY_POSTURES,
-    get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),
-    apply: generic<SecurityPosture>(
-      (body) => {
-        const posture = parseSecurityPosture((body as { posture?: unknown }).posture);
-        return posture
-          ? { value: posture }
-          : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
-      },
-      (deps, scope, posture) => deps.config!.setSecurityPosture(scope, posture),
-    ),
-  },
-  {
-    id: "sharing-posture",
-    kind: "enum",
-    target: "any",
-    label:
-      "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
-    readKey: "sharingPosture",
-    enumValues: SHARING_POSTURES,
-    get: (deps, scope) => deps.config!.getSharingPostureDurable(scope),
-    apply: generic<SharingPosture | null>(
-      (body) => {
-        if ((body as { inherit?: unknown }).inherit === true) return { value: null };
-        const posture = parseSharingPosture((body as { posture?: unknown }).posture);
-        return posture
-          ? { value: posture }
-          : { error: `sharing-posture requires { posture: ${SHARING_POSTURES.join(" | ")} }` };
-      },
-      (deps, scope, posture) =>
-        posture === null ? deps.config!.clearSharingPosture(scope) : deps.config!.setSharingPosture(scope, posture),
-    ),
-  },
-  {
     id: "auto-flagger",
     refreshesModels: true,
     kind: "custom",
     target: "org",
     clearable: true,
-    label:
-      "The model and classification rubric used to screen external content when the deployment enables model screening.",
+    label: "The model and classification rubric used to screen external content.",
     readKey: "autoFlagger",
     get: (deps) => deps.config!.getAutoFlaggerConfig(),
     apply: async (ctx, _actor, scope) => {

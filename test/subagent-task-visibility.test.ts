@@ -75,7 +75,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
 
 test("human-origin delegated input is screened before model execution", async (t) => {
   const screened: string[] = [];
-  const built = buildApp(testConfig({ memoryCapture: "off", securityPosture: "strict" }), {
+  const built = buildApp(testConfig({ memoryCapture: "off" }), {
     securityScreener: {
       provider: "test-screen",
       async classify(input) {

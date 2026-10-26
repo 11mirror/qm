@@ -258,8 +258,6 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                               (cfg.commandPolicy.mode || "denylist")
                             : "default",
                         ],
-                        ["Security posture", cfg.securityPosture || "auto"],
-                        ["Sharing posture", cfg.sharingPosture || "isolated"],
                         ["Egress overrides", allowN || denyN ? allowN + " allow · " + denyN + " deny" : "none"],
                         ["Base model", cfg.baseModel || "org default"],
                         ["Connectors linked", String((cfg.connectors || []).length)],

@@ -18,8 +18,6 @@ const TABLES = [
   "soul_configs",
   "soul_history",
   "command_policies",
-  "security_postures",
-  "sharing_postures",
   "egress_policies",
   "deploy_auth_split",
   "publish_member_grants",
@@ -263,9 +261,6 @@ test(
     const a = testConfigStore("default-org", m);
     const version = await a.setSoul(ch, "a channel-specific soul");
     await a.setCommandPolicy(ch, policy);
-    await a.setSecurityPosture(ch, "strict");
-    await a.setSharingPosture(org, "open");
-    await a.setSharingPosture(ch, "open");
     await a.setApprovalGrantModes(ch, { session: false, always: true });
     await a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
     await a.setBaseModel(ch, "claude-opus-4-8");
@@ -275,8 +270,6 @@ test(
       async () =>
         (await m.souls.get(ch))?.version === version &&
         !!(await m.commandPolicies.get(ch)) &&
-        (await m.securityPostures.get(ch))?.posture === "strict" &&
-        (await m.sharingPostures.get(ch))?.posture === "open" &&
         (await m.approvalGrantModes.get(ch))?.modes.session === false &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
         (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
@@ -292,8 +285,6 @@ test(
     assert.equal(b.soulVersion(ch), version, "the soul version round-trips (monotonic across restart)");
     assert.equal(b.soulHistory(ch)[0]?.content, "a channel-specific soul", "the revision history survives a restart");
     assert.deepEqual(b.getCommandPolicy(ch), policy, "the command policy survived");
-    assert.equal(await b.getSecurityPostureDurable(ch), "strict", "the security posture survived");
-    assert.equal(await b.resolveSharingPostureDurable(scopeId("personal", "U1"), ch), "open");
     assert.deepEqual(
       b.getEgress(ch),
       { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },

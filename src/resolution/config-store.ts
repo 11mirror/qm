@@ -5,12 +5,6 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import {
-  composeSecurityPosture,
-  DEFAULT_SECURITY_POSTURE,
-  type SecurityPosture,
-} from "../security/security-posture.ts";
-import { composeSharingPostures, DEFAULT_SHARING_POSTURE, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import {
   deriveConnectorKey,
@@ -42,8 +36,6 @@ export interface PersistedSoulRevision {
 }
 type SoulSnapshot = PersistedSoul | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
-export type PersistedSecurityPosture = ScopedRow<"posture", SecurityPosture>;
-export type PersistedSharingPosture = ScopedRow<"posture", SharingPosture>;
 export type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
 export type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
 export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
@@ -99,8 +91,6 @@ export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
 interface ScopeConfigPresence {
   soul: boolean;
   commandPolicy: boolean;
-  securityPosture: boolean;
-  sharingPosture: boolean;
   approvalGrantModes: boolean;
   egress: boolean;
   unfulfilledInsights: boolean;
@@ -124,15 +114,6 @@ export interface ScopedConfigStore {
   restoreSoulCacheSnapshot(id: ScopeId, snapshot: SoulSnapshot): void;
   getCommandPolicy(id: ScopeId): CommandPolicy | null;
   setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
-  getSecurityPosture(id: ScopeId): SecurityPosture;
-  getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
-  setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
-  getSharingPosture(id: ScopeId): SharingPosture;
-  getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
-  getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
-  resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture>;
-  setSharingPosture(id: ScopeId, posture: SharingPosture): Promise<void>;
-  clearSharingPosture(id: ScopeId): Promise<void>;
   getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
@@ -206,8 +187,6 @@ export interface ConfigStoreMaps {
   souls?: DurableMap<PersistedSoul>;
   soulHistory?: DurableMap<PersistedSoulRevision>;
   commandPolicies?: DurableMap<ScopedRow<"policy", CommandPolicy>>;
-  securityPostures?: DurableMap<PersistedSecurityPosture>;
-  sharingPostures?: DurableMap<PersistedSharingPosture>;
   approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
   egressPolicies?: DurableMap<PersistedEgressPolicy>;
   unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
@@ -232,8 +211,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   souls: "soul_configs",
   soulHistory: "soul_history",
   commandPolicies: "command_policies",
-  securityPostures: "security_postures",
-  sharingPostures: "sharing_postures",
   approvalGrantModes: "approval_grant_modes",
   egressPolicies: "egress_policies",
   unfulfilledInsights: "unfulfilled_insights_flag",
@@ -262,8 +239,6 @@ export function createConfigStore(
   orgId: string,
   opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
-    defaultSecurityPosture?: SecurityPosture;
-    defaultSharingPosture?: SharingPosture;
   },
 ): ScopedConfigStore {
   const souls = new Map<ScopeId, { content: string; version: number }>();
@@ -327,8 +302,6 @@ export function createConfigStore(
     );
   const settings = {
     commandPolicies: field("commandPolicies", "policy"),
-    securityPostures: field("securityPostures", "posture"),
-    sharingPostures: field("sharingPostures", "posture"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
     unfulfilledInsights: field("unfulfilledInsights", "on"),
@@ -433,8 +406,6 @@ export function createConfigStore(
       cacheBaseModel(org, saved);
     });
   };
-  const defaultSecurityPosture = opts.defaultSecurityPosture ?? DEFAULT_SECURITY_POSTURE;
-  const defaultSharingPosture = opts.defaultSharingPosture ?? DEFAULT_SHARING_POSTURE;
   const orgDefaultPolicy = defaultOrgPolicy();
   const orgDefaultEgress: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
   const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };
@@ -497,7 +468,6 @@ export function createConfigStore(
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
-          settings.sharingPostures.reload(id),
         ]),
       );
     },
@@ -633,42 +603,6 @@ export function createConfigStore(
     },
     getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
-    getSecurityPosture(id) {
-      const orgPosture = settings.securityPostures.get(org) ?? defaultSecurityPosture;
-      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPostures.get(id));
-    },
-    async getSecurityPostureDurable(id) {
-      const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
-      if (id === org) return orgPosture;
-      return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
-    },
-    async setSecurityPosture(id, posture) {
-      const effective =
-        id === org
-          ? posture
-          : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
-      await settings.securityPostures.set(id, effective);
-    },
-    getSharingPosture(id) {
-      const orgPosture = settings.sharingPostures.get(org) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPostures.get(id)]);
-    },
-    async getSharingPostureDurable(id) {
-      const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
-    },
-    getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
-    async resolveSharingPostureDurable(personalId, targetId) {
-      const [orgPosture, personalPosture, targetPosture] = await Promise.all(
-        [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
-      );
-      return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
-        personalId === org ? undefined : personalPosture,
-        targetId === org || targetId === personalId ? undefined : targetPosture,
-      ]);
-    },
-    setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
-    clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
     getApprovalGrantModes(id) {
       const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -852,8 +786,6 @@ export function createConfigStore(
       const stores = {
         soul: soulStore,
         commandPolicy: settings.commandPolicies.store,
-        securityPosture: settings.securityPostures.store,
-        sharingPosture: settings.sharingPostures.store,
         approvalGrantModes: settings.approvalGrantModes.store,
         egress: settings.egressPolicies.store,
         unfulfilledInsights: settings.unfulfilledInsights.store,

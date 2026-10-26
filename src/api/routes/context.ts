@@ -261,7 +261,7 @@ export const contextRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/surface-context",
     actor: "system",
     auth: "either",
-    allowedInStrict: true,
+
     handle: createSurfaceContextRequest,
   },
   { method: "POST", path: "/v1/surface-file", actor: "system", auth: "either", handle: createSurfaceFileRequest },

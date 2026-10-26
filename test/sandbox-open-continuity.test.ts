@@ -12,7 +12,6 @@ function fixture(
   toolDeps: Partial<ToolContextDeps> = {},
 ) {
   const state = {
-    open: true,
     member: true,
     allowed: true,
     liveJobs: [] as Array<{ sandboxId: string; scopeId: string }>,
@@ -32,7 +31,6 @@ function fixture(
   const approvalCalls: unknown[][] = [];
   const egressClaims: unknown[] = [];
   const config = {
-    resolveSharingPostureDurable: async () => (state.open ? "open" : "isolated"),
     refreshSecurity: async () => {},
     getCommandPolicy: () => state.targetPolicy,
     getEgress: () => state.targetEgress,
@@ -194,12 +192,11 @@ test("Open shared requests execute on the owner's personal machine without movin
   assert.deepEqual(f.writes, []);
 });
 
-test("Open cross-scope cached handles recheck membership, posture, and target authorization", async () => {
-  for (const revoke of ["revoke", "isolate", "deny"] as const) {
+test("Open cross-scope cached handles recheck membership and target authorization", async () => {
+  for (const revoke of ["revoke", "deny"] as const) {
     const f = fixture();
     await f.turn.provisionResource("personal-box");
     if (revoke === "revoke") f.state.member = false;
-    else if (revoke === "isolate") f.state.open = false;
     else f.state.allowed = false;
     await assert.rejects(f.turn.provisionResource("personal-box"), /authorized|permission/);
   }
@@ -260,7 +257,7 @@ test("Open continuity applies consistently to inventory and explicit management"
   await f.tools.computerStatus("personal-box");
   await f.tools.restartComputer("personal-box");
   await f.tools.sandboxResources!("retire", { sandboxId: "personal-box" });
-  f.state.open = false;
+  f.state.member = false;
   assert.equal(((await f.tools.sandboxResources!("list")) as { sandboxes: unknown[] }).sandboxes.length, 0);
   await assert.rejects(f.tools.computerStatus("personal-box"), /authorized/);
 });

@@ -1,5 +1,5 @@
 import { cronTriggerAuthority } from "../cron/authority.ts";
-import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
+import { MAX_SCREEN_CHARS } from "../security/security-screen.ts";
 import type { Cron, InboxItem, TurnRequest } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { hashId } from "../util/crypto.ts";

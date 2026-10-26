@@ -67,18 +67,11 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   if (ctx.capability) {
     const cap = ctx.capability;
     const shared = cap.scopeId !== personal;
-    if (
-      cap.ownerConnections !== true ||
-      cap.deployment ||
-      cap.botActor ||
-      (shared &&
-        livePersonCapability(cap) &&
-        (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
-    ) {
+    if (cap.ownerConnections !== true || cap.deployment || cap.botActor || (shared && !livePersonCapability(cap))) {
       sendJson(ctx.res, 403, {
         error: "private_connections",
         message:
-          "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+          "Use your connected apps in your own conversation, or on a turn a person started in this conversation.",
       });
       return null;
     }

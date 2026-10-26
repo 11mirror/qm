@@ -63,9 +63,7 @@ export function startAdmin(host, env) {
     ].forEach((card) => content.insertBefore(card, anchor));
     content.insertBefore(anchor, $("card-service-credentials"));
     [
-      $("card-security-posture"),
       $("card-auto-flagger"),
-      $("card-sharing-posture"),
       governanceAmbient,
       $("card-external-slack"),
       $("card-command-policy"),
@@ -1105,18 +1103,6 @@ export function startAdmin(host, env) {
     root.querySelector(".detail").textContent = detail;
   }
   function renderGovernanceOverview(data) {
-    const posture = data.securityPosture || "auto";
-    let postureTone = "ok";
-    if (posture === "dangerous") postureTone = "danger";
-    else if (posture === "auto") postureTone = "warn";
-    setGovernanceStatus("governance-status-posture", titleCase(posture), "Effective security posture", postureTone);
-    const sharingPosture = data.sharingPosture || "isolated";
-    setGovernanceStatus(
-      "governance-status-sharing",
-      titleCase(sharingPosture),
-      "Effective sharing posture",
-      sharingPosture === "open" ? "danger" : "ok",
-    );
     const allowCount = (data.egress?.allowedHosts || []).length;
     const denyCount = (data.egress?.deniedHosts || []).length;
     const enforcement = data.egressEnforcement || {
@@ -1688,9 +1674,7 @@ export function startAdmin(host, env) {
   });
   const SAVE = Object.fromEntries([...governanceUI.states.keys()].map((key) => [key, () => governanceUI.collect(key)]));
   const SAVE_ST = {
-    "security-posture": "st-security-posture",
     "auto-flagger": "st-auto-flagger",
-    "sharing-posture": "st-sharing-posture",
     "approval-grant-modes": "st-approval-grant-modes",
     "command-policy": "st-policy",
     soul: "st-soul",
@@ -1787,42 +1771,6 @@ export function startAdmin(host, env) {
     return btn?.dataset.save || "";
   }
   function governanceSaveReview(key, body) {
-    if (key === "security-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "auto";
-      const dangerous = body.posture === "dangerous";
-      return reviewGovernanceChange({
-        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
-        subtitle: "Review the immutable change below before it is applied.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
-        ],
-        warning: dangerous
-          ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
-          : "This changes the effective tools and approval behavior for future turns in this scope.",
-        confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
-        danger: dangerous,
-      });
-    }
-    if (key === "sharing-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "isolated";
-      const open = body.posture === "open";
-      return reviewGovernanceChange({
-        title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
-        subtitle: "This applies to future live human turns in the selected scope.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
-        ],
-        warning: open
-          ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
-          : "Cross-context resources will again require explicit shares or grants.",
-        confirmLabel: open ? "Enable Open" : "Use Isolated",
-        danger: open,
-      });
-    }
     if (key === "external-slack-participants") {
       const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
       return reviewGovernanceChange({
@@ -1841,45 +1789,6 @@ export function startAdmin(host, env) {
       });
     }
     return Promise.resolve(true);
-  }
-  $("sharing-posture-inherit").onclick = async () => {
-    const requestedScope = scope;
-    const requestedGeneration = governanceReq;
-    const draftBefore = JSON.stringify(governanceUI.collect("sharing-posture"));
-    if (
-      !(await reviewGovernanceChange({
-        title: "Follow organization sharing?",
-        subtitle: "Remove this scope's sharing override.",
-        facts: [["Scope", governanceScopeName()]],
-        warning:
-          "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
-        confirmLabel: "Follow organization",
-      })) ||
-      requestedScope !== scope ||
-      requestedGeneration !== governanceReq
-    )
-      return;
-    const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/sharing-posture", {
-      inherit: true,
-    });
-    if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-    if (result.ok)
-      await refreshPolicySetting("sharing-posture", requestedScope, requestedGeneration, draftBefore, "Saved");
-    else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
-  };
-  async function refreshPolicySetting(key, requestedScope, requestedGeneration, draftBefore, message) {
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
-    if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-    if (!fresh.ok) return governanceUI.status(key, "Saved, but the current setting could not be refreshed.", "warn");
-    const state = governanceUI.states.get(key);
-    const currentDraft = state.collect();
-    const changed = JSON.stringify(currentDraft) !== draftBefore;
-    governanceUI.load(fresh.data, requestedScope, key);
-    sectionSnapshots.set(key, state.baseline);
-    if (changed) {
-      state.draft = currentDraft;
-      state.changed();
-    } else governanceUI.status(key, message, "ok");
   }
   let governanceSaveSeq = 0;
   $("auto-flagger-test").onclick = async () => {
@@ -1978,7 +1887,7 @@ export function startAdmin(host, env) {
           return;
         }
         if (key === "command-policy") loadedCommandPolicyPresent = true;
-        if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+        if (["ambient-policy", "auto-flagger"].includes(key)) {
           const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
           if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
           if (fresh.ok && !governanceUI.states.get(key).dirty) {

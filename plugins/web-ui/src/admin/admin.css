@@ -3960,7 +3960,6 @@
 #app-view #view-governance .environment-notice.hidden {
   display: none;
 }
-#app-view #card-security-posture > .head p,
 #app-view #card-external-slack > .head p {
   display: none;
 }
@@ -4018,40 +4017,17 @@
   font-weight: 400;
   line-height: 1.4;
 }
-#app-view #card-security-posture .choice-stack {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  max-width: none;
-}
-#app-view #card-security-posture .posture-choice,
-#app-view #card-sharing-posture .posture-choice,
 #app-view #card-external-slack .posture-choice {
   padding: 14px 16px;
   border-color: var(--border);
   background: transparent;
 }
-#app-view #card-security-posture .posture-choice:has(input:checked),
-#app-view #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #card-external-slack .posture-choice:has(input:checked) {
   border-color: var(--muted);
   background: transparent;
 }
-#app-view #card-security-posture .posture-choice:hover,
-#app-view #card-sharing-posture .posture-choice:hover,
 #app-view #card-external-slack .posture-choice:hover {
   background: color-mix(in srgb, var(--text) 2%, transparent);
-}
-@media (max-width: 1100px) {
-  #app-view #card-security-posture .choice-stack {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-  #app-view #card-security-posture .posture-choice > span {
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: 8px;
-  }
 }
 #app-view #view-governance .governance-field-grid {
   display: grid;
@@ -4280,16 +4256,6 @@
   order: 1;
   font-weight: 400;
 }
-#app-view #card-security-posture .body > .dd,
-#app-view #card-sharing-posture .body > .dd {
-  width: 180px;
-  margin-left: auto;
-}
-#app-view #view-governance #sharing-posture-effective {
-  margin: 0 0 8px;
-  text-align: right;
-  font-size: 12px;
-}
 #app-view #view-governance .audience-toggle {
   display: flex;
   align-items: center;
@@ -4329,14 +4295,6 @@
   }
   #app-view #view-governance :is(.card, .parity-subsection) > .foot {
     grid-column: 1;
-  }
-  #app-view #card-security-posture .body > .dd,
-  #app-view #card-sharing-posture .body > .dd {
-    width: 100%;
-    margin-left: 0;
-  }
-  #app-view #view-governance #sharing-posture-effective {
-    text-align: left;
   }
   #app-view #view-governance .audience-toggle {
     justify-content: flex-start;
@@ -4386,8 +4344,6 @@
 #app-view #view-governance .posture-help dd:last-child {
   margin-bottom: 0;
 }
-#app-view #view-governance #card-security-posture .choice-stack,
-#app-view #view-governance #card-sharing-posture .choice-stack,
 #app-view #view-governance #card-external-slack .choice-stack,
 #app-view #view-governance #card-governance-org-ambient .choice-stack {
   display: flex;
@@ -4395,27 +4351,19 @@
   gap: 4px;
   margin: 0;
 }
-#app-view #view-governance #card-security-posture .posture-choice,
-#app-view #view-governance #card-sharing-posture .posture-choice,
 #app-view #view-governance #card-external-slack .posture-choice,
 #app-view #view-governance #card-governance-org-ambient .posture-choice {
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
 }
-#app-view #view-governance #card-security-posture .posture-choice > span,
-#app-view #view-governance #card-sharing-posture .posture-choice > span,
 #app-view #view-governance #card-external-slack .posture-choice > span,
 #app-view #view-governance #card-governance-org-ambient .posture-choice > span {
   display: block;
 }
-#app-view #view-governance #card-security-posture .posture-choice:has(input:checked),
-#app-view #view-governance #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-external-slack .posture-choice:has(input:checked),
 #app-view #view-governance #card-governance-org-ambient .posture-choice:has(input:checked) {
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
-#app-view #view-governance #card-security-posture .posture-choice:hover,
-#app-view #view-governance #card-sharing-posture .posture-choice:hover,
 #app-view #view-governance #card-external-slack .posture-choice:hover,
 #app-view #view-governance #card-governance-org-ambient .posture-choice:hover {
   background: color-mix(in srgb, var(--text) 4%, transparent);

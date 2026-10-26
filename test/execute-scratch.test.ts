@@ -379,9 +379,8 @@ test("execute masks credential output before model delivery, screening, and tran
     emit: async (entry) => {
       emitted.push(entry);
     },
-    screenToolResult: async (input) => {
+    observeToolResult: (input) => {
       screened.push(input);
-      return { outcome: "allow" };
     },
   });
   const result = await call(execute, {

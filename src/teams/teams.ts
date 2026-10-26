@@ -2,7 +2,6 @@ import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { createPgPool, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 
@@ -165,14 +164,12 @@ export function createPostgresTeamStore(
 
 export function teamsForTurn(
   teams: readonly TurnTeam[],
-  turn: { scope: ScopeId; actorId: string; audience: readonly Principal[]; posture: SharingPosture },
+  turn: { scope: ScopeId; actorId: string; audience: readonly Principal[] },
 ): { teamIds: string[]; note?: string } {
   const ownScope = turn.scope === scopeId("personal", turn.actorId);
   const everyoneOn = (t: TurnTeam) => turn.audience.length > 0 && turn.audience.every((p) => onTeam(t, p.id));
   const applies = teams.filter(
-    (t) =>
-      onTeam(t, turn.actorId) &&
-      (ownScope || t.configured || everyoneOn(t) || (turn.posture === "open" && !t.isolatedInOpen)),
+    (t) => onTeam(t, turn.actorId) && (ownScope || t.configured || everyoneOn(t) || !t.isolatedInOpen),
   );
   const teamIds = applies.map((t) => t.id);
   if (teamIds.length < 2) return { teamIds };
@@ -191,21 +188,13 @@ export function teamsForTurn(
 
 export async function scopeTeamsToTurn<
   T extends { actor: Principal; conversation: Conversation; conversationHeader?: string },
->(
-  input: T,
-  deps: {
-    teams?: TeamStore;
-    config?: { resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture> };
-  },
-  external: boolean,
-): Promise<T> {
+>(input: T, deps: { teams?: TeamStore }, external: boolean): Promise<T> {
   if (external || !deps.teams) return input;
   const { actor, conversation } = input;
   const scope = conversationScope(conversation, actor.id);
   const rows = await deps.teams.forTurn(scope, [actor.id, ...conversation.audience.map((p) => p.id)]);
   if (!rows.length) return input;
-  const posture = (await deps.config?.resolveSharingPostureDurable(scopeId("personal", actor.id), scope)) ?? "isolated";
-  const { teamIds, note } = teamsForTurn(rows, { scope, actorId: actor.id, audience: conversation.audience, posture });
+  const { teamIds, note } = teamsForTurn(rows, { scope, actorId: actor.id, audience: conversation.audience });
   if (!teamIds.length) return input;
   const stamp = (p: Principal): Principal => {
     const own = rows.filter((t) => teamIds.includes(t.id) && onTeam(t, p.id)).map((t) => t.id);

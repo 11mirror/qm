@@ -357,7 +357,7 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
 
 test("reply-or-decline nudge preserves the trigger image and environment", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-image-"));
-  const built = buildTestApp(testConfig({ dataDir, securityPosture: "dangerous" }));
+  const built = buildTestApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
     const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

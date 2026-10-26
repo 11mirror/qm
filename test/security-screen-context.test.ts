@@ -11,7 +11,7 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 for (const surface of ["web", "slack"]) {
   test(`HTTP ${surface} tool screening carries current request on every output chunk`, async () => {
     const calls: Parameters<SecurityScreener["classify"]>[0][] = [];
-    const built = buildApp(testConfig({ securityPosture: "auto" }), {
+    const built = buildApp(testConfig(), {
       securityScreener: {
         provider: "context-spy",
         async classify(input) {

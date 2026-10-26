@@ -24,7 +24,7 @@ import {
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
@@ -40,7 +40,6 @@ async function capabilityAdminDenied(
   params: Record<string, string>,
   url: URL,
   claims: CapabilityClaims,
-  config: ServerDeps["config"],
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
@@ -53,11 +52,7 @@ async function capabilityAdminDenied(
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
-    if (
-      parseScopeId(target).kind !== "org" &&
-      (!livePersonCapability(claims) ||
-        (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
-    ) {
+    if (parseScopeId(target).kind !== "org" && !livePersonCapability(claims)) {
       return "this admin read returns private content — ask the agent in a DM";
     }
   }
@@ -192,7 +187,7 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
@@ -212,7 +207,7 @@ async function gate(
         return null;
       }
       if (route?.admin) {
-        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config);
+        const denied = await capabilityAdminDenied(route.admin, params, url, capability);
         if (denied) {
           sendJson(res, 403, { error: "forbidden", message: denied });
           return null;
@@ -243,17 +238,6 @@ async function gate(
       sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
       return null;
     }
-  }
-  if (
-    capability &&
-    !requiredAud &&
-    method !== "GET" &&
-    !route?.allowedInStrict &&
-    deps.config &&
-    (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
-  ) {
-    sendJson(res, 403, { error: "forbidden", message: "Strict posture blocks direct control-plane mutations" });
-    return null;
   }
 
   let actor: PortalIdentity | null = null;

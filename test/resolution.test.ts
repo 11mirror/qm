@@ -97,25 +97,6 @@ test("the writable layer is the scope, global is read-only", async () => {
   assert.equal(personal?.mode, "rw");
 });
 
-test("resolution carries the durable effective security posture", async () => {
-  const config = testConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
-  await config.setSecurityPosture(scopeId("org", "default-org"), "auto");
-  await config.setSecurityPosture(scopeId("personal", "U1"), "strict");
-  const res = createResolutionService(
-    "default-org",
-    config,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-  );
-  const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const resolved = await res.resolve(conv, actor);
-  assert.deepEqual(resolved.securityPolicy, {
-    screening: "enforce",
-    denyPrivateNetworks: false,
-    toolApprovals: "all",
-  });
-  assert.deepEqual(resolved.approvalGrantModes, { session: true, always: true }, "grant modes default to all-on");
-});
-
 test("resolution refreshes security config written by another instance", async () => {
   const souls = testMap<PersistedSoul>();
   const egressPolicies = testMap<PersistedEgressPolicy>();
@@ -135,30 +116,6 @@ test("resolution refreshes security config written by another instance", async (
   const resolved = await res.resolve(conv, actor);
   assert.match(resolved.systemPrompt, /FLEET_LIVE/);
   assert.deepEqual(resolved.egress.deniedHosts, ["blocked.example"]);
-});
-
-test("deployment screening mode is capped only by dangerous posture", async () => {
-  const config = testConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
-  const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const expected = {
-    off: { dangerous: "off", auto: "off", strict: "off" },
-    observe: { dangerous: "observe", auto: "observe", strict: "observe" },
-    enforce: { dangerous: "observe", auto: "enforce", strict: "enforce" },
-  } as const;
-  for (const mode of ["off", "observe", "enforce"] as const) {
-    const res = createResolutionService(
-      "default-org",
-      config,
-      createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-      mode,
-    );
-    for (const posture of ["dangerous", "auto", "strict"] as const) {
-      await config.setSecurityPosture(scopeId("personal", "U1"), posture);
-      const policy = (await res.resolve(conv, actor)).securityPolicy;
-      assert.equal(policy.screening, expected[mode][posture], `${mode}/${posture}`);
-      assert.equal(policy.toolApprovals, posture === "strict" ? "all" : "none");
-    }
-  }
 });
 
 test("SOUL composition keeps organization precedence without duplicating identical policy", () => {

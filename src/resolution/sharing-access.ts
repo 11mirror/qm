@@ -2,21 +2,17 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { GrantedHandle, Principal, ScopeId, TurnOrigin } from "../types.ts";
 import { parseScopeId, personalScope } from "../types.ts";
-import type { ScopedConfigStore } from "./config-store.ts";
 import type { IsCurrentSharedScopeMember } from "./scope-membership.ts";
-import type { SharingPosture } from "./sharing-posture.ts";
 
 export const MAX_OPEN_SHARED_SCOPES = 25;
 const MAX_OPEN_FILES = 200;
 const MAX_OPEN_CANDIDATES = 100;
 
 interface SharingSourcesInput {
-  posture: SharingPosture | undefined;
   actor: Principal;
   origin: TurnOrigin;
   trustedLiveHuman: boolean;
   targetScope: ScopeId;
-  config?: ScopedConfigStore;
   sessions: Pick<SessionStore, "listByParticipant">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
 }
@@ -24,24 +20,19 @@ interface SharingSourcesInput {
 export async function isOpenScopeMember(input: {
   actorId: string;
   scope: ScopeId;
-  config: Pick<ScopedConfigStore, "resolveSharingPostureDurable">;
   isCurrentSharedScopeMember: IsCurrentSharedScopeMember;
 }): Promise<boolean> {
   const { kind } = parseScopeId(input.scope);
   return (
-    (kind === "channel" || kind === "group") &&
-    (await input.isCurrentSharedScopeMember(input.actorId, input.scope)) &&
-    (await input.config.resolveSharingPostureDurable(personalScope(input.actorId), input.scope)) === "open"
+    (kind === "channel" || kind === "group") && (await input.isCurrentSharedScopeMember(input.actorId, input.scope))
   );
 }
 
 export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise<ScopeId[]> {
   if (
-    input.posture !== "open" ||
     input.actor.type !== "internal" ||
     (input.origin.kind !== "human" && !(input.origin.kind === "ambient" && input.origin.live === true)) ||
     !input.trustedLiveHuman ||
-    !input.config ||
     !input.isCurrentSharedScopeMember
   )
     return [];
@@ -66,7 +57,6 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
     if (seen.has(session.scopeId)) continue;
     seen.add(session.scopeId);
     if (!(await input.isCurrentSharedScopeMember(input.actor.id, session.scopeId))) continue;
-    if ((await input.config.resolveSharingPostureDurable(personal, session.scopeId)) !== "open") continue;
     sources.push(session.scopeId);
     if (sources.length >= MAX_OPEN_SHARED_SCOPES) break;
   }

@@ -4,7 +4,6 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 
 test("Open owner computer rechecks revocation before reuse and is destroyed, never shared", async () => {
   let member = true;
-  let posture = "open";
   const global = { scopeId: "org:test", mode: "ro", mountPath: "global" };
   const handle = { id: "owner-test", cwd: "/tmp/owner-test" };
   const provisions: unknown[][] = [];
@@ -22,7 +21,6 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
         },
       },
       auditLog: { record: (event: unknown) => audits.push(event) },
-      config: { resolveSharingPostureDurable: async () => posture },
       isCurrentSharedScopeMember: async () => member,
     },
     input: {},
@@ -48,9 +46,6 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
   member = false;
   await assert.rejects(boxes.provisionOwnerAuth!(), /no longer authorized/);
   member = true;
-  posture = "isolated";
-  await assert.rejects(boxes.provisionOwnerAuth!(), /no longer authorized/);
-  posture = "open";
   const command = boxes.ownerAuthCommand!("true");
   assert.match(command, /^unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN; unset AGENT_CREDENTIAL_TOKEN /);
   assert.doesNotMatch(

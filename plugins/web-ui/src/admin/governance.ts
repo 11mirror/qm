@@ -6,47 +6,6 @@ import { states, patternError, type GovernanceState } from "./governance-state.t
 export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
-  "card-security-posture": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-security-posture"
-    >
-      <div class="head">
-        <h2>Security posture</h2>
-        <p>Choose how the agent screens external content and when it requires your approval.</p>
-      </div>
-      <div class="body">
-        <select
-          id="security-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("security-posture")}
-          @change=${(event: Event) => changeField(s, "security-posture", event)}
-        >
-          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
-          <option value="auto">Auto — use the deployment’s configured screener</option>
-          <option value="strict">Strict — approve tool actions</option>
-        </select>
-        ${choiceGroup(
-          {
-            name: "security-posture-choice",
-            value: s.draft.posture,
-            choiceFor: "security-posture",
-            onChange: (event: Event) => changeField(s, "security-posture", event),
-          },
-          [
-            [
-              "auto",
-              "Auto",
-              "Default. Blocks private-network access. Screens external content when the deployment configures a screener; model screening is off by default.",
-            ],
-            ["dangerous", "Dangerous", "No posture-based screening; deployment-required screening still applies."],
-            ["strict", "Strict", "Every tool action requires human approval."],
-          ],
-        )}
-      </div>
-      ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
   "card-auto-flagger": (s) =>
     html`<section
       class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
@@ -55,8 +14,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="head">
         <h2>Auto flagger</h2>
         <p>
-          Model and prompt used when the deployment explicitly enables model screening. These settings do not enable
-          screening. The security boundary and required verdict format remain fixed.
+          Model and prompt the security screen uses to observe external content. The security boundary and required
+          verdict format remain fixed.
         </p>
       </div>
       <div class="body">
@@ -132,7 +91,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <p>
           Which standing options an approval card offers besides "Allow once". Composes tighten-only with the org value;
           disabling a mode also suspends existing grants of that mode until it is re-enabled. Predeclared command
-          approvals and strict-posture tool approvals both honor this.
+          approvals honor this.
         </p>
       </div>
       <div class="body">
@@ -262,56 +221,6 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="foot">
         <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button
         >${saveButton(s, "Save", s.disabled)}${settingStatus(s)}
-      </div>
-    </section>`,
-  "card-sharing-posture": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-sharing-posture"
-    >
-      <div class="head">
-        <h2>Sharing posture</h2>
-        <p>The organization is a ceiling. Personal and room scopes can opt out, and Isolated always wins.</p>
-      </div>
-      <div class="body">
-        <p id="sharing-posture-effective">${sharingLabel(s)}</p>
-        <select
-          id="sharing-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("sharing-posture")}
-          @change=${(event: Event) => changeField(s, "sharing-posture", event)}
-        >
-          <option value="isolated">Isolated</option>
-          <option value="open">Open</option>
-        </select>
-        ${choiceGroup(
-          {
-            name: "sharing-posture-choice",
-            value: s.draft.posture,
-            choiceFor: "sharing-posture",
-            onChange: (event: Event) => changeField(s, "sharing-posture", event),
-          },
-          [
-            ["isolated", "Isolated", "Resources stay in their own scope unless explicitly shared."],
-            [
-              "open",
-              "Open",
-              "QM can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
-            ],
-          ],
-        )}
-      </div>
-      <div class="foot">
-        ${saveButton(s, "Apply", s.disabled)}
-        <button
-          type="button"
-          id="sharing-posture-inherit"
-          ?hidden=${s.scope.startsWith("org:") || s.context.sharingPostureOverride == null}
-        >
-          Follow organization
-        </button>
-        ${settingStatus(s)}
       </div>
     </section>`,
   "card-egress": (s) =>
@@ -465,15 +374,6 @@ function changeField(s: GovernanceState, id: string, event: Event) {
   if (id === "governance-org-ambient") value = value === "on";
   if (id === "ambient-enabled") value = value === "default" ? null : value === "on";
   s.change(id, value);
-}
-function sharingLabel(s: GovernanceState): string {
-  const title = (value: string) => value[0].toUpperCase() + value.slice(1);
-  const inherited = s.scope.startsWith("org:") ? "Default" : "Following organization";
-  return (
-    (s.context.sharingPostureOverride == null ? inherited : "Configured: " + title(s.context.sharingPostureOverride)) +
-    " · Effective: " +
-    title(s.context.sharingPosture || "isolated")
-  );
 }
 let rowId = 0;
 function addRule(s: GovernanceState) {

@@ -1,7 +1,7 @@
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
-import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-posture.ts";
+import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-screen.ts";
 import { defaultAutoFlaggerConfig, parseAutoFlaggerDraft, type AutoFlaggerDraft } from "../admin-resources.ts";
 import type { ScreenSample } from "../../../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../../../security/security-screener.ts";

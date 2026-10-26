@@ -260,8 +260,6 @@ test("Open carries only the live actor's personal reads into a shared turn and a
 
   const isolated = await orchestrator.handleTurn(channel("C1:isolated", "!sysprompt", { kind: "human" }));
   assert.doesNotMatch(isolated.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
-
-  await config.setSharingPosture(scopeId("org", ORG), "open");
   const open = await orchestrator.handleTurn(
     channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
   );
@@ -339,7 +337,6 @@ test("Open advertises the source and audits a carried skill read without grantin
     skills,
     isCurrentSharedScopeMember: async () => true,
   });
-  await config.setSharingPosture(scopeId("org", ORG), "open");
   const result = await orchestrator.handleTurn({
     surface: "test",
     actor,
@@ -390,7 +387,6 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
   });
   const personal = scopeId("personal", actor.id);
   const channelScope = scopeId("channel", "C1");
-  await config.setSharingPosture(scopeId("org", ORG), "open");
   await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), actor.id);
   const channelConversation: Conversation = {
     kind: "channel",
@@ -461,15 +457,6 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     dm("dm:U1:room-file", `!read shared/open-channel-C1/${decisionId}/decision.txt`, { origin: { kind: "human" } }),
   );
   assert.doesNotMatch(revokedFile.reply ?? "", /ROOM_DECISION_FILE/);
-
-  member = true;
-  await config.setSharingPosture(channelScope, "isolated");
-  const vetoed = await orchestrator.handleTurn(
-    dm("dm:U1:vetoed", "!memorysearch ROOM_ONLY_MEMORY", {
-      origin: { kind: "human" },
-    }),
-  );
-  assert.doesNotMatch(vetoed.reply ?? "", /ROOM_ONLY_MEMORY/);
 });
 
 test("the system prompt is byte-identical across two turns a minute apart; the clock rides the environment note", async (t) => {
@@ -663,7 +650,6 @@ for (const mode of ["off", "writable", "skip"] as const) {
       memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
       isCurrentSharedScopeMember: async () => true,
     });
-    await config.setSharingPosture(scopeId("org", ORG), "open");
     await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), actor.id);
     for (const text of [
       "!sysprompt",
@@ -758,7 +744,6 @@ for (const location of [
       sandbox,
       isCurrentSharedScopeMember: async () => true,
     });
-    await config.setSharingPosture(scopeId("org", ORG), "open");
     const result = await orchestrator.handleTurn({
       surface: "test",
       actor,
@@ -846,7 +831,6 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
     securityScreener,
     isCurrentSharedScopeMember: async () => true,
   });
-  await config.setSharingPosture(scopeId("org", ORG), "open");
   const result = await orchestrator.handleTurn({
     surface: "test",
     actor,
@@ -897,7 +881,6 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
     return { reply: "done" };
   };
   const { orchestrator, config, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
-  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
   const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
@@ -931,59 +914,11 @@ test("read-only turns report steered files as unavailable without provisioning a
     return { reply: "done" };
   };
   const { orchestrator, config } = buildOrchestrator({ harness });
-  await config.setSecurityPosture(scopeId("org", ORG), "strict");
   const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
   assert.deepEqual(prepared?.documents, []);
   assert.match(prepared?.text ?? "", /secret.txt/);
-});
-
-test("steered documents use the inbound security screen before writing their contents", async () => {
-  const blobTransfer = createMemoryBlobTransferStore();
-  const blob = await blobTransfer.put(Buffer.from("STEER_UNTRUSTED_CONTENT"));
-  const writes: string[] = [];
-  const sandbox: Sandbox = {
-    ...readSandbox(),
-    removeDir: async () => {},
-    listDir: async () => [],
-    writeFile: async () => {},
-    writeFileBytes: async (_handle, path) => {
-      writes.push(path);
-    },
-  };
-  const harness = createMockHarness();
-  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
-  harness.turns.runTurn = async (turn) => {
-    prepared = await turn.prepareSteer!("read the attachment", {
-      surface: "web",
-      actor: { externalId: actor.id },
-      conversation: { kind: "dm", threadRef: "web:alice:inbox" },
-      conversationHeader: "REFRESH_WITH_ATTACHMENT",
-      text: "read the attachment",
-      attachments: [{ name: "unsafe.txt", mimetype: "text/plain", ...blob }],
-    });
-    return { reply: "done" };
-  };
-  const securityScreener: SecurityScreener = {
-    provider: "test",
-    classify: async ({ payload }) => ({
-      verdict: { decision: payload.includes("STEER_UNTRUSTED_CONTENT") ? "strict" : "auto" },
-      score: 0,
-      threshold: 1,
-    }),
-  };
-  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
-  const result = await orchestrator.handleTurn(dm("web:alice:inbox", "hello", { surface: "web" }));
-  assert.equal(result.status, "ok", result.reason);
-  assert.deepEqual(prepared?.attachments, []);
-  assert.deepEqual(prepared?.documents, []);
-  assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
-  assert.match(prepared?.text ?? "", /REFRESH_WITH_ATTACHMENT/);
-  assert.equal(
-    writes.some((path) => path.endsWith("unsafe.txt")),
-    false,
-  );
 });
 
 for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
@@ -1022,7 +957,6 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
       return { reply: "done" };
     };
     const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
-    await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn({
       ...dm(`steer-budget-${budget}`, "hello"),
       attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
@@ -1115,7 +1049,6 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     return { reply: "read after switching" };
   };
   const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
-  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.equal(segments, 2);
@@ -1233,7 +1166,7 @@ test("connector revocation refreshes the environment without treating historical
   assert.match(second.reply!, /sections below replace their earlier versions/);
 });
 
-for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {
+for (const mode of ["flagged", "ordinary"] as const) {
   test(`live inbox steering refreshes context with ${mode} screening`, async () => {
     const harness = createMockHarness();
     const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
@@ -1254,22 +1187,16 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
       classify: async ({ payload }) => {
         if (payload.includes("UPDATED_INBOX_SNAPSHOT")) {
           refreshedScreens++;
-          if (mode === "unavailable") throw new Error("screen unavailable");
-          if (mode === "blocked") return { verdict: { decision: "strict" }, score: 1, threshold: 1 };
+          return { verdict: { decision: "strict" }, score: 1, threshold: 1 };
         }
         return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
       },
     };
-    const { orchestrator, config } = buildOrchestrator({ harness, securityScreener });
-    if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    const { orchestrator } = buildOrchestrator({ harness, securityScreener });
     const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
     assert.equal(result.status, "ok", result.reason);
-    if (mode === "safe" || mode === "observe") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
-    else if (mode === "ordinary") assert.equal(prepared!.text, "summarize again");
-    else {
-      assert.doesNotMatch(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
-      assert.match(prepared!.text, /withheld/);
-    }
+    if (mode === "flagged") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+    else assert.equal(prepared!.text, "summarize again");
     if (mode === "ordinary") assert.equal(refreshedScreens, 0);
     else assert.ok(refreshedScreens > 0);
   });

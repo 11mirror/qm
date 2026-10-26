@@ -1,7 +1,6 @@
 import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
-import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { MemoryFactsMissing, parseFactId, renderFacts, type MemoryFact, type MemoryProvenance } from "./facts.ts";
 import { queryFacts, type MemoryService } from "./memory-service.ts";
@@ -13,7 +12,6 @@ export interface MemoryDisclosure {
   nativeScopes: readonly ScopeId[];
   audience: readonly Principal[];
   open: boolean;
-  config?: Pick<ScopedConfigStore, "resolveSharingPostureDurable">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: CurrentScopeMembers;
 }
@@ -60,10 +58,8 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
       if (!(await entitled(input.actor, source))) return false;
       if (source === input.targetScope || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
         return allEntitled(source);
-      if (!input.open || !input.config) return false;
+      if (!input.open) return false;
       const personal = personalScope(input.actor.id);
-      if ((await input.config.resolveSharingPostureDurable(personal, input.targetScope)) !== "open") return false;
-      if ((await input.config.resolveSharingPostureDurable(personal, source)) !== "open") return false;
       const members = await audience();
       if (await allEntitled(source, [...members])) return true;
       return (

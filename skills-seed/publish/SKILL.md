@@ -133,7 +133,7 @@ apps({ action: "share", id: "status-board", toScope: "org", permission: "read" }
 - **Env carries over.** `env` is baked into each version; a republish that omits `env` keeps
   the most recent version's (including a failed attempt), and passing `env` replaces it
   (`{}` clears).
-- **Posture-aware egress.** Deployment network access follows the operator's configured
+- **Policy-bound egress.** Deployment network access follows the operator's configured
   deployment provider and egress policy. Declare required hosts and credentials explicitly;
   never assume arbitrary outbound access.
 - **Scale-to-zero.** Idle personal previews are stopped and woken on next access.

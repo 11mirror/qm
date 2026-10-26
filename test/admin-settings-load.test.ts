@@ -78,7 +78,6 @@ test("Customize completes within 500 ms with unrelated model and connector servi
   t.after(srv.close);
   await warm(srv.base);
   t.mock.method(srv.built.config, "listConnectorClients", fail);
-  t.mock.method(srv.built.config, "getSecurityPostureDurable", fail);
   const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=customize", { headers: ADMIN });
   assert.equal(response.status, 200);
@@ -89,12 +88,7 @@ test("Customize completes within 500 ms with unrelated model and connector servi
 test("independent governance reads overlap rather than accumulating network round trips", async (t) => {
   const srv = start();
   t.after(srv.close);
-  const reads = [
-    "getSecurityPostureDurable",
-    "getSharingPostureDurable",
-    "getSharingPostureOwnDurable",
-    "getApprovalGrantModesDurable",
-  ] as const;
+  const reads = ["getApprovalGrantModesDurable", "getAutoFlaggerConfig"] as const;
   await warm(srv.base);
   let active = 0;
   let maxActive = 0;

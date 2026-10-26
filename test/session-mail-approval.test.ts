@@ -84,7 +84,7 @@ async function scenario() {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
         emit: turn.emit,
-        screenToolResult: turn.screenToolResult,
+        observeToolResult: turn.observeToolResult,
         pendingApprovals: [],
       };
       const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;

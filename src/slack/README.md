@@ -182,8 +182,8 @@ the tokens, core simply runs without Slack.
   (collect-mode `ok` + `pendingApprovals`, what the real Pi harness does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
 - **Hand-offs are plain DMs.** When channel work needs another member's own logins, files or
-  memory, the agent follows the `hand-off` skill: in Open conversations it uses the requester's own
-  access; otherwise it sends that person a DM through `POST /v1/reach` with the full request, and
+  memory, the agent follows the `hand-off` skill: it uses the requester's own access itself;
+  for anyone else's it sends that person a DM through `POST /v1/reach` with the full request, and
   says so only after reach confirms who it matched.
 - In an **externally-shared (Slack Connect) channel**, or any channel/mpim whose audience
   includes a **guest or external member**, it stays silent in-channel and replies privately

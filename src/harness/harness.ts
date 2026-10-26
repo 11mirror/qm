@@ -20,7 +20,7 @@ import type { GrindMeter } from "./grind.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
-import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
+import type { SecurityScreenVerdict, ToolResultScreenInput } from "../security/security-screen.ts";
 
 export interface RuntimeChoice {
   modelId: string;
@@ -127,7 +127,7 @@ export interface HarnessTurnInput {
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
-  toolApprovalGate?(tool: string, callKey?: string): boolean;
+  toolApprovalGate?(callKey: string): boolean;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
@@ -142,7 +142,7 @@ export interface HarnessTurnInput {
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
-  screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
+  observeToolResult?(input: ToolResultScreenInput): void;
   governGoal?: import("./goal.ts").GoalGovernor;
 }
 

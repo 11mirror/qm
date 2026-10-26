@@ -14,11 +14,7 @@ import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/ha
 import { countTokens } from "../../src/util/tokens.ts";
 import { isReply, isUserMessage } from "../../src/sessions/items.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
-import {
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-  type ToolResultScreen,
-} from "../../src/security/security-posture.ts";
+import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../../src/security/security-screen.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -394,30 +390,9 @@ export function createMockHarness(): Harness {
         await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
         const result = await turn.tools.execute(command);
         const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        const screen = turn.screenToolResult
-          ? await turn
-              .screenToolResult({
-                tool: "execute",
-                result: output,
-                unscreenable: false,
-                provenance: "external",
-              })
-              .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
-          : ({ outcome: "allow" } as ToolResultScreen);
-        if (screen.outcome === "quarantine") {
-          const stub = "[tool output quarantined by the security screen]";
-          await turn.emit({
-            kind: "ToolResult",
-            tool: "execute",
-            text: stub,
-            isError: true,
-            body: { quarantined: true, quarantineReason: "screen_verdict" },
-          });
-          reply = stub;
-        } else {
-          await turn.emit({ kind: "ToolResult", body: { ...result } });
-          reply = output;
-        }
+        turn.observeToolResult?.({ tool: "execute", result: output, unscreenable: false, provenance: "external" });
+        await turn.emit({ kind: "ToolResult", body: { ...result } });
+        reply = output;
         usedTool = true;
       } else if (command0.startsWith("!reach ")) {
         const rest = command0.slice("!reach ".length);
@@ -498,7 +473,7 @@ export function createMockHarness(): Harness {
         const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
         const callKey = toolCallApprovalKey("example_send", args);
         usedTool = true;
-        if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
+        if (turn.toolApprovalGate?.(callKey)) reply = `sent ${JSON.stringify(args)}`;
         else {
           collected.push({
             command: `example_send ${JSON.stringify(args)}`,

@@ -61,14 +61,6 @@ export const ADMIN_MARKUP = `
         <p>Resolved for this scope now</p>
       </div>
       <div class="governance-status-grid">
-        <div class="governance-status" id="governance-status-posture">
-          <span class="k">Autonomy</span><span class="v">Loading</span
-          ><span class="detail">Security posture</span>
-        </div>
-        <div class="governance-status" id="governance-status-sharing">
-          <span class="k">Sharing</span><span class="v">Loading</span
-          ><span class="detail">Cross-context reads</span>
-        </div>
         <div class="governance-status" id="governance-status-egress">
           <span class="k">Network</span><span class="v">Loading</span
           ><span class="detail">Outbound enforcement</span>
@@ -95,7 +87,6 @@ export const ADMIN_MARKUP = `
           <h2>Autonomy</h2>
           <p>How agents reason, act, and respond without supervision.</p>
         </div>
-        <template data-governance-card="card-security-posture"></template>
         <template data-governance-card="card-auto-flagger"></template>
         <template data-governance-card="card-approval-grant-modes"></template>
         <template data-governance-card="card-command-policy"></template>
@@ -105,7 +96,6 @@ export const ADMIN_MARKUP = `
           <h2>Data boundaries</h2>
           <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
         </div>
-        <template data-governance-card="card-sharing-posture"></template>
         <template data-governance-card="card-egress"></template>
         <template data-integrations-card="card-external-slack"></template>
         <template data-integrations-card="card-channel-header-pin-default"></template>

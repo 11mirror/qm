@@ -27,7 +27,6 @@ import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
-import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 import { isUserMessage } from "../sessions/items.ts";
@@ -484,15 +483,12 @@ export function createTurnMethods(
           let injectedText = steerText;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
+            deps.orchestrator.observeSecuritySteer({
               payload: steerText,
               actor,
               conversation,
               ...(session ? { sessionId: session.id } : {}),
             });
-            if (decision === "block")
-              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
-            if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
           const fileNames = (req.attachments ?? []).map((a) =>
             a.sourceId
