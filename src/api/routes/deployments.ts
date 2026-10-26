@@ -19,7 +19,6 @@ import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from
 import { isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
-import { CONFIG_DEFAULTS } from "../../config.ts";
 import { resolveShareTarget as resolveShareTargetGrammar, type ResolvedShareTarget } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
@@ -29,6 +28,8 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+
+const DEPLOY_DIAL_TIMEOUT_MS = 20_000;
 
 const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -366,7 +367,7 @@ function proxyReachHttp2(
       else if (!failureHandled && !res.destroyed && !res.writableEnded) res.end();
     });
     up.setTimeout(
-      warmingDialTimeoutMs(`${host}:${port}`, htmlNav, deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs),
+      warmingDialTimeoutMs(`${host}:${port}`, htmlNav, deps.deployDialTimeoutMs ?? DEPLOY_DIAL_TIMEOUT_MS),
       () => {
         if (failureHandled) return;
         failureHandled = true;
@@ -533,13 +534,10 @@ async function proxyReach(
       upRes.pipe(res);
     },
   );
-  up.setTimeout(
-    warmingDialTimeoutMs(upstreamKey, htmlNav, deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs),
-    () => {
-      if (!sendUpstreamFailure(res, htmlNav, true)) res.end();
-      up.destroy();
-    },
-  );
+  up.setTimeout(warmingDialTimeoutMs(upstreamKey, htmlNav, deps.deployDialTimeoutMs ?? DEPLOY_DIAL_TIMEOUT_MS), () => {
+    if (!sendUpstreamFailure(res, htmlNav, true)) res.end();
+    up.destroy();
+  });
   up.on("error", () => {
     if (!sendUpstreamFailure(res, htmlNav, false)) res.end();
   });

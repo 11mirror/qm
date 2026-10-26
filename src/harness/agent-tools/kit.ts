@@ -1,7 +1,7 @@
 // State every agent tool shares within one createAgentTools call: option flags and limits, and the ToolCall/ToolResult recorders.
 
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { CONFIG_DEFAULTS } from "../../config.ts";
+import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { toolResultProvenance, type ToolResultProvenance } from "../../security/security-screen.ts";
 import { parkIfOverCap } from "../../sessions/tool-output.ts";
@@ -13,16 +13,19 @@ import { type AgentToolsOptions, type ToolContextRef } from "../agent-tools.ts";
 import { capPayloadStrings, capResultText, isPolicyNotice, text } from "./shared.ts";
 import { type RetryMark } from "./wrappers.ts";
 
+export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
+export const EXEC_TIMEOUT_MAX_MS = 300_000;
+
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const scratchExec = !!opts?.scratchExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
   const delegateWork = opts?.delegateWork === true;
-  const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
-  const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
-  const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
-  const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
+  const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? EXEC_TIMEOUT_DEFAULT_MS) / 1000);
+  const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? EXEC_TIMEOUT_MAX_MS) / 1000);
+  const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? BACKGROUND_JOB_TTL_MS) / 1000);
+  const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? BACKGROUND_JOB_TTL_MAX_MS) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
   const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;

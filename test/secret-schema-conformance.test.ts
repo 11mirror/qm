@@ -30,7 +30,6 @@ test("runtime schema conditions reference env vars the CLI schema also condition
   const runtimeConditionEnv = [
     "SANDBOX_BACKEND",
     "DEPLOY_PROVIDER",
-    "AWS_DEPLOY_APPS_DOMAIN",
     "DEPLOY_APPS_DOMAIN",
     "GOOGLE_OAUTH_CLIENT_ID",
     "DROPBOX_OAUTH_CLIENT_ID",

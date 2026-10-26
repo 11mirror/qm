@@ -90,7 +90,7 @@ instance has the gateway configured:
 
 ```sh
 export DEPLOY_APPS_DOMAIN=apps.e2e.test AWS_DEPLOY_GATE_SECRET=$(openssl rand -hex 16) \
-  DEPLOY_APPS_SESSION_SECRET=$(openssl rand -hex 16) DEPLOY_APPS_LOGIN_URL=http://localhost:8181
+  PORTAL_SESSION_SECRET=$(openssl rand -hex 16) DEPLOY_APPS_LOGIN_URL=http://localhost:8181
 ```
 
 The default `docker` deploy provider needs a `docker` on PATH; a shim that runs each

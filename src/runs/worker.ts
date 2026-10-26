@@ -28,6 +28,8 @@ export interface ProcessDeps {
   errors?: ErrorLog;
 }
 
+/** Times a run may be claimed before it is failed. */
+export const RUN_MAX_CLAIMS = 8;
 export const LEASE_LOST_CONSECUTIVE = 3;
 
 export const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;

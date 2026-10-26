@@ -79,22 +79,12 @@ function renderEvent(
 }
 
 export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceiver {
-  const triggerDeps: TriggerDeps = {
-    outbound: deps.outbound,
-    idempotency: deps.idempotency,
-    identity: deps.identity,
-    run: deps.run,
-    ...(deps.directory ? { directory: deps.directory } : {}),
-    ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
-  };
-
   async function fire({ webhookId, deliveryId, input, securityScreenData }: WebhookFireJob): Promise<void> {
     const wh = await deps.webhooks.get(webhookId);
     if (!wh || !wh.enabled) return;
     const destination: Destination | undefined = wh.destination;
     try {
-      const outcome = await runTrigger(triggerDeps, {
+      const outcome = await runTrigger(deps, {
         owner: wh.owner,
         ownerScopeId: wh.ownerScopeId,
         input,

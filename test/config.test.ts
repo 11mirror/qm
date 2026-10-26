@@ -122,15 +122,6 @@ test("a remote sandbox backend without the shared egress proxy warns once", () =
   assert.equal(warnings.filter((w) => w.includes("without SANDBOX_EGRESS_PROXY_URL")).length, 1);
 });
 
-test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
-  assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ ARTIFACT_STORE: "sqlite" }), /ARTIFACT_STORE=sqlite is no longer supported/);
-});
-
-test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
-  assert.doesNotThrow(() => loadConfig({ ARTIFACT_STORE: "memory" }));
-});
-
 test("boolEnv: one vocabulary for every boolean env knob", () => {
   for (const v of ["1", "true", "yes", "on", "TRUE", " On "]) assert.equal(boolEnv(v), true, v);
   for (const v of ["0", "false", "no", "off", "none", "OFF"]) assert.equal(boolEnv(v), false, v);
@@ -504,10 +495,11 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
   assert.equal(porter.awsDeploy.appsDomain, undefined);
   assert.equal(porter.porterDeploy.appsDomain, "apps.example.com");
   const aws = loadConfig({
-    AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+    DEPLOY_APPS_DOMAIN: "apps.example.com",
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
   });
   assert.equal(aws.deployAppsDomain, "apps.example.com");
+  assert.equal(aws.awsDeploy.appsDomain, "apps.example.com");
   assert.equal(loadConfig({}).deployAppsDomain, undefined);
 });
 
@@ -531,7 +523,7 @@ test("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase withou
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev.", ...gate }), /shared platform domain/);
 });
 
-test("the portal session secret doubles as the deploy-apps viewer secret when a login URL exists", () => {
+test("the portal session secret is the deploy-apps viewer secret when a login URL exists", () => {
   const derived = loadConfig({ PORTAL_SESSION_SECRET: "shared", PUBLIC_WEB_URL: "https://qm.example.com" });
   assert.equal(derived.deployAppsSessionSecret, "shared");
   assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
@@ -541,17 +533,11 @@ test("the portal session secret doubles as the deploy-apps viewer secret when a 
     undefined,
     "no sign-in address means the fallback stays off, not a throw",
   );
-  const explicit = loadConfig({
-    PORTAL_SESSION_SECRET: "shared",
-    DEPLOY_APPS_SESSION_SECRET: "own",
-    PUBLIC_WEB_URL: "https://qm.example.com",
-  });
-  assert.equal(explicit.deployAppsSessionSecret, "own");
 });
 
 test("the deploy-apps sign-in address defaults to the public web URL", () => {
   const derived = loadConfig({
-    DEPLOY_APPS_SESSION_SECRET: "s",
+    PORTAL_SESSION_SECRET: "s",
     PUBLIC_WEB_URL: "https://qm.example.com/",
   });
   assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
@@ -559,7 +545,7 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   assert.equal(derived.deployAppsLoginPath, "/auth/login");
   assert.equal(
     loadConfig({
-      DEPLOY_APPS_SESSION_SECRET: "s",
+      PORTAL_SESSION_SECRET: "s",
       PUBLIC_WEB_URL: "https://qm.example.com",
       DEPLOY_APPS_LOGIN_PATH: "/auth/trusted/login",
     }).deployAppsLoginPath,
@@ -567,23 +553,20 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
   assert.throws(() => loadConfig({ DEPLOY_APPS_LOGIN_PATH: "//evil.example" }), /DEPLOY_APPS_LOGIN_PATH/);
   const explicit = loadConfig({
-    DEPLOY_APPS_SESSION_SECRET: "s",
+    PORTAL_SESSION_SECRET: "s",
     DEPLOY_APPS_LOGIN_URL: "https://portal.example.com/",
     PUBLIC_WEB_URL: "https://qm.example.com",
   });
   assert.equal(explicit.deployAppsLoginUrl, "https://portal.example.com");
-  assert.throws(() => loadConfig({ DEPLOY_APPS_SESSION_SECRET: "s" }), /DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL/);
+  assert.equal(loadConfig({ PORTAL_SESSION_SECRET: "s" }).deployAppsSessionSecret, undefined);
   assert.throws(
     () => loadConfig({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }),
-    /requires DEPLOY_APPS_SESSION_SECRET/,
+    /requires PORTAL_SESSION_SECRET/,
   );
 });
 
-test("a Claude subscription token in ANTHROPIC_API_KEY is company subscription auth", () => {
-  const subscription = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" });
-  assert.equal(subscription.anthropicApiKey, "sk-ant-oat01-company");
-  assert.equal(providerKeysPresent(subscription).anthropic, true);
-  assert.equal(companySubscriptionAuth(subscription), "anthropic");
+test("company Claude subscription auth comes from the keychain credential, not the API key's text", () => {
+  assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" })), undefined);
   assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-api" })), undefined);
   const keychainHeld = loadConfig({ CLAUDE_AUTH_CREDENTIAL: "cred-1" });
   assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
@@ -664,6 +647,8 @@ test("background ownership requires durable storage and an independent deploymen
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
     DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
   };
   const config = loadConfig(env);
@@ -698,7 +683,7 @@ test("the spend export token is optional, strong, trimmed and never shared with 
   for (const name of [
     "CORE_SIGNING_SECRET",
     "QM_SLACK_SERVICE_TOKEN",
-    "DEPLOY_APPS_SESSION_SECRET",
+    "PORTAL_SESSION_SECRET",
     "SLACK_SIGNING_SECRET",
   ]) {
     assert.throws(
@@ -717,29 +702,8 @@ test("a subscription-only company ChatGPT deployment defaults pi to the plain Co
   assert.equal(configuredModel(base), undefined);
 });
 
-test("QM_ROLES defaults to every role and a split core runs no background work", () => {
-  const all = loadConfig({});
-  assert.deepEqual(all.roles, ["api", "surfaces", "harness"]);
-  assert.equal(all.backgroundWorkEnabled, true);
-  const core = loadConfig({ QM_ROLES: "api" });
-  assert.deepEqual(core.roles, ["api"]);
-  assert.equal(core.backgroundWorkEnabled, false);
-  const harness = loadConfig({ QM_ROLES: "harness, surfaces" });
-  assert.deepEqual(harness.roles, ["harness", "surfaces"]);
-  assert.equal(harness.backgroundWorkEnabled, true);
-  assert.equal(loadConfig({ QM_ROLES: "harness", BACKGROUND_WORK_ENABLED: "0" }).backgroundWorkEnabled, false);
-  assert.throws(() => loadConfig({ QM_ROLES: "api,workers" }), /QM_ROLES="api,workers" must list/);
-  assert.throws(() => loadConfig({ QM_ROLES: "api", BACKGROUND_WORK_ENABLED: "1" }), /needs the harness role/);
-  assert.throws(() => loadConfig({ QM_ROLES: "api,surfaces" }), /surfaces needs harness too/);
-  assert.throws(
-    () =>
-      loadConfig({
-        QM_ROLES: "harness,surfaces",
-        BACKGROUND_DEPLOYMENT_ID: "d1",
-        DEPLOYMENT_CONTROL_SECRET: "x",
-        DATABASE_URL: "postgres://x/y",
-        CONNECTOR_SECRET_KEY: "k".repeat(64),
-      }),
-    /cannot split roles while BACKGROUND_DEPLOYMENT_ID/,
-  );
+test("background work defaults on and BACKGROUND_WORK_ENABLED turns it off", () => {
+  assert.equal(loadConfig({}).backgroundWorkEnabled, true);
+  assert.equal(loadConfig({ BACKGROUND_WORK_ENABLED: "0" }).backgroundWorkEnabled, false);
+  assert.throws(() => loadConfig({ BACKGROUND_WORK_ENABLED: "sometimes" }), /BACKGROUND_WORK_ENABLED/);
 });

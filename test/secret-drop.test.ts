@@ -128,6 +128,42 @@ describe("fireDropResolution", () => {
     assert.equal(seen.length, 1, "the drop:<id> fireKey dedupes a double fire");
   });
 
+  it("skips a channel resume when the owner is no longer a current member of the drop's channel", async () => {
+    const seen: TurnRequest[] = [];
+    const run = async (req: TurnRequest) => {
+      seen.push(req);
+      return { status: "ok" } as TurnResult;
+    };
+    const drop = (id: string): DropResolution => ({
+      id,
+      ownerId: "U_A",
+      service: "stripe",
+      purpose: "charge cards",
+      audienceScopeId: scopeId("channel", "C1"),
+      threadRef: "ch:C1-t",
+      grantId: "g1",
+      credentialHandle: "kc_stripe",
+      granted: true,
+    });
+    const left = await fireDropResolution(
+      { ...depsWith(run), currentScopeMembers: async () => [{ id: "U_B", type: "internal" as const }] },
+      drop("drop-left"),
+    );
+    assert.equal(seen.length, 0, "membership is checked the same way as for crons and asks");
+    assert.match(left.note ?? "", /no longer a member/);
+    await fireDropResolution(
+      {
+        ...depsWith(run),
+        currentScopeMembers: async () => [
+          { id: "U_A", type: "internal" as const },
+          { id: "U_B", type: "internal" as const },
+        ],
+      },
+      drop("drop-member"),
+    );
+    assert.equal(seen.length, 1, "a current member still gets the resume");
+  });
+
   it("resumes a DM (own scope, no grant) and tells the agent the key is available here", async () => {
     const seen: TurnRequest[] = [];
     const deps = depsWith(async (req) => {

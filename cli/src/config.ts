@@ -205,7 +205,8 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
+/** The backend core runs: env.core.SANDBOX_BACKEND when set, else sandbox.backend. Every caller reads it here. */
+export const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 
 export const localSandboxActive = (config: QmConfig): boolean =>
@@ -329,34 +330,45 @@ function objectProps(s: string, objStart: number): { props: PropSpan[]; openBrac
   }
 }
 
+type TextEdit = { start: number; end: number; text: string };
+
+function applyEdits(raw: string, edits: TextEdit[]): string {
+  let out = raw;
+  for (const edit of edits.sort((a, b) => b.start - a.start))
+    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  return out;
+}
+
+const stringEntry = ([key, value]: [string, string]): string => `${JSON.stringify(key)}: ${JSON.stringify(value)}`;
+
+/** Set each key of `updates` in an existing object: replace present values, insert the rest after the brace. */
+function upsertStrings(obj: ReturnType<typeof objectProps>, updates: Record<string, string>): TextEdit[] {
+  const edits: TextEdit[] = [];
+  const missing: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(updates)) {
+    const prop = obj.props.find((p) => p.key === key);
+    if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(value) });
+    else missing.push([key, value]);
+  }
+  if (missing.length) {
+    const body = missing.map(stringEntry).join(", ");
+    edits.push({
+      start: obj.openBrace + 1,
+      end: obj.openBrace + 1,
+      text: obj.props.length ? ` ${body},` : ` ${body} `,
+    });
+  }
+  return edits;
+}
+
 function updateConfigStringMap(raw: string, key: string, updates: Record<string, string>): string {
   const stripped = stripJsonComments(raw);
   const root = objectProps(stripped, 0);
-  const edits: Array<{ start: number; end: number; text: string }> = [];
-  const entry = ([k, v]: [string, string]): string => `${JSON.stringify(k)}: ${JSON.stringify(v)}`;
   const property = root.props.find((p) => p.key === key);
-  if (property) {
-    const obj = objectProps(stripped, property.valueStart);
-    const missing: Array<[string, string]> = [];
-    for (const [k, v] of Object.entries(updates)) {
-      const prop = obj.props.find((p) => p.key === k);
-      if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(v) });
-      else missing.push([k, v]);
-    }
-    if (missing.length) {
-      const body = missing.map(entry).join(", ");
-      const text = obj.props.length ? ` ${body},` : ` ${body} `;
-      edits.push({ start: obj.openBrace + 1, end: obj.openBrace + 1, text });
-    }
-  } else {
-    const body = Object.entries(updates).map(entry).join(", ");
-    const text = `${root.props.length ? "," : ""}\n  ${JSON.stringify(key)}: { ${body} }\n`;
-    edits.push({ start: root.closeBrace, end: root.closeBrace, text });
-  }
-  edits.sort((a, b) => b.start - a.start);
-  let out = raw;
-  for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
-  return out;
+  if (property) return applyEdits(raw, upsertStrings(objectProps(stripped, property.valueStart), updates));
+  const body = Object.entries(updates).map(stringEntry).join(", ");
+  const text = `${root.props.length ? "," : ""}\n  ${JSON.stringify(key)}: { ${body} }\n`;
+  return applyEdits(raw, [{ start: root.closeBrace, end: root.closeBrace, text }]);
 }
 
 export const updateConfigImageOverrides = (raw: string, updates: Record<string, string>): string =>
@@ -364,32 +376,11 @@ export const updateConfigImageOverrides = (raw: string, updates: Record<string, 
 
 export function updateConfigCoreEnv(raw: string, updates: Record<string, string>): string {
   const stripped = stripJsonComments(raw);
-  const root = objectProps(stripped, 0);
-  const edits: Array<{ start: number; end: number; text: string }> = [];
-  const envProp = root.props.find((p) => p.key === "env");
+  const envProp = objectProps(stripped, 0).props.find((p) => p.key === "env");
   if (!envProp) throw new CliError('config has no top-level "env" object');
-  const env = objectProps(stripped, envProp.valueStart);
-  const coreProp = env.props.find((p) => p.key === "core");
+  const coreProp = objectProps(stripped, envProp.valueStart).props.find((p) => p.key === "core");
   if (!coreProp) throw new CliError('config has no "env.core" object');
-  const core = objectProps(stripped, coreProp.valueStart);
-  const missing: Array<[string, string]> = [];
-  for (const [key, value] of Object.entries(updates)) {
-    const prop = core.props.find((p) => p.key === key);
-    if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(value) });
-    else missing.push([key, value]);
-  }
-  if (missing.length) {
-    const body = missing.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(", ");
-    edits.push({
-      start: core.openBrace + 1,
-      end: core.openBrace + 1,
-      text: core.props.length ? ` ${body},` : ` ${body} `,
-    });
-  }
-  edits.sort((a, b) => b.start - a.start);
-  let out = raw;
-  for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
-  return out;
+  return applyEdits(raw, upsertStrings(objectProps(stripped, coreProp.valueStart), updates));
 }
 
 export function loadConfigAt(path: string, overrides?: { target?: Target }): { config: QmConfig; path: string } {
@@ -482,6 +473,24 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "aws",
 ]);
 
+function requireOriginUrl(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) throw new CliError(`${field} must be a non-empty http(s) origin URL`);
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
+      throw new Error("origin");
+    if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
+  } catch {
+    throw new CliError(
+      `${field} must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
+    );
+  }
+}
+
+/** An OCI/ECR image tag: 1-128 letters, digits, underscores, periods or hyphens, not starting with a period or hyphen. */
+export const IMAGE_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+
 function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
@@ -508,37 +517,11 @@ function validate(raw: unknown, path: string): QmConfig {
   }
 
   const publicUrl = o["publicUrl"];
-  if (typeof publicUrl !== "string" || !publicUrl.trim()) {
-    throw new CliError(`${path}: "publicUrl" must be a non-empty http(s) origin URL`);
-  }
-  try {
-    const parsed = new URL(publicUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-    if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
-      throw new Error("origin");
-    if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
-  } catch {
-    throw new CliError(
-      `${path}: "publicUrl" must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
-    );
-  }
+  requireOriginUrl(publicUrl, `${path}: "publicUrl"`);
 
   const apiUrl = o["apiUrl"];
   if (apiUrl !== undefined) {
-    if (typeof apiUrl !== "string" || !apiUrl.trim()) {
-      throw new CliError(`${path}: "apiUrl" must be a non-empty http(s) origin URL`);
-    }
-    try {
-      const parsed = new URL(apiUrl);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-      if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
-        throw new Error("origin");
-      if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
-    } catch {
-      throw new CliError(
-        `${path}: "apiUrl" must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
-      );
-    }
+    requireOriginUrl(apiUrl, `${path}: "apiUrl"`);
   }
 
   rejectRetiredAdminService(o, path);
@@ -870,16 +853,13 @@ export function requiresAwsMicrovmImage(config: QmConfig): boolean {
   if (config.target !== "aws") return false;
   const core = config.env.core;
   if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
-  return (core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
+  return (effectiveSandboxBackend(config) || "aws") === "aws";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
   const hasPortal = config.services.includes("portal");
   const publicUrl = new URL(config.publicUrl);
   const protocol = publicUrl.protocol;
-  if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash || publicUrl.username || publicUrl.password) {
-    throw new CliError(`${path}: AWS publicUrl must be an origin URL without credentials, a path, query, or fragment`);
-  }
   if (config.apiUrl && new URL(config.apiUrl).protocol !== protocol) {
     throw new CliError(`${path}: AWS apiUrl must use the same protocol as publicUrl`);
   }
@@ -1008,7 +988,7 @@ function validateAws(
     );
   }
   const imageLabel = requiredString(raw["imageLabel"], "imageLabel");
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageLabel)) {
+  if (!IMAGE_TAG.test(imageLabel)) {
     throw new CliError(
       `${path}: "aws.imageLabel" must be a valid OCI/ECR tag (1-128 letters, digits, underscores, periods, or hyphens; the first character cannot be a period or hyphen)`,
     );

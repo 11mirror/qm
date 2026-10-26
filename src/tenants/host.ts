@@ -26,7 +26,6 @@ import {
   homeTenantId,
   listTenants,
   tenantSecretsKey,
-  tenantServiceEnv as tenantRecordEnv,
   type TenantRecord,
 } from "./registry.ts";
 
@@ -57,7 +56,7 @@ export function tenantTarget(t: Tenant, server: Server): HostTarget {
 }
 
 export function tenantCoreEnv(base: NodeJS.ProcessEnv, rec: TenantRecord): NodeJS.ProcessEnv {
-  return { ...tenantRecordEnv(base, rec, "core"), ORG_ID: rec.orgId };
+  return { ...tenantServiceEnv(base, rec, "core"), ORG_ID: rec.orgId };
 }
 
 function configHosts(config: Config): string[] {
@@ -129,7 +128,6 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts };
     own.booted = await withTenant(t, () =>
       boot(tenantEnv, async (server, config) => {
-        if (!server) return;
         const target = tenantTarget(t, server);
         if (!t.id) {
           homeCore = target;

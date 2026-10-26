@@ -85,11 +85,6 @@ export async function homeTenantId(pool: PgPool): Promise<string> {
   return id;
 }
 
-/** The overlay env for one service of a tenant: deployment env, then the tenant's env, then its secrets. */
-export function tenantServiceEnv(base: NodeJS.ProcessEnv, rec: TenantRecord, service: string): NodeJS.ProcessEnv {
-  return { ...base, ...(rec.env[service] ?? {}), ...(rec.secretEnv[service] ?? {}) };
-}
-
 /** Refuse to serve several tenants from a login that ignores row-level security. */
 export async function assertRowSecurityEnforced(pool: PgPool): Promise<void> {
   const rows = await pool.q("SELECT rolsuper OR rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
