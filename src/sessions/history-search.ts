@@ -1,6 +1,6 @@
 import { contextSummary } from "./session-store.ts";
 import { isOverheard, itemFields, proseText, type Item } from "./items.ts";
-import { searchAuthor } from "./entry-search.ts";
+import { searchAuthor } from "./item-search.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 
 const MAX_HIT_CHARS = 500;

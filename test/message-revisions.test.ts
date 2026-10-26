@@ -12,7 +12,7 @@ import {
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../src/slack/message-gating.ts";
 import { sleep } from "../src/util/async.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import type { SessionStore } from "../src/sessions/session-store.ts";
+import type { LeaseHolder, SessionStore } from "../src/sessions/session-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import type { ScopeId } from "../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
@@ -325,7 +325,7 @@ test("an edit whose marker is already recorded never takes the backfill lease", 
   const acquires: string[] = [];
   const spied = {
     ...sessions,
-    acquireLease: async (id: string, holder?: "turn" | "compaction" | "fork" | "backfill") => {
+    acquireLease: async (id: string, holder?: LeaseHolder) => {
       acquires.push(holder ?? "");
       return sessions.acquireLease(id, holder);
     },

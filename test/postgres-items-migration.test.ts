@@ -123,12 +123,12 @@ test(
       await store.releaseLease(lease);
       assert.equal(next.seq, legacy.length);
       assert.deepEqual(
-        (await store.searchEntries("alice", "zebracorn")).map((hit) => [hit.sessionId, hit.seq]),
+        (await store.searchItems("alice", "zebracorn")).map((hit) => [hit.sessionId, hit.seq]),
         [[sessionId, legacy.length]],
         "search reads items",
       );
       assert.deepEqual(
-        (await store.searchEntries("alice", "final answer")).map((hit) => [hit.seq, hit.type]),
+        (await store.searchItems("alice", "final answer")).map((hit) => [hit.seq, hit.type]),
         [[5, "assistant"]],
         "copied history is searchable",
       );

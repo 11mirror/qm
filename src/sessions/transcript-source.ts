@@ -13,16 +13,6 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<TranscriptRead>;
 }
 
-export function transcriptItems(items: readonly Item[]): Item[] {
-  const receipt = (item: Item): boolean => item.kind === "UserMessage" && item.body.slackReplyReceipt === true;
-  const received = new Set(
-    items.flatMap((item) =>
-      item.kind === "UserMessage" && item.externalId && !receipt(item) ? [item.externalId] : [],
-    ),
-  );
-  return items.filter((item) => !(receipt(item) && item.externalId && received.has(item.externalId)));
-}
-
 const emptyWindowStart = (opts?: GetItemsOptions): number =>
   Math.min(opts?.sinceSeq ?? Infinity, opts?.beforeSeq ?? Infinity, Number.MAX_SAFE_INTEGER);
 

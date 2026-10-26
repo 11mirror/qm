@@ -27,7 +27,7 @@ async function seed(sessions: SessionStore, threadRef: string, principal: string
   return s.id;
 }
 
-test("session store: searchEntries matches user and assistant text, newest first", async () => {
+test("session store: searchItems matches user and assistant text, newest first", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const id = await seed(store, "web:U1:a", "U1", [
     "can you refresh the memo board?",
@@ -35,16 +35,16 @@ test("session store: searchEntries matches user and assistant text, newest first
     "unrelated chatter",
   ]);
 
-  const hits = await store.searchEntries("U1", "memo board");
+  const hits = await store.searchItems("U1", "memo board");
   assert.equal(hits.length, 2);
   assert.equal(hits[0]!.sessionId, id);
   assert.equal(hits[0]!.type, "assistant", "assistant reply is found too");
   assert.equal(hits[1]!.author, "josh", "user hits carry the author");
   assert.ok(hits[0]!.createdAt >= hits[1]!.createdAt, "newest first");
 
-  assert.deepEqual(await store.searchEntries("U1", "memo missing"), [], "every term must match");
-  assert.deepEqual(await store.searchEntries("U1", "  "), [], "blank query matches nothing");
-  assert.equal((await store.searchEntries("U1", "memo"))[0]!.text.includes("memo"), true);
+  assert.deepEqual(await store.searchItems("U1", "memo missing"), [], "every term must match");
+  assert.deepEqual(await store.searchItems("U1", "  "), [], "blank query matches nothing");
+  assert.equal((await store.searchItems("U1", "memo"))[0]!.text.includes("memo"), true);
 });
 
 test("session store: search respects participant visibility windows and identity", async () => {
@@ -64,12 +64,12 @@ test("session store: search respects participant visibility windows and identity
   });
   await store.releaseLease(lease!);
 
-  const u2 = await store.searchEntries("U2", "secret");
+  const u2 = await store.searchItems("U2", "secret");
   assert.equal(u2.length, 1, "U2 sees only the post-join message");
   assert.equal(u2[0]!.text, "shared secret plans");
 
-  assert.deepEqual(await store.searchEntries("U3", "secret"), [], "a non-participant sees nothing");
-  assert.equal((await store.searchEntries("U1", "secret")).length, 2, "a full-history participant sees both");
+  assert.deepEqual(await store.searchItems("U3", "secret"), [], "a non-participant sees nothing");
+  assert.equal((await store.searchItems("U1", "secret")).length, 2, "a full-history participant sees both");
 });
 
 test("session store: search ignores non-conversational entry types", async () => {
@@ -90,7 +90,7 @@ test("session store: search ignores non-conversational entry types", async () =>
   });
   await store.releaseLease(lease!);
 
-  const hits = await store.searchEntries("U1", "zanzibar");
+  const hits = await store.searchItems("U1", "zanzibar");
   assert.equal(hits.length, 1, "tool calls are not searched");
   assert.equal(hits[0]!.type, "text");
 });

@@ -1,7 +1,7 @@
 import { samePerson } from "../directory/person.ts";
 import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../search/core-search.ts";
 import { createIntersectionBackend } from "../search/backends.ts";
-import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
+import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/item-search.ts";
 import type { Principal } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";

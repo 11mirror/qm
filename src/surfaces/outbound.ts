@@ -182,7 +182,7 @@ export async function appendToTranscript(
   alreadyThere?: () => Promise<boolean>,
 ): Promise<void> {
   const wait = deps.leaseWaitMs ?? TRANSCRIPT_LEASE_WAIT_MS;
-  const { lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", wait);
+  const { lease } = await acquireLeaseWithin(deps.sessions, session.id, "append", wait);
   if (!lease)
     throw Object.assign(
       new Error("that conversation stayed busy, so the message was not added to it — try again shortly"),

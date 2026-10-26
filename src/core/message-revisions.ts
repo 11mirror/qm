@@ -132,7 +132,7 @@ async function recordWhenIdle(
   if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
-    const { lease } = await sessions.acquireLease(session.id, "backfill");
+    const { lease } = await sessions.acquireLease(session.id, "append");
     if (!lease) continue;
     try {
       await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);

@@ -107,7 +107,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     );
     return false;
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "backfill", FAILURE_RECORD_WAIT_MS);
+  const { lease } = await acquireLeaseWithin(sessions, session.id, "append", FAILURE_RECORD_WAIT_MS);
   if (!lease) {
     console.error(`[run-results] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
     return false;
