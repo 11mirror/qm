@@ -272,3 +272,27 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
 
   await built.app.deleteCron(privCron.id);
 });
+
+test("cron runtime patches pass through the web API, validate, and clear", async () => {
+  const cron = await built.app.createCron({
+    title: "runtime",
+    action: "check",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+  });
+  const runtime = { modelId: "claude-sonnet-5" };
+  const patch = (value: unknown) =>
+    fetch(
+      `${webBase}/api/crons/${cron.id}`,
+      asUser("alice", { method: "PATCH", body: JSON.stringify({ runtime: value }) }),
+    );
+  const selected = await patch(runtime);
+  assert.equal(selected.status, 200, await selected.clone().text());
+  assert.deepEqual((await built.app.getCron(cron.id))?.runtime, runtime);
+  assert.equal((await patch({ modelId: "does-not-exist" })).status, 400);
+  assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
+  assert.equal((await patch(null)).status, 200);
+  assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+});

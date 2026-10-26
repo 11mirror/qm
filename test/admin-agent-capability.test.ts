@@ -885,7 +885,7 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
   });
 }
 
-test("shared-channel admin cron mutations do not return a private cron prompt", async () => {
+test("shared-channel admin runtime mutations do not return a private cron prompt", async () => {
   const s = await start();
   try {
     await s.built.config.setSharingPosture("channel:C1", "isolated");
@@ -900,6 +900,13 @@ test("shared-channel admin cron mutations do not return a private cron prompt", 
     const headers = { "x-agent-capability": cap, "content-type": "application/json" };
     const read = await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers });
     assert.equal(read.status, 403);
+    const updated = await fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=personal:U1`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ runtime: null }),
+    });
+    assert.equal(updated.status, 200);
+    assert.deepEqual(await updated.json(), { cron: { id: cron.id, runtime: null } });
     const retargeted = await fetch(`${s.base}/v1/admin/crons/${cron.id}/destination?scope=personal:U1`, {
       method: "PUT",
       headers,
@@ -908,10 +915,10 @@ test("shared-channel admin cron mutations do not return a private cron prompt", 
     assert.equal(retargeted.status, 200);
     assert.deepEqual(await retargeted.json(), { cron: { id: cron.id } });
     const unattended = await capFor("admin-alice", { live: false, scope: "channel:C1" });
-    const denied = await fetch(`${s.base}/v1/admin/crons/${cron.id}/destination?scope=personal:U1`, {
+    const denied = await fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=personal:U1`, {
       method: "PUT",
       headers: { ...headers, "x-agent-capability": unattended },
-      body: JSON.stringify({ destination: null }),
+      body: JSON.stringify({ runtime: null }),
     });
     assert.equal(denied.status, 403);
   } finally {

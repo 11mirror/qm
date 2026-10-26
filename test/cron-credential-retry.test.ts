@@ -19,6 +19,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     ownerScopeId: "personal:U_ALICE",
     schedule: { everyMs: 60_000 },
     action: "read a private dummy account",
+    runtime: { modelId: "gpt-6-luna", effortLevel: "low" },
     destination: {
       type: "principal",
       target: "U_BOB",
@@ -65,6 +66,8 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
 
   await assert.rejects(fireAskResolution(f.deps, f.ask));
 
+  assert.equal(requests[0]?.model, "gpt-6-luna");
+  assert.equal(requests[0]?.thinkingLevel, "low");
   assert.equal(await f.idempotency.committed(fireKey), false);
   assert.equal((await f.outbound.pending("principal")).length, 0);
   const resumed = await fireAskResolution(f.deps, f.ask);

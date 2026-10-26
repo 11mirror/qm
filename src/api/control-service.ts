@@ -3,7 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Webhook } from "../types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { describeRunNowRefusal, type Scheduler } from "../cron/scheduler.ts";
+import {
+  cronFireReadsNotes,
+  describeRunNowRefusal,
+  echoesCronContextMarkers,
+  flattenFireNote,
+  type Scheduler,
+} from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, type ReachResolution } from "../reach/reach.ts";
@@ -25,6 +31,7 @@ import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
 export interface CronCreateRequest {
+  runtime?: Cron["runtime"];
   schedule: CronSchedule;
   title?: string;
   action?: string;
@@ -68,6 +75,7 @@ export type WebhookCreateResult =
   | { ok: false; code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   text?: string;
@@ -80,6 +88,7 @@ export interface CronPatchRequest {
 }
 
 const CRON_PATCH_FIELDS = [
+  "runtime",
   "title",
   "action",
   "text",
@@ -104,6 +113,8 @@ export interface CronRunsResult {
 export const CRON_PATCH_NOTHING_TO_CHANGE =
   "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, unattendedGrants, or session";
 
+export const CRON_FIRE_NOTE_MAX_CHARS = 400;
+
 export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 type ControlOp<T, C extends string = never> = Promise<ControlOk<T> | ControlErr<"not_found" | "forbidden" | C>>;
@@ -118,6 +129,7 @@ export interface ControlService {
     req: CronPatchRequest,
     claims: CapabilityClaims,
   ): ControlOp<{ cron: Cron }, "bad_request" | "cron_update_failed">;
+  noteCron(id: string, text: string, claims: CapabilityClaims): ControlOp<{ applied: boolean }, "bad_request">;
   deleteCron(id: string, claims: CapabilityClaims): ControlOp<Record<never, never>>;
   setCronEnabled(id: string, enabled: boolean, claims: CapabilityClaims): ControlOp<{ cron: Cron }>;
   runCron(
@@ -236,6 +248,7 @@ function patchFromCronPatchRequest(
     return fail("bad_request", "session:true needs a live conversation in the cron's own scope to tie it to");
   return {
     ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
+    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
@@ -250,6 +263,7 @@ function patchFromCronPatchRequest(
 
 function cronEditSummary(req: CronPatchRequest): string[] {
   return [
+    ...(req.runtime !== undefined ? ["runtime"] : []),
     ...(req.title !== undefined ? ["title"] : []),
     ...(req.action !== undefined || req.text !== undefined ? ["task"] : []),
     ...(req.schedule !== undefined ? ["schedule"] : []),
@@ -376,6 +390,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
+        ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
         ...(req.text !== undefined ? { message: req.text } : {}),
         owner: capability.actorId,
@@ -447,6 +462,44 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         return fail("cron_update_failed", errMessage(e));
       }
+    },
+
+    async noteCron(id, text, capability) {
+      const flattened = flattenFireNote(text);
+      if (!flattened) return fail("bad_request", "the note is empty — say what the next fire should know");
+      const length = [...flattened].length;
+      if (length > CRON_FIRE_NOTE_MAX_CHARS)
+        return fail(
+          "bad_request",
+          `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files via the available Files API, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+        );
+      if (echoesCronContextMarkers(flattened))
+        return fail(
+          "bad_request",
+          "the note can't include the cron runtime context markers — write a plain report instead",
+        );
+      const found = await administeredCron(id, capability);
+      if (!found.ok) return found;
+      const { cron } = found;
+      if (cron.archived)
+        return fail("bad_request", `cron ${id} is archived — its fires won't run, so a note would never be read`);
+      if (!cronFireReadsNotes(cron))
+        return fail(
+          "bad_request",
+          `cron ${id}'s fires don't read shift-change notes (it is one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+        );
+      const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
+      const refusal = ownFire ? null : await unattendedRefusal(cron, capability);
+      if (refusal) return refusal;
+      const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
+      const outcome = await app.setCronFireNote(id, {
+        text: flattened,
+        at: fireEntry?.firedAt ?? Date.now(),
+        ...(ownFire ? {} : { by: capability.actorId }),
+      });
+      if (outcome === "missing") return fail("not_found", `no cron ${id}`);
+      if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"]);
+      return { ok: true, applied: outcome === "applied" };
     },
 
     async deleteCron(id, capability) {
