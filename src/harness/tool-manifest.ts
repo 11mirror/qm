@@ -46,6 +46,7 @@ const PURPOSE: Record<string, string> = {
   history: "Searches earlier parts of this conversation.",
   background: "Checks on and stops long-running commands.",
   subagents: "Hands work to helper agents that run alongside.",
+  swarm: "Runs a group of helper agents that share a message board.",
   sessions: "Opens and reads other conversations in your sidebar.",
   sandbox: "Creates and manages sandbox computers.",
   cron: "Schedules future and recurring work.",
