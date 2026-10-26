@@ -2,7 +2,7 @@ import type { SkillPackStore } from "./skill-pack-store.ts";
 import type { SkillPackFetcher } from "./pack-fetcher.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { reportFailure, reportFailureAs } from "../util/errors.ts";
 
 const TICK_LEASE_KEY = "skills:sync:tick";
 const DEFAULT_INTERVAL_MS = 300_000;
@@ -44,7 +44,7 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
       try {
         await syncOne(pack.id);
       } catch (e) {
-        console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e));
+        reportFailure("skill-sync: pack sync", e, pack.id);
       }
     }
   }

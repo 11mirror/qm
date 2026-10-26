@@ -56,19 +56,20 @@ function lastSegment(path: string): string {
   return parts.at(-1) ?? path;
 }
 
-function collectAssets(repo: FetchedRepo, skillDir: string): SkillFile[] | null {
+/** A skill's bundled files, or why the skill can't be imported: a binary file or a path that isn't safe to write. */
+function collectAssets(repo: FetchedRepo, skillDir: string): SkillFile[] | "binary-asset" | "malformed" {
   const prefix = skillDir ? `${skillDir}/` : "";
   const out: SkillFile[] = [];
   for (const f of repo.files) {
     if (!f.path.startsWith(prefix)) continue;
     const rel = f.path.slice(prefix.length);
     if (rel === "SKILL.md" || rel.includes("/SKILL.md")) continue;
-    if (f.binary) return null;
+    if (f.binary) return "binary-asset";
     let safe: string;
     try {
       safe = safeSkillFilePath(rel);
     } catch {
-      return null;
+      return "malformed";
     }
     out.push({ path: safe, content: f.text });
   }
@@ -188,7 +189,10 @@ export function planIngest(repo: FetchedRepo, ctx: IngestContext): IngestPlan {
     if (norm.private) reason = "private";
     else if (!isOrgEligibleScope(norm.scopeHint)) reason = "scope";
     else if (ctx.nativeNames.has(norm.manifest.name)) reason = "collision";
-    else if (collectAssets(repo, skillDir) === null) reason = "binary-asset";
+    else {
+      const assets = collectAssets(repo, skillDir);
+      if (typeof assets === "string") reason = assets;
+    }
 
     if (reason) counts[reason]++;
     else counts.eligible++;
@@ -236,7 +240,8 @@ export async function importPack(
   const toWrite: Array<{ upstreamName: string; manifest: SkillManifest }> = [];
   for (const c of plan.candidates) {
     if (!c.eligible || !c.normalized || !wanted(c.upstreamName)) continue;
-    const assets = collectAssets(repo, skillDirOf(c.skillPath)) ?? [];
+    const collected = collectAssets(repo, skillDirOf(c.skillPath));
+    const assets = typeof collected === "string" ? [] : collected;
     toWrite.push({ upstreamName: c.upstreamName, manifest: { ...c.normalized.manifest, files: assets } });
   }
 

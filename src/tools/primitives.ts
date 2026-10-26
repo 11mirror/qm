@@ -60,7 +60,7 @@ import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
-import { errMessage, withCleanup } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
@@ -653,7 +653,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       try {
         deps.onGapWork?.({ phase, start, end: Date.now() });
       } catch (error) {
-        void error;
+        swallow("tool context timing sink", error);
       }
     }
   }
@@ -788,7 +788,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
                     listed.sandboxes.map(async (record) =>
                       deps.accessSandboxResource!(record.id)
                         .then((access) => access.resource)
-                        .catch(() => null),
+                        .catch(swallowAs("sandbox list: access check", null)),
                     ),
                   )
                 ).filter((record) => record !== null),

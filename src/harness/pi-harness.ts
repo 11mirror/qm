@@ -1422,21 +1422,23 @@ export function resolveConfiguredModelId(configured: string | undefined, default
 
 const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
 
-function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
-  const prior = model.headers?.["anthropic-beta"];
-  if (!prior || !apiKey?.includes("sk-ant-oat")) return model;
-  const beta = [...new Set([...CLAUDE_SUBSCRIPTION_BETAS, ...prior.split(",").map((value) => value.trim())])].join(",");
+/** The model with `before` and `after` merged around its existing anthropic-beta values, deduplicated. */
+function withAnthropicBetas(model: Model<Api>, before: readonly string[], after: readonly string[] = []): Model<Api> {
+  const prior = model.headers?.["anthropic-beta"]?.split(",").map((value) => value.trim()) ?? [];
+  const beta = [...new Set([...before, ...prior, ...after])].join(",");
   return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+}
+
+function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
+  if (!model.headers?.["anthropic-beta"] || !apiKey?.includes("sk-ant-oat")) return model;
+  return withAnthropicBetas(model, CLAUDE_SUBSCRIPTION_BETAS);
 }
 
 export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
   if (api.startsWith("openai") || !direct) return model;
   const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
-  if (!betas.length) return model;
-  const prior = model.headers?.["anthropic-beta"];
-  const beta = [...new Set([...(prior ? prior.split(",").map((value) => value.trim()) : []), ...betas])].join(",");
-  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+  return betas.length ? withAnthropicBetas(model, [], betas) : model;
 }
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
