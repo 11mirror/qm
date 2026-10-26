@@ -35,7 +35,6 @@ export interface TriggerDeps {
 }
 
 export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
-  runtime?: import("../harness/harness.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
@@ -288,12 +287,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
         ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
         ...turnModelOptions({
           triggered: true,
           surface: spec.surface,
-          thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
-          fastMode: spec.fastMode ?? spec.runtime?.fastMode,
+          thinkingLevel: spec.thinkingLevel,
+          fastMode: spec.fastMode,
         }),
         ...(spec.model ? { model: spec.model } : {}),
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),

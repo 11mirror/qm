@@ -200,8 +200,8 @@ test("ledger replay: a FAILED create is not cached, so a retry can succeed", asy
 
   const bad = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).cronCreate({
     schedule: { everyMs: 3_600_000 },
-    action: "x",
-    destinationKey: "nope",
+    text: "x",
+    inbox: true,
   });
   assert.equal(bad.ok, false);
 

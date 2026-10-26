@@ -1,7 +1,7 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
+import { type Cron, type CronFireLogEntry, type TurnRequest, type TurnResult } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
@@ -93,7 +93,7 @@ function truncate(s: string, maxChars: number): string {
 
 const CRON_CONTEXT_MARKERS = ["[Cron runtime context]", "[End cron runtime context]"] as const;
 
-export function echoesCronContextMarkers(s: string): boolean {
+function echoesCronContextMarkers(s: string): boolean {
   return CRON_CONTEXT_MARKERS.some((marker) => s.includes(marker));
 }
 
@@ -106,27 +106,6 @@ function cronFireLogReply(s: string): string {
 
 function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
   return schedule.everyMs == null && schedule.cron == null;
-}
-
-export function cronFireReadsNotes(cron: Pick<Cron, "schedule" | "action">): boolean {
-  const task = cron.action ?? "";
-  if (!task.trim() || /^!(run|scratch)\s/.test(task.trimStart())) return false;
-  return !isOneShotSchedule(cron.schedule);
-}
-
-export function flattenFireNote(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function fireNoteLine(note: CronFireNote | undefined): string[] {
-  if (!note || !Number.isFinite(note.at)) return [];
-  const text = flattenFireNote(note.text);
-  if (!text || echoesCronContextMarkers(text)) return [];
-  return [
-    note.by
-      ? `Note left for this fire by ${note.by} (${utcMinute(note.at)}): ${text}`
-      : `Notes from last fire agent (${utcMinute(note.at)}): ${text}`,
-  ];
 }
 
 function cronFireThreadRef(cronId: string, fireKey: string): string {
@@ -151,7 +130,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
   if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
-  const readsNotes = cronFireReadsNotes(cron);
   return [
     "[Cron runtime context]",
     `Cron id: ${cron.id}${cron.title ? ` (${cron.title})` : ""}.`,
@@ -163,12 +141,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
     ...(cron.inbox
       ? [
           `This cron keeps an inbox of work items. GET $AGENT_API_URL/v1/crons/${cron.id}/items lists them. POST it with {"items":[{"dedupeKey","summary","sourcePayload":{...},"proposal":{...}}]} to add or refresh items; a repeated dedupeKey updates the same item. Close one with POST $AGENT_API_URL/v1/crons/${cron.id}/items/<item id>/action and {"kind":"done"|"fail"|"dismiss","args":{"reason":"<one line>"}}. Work every pending item before finishing.`,
-        ]
-      : []),
-    ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
-    ...(readsNotes
-      ? [
-          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include credentials. It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say.`,
         ]
       : []),
     ...(mentionRoster
@@ -259,7 +231,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
-          ...(cron.runtime ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);

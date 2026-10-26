@@ -269,14 +269,7 @@ export interface CronFireLogEntry {
   sessionId?: string;
 }
 
-export interface CronFireNote {
-  text: string;
-  at: number;
-  by?: string;
-}
-
 export interface Cron extends TriggerBase {
-  runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
@@ -291,7 +284,6 @@ export interface Cron extends TriggerBase {
   sessionRef?: string;
 
   fireLog?: CronFireLogEntry[];
-  lastFireNote?: CronFireNote;
 }
 
 interface WebhookVerification {

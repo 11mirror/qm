@@ -103,8 +103,6 @@ test("pg cron_fires: thread-ref lookups hit the indexed columns across crons", {
       ["c-b", "kb2"],
     ],
   );
-  assert.equal((await fires.latestForThread("c-b", "thread-b"))?.fireKey, "kb2");
-  assert.equal(await fires.latestForThread("c-b", "missing"), undefined);
   assert.deepEqual(await fires.listByThreadRefs([]), []);
 });
 

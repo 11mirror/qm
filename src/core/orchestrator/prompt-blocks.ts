@@ -12,11 +12,10 @@ export function deliveryMenu(candidates: CandidateDestination[], defaultKey: str
     );
   return [
     "## Where scheduled tasks post",
-    "When you schedule a cron here, it delivers to the default below unless you pass a different",
-    "`destinationKey` to the `cron` tool on create, or move an existing one with `cron`",
-    "action=retarget. A `destinationKey` may only come from this list — these are the destinations",
-    "authenticated for this conversation. To schedule something privately for whoever asked instead,",
-    'pass `scope:"personal"` (it runs at their personal scope and DMs them).',
+    "A cron you schedule here delivers to the default below; to post one to a whole channel, pass the",
+    "channel's name as `channel`. A webhook also delivers to the default unless you pass a different",
+    "`destinationKey` to the `webhook` tool on create. A `destinationKey` may only come from this list —",
+    "these are the destinations authenticated for this conversation.",
     ...lines,
   ].join("\n");
 }

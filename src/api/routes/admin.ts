@@ -12,13 +12,7 @@ import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
-import {
-  archiveAdminSkill,
-  getAdminSkill,
-  listAdminArtifacts,
-  putAdminCronDestination,
-  putAdminCronRuntime,
-} from "./admin/artifacts.ts";
+import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
 import { adminMemory, listMemoryScopes } from "./admin/memory.ts";
 import { manageSandboxResources } from "./admin/sandbox.ts";
 import {
@@ -151,7 +145,6 @@ const routes: Route<ApiCtx>[] = [
     route("GET", "/crons", listAdminArtifacts, unattended("admin.crons.read", "list a scope's crons")),
     route("GET", "/deployments", listAdminArtifacts, PRIVATE),
     route("GET", "/skills", listAdminArtifacts, PRIVATE),
-    route("PUT", "/crons/:id/runtime", putAdminCronRuntime),
     route("PUT", "/crons/:id/destination", putAdminCronDestination),
     route("GET", "/skills/:id", getAdminSkill, PRIVATE),
     route("DELETE", "/skills/:id", archiveAdminSkill),

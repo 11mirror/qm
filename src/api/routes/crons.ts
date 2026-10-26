@@ -1,4 +1,3 @@
-import { isCronRuntime } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -14,7 +13,6 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 function isCreateCron(b: unknown): b is CreateCronInput {
   return (
     isObj(b) &&
-    isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
     (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
@@ -42,7 +40,6 @@ async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cr
 }
 
 const CRON_PATCH_TYPES = {
-  runtime: null,
   title: "string",
   action: "string",
   task: "string",
@@ -59,7 +56,6 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
 }
 
 function isCronPatch(b: unknown): b is {
-  runtime?: Cron["runtime"];
   title?: string;
   task?: string;
   action?: string;
@@ -70,7 +66,7 @@ function isCronPatch(b: unknown): b is {
   unattendedGrants?: string[];
   session?: boolean;
 } {
-  if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
+  if (!isObj(b)) return false;
   for (const [key, type] of Object.entries(CRON_PATCH_TYPES))
     if (type && b[key] !== undefined && typeof b[key] !== type) return false;
   if (
@@ -186,7 +182,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     });
   }
   const patch: CronPatch = {
-    ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(task !== undefined ? { action: task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),
@@ -204,7 +199,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         cron: updated,
         editorId: editor,
         changeSummary: [
-          ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
           ...(task !== undefined ? ["task"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),

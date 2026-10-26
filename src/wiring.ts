@@ -114,7 +114,13 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import {
+  createCronStore,
+  DROP_CRON_RUNTIME_AND_NOTE_MIGRATION,
+  DROP_RUN_AS_MIGRATION,
+  LOOPS_TO_CRONS_MIGRATION,
+  type CronStore,
+} from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createInboxLedger, type InboxEventSink } from "./inbox/ledger.ts";
@@ -1650,6 +1656,7 @@ export function buildApp(
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
   pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(DROP_CRON_RUNTIME_AND_NOTE_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
