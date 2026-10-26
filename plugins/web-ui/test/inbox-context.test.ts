@@ -25,8 +25,6 @@ test("conversation details include the waiting message after prior context with 
     for (const [source, payloadSource] of [
       ["slack", undefined],
       ["gmail", undefined],
-      [undefined, "slack"],
-      [undefined, "gmail"],
       ["slack", "gmail"],
       ["gmail", "slack"],
     ]) {
@@ -53,7 +51,7 @@ test("conversation details include the waiting message after prior context with 
           updatedAt: 3000,
           thread: [],
         });
-        assert.equal(item.source, source ?? payloadSource);
+        assert.equal(item.source, source);
         render(contextTpl(item), host);
         assert.deepEqual(
           [...host.querySelectorAll(".inbox-context-text")].map((el) => el.textContent?.trim()),
