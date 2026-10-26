@@ -42,6 +42,7 @@ async function quietAsync(fn: () => Promise<void>): Promise<string[]> {
 test("nodeEngineProblem accepts a satisfying version and rejects an older one", () => {
   assert.equal(nodeEngineProblem(">=24.15.0", "package.json", "v24.15.0"), undefined);
   assert.equal(nodeEngineProblem(">=24.0.0", "package.json", "v24.13.0"), undefined);
+  assert.match(nodeEngineProblem("^24", "package.json", "v24.13.0") ?? "", /not a ">=<version>" range/);
   const problem = nodeEngineProblem(">=24.15.0", "the repo package.json", "v24.13.0");
   assert.ok(problem?.includes("v24.13.0"));
   assert.ok(problem?.includes(">=24.15.0"));

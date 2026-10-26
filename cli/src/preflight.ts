@@ -42,6 +42,8 @@ function cliPackagePath(): string {
 }
 
 export function nodeEngineProblem(spec: string, source: string, nodeVersion = process.version): string | undefined {
+  if (!/^\s*(?:>=\s*v?\d+(?:\.\d+){0,2}\s*)+$/.test(spec))
+    return `"node": ${JSON.stringify(spec)} in ${source} is not a ">=<version>" range qm can check; use ">=<version>"`;
   const minimums = [...spec.matchAll(/>=\s*v?(\d+(?:\.\d+){0,2})/g)].map((match) => match[1]!);
   for (const minimum of minimums) {
     if (!versionAtLeast(nodeVersion, minimum)) {
