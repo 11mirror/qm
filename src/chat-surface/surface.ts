@@ -54,7 +54,10 @@ export interface Surface {
   readonly name: string;
   readonly label: string;
   readonly destinationTypes: readonly string[];
-  normalize?(request: SurfaceRequest): Promise<InboundOutcome>;
   deliver: SurfaceSender;
+}
+
+export interface InboundSurface extends Surface {
+  normalize(request: SurfaceRequest): Promise<InboundOutcome>;
   principalFor(user: SurfaceUser): ActorAssertion;
 }

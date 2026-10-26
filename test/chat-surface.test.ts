@@ -65,7 +65,7 @@ test("surface refs keep a chat id from colliding with another surface or account
 
 test("http-chat accepts only events signed with its own secret inside the replay window", async () => {
   const adapter = createHttpChatSurface(config());
-  const receive = adapter.normalize!.bind(adapter);
+  const receive = adapter.normalize.bind(adapter);
   const ok = await receive(signed(dmEvent()));
   assert.equal(ok.status, 200);
   assert.deepEqual(ok.status === 200 && ok.messages[0], {
@@ -90,7 +90,7 @@ test("http-chat accepts only events signed with its own secret inside the replay
 
 test("http-chat treats authors as guests unless their email is in an internal domain, and takes DMs only", async () => {
   const adapter = createHttpChatSurface(config());
-  const receive = adapter.normalize!.bind(adapter);
+  const receive = adapter.normalize.bind(adapter);
   const authorOf = async (author: Record<string, unknown>) => {
     const out = await receive(signed(dmEvent({ author })));
     return out.status === 200 ? out.messages[0]?.author : undefined;
@@ -312,7 +312,7 @@ test("http-chat writes its inbound and outbound messages to the surface message 
     fetch: async () => new Response("{}", { status: 201 }),
     mirror: async (events) => void mirrored.push(...events),
   });
-  await adapter.normalize!(
+  await adapter.normalize(
     signed(
       dmEvent({
         message: { id: 9001, text: "hello", thread_id: 500, sent_at: 1_700_000_000_000 },
