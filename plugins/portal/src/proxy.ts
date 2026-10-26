@@ -87,7 +87,9 @@ function relay(
       upRes.pipe(res);
     },
   );
+  let clientGone = false;
   up.on("error", (error) => {
+    if (clientGone) return;
     console.warn(`[portal] upstream ${target.hostname}:${target.port ?? ""} failed: ${errMessage(error)}`);
     if (!res.headersSent) {
       res.writeHead(502, { "content-type": "application/json" });
@@ -96,9 +98,14 @@ function relay(
       res.end();
     }
   });
-  req.on("error", () => up.destroy());
+  req.on("error", () => {
+    clientGone = true;
+    up.destroy();
+  });
   res.on("close", () => {
-    if (!res.writableFinished) up.destroy();
+    if (res.writableFinished) return;
+    clientGone = true;
+    up.destroy();
   });
   req.pipe(up);
 }
