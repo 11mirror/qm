@@ -420,6 +420,7 @@ async function getSessionRow(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? undefined;
   if (!principalId || (!id && !threadRef)) return badRequest(res, "principalId and id or threadRef required");
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
+  if (!id && !session) return sendJson(res, 200, { session: null });
   return found(res, session && { session });
 }
 
