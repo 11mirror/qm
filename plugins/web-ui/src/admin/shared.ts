@@ -11,7 +11,7 @@ export function badge(text: unknown, kind = "") {
   return html`<span class=${"badge" + (kind ? " " + kind : "")}>${text}</span>`;
 }
 
-export function cell(value: any): unknown {
+function cell(value: any): unknown {
   if (value?.node) return value.node;
   if (value?.badges)
     return html`<div class="badges">

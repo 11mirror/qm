@@ -3,18 +3,7 @@ import { html, render, type TemplateResult } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
-export {
-  owns,
-  collect,
-  capture,
-  commit,
-  status,
-  statusKey,
-  load,
-  loadResource,
-  updateCatalog,
-  states,
-} from "./governance-state.ts";
+export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "card-security-posture": (s) =>

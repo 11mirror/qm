@@ -545,7 +545,7 @@ function accountRow(): TemplateResult {
   `;
 }
 
-export const SETTINGS_BASE = `${UI_BASE}/settings`;
+const SETTINGS_BASE = `${UI_BASE}/settings`;
 
 let section = "general";
 let adminHost: HTMLElement | null = null;

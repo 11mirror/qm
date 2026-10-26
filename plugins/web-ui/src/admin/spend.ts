@@ -80,7 +80,7 @@ function sortValue(row: any, key: string): number | string {
   return Number(row[key] || 0);
 }
 
-export class SpendView {
+class SpendView {
   root: HTMLElement;
   data: any;
   services: Services;

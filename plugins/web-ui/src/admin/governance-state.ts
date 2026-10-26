@@ -188,9 +188,6 @@ export function patternError(pattern: string): string {
 }
 export const states = new Map(Object.keys(fieldNames).map((key) => [key, new GovernanceState(key)]));
 export const { owns, collect, capture, commit, status } = settingRegistry(states);
-export function loadResource(key: string, body: Record<string, any>) {
-  states.get(key)!.load(body);
-}
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
