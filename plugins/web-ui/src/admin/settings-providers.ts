@@ -132,7 +132,12 @@ async function removeProvider(item: any) {
 }
 export async function loadProviders() {
   const res = await config.api("GET", "/api/custom-providers");
-  if (!res.ok) return;
+  if (!res.ok) {
+    const summary = document.getElementById("custom-provider-summary");
+    if (summary)
+      summary.textContent = "Couldn't load providers: " + (res.data?.message || "Failed (" + res.status + ").");
+    return;
+  }
   provider.rows = (res.data?.providers || []).filter((p: any) => !p.disabled);
   renderRows();
 }

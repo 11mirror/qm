@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { bareCard, card, denseList, renderer, node } from "./shared.ts";
 import { cronName, historyKindMatches, historyModeLabel, plural, relTime, scopeKind, titleCase } from "./format.ts";
-import { errorStripBox } from "./dom.ts";
+import { errorStripBox } from "./shared.ts";
 
 export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
@@ -61,7 +61,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   );
   const environment = (s.environments || []).find((e: any) => e.id === s.scope);
   const attached = environment?.attachedScopes || [];
-  let [errors, errorCount, errorsOpen] = [[] as any[], 0, false];
+  let [errors, errorCount, errorsOpen]: [any[] | null, number | null, boolean] = [[], 0, false];
   const draw = () =>
     paint(
       html`${
@@ -121,8 +121,8 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
       )}${pages}${
         !orgWide && !cron
           ? html`<div>
-              ${
-                errorCount && errors.length
+              ${errors === null || errorCount === null ? html`<div class="statline">Couldn't load this scope's errors.</div>` : nothing}${
+                errorCount && errors?.length
                   ? html`<div class="statline">
                         <a href="#" @click=${(e: Event) => (e.preventDefault(), (errorsOpen = !errorsOpen), draw())}
                           >${plural(errorCount, "error")} logged in this scope</a
@@ -138,12 +138,10 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   draw();
   if (!orgWide && !cron) {
     const query = "scope=" + encodeURIComponent(s.scope);
-    void Promise.all([s.adminErrorCount(query), s.adminErrors(query)])
-      .then(([count, rows]) => {
-        errorCount = count;
-        errors = rows;
-        draw();
-      })
-      .catch(() => {});
+    void Promise.all([s.adminErrorCount(query), s.adminErrors(query)]).then(([count, rows]) => {
+      errorCount = count;
+      errors = rows;
+      draw();
+    });
   }
 }

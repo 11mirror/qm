@@ -358,11 +358,7 @@ function template() {
         ${credentialRows()}
       </div>
     </div>
-    <div
-      class=${classMap({ body: true, hidden: !s.open })}
-      id="sc-editor"
-      style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px"
-    >
+    <div class=${classMap({ body: true, hidden: !s.open })} id="sc-editor">
       <div class="sc-semantics" aria-label="Blank value semantics">
         <div><strong>Blank secret</strong><span id="sc-secret-semantics">${secretSemantics()}</span></div>
         <div><strong>Blank method</strong><span>Uses the broker default: GET only.</span></div>
@@ -418,17 +414,6 @@ function template() {
           </p>
           ${toggleField("Everyone in this organization", 12, !!s.draft.org, () => s.change("org", true), { id: "sc-share-org", name: "sc-share", value: "org", cls: only("broker") })}
           ${toggleField("Only selected people or teams", 12, !s.draft.org, () => s.change("org", false), { name: "sc-share", value: "people", cls: only("broker") })}
-          <input
-            type="text"
-            id="sc-people"
-            .value=${s.draft.people || ""}
-            @input=${(e: Event) => s.change("people", (e.target as HTMLInputElement).value)}
-            class=${classMap({ "sc-broker-only": true, hidden: env })}
-            list="sc-people-options"
-            placeholder="Principal IDs, comma-separated"
-            style="width: 100%; display: none"
-          />
-          <datalist id="sc-people-options"></datalist>
           <div
             class=${classMap({ "sc-picker": true, "sc-broker-only": true, hidden: env })}
             style=${s.draft.org ? "display: none" : ""}

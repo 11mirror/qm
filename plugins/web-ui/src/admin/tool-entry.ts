@@ -1,5 +1,6 @@
+import { html, nothing } from "lit";
 import { itemFields, type Item } from "../items.ts";
-import { copyButton, el, metaChip } from "./dom.ts";
+import { copyButton, metaChip, node } from "./shared.ts";
 import { fmtBytes, fmtMs, fmtTime, stringify, titleCase } from "./format.ts";
 
 type Row = Record<string, any>;
@@ -74,32 +75,32 @@ export function renderToolEntry(
   callEntry: Item | null,
   resultEntry: Item | null,
   contextBtn: Node | null = null,
-  timingEl: Node | null = null,
+  timingEl: unknown = nothing,
 ) {
   const callPayload: Row = callEntry ? itemFields(callEntry) : {};
   const resultPayload: Row = resultEntry ? itemFields(resultEntry) : {};
   const tool = toolName(callPayload, resultPayload);
-  const block = el("div.entry tool-entry");
-  const who = el("div.who");
-  if (contextBtn) who.appendChild(contextBtn);
-  who.append(el("span.tool-label", toolLabelText(tool, callPayload, resultPayload)));
-  if (timingEl) who.appendChild(timingEl);
-  who.append(
-    el(
-      "span.when",
-      resultEntry
-        ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
-        : `#${callEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? NaN)}`,
-    ),
-    el("div.meta-row", {}, ...toolStatusMeta(tool, resultPayload, !!resultEntry)),
-    copyButton("Copy", () => toolCopyText(callEntry, resultEntry)),
-  );
-  const body = el("div.tool-body");
+  const when = resultEntry
+    ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
+    : `#${callEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? NaN)}`;
   const primaryText = toolPrimaryText(callPayload, resultPayload, !!callEntry, !!resultEntry);
-  if (primaryText) {
-    const truncated = primaryText.length > 1800;
-    const preview = truncated ? primaryText.slice(0, 1800) + "…" : primaryText;
-    const card = el("pre.tool-command", { textContent: preview, tabIndex: 0, role: "button" });
+  const truncated = primaryText.length > 1800;
+  const preview = truncated ? primaryText.slice(0, 1800) + "…" : primaryText;
+  const block = node(
+    html`<div class="entry tool-entry">
+      <div class="who">
+        ${contextBtn ?? nothing}<span class="tool-label">${toolLabelText(tool, callPayload, resultPayload)}</span
+        >${timingEl}<span class="when">${when}</span>
+        <div class="meta-row">${toolStatusMeta(tool, resultPayload, !!resultEntry)}</div>
+        ${copyButton("Copy", () => toolCopyText(callEntry, resultEntry))}
+      </div>
+      <div class="tool-body">
+        ${primaryText ? html`<pre class="tool-command" tabindex="0" role="button">${preview}</pre>` : nothing}
+      </div>
+    </div>`,
+  );
+  const card = block.querySelector<HTMLElement>(".tool-command");
+  if (card) {
     const syncExpanded = () => {
       const expanded = block.classList.contains("expanded");
       card.setAttribute("aria-expanded", String(expanded));
@@ -117,9 +118,7 @@ export function renderToolEntry(
       toggle();
     };
     syncExpanded();
-    body.appendChild(card);
   }
-  block.append(who, body);
   return { block, sync: () => {} };
 }
 
@@ -127,17 +126,14 @@ function durSeg(ms: number, label?: string) {
   let cls = "";
   if (ms >= 30000) cls = "dur-hot";
   else if (ms >= 5000) cls = "dur-warm";
-  const span = el("span." + cls, fmtMs(ms));
-  if (!label) return span;
-  const wrap = document.createDocumentFragment();
-  wrap.append(el("span.seg-label", label + " "), span);
-  return wrap;
+  const span = html`<span class=${cls}>${fmtMs(ms)}</span>`;
+  return label ? html`<span class="seg-label">${label + " "}</span>${span}` : span;
 }
 
 export function stepDurEl(segs: (number | string | null | undefined)[][] | null | undefined) {
   const parts = (segs || []).filter((seg): seg is [number, string?] => typeof seg[0] === "number" && seg[0] >= 0);
-  if (!parts.length) return null;
-  const node = el("span.step-dur");
-  parts.forEach(([ms, label], i) => node.append(...(i ? [" · "] : []), durSeg(ms, label)));
-  return node;
+  if (!parts.length) return nothing;
+  return html`<span class="step-dur"
+    >${parts.map(([ms, label], i) => html`${i ? " · " : ""}${durSeg(ms, label)}`)}</span
+  >`;
 }

@@ -223,7 +223,7 @@ export function startSettings({
       if (requestedView === "credentials") settings.credentialLoading(denied || "Could not load credentials.", true);
       if (requestedView === "governance" && governanceReadyScope !== requestedScope)
         $("governance-loading").textContent = denied || "Could not load settings. Select Governance to retry.";
-      return setStatus("st-policy", denied || r.data?.message || "Failed to load.", "err");
+      return governanceUI.status("command-policy", denied || r.data?.message || "Failed to load.", "err");
     }
     if (requestedView === "governance") {
       renderEnvironmentNotice(r.data);
@@ -241,10 +241,7 @@ export function startSettings({
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope());
     const opts = r.data.baseModelOptions || [];
     if (requestedView === "models") {
-      for (const key of "runtime cron-runtime subagent-runtime fallback-runtime webui-models memory-embedding-model".split(
-        " ",
-      ))
-        settings.load(r.data, scope(), key);
+      for (const key of settings.modelSettingKeys) settings.load(r.data, scope(), key);
       void settings.loadProviders();
     }
     if (requestedView === "credentials") {
@@ -305,11 +302,6 @@ export function startSettings({
   function loadServiceCredDirectory(data: any) {
     serviceCredDirectory = data.directoryMembers || [];
     serviceCredChannels = data.directoryChannels || [];
-    $("sc-people-options").replaceChildren(
-      ...serviceCredDirectory.map((member: any) =>
-        Object.assign(new Option(), { value: member.principalId, label: member.displayName }),
-      ),
-    );
   }
   let savedBranding = {};
   settings.configureDecisions({
@@ -539,8 +531,6 @@ export function startSettings({
       simulatePolicy();
     }
   });
-  const statusIdOf = (key: string) =>
-    ({ "command-policy": "st-policy", "org-ambient": "st-governance-org-ambient" })[key] || "st-" + key;
   const sectionSnapshots = new Map();
   function autoFlaggerTestSummary(data: any) {
     if (!data.sampled) return data.message || "No past screenings to replay yet.";
@@ -699,7 +689,7 @@ export function startSettings({
     try {
       body = governanceUI.collect(key);
     } catch (err) {
-      return setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
+      return governanceUI.status(key, err instanceof Error ? err.message : "Could not save.", "err");
     }
     if (!(await governanceSaveReview(key, body)) || stale()) return;
     const saveRequest = String(++governanceSaveSeq);
@@ -707,7 +697,7 @@ export function startSettings({
       btn.dataset.saveRequest = saveRequest;
       btn.disabled = true;
     }
-    setStatus(statusIdOf(key), "Saving...", "saving", true);
+    governanceUI.status(key, "Saving...", "saving");
     const isBranding = key === "branding";
     const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
     const r = await api("PUT", scopeUrl(requestedScope, "/" + (isBranding ? "branding" : key)), brandingBody);
@@ -718,7 +708,7 @@ export function startSettings({
         delete btn.dataset.saveRequest;
         btn.disabled = !btn.classList.contains("dirty");
       }
-      return setStatus(statusIdOf(key), "", "");
+      return governanceUI.status(key, "", "");
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
     if (!r.ok) {
@@ -727,7 +717,7 @@ export function startSettings({
       let message = r.data?.message || "Save failed.";
       if (soulConflict) message = "SOUL changed; latest revision loaded and your draft was preserved.";
       else if (r.status === 403) message = "Not authorized for this scope.";
-      return setStatus(statusIdOf(key), message, "err");
+      return governanceUI.status(key, message, "err");
     }
     governanceUI.commit(key, body);
     sectionSnapshots.set(key, JSON.stringify(body));
@@ -788,6 +778,7 @@ export function startSettings({
   return {
     review: reviewGovernanceChange,
     loadScope,
+    save: (key: string) => void saveSetting(key),
     setPending: setGovernancePending,
     readyScope: () => governanceReadyScope,
     forgetReady: () => {

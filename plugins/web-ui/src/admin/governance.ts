@@ -4,6 +4,7 @@ import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
+import { brandName } from "../ui.ts";
 export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
@@ -14,22 +15,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <p>Choose how the agent screens external content and when it requires your approval.</p>
       </div>
       <div class="body">
-        <select
-          id="security-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("security-posture")}
-          @change=${(event: Event) => changeField(s, "security-posture", event)}
-        >
-          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
-          <option value="auto">Auto — use the deployment’s configured screener</option>
-          <option value="strict">Strict — approve tool actions</option>
-        </select>
         ${choiceGroup(
           {
             name: "security-posture-choice",
             value: s.draft.posture,
-            choiceFor: "security-posture",
             onChange: (event: Event) => changeField(s, "security-posture", event),
           },
           [
@@ -152,7 +141,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ${s.warnings.map((warning) => html`<div>${warning}</div>`)}
         </div>
       </div>
-      <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s, "st-policy")}</div>
+      <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s)}</div>
     </section>`,
   "card-ambient-policy": (s) =>
     html`<section class=${govClass(s)} id="card-ambient-policy">
@@ -170,7 +159,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <label for="ambient-enabled">Ambient behavior</label>
         <p class="hint" style="margin: 2px 0 6px">
           When off, the agent never wakes on overheard messages in this channel; it only responds to direct @mentions.
-          Default: on for channels with 8 or fewer members, off for larger ones.
+          Default: on only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
         </p>
         <select
           id="ambient-enabled"
@@ -178,7 +167,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.draft.ambientEnabled == null ? "default" : String(s.draft.ambientEnabled ? "on" : "off")}
           @change=${(event: Event) => changeField(s, "ambient-enabled", event)}
         >
-          <option value="default">Default (by channel size)</option>
+          <option value="default">Default (on when standing orders are set)</option>
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
@@ -226,21 +215,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
       <div class="body">
         <p id="sharing-posture-effective">${sharingLabel(s)}</p>
-        <select
-          id="sharing-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("sharing-posture")}
-          @change=${(event: Event) => changeField(s, "sharing-posture", event)}
-        >
-          <option value="isolated">Isolated</option>
-          <option value="open">Open</option>
-        </select>
         ${choiceGroup(
           {
             name: "sharing-posture-choice",
             value: s.draft.posture,
-            choiceFor: "sharing-posture",
             onChange: (event: Event) => changeField(s, "sharing-posture", event),
           },
           [
@@ -248,7 +226,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
             [
               "open",
               "Open",
-              "QM can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
+              brandName() +
+                " can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
             ],
           ],
         )}
@@ -342,29 +321,18 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         >${saveButton(s, "Save policy", s.disabled)}${settingStatus(s)}
       </div>
     </section>`,
-  "card-governance-org-ambient": (s) =>
-    html`<section class=${govClass(s)} id="card-governance-org-ambient">
+  "card-org-ambient": (s) =>
+    html`<section class=${govClass(s)} id="card-org-ambient">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p>
         <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button>
       </div>
       <div class="body">
-        <select
-          id="governance-org-ambient"
-          data-choice-state
-          hidden
-          .value=${s.draft.on ? "on" : "off"}
-          @change=${(event: Event) => changeField(s, "governance-org-ambient", event)}
-        >
-          <option value="on">Agent judges all messages and replies when useful</option>
-          <option value="off">Agent does not read messages or reply unless @-mentioned</option>
-        </select>
         ${choiceGroup(
           {
             name: "ambient-reply-choice",
             value: ({ true: "on", false: "off" } as Record<string, string>)[String(s.draft.on)] || "",
-            choiceFor: "governance-org-ambient",
             onChange: (event: Event) => changeField(s, "governance-org-ambient", event),
           },
           [
@@ -382,14 +350,14 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ?disabled=${!s.dirty || s.saving}
         >
           Apply</button
-        >${settingStatus(s, "st-governance-org-ambient")}
+        >${settingStatus(s)}
       </div>
     </section>`,
 };
 
 export function mountCards(): void {
   for (const [id, template] of Object.entries(cards)) {
-    const state = states.get(id === "card-governance-org-ambient" ? "org-ambient" : id.slice(5))!;
+    const state = states.get(id.slice(5))!;
     state.render = mountTemplate(`template[data-governance-card="${id}"]`, () => template(state));
   }
 }

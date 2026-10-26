@@ -1,5 +1,3 @@
-import { firstLine, pick, relTime, titleCase } from "./format.ts";
-
 type Kid = Node | string;
 type Props = Record<string, any>;
 
@@ -17,23 +15,6 @@ export function el(spec: string, props?: Props | string | null, ...kids: Kid[]):
   node.append(...kids);
   return node;
 }
-
-export const badge = (text: string, kind?: string) =>
-  el("span", { className: "badge" + (kind ? " " + kind : ""), textContent: text });
-
-export function stacked(primary: string, secondary?: string, cls?: string) {
-  const d = el("div", {}, el("div.primaryline", primary));
-  if (cls) d.className = cls;
-  if (secondary) d.appendChild(el("div.subline", secondary));
-  return d;
-}
-
-const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
-export const statusBadge = (status: string | null | undefined) =>
-  badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
-
-export const metaChip = (text: string, kind = "") =>
-  el("span", { className: "meta-chip" + (kind ? " " + kind : ""), textContent: text });
 
 export function kpis(items: [unknown, unknown][], className = "") {
   const kpi = ([n, k]: [unknown, unknown]) =>
@@ -64,21 +45,6 @@ export async function copyText(text: string) {
   }
   ta.remove();
   return ok;
-}
-
-export function copyButton(label: string, getText: () => string) {
-  const btn = el("button.copy", { type: "button", textContent: label });
-  btn.onclick = async (ev) => {
-    ev.stopPropagation();
-    const ok = await copyText(getText());
-    btn.textContent = ok ? "Copied" : "Copy failed";
-    if (ok) btn.classList.add("copied");
-    setTimeout(() => {
-      btn.textContent = label;
-      btn.classList.remove("copied");
-    }, 1200);
-  };
-  return btn;
 }
 
 export function linkClick(go: () => void) {
@@ -149,25 +115,4 @@ export interface ErrorRow {
   category?: string;
   code?: string;
   ts?: number;
-}
-
-export function errorStripBox(
-  errs: ErrorRow[],
-  headText: string,
-  max: number,
-  rowLink?: (e: ErrorRow) => { href: string; go: () => void } | null,
-) {
-  const box = el("div.error-strip", {}, el("div.error-strip-head", headText));
-  errs.slice(0, max).forEach((e) => {
-    const link = rowLink ? rowLink(e) : null;
-    const row = link
-      ? el("a.error-strip-row", { href: link.href, onclick: linkClick(link.go) })
-      : el("div.error-strip-row");
-    const msg = el("span.mono", { textContent: firstLine(e.message || "(no message)", 160), title: e.message || "" });
-    const meta = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
-    row.append(msg, el("span.subline", meta));
-    box.appendChild(row);
-  });
-  if (errs.length > max) box.appendChild(el("div.subline", "…and " + (errs.length - max) + " more"));
-  return box;
 }

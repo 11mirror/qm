@@ -1,9 +1,9 @@
+import { errMessage } from "../../../chassis/src/errors";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { badge, card, table, renderer, stacked } from "./shared.ts";
+import { badge, card, table, renderer, stacked, statusBadge } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
 import { packRepoLabel, scopeKind, shortId } from "./format.ts";
-import { statusBadge } from "./dom.ts";
 import { scopeMultiSelect } from "./scope-picker.ts";
 export async function removeSkill(s: Data, c: Context) {
   const where = c.dirLabel(s.ownerScopeId) || s.ownerScopeId;
@@ -17,7 +17,8 @@ export async function removeSkill(s: Data, c: Context) {
     if (!response.ok) return alert(response.data?.message || "1 scope(s) could not be removed.");
     c.invalidate();
     await c.reload();
-  } catch {
+  } catch (error) {
+    console.warn("[swallowed] admin: remove skill", errMessage(error));
     alert("Could not remove skill.");
   }
 }
@@ -96,7 +97,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
                 ),
               )
             : nothing
-        }${card("Instructions", "The SKILL.md the agent reads when this skill is in play.", html`<pre class="skillbody" style="white-space:pre-wrap;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;margin:0">${k.body || "(empty)"}</pre>`)}
+        }${card("Instructions", "The SKILL.md the agent reads when this skill is in play.", html`<pre class="skillbody">${k.body || "(empty)"}</pre>`)}
       </div>`,
     ),
   );
@@ -115,18 +116,16 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
   let [menu, menuTop, menuLeft] = [null as string | null, 0, 0];
   const statuses = new Map<string, Data>();
   const pending = new Set<string>();
-  const closeMenu = () => menu && ((menu = null), draw());
   const abort = new AbortController();
+  const closeMenu = () => {
+    if (!root.isConnected) return abort.abort();
+    if (!menu) return;
+    menu = null;
+    draw();
+  };
   document.addEventListener("click", closeMenu, { signal: abort.signal });
   document.addEventListener("scroll", closeMenu, { signal: abort.signal, capture: true });
   window.addEventListener("resize", closeMenu, { signal: abort.signal });
-  const observer = new MutationObserver(() => {
-    if (!root.isConnected) {
-      abort.abort();
-      observer.disconnect();
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
   const change = (key: keyof typeof draft) => (e: Event) => {
     draft[key] = (e.target as HTMLInputElement).value;
     draw();
@@ -155,7 +154,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         if (JSON.stringify(draft) === submitted) await c.reload();
         else [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: register skill pack", errMessage(error));
       [message, tone] = ["Registration failed.", "err"];
     } finally {
       registering = false;
@@ -205,7 +205,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         c.invalidate();
         await c.reload();
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: skill pack " + action, errMessage(error));
       statuses.set(s.id, { text: "Request failed.", tone: "err" });
     } finally {
       pending.delete(s.id);
@@ -443,7 +444,8 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
           if (root.isConnected && !closed) c.reload();
         }, 1500);
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: skill pack import", errMessage(error));
       [message, tone] = ["Import failed.", "err"];
     } finally {
       busy = false;
@@ -451,9 +453,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     }
   };
   const action = (bottom = false) =>
-    html`<div
-      style=${"display:flex;flex-direction:column;align-items:flex-start;gap:6px;" + (bottom ? "margin-top:10px" : "")}
-    >
+    html`<div class=${"pack-action" + (bottom ? " bottom" : "")}>
       <button type="button" class="primary" ?disabled=${busy} @click=${importSelected}>Import selected</button
       ><span class=${"status" + (tone ? " " + tone : "")}>${message}</span>
     </div>`;
@@ -468,7 +468,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
       imported: candidates.filter(all).length,
     };
     paint(
-      html`<section class="card" style="position:relative">
+      html`<section class="card pack-browser">
         <div class="head">
           <h2>${"Browse: " + pack.url}</h2>
           <p>
@@ -478,24 +478,19 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
         </div>
         <div class="body">
           <div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 4px">
-              <span style="font-size:12px;opacity:0.7">Add to scopes:</span>${picker}
-            </div>
+            <div class="pack-scopes"><span class="pack-scopes-label">Add to scopes:</span>${picker}</div>
             ${
               plan.bundlePaths?.length
-                ? html`<details style="margin:8px 0">
+                ? html`<details class="pack-files">
                     <summary>
                       ${plan.bundlePaths.length + " shared pack file" + (plan.bundlePaths.length === 1 ? "" : "s") + " (contained under a pack-owned directory)"}
                     </summary>
-                    <pre
-                      style="max-height:180px;overflow:auto;font-size:11px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)"
-                    >
-${plan.bundlePaths.join("\n")}</pre>
+                    <pre class="pack-files-list">${plan.bundlePaths.join("\n")}</pre>
                   </details>`
                 : nothing
             }
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px">
-              <div class="badges" style="flex:1">
+            <div class="pack-filters">
+              <div class="badges">
                 ${Object.entries(reasons)
                   .filter(
                     ([key]) =>
@@ -506,8 +501,7 @@ ${plan.bundlePaths.join("\n")}</pre>
                   .map(
                     ([key, reason]) =>
                       html`<span
-                        class=${"badge " + reason.tone}
-                        style=${"cursor:pointer;" + (filter === key ? "background:var(--text);color:#fff;border-color:var(--text)" : "")}
+                        class=${"badge pack-filter " + reason.tone + (filter === key ? " active" : "")}
                         title=${reason.help + " " + (key === "all" ? "" : "Click to show only these.")}
                         @click=${() => ((filter = key), draw())}
                         >${(tally[key] ?? (counts[key] || 0)) + " " + reason.label}</span
@@ -558,9 +552,7 @@ ${plan.bundlePaths.join("\n")}</pre>
           type="button"
           title="Close"
           aria-label="Close browse"
-          style="position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px"
-          @mouseenter=${(e: Event) => ((e.target as HTMLElement).style.opacity = "1")}
-          @mouseleave=${(e: Event) => ((e.target as HTMLElement).style.opacity = "0.55")}
+          class="pack-close"
           @click=${() => ((closed = true), paint(nothing))}
         >
           ✕

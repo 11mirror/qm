@@ -8,6 +8,7 @@ import { states, connectors, installation, emoji, context, type SlackSetting } f
 export * from "./integrations-state.ts";
 import { loadScope as loadSettings } from "./integrations-state.ts";
 import { fmtTime } from "./format.ts";
+import { brandName } from "../ui.ts";
 export function loadScope(data: any, scope: string) {
   loadSettings(data, scope);
   if (states.get("ack-emoji")!.available) void emoji.load();
@@ -27,18 +28,10 @@ cards["card-external-slack"] = () => {
       </p>
     </div>
     <div class="body">
-      <input
-        type="checkbox"
-        id="external-slack-participants"
-        .checked=${!!s.draft.on}
-        @change=${(e: Event) => s.change({ on: (e.target as HTMLInputElement).checked })}
-        hidden
-      />
       ${choiceGroup(
         {
           name: "external-slack-choice",
           value: ({ true: "on", false: "off" } as Record<string, string>)[String(s.draft.on)] || "",
-          checkboxFor: "external-slack-participants",
           onChange: (event: Event) => s.change({ on: (event.target as HTMLInputElement).value === "on" }),
         },
         [
@@ -63,9 +56,9 @@ cards["card-channel-header-pin-default"] = () => {
     <div class="head">
       <h2>Pinned channel message</h2>
       <p>
-        When QM joins an internal Slack channel, it can post and pin a message showing the active model and a link to
-        that channel’s settings. Turn this off to remove QM’s pinned message from channels using this default.
-        Individual channels can override it on their settings page.
+        When ${brandName()} joins an internal Slack channel, it can post and pin a message showing the active model and
+        a link to that channel’s settings. Turn this off to remove ${brandName()}’s pinned message from channels using
+        this default. Individual channels can override it on their settings page.
       </p>
     </div>
     <div class="body">
@@ -88,9 +81,9 @@ cards["card-channel-header-pin-default"] = () => {
       <figure class="slack-message-example">
         <figcaption>Example · pinned in #product</figcaption>
         <div class="slack-example-message">
-          <span class="slack-example-avatar" aria-hidden="true">Q</span>
+          <span class="slack-example-avatar" aria-hidden="true">${brandName().slice(0, 1)}</span>
           <div>
-            <strong>QM</strong> <span class="muted">APP</span>
+            <strong>${brandName()}</strong> <span class="muted">APP</span>
             <p>Using Sonnet here. <span class="slack-example-link">More settings</span></p>
           </div>
         </div>
@@ -113,8 +106,8 @@ cards["card-ack-emoji"] = () => {
       </p>
     </div>
     <div class="body">
-      <div id="ack-emoji-chips" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
-        ${emojiChips(s)}<span style="position: relative; display: inline-block">
+      <div id="ack-emoji-chips">
+        ${emojiChips(s)}<span class="ack-emoji-add">
           <button type="button" id="ack-emoji-open" @click=${() => toggleEmoji(s)} class="ghost" aria-haspopup="true">
             + Add emoji
           </button>
@@ -153,11 +146,7 @@ cards["card-connectors"] = () => {
     <div class="body">
       <div id="conn-list" class=${connectors.displayed.length ? "" : "hint"}>${connectorRows()}</div>
     </div>
-    <div
-      class=${classMap({ body: true, hidden: !s.editor })}
-      id="conn-editor"
-      style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px"
-    >
+    <div class=${classMap({ body: true, hidden: !s.editor })} id="conn-editor">
       <div class="sc-form-head">
         <p class="hint" id="conn-form-title">
           ${s.editing ? "Editing " + context.connectorName(s.editing) : "Add a connector"}
@@ -405,22 +394,20 @@ function builtIns() {
 }
 function emojiChanged(s: SlackSetting, names: string[]) {
   s.change({ names });
-  (document.querySelector('[data-save="ack-emoji"]') as HTMLButtonElement | null)?.click();
+  context.save(s.key);
 }
 function emojiChips(s: SlackSetting) {
   return repeat(
     s.draft.names || [],
     (name: string) => name,
     (name: string) =>
-      html`<span
-        data-chip=${name}
-        style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border, #d4d4d4);border-radius:999px;font-size:13px"
+      html`<span data-chip=${name} class="ack-emoji-chip"
         ><span
-          >${emoji.catalog[name] ? html`<img src=${emoji.catalog[name]} alt=${name} class="ack-emoji-img" style="margin-right:4px" />` : (emoji.standard.find((e) => e[0] === name)?.[1] || "") + " "}${":" + name + ":"}</span
+          >${emoji.catalog[name] ? html`<img src=${emoji.catalog[name]} alt=${name} class="ack-emoji-img" />` : (emoji.standard.find((e) => e[0] === name)?.[1] || "") + " "}${":" + name + ":"}</span
         ><button
           type="button"
           aria-label=${"Remove " + name}
-          style="border:0;background:none;cursor:pointer;padding:0;font-size:14px;line-height:1"
+          class="ack-emoji-remove"
           @click=${() =>
             emojiChanged(
               s,

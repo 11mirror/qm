@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BACKGROUND_SOURCES, spendChart } from "./spend-chart.ts";
+import { backgroundSources, sourceLabel, spendChart } from "./spend-chart.ts";
 import { table, card, renderer, keepSearch, matches } from "./shared.ts";
 import { cronName, fmtPct, fmtTokens, plural } from "./format.ts";
 import { shortSchedule } from "./schedule.ts";
@@ -163,9 +163,9 @@ class SpendView {
     ];
   }
   backgroundCell(background: any) {
-    const parts = BACKGROUND_SOURCES.filter(([key]) => Number(background?.sources?.[key]?.costUsd) > 0).map(
-      ([key, label]) => `${label} ${fmtUsd(background.sources[key].costUsd)}`,
-    );
+    const parts = backgroundSources(background)
+      .filter((key) => Number(background.sources[key]?.costUsd) > 0)
+      .map((key) => `${sourceLabel(key)} ${fmtUsd(background.sources[key].costUsd)}`);
     return html`${fmtUsd(background?.costUsd)}${parts.length ? html`<div class="subline">${parts.join(" · ")}</div>` : null}`;
   }
   sourceCells(row: any) {
@@ -209,17 +209,19 @@ class SpendView {
     );
     const backgroundTotal = Number(this.data.org?.background?.costUsd) || 0;
     const sources = sorted(
-      BACKGROUND_SOURCES.map(([source, label]) => {
-        const totals = this.data.org?.background?.sources?.[source] || {};
-        return {
-          source,
-          displayName: label,
-          costUsd: Number(totals.costUsd) || 0,
-          calls: Number(totals.calls) || 0,
-          tokens: Number(totals.tokens) || 0,
-          share: backgroundTotal > 0 ? (Number(totals.costUsd) || 0) / backgroundTotal : null,
-        };
-      }).filter((row) => row.costUsd > 0 && hit(row.displayName)),
+      backgroundSources(this.data.org?.background)
+        .map((source) => {
+          const totals = this.data.org.background.sources[source] || {};
+          return {
+            source,
+            displayName: sourceLabel(source),
+            costUsd: Number(totals.costUsd) || 0,
+            calls: Number(totals.calls) || 0,
+            tokens: Number(totals.tokens) || 0,
+            share: backgroundTotal > 0 ? (Number(totals.costUsd) || 0) / backgroundTotal : null,
+          };
+        })
+        .filter((row) => row.costUsd > 0 && hit(row.displayName)),
     );
     const models = sorted((this.data.models || []).filter((row: any) => hit(rowName(row))));
     const series = this.data.series || [];

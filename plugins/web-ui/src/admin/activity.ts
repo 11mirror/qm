@@ -1,13 +1,13 @@
 import { html } from "lit";
 import { bareCard, table, pager, mount } from "./shared.ts";
-import { egressDetail, firstLine, fmtTime, plural, relTime } from "./format.ts";
+import { egressDetail, firstLine, fmtTime, relTime } from "./format.ts";
 
 export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
   const rows = data.errors || [];
   const total = data.total ?? rows.length;
   const limit = data.limit || s.errorsPageSize;
   const offset = data.offset || 0;
-  s.defaultShell({ count: plural(total, "error") });
+  s.defaultShell({ tally: [total, "errors"] });
   const content = table(
     ["Category", "Code", "Message", ...(s.all ? ["Scope"] : []), "Session", "Time"],
     rows.map((e: any) => {
@@ -42,7 +42,7 @@ export function errors(root: HTMLElement, data: any, s: Record<string, any>) {
 
 export function audit(root: HTMLElement, data: any, s: Record<string, any>) {
   const events = data.events || [];
-  s.defaultShell({ count: plural(events.length, "event") });
+  s.defaultShell({ tally: [events.length, "events"] });
   mount(
     root,
     bareCard(

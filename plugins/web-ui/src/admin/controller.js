@@ -5,9 +5,10 @@ import { adminApi, scopeUrl } from "./api.ts";
 import { startSettings } from "./settings-controller.ts";
 import { scopeMultiSelect } from "./scope-picker.ts";
 import * as routes from "./routes.ts";
-import { fire, watchCustomDropdowns } from "./dropdown.ts";
-import { backArrow, badge, el, kpis, linkClick, searchField, stacked } from "./dom.ts";
-import { KIND_LABEL, fileName, fmtBytes, historyCategory, relTime, scopeKind, titleCase } from "./format.ts";
+import { watchCustomDropdowns } from "./dropdown.ts";
+import { backArrow, el, kpis, linkClick, searchField } from "./dom.ts";
+import { stacked } from "./shared.ts";
+import { KIND_LABEL, fileName, historyCategory, relTime, scopeKind, titleCase } from "./format.ts";
 
 export function startAdmin(host, env) {
   host.innerHTML = ADMIN_MARKUP;
@@ -22,22 +23,6 @@ export function startAdmin(host, env) {
     " in a DM. It can make the edit for you and confirm what changed.";
   document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
     link.closest("section.card").querySelector(":scope > .head").appendChild(link);
-  });
-  document.querySelectorAll("[data-choice-for]").forEach((input) => {
-    if (input.closest(".sv-governance, .sv-slack-settings, .sv-models, .sv-customize")) return;
-    input.onchange = () => {
-      const select = $(input.dataset.choiceFor);
-      select.value = input.value;
-      fire(select);
-    };
-  });
-  document.querySelectorAll("[data-checkbox-for]").forEach((input) => {
-    if (input.closest(".sv-slack-settings")) return;
-    input.onchange = () => {
-      const checkbox = $(input.dataset.checkboxFor);
-      checkbox.checked = input.value === "on";
-      fire(checkbox);
-    };
   });
   const ERRORS_PAGE_SIZE = 50;
   const brandSelfLabel = () => env.productName;
@@ -77,20 +62,6 @@ export function startAdmin(host, env) {
     );
   }
   const settings = governanceUI.settings;
-  function deliveryFileBadges(filesPayload) {
-    const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
-    if (!filesWithNames.length) return null;
-    return el(
-      "div.badges",
-      {},
-      ...filesWithNames.map((f) => {
-        const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
-        if (!f.artifactId) return badge(label, "muted");
-        const file = { id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true };
-        return el("button.badge info", { textContent: label, onclick: () => downloadFile(file) });
-      }),
-    );
-  }
   const stateToUrl = (st) => routes.stateToUrl(st, PAGE_BASE);
   const urlToState = () => routes.urlToState(PAGE_BASE, orgId, scope);
   let transcriptObserver = null;
@@ -294,11 +265,19 @@ export function startAdmin(host, env) {
       const amount = Number.isFinite(number) ? number.toLocaleString() : String(value);
       return el("span.log-count", amount + " " + noun.toLowerCase());
     };
-    if (opts.back) {
-      const back = el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
-      back.append(el("span", opts.back.label.replace(/^←\s*/, "")));
-      bar.appendChild(el("div.shell-back-row", {}, back));
+    const back = opts.back && el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
+    back?.append(el("span", opts.back.label.replace(/^←\s*/, "")));
+    if (opts.stacked) {
+      const context = el("span.shell-context", opts.context || "");
+      bar.append(
+        el("div.sm-toolbar", {}, back, ...(opts.actions || [])),
+        el("div.sm-channel-heading", {}, el("h2.shell-title", opts.title), context),
+        counts,
+      );
+      if (opts.search) bar.appendChild(searchField(opts.search));
+      return;
     }
+    if (back) bar.appendChild(el("div.shell-back-row", {}, back));
     if (opts.title) bar.appendChild(el("h2.shell-title", opts.title));
     if (logView) bar.appendChild(counts);
     if (opts.context) {
@@ -326,12 +305,8 @@ export function startAdmin(host, env) {
         counts.appendChild(countText(noun, active.count));
       }
       bar.appendChild(wrap);
-    } else if (opts.count != null && opts.count !== "") {
-      const c = el("span.shell-count", String(opts.count));
-      const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
-      if (!logView) bar.appendChild(c);
-      else counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
-    }
+    } else if (opts.tally) counts.appendChild(countText(opts.tally[1], opts.tally[0]));
+    else if (opts.count != null && opts.count !== "") bar.appendChild(el("span.shell-count", String(opts.count)));
     if (logView) (opts.stats || []).forEach(([value, label]) => counts.appendChild(countText(label, value)));
     bar.appendChild(el("span.shell-spacer"));
     if (!logView && opts.stats && opts.stats.length) bar.appendChild(kpis(opts.stats, "shell-stats"));
@@ -410,7 +385,7 @@ export function startAdmin(host, env) {
   }
   const connectorName = (id) => (id === "x" ? "X" : id.charAt(0).toUpperCase() + id.slice(1));
   const orgScope = () => "org:" + orgId;
-  governanceUI.integrations.configure({ api, orgScope, connectorName });
+  governanceUI.integrations.configure({ api, orgScope, connectorName, save: (key) => settingsUi.save(key) });
   governanceUI.integrations.mountBuiltIns();
   watchCustomDropdowns($("app-view"));
   let dataReq = 0;
@@ -488,11 +463,11 @@ export function startAdmin(host, env) {
   }
   async function adminErrors(query) {
     const r = await api("GET", "/api/errors?" + query);
-    return r.ok ? r.data?.errors || [] : [];
+    return r.ok ? r.data?.errors || [] : null;
   }
   async function adminErrorCount(query) {
     const r = await api("GET", "/api/errors?count=1&" + query);
-    return r.ok ? Number(r.data?.total || 0) : 0;
+    return r.ok ? Number(r.data?.total || 0) : null;
   }
   let artifactRenderGeneration = 0;
   function artifactContext() {
@@ -517,7 +492,6 @@ export function startAdmin(host, env) {
       apiBase: API_BASE,
       fmtHistoryTime: relTime,
       deploymentHref: (dep) => dep.publicUrl || "",
-      stacked,
       invalidate: () => dataCache.clear(),
       reload: () => (current() ? renderData() : Promise.resolve()),
       setCronEditing: (id) => {
@@ -638,7 +612,6 @@ export function startAdmin(host, env) {
       adminErrors,
       adminErrorCount,
       downloadFile,
-      deliveryFileBadges,
       brandSelfLabel,
       slackContainerLabel,
       slackContainerScope,

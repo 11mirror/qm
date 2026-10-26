@@ -163,7 +163,7 @@ export class SlackActivity {
       const containers = context.containers() || [];
       context.pageShell({
         title: "Slack",
-        count: (context.truncated() ? containers.length.toLocaleString() + "+" : containers.length) + " conversations",
+        tally: [context.truncated() ? containers.length + "+" : containers.length, "conversations"],
         search: this.searchBox(null),
       });
       return this.draw(
@@ -185,6 +185,7 @@ export class SlackActivity {
     const container = st.container,
       scope = context.slackContainerScope(container);
     context.pageShell({
+      stacked: true,
       back: { label: "← Slack", onClick: () => context.go({ view: "slack", container: null, ts: null }) },
       title: context.slackContainerLabel(container),
       context: container,
@@ -192,19 +193,17 @@ export class SlackActivity {
       actions: [
         context.navLink("Judgments →", { view: "judgments", container }),
         ...(scope ? [context.navLink("Governance →", { view: "governance", scope, session: null })] : []),
+        node(
+          html`<a
+            href=${"/api/slack-mirror/messages?container=" + encodeURIComponent(container)}
+            target="_blank"
+            rel="noopener"
+            title="Open the raw mirrored JSON rows for this container in a new tab"
+            >Raw feed ↗</a
+          >`,
+        ),
       ],
     });
-    const bar = document.getElementById("shellbar")!;
-    const toolbar = node(
-      html`<div class="sm-toolbar">${bar.querySelector(".back")}${[...bar.querySelectorAll(".link")]}</div>`,
-    );
-    const heading = node(
-      html`<div class="sm-channel-heading">
-        ${bar.querySelector(".shell-title")}${bar.querySelector(".shell-context")}
-      </div>`,
-    );
-    bar.querySelector(".shell-spacer")?.remove();
-    bar.prepend(toolbar, heading);
     this.draw(loading("Loading messages..."));
     let result = await this.fetchMessages(container);
     if (!this.current("slack", generation)) return;
@@ -218,17 +217,6 @@ export class SlackActivity {
       this.messages = [...(result.data.messages || []), ...this.messages];
       this.hasMore = !!result.data.hasMore;
     }
-    toolbar.appendChild(
-      node(
-        html`<a
-          href=${"/api/slack-mirror/messages?container=" + encodeURIComponent(container)}
-          target="_blank"
-          rel="noopener"
-          title="Open the raw mirrored JSON rows for this container in a new tab"
-          >Raw feed ↗</a
-        >`,
-      ),
-    );
     this.paintMessages();
     requestAnimationFrame(() => {
       if (!this.current("slack", generation)) return;

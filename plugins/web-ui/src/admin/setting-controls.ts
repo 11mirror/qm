@@ -43,8 +43,6 @@ export function choiceGroup(
     name: string;
     value: string;
     onChange: (event: Event) => void;
-    choiceFor?: string;
-    checkboxFor?: string;
   },
   choices: [value: string, title: string, description: string][],
 ) {
@@ -56,8 +54,6 @@ export function choiceGroup(
             type="radio"
             name=${options.name}
             value=${value}
-            data-choice-for=${ifDefined(options.choiceFor)}
-            data-checkbox-for=${ifDefined(options.checkboxFor)}
             .checked=${options.value === value}
             @change=${options.onChange}
           /><span><strong>${title}</strong><small>${description}</small></span></label
