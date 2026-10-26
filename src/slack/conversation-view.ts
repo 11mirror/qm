@@ -1,17 +1,11 @@
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow } from "../util/errors.ts";
-import {
-  type ActorAssertion,
-  type ConversationView,
-  type ReactionTally,
-  type RecentMessage,
-  type SlackFile,
-  MAX_RECENT_MESSAGES,
-  decodeSlackEntities,
-  isOversize,
-  recentWindow,
-} from "./lib.ts";
+import { type ActorAssertion } from "./identity.ts";
+import { type ConversationView, type RecentMessage, MAX_RECENT_MESSAGES, recentWindow } from "./conversation.ts";
+import { type ReactionTally } from "./reactions.ts";
+import { type SlackFile, isOversize } from "./attachments.ts";
+import { decodeSlackEntities } from "./mrkdwn.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";

@@ -10,7 +10,7 @@ import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
-import { createDeduper, createThreadTracker } from "./lib.ts";
+import { createDeduper, createThreadTracker } from "./message-gating.ts";
 import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
@@ -283,9 +283,6 @@ export async function startSlackPlugin(
         return;
       }
       if (!scope.startsWith("org:")) return;
-      // The org-wide default changed: re-ensure every channel the bot is in. The
-      // ensurer re-reads each scope's effective setting, so explicit per-channel
-      // overrides come out unchanged.
       void (async () => {
         try {
           for await (const res of app.client.paginate("conversations.list", {

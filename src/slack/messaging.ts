@@ -2,12 +2,11 @@ import { extractPrivateContinuation } from "./external-access.ts";
 import {
   type ReactionDirective,
   MAX_REACTIONS_PER_TURN,
-  SLACK_TEXT_LIMIT,
   applyReactions,
-  botIdentityArgs,
   extractReactions,
   stripReactionDirectives,
-} from "./lib.ts";
+} from "./reactions.ts";
+import { SLACK_TEXT_LIMIT, botIdentityArgs } from "./delivery.ts";
 
 import type { SlackConversationKind } from "./message-gating.ts";
 export type { SlackConversationKind } from "./message-gating.ts";

@@ -85,8 +85,6 @@ export async function keychainApprovalOrigin(
   return url.toString();
 }
 
-// Posts the approval card in the requesting conversation; a later `ask:<id>:resolved` delivery
-// finds that card and updates it in place, so a decision made on the web shows here too.
 export async function deliverKeychainCard(
   core: SlackCoreClient,
   client: any,

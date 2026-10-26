@@ -1,6 +1,7 @@
 import { isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
-import { decodeSlackEntities, mentionsBot } from "./lib.ts";
+import { decodeSlackEntities } from "./mrkdwn.ts";
+import { mentionsBot } from "./message-gating.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";

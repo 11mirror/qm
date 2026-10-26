@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { LRUCache } from "lru-cache";
 import { swallow } from "../util/errors.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
-import { parseDeliveryTarget } from "./lib.ts";
+import { parseDeliveryTarget } from "./delivery.ts";
 
 interface Recipient {
   target: string;

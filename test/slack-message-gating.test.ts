@@ -18,7 +18,7 @@ import {
   isBareStop,
   maybeInterceptStop,
   createInFlightThreadMap,
-} from "../src/slack/lib.ts";
+} from "../src/slack/message-gating.ts";
 
 test("shouldProcessMessage allows file_share and thread_broadcast but drops other subtypes and the bot's own", () => {
   assert.equal(shouldProcessMessage({ subtype: "file_share", user: "U1" }, "BOT"), true);

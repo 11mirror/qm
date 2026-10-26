@@ -8,58 +8,61 @@ import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
+import { type ActorAssertion, type ChannelMeta, groupDmDisplayName, isExternallyShared, isMpim } from "./identity.ts";
 import {
-  type ActorAssertion,
-  type ChannelMeta,
   type ConversationTurn,
   type OverheardMessage,
+  renderConversationView,
+  resolveMentions,
+} from "./conversation.ts";
+import {
   type ReactionTally,
+  REACTION_DETECT_GUIDANCE,
+  REACTION_INSTRUCTION,
+  buildReactionTurnText,
+  resolveReactionTargets,
+  shouldSurfaceReaction,
+} from "./reactions.ts";
+import {
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
-  type SlackFile,
   DEFAULT_ACK_REACTIONS,
-  REACTION_DETECT_GUIDANCE,
-  REACTION_INSTRUCTION,
-  botIdentityArgs,
-  buildReactionTurnText,
   createAckPresenter,
-  createDeduper,
-  createThreadTracker,
-  decodeSlackEntities,
-  dedupeKey,
-  dedupedRun,
-  deliveryCandidatesFor,
-  statusPlaceholderKey,
-  channelThreadRef,
-  dmThreadRef,
+} from "./presenters.ts";
+import {
+  type SlackFile,
   downloadSlackFile,
-  encodeDeliveryTarget,
-  groupDmDisplayName,
-  hasContent,
   hydrateSlackFiles,
-  isExternallyShared,
-  isMpim,
-  type SurfaceHeaderClient,
-  maybeInterceptStop,
-  postThenAckRunDelivery,
-  type PostMessageArgs,
-  postWithVerify,
   processInboundFiles,
-  safeChunks,
-  SLACK_POST_SPLIT_LIMIT,
-  refusalDelivery,
-  refusalNote,
-  renderConversationView,
-  resolveMentions,
-  resolveReactionTargets,
-  shouldSurfaceReaction,
-  slackReplyArgs,
-  threadHasBotStake,
-  toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
-} from "./lib.ts";
+} from "./attachments.ts";
+import {
+  botIdentityArgs,
+  deliveryCandidatesFor,
+  statusPlaceholderKey,
+  encodeDeliveryTarget,
+  type SurfaceHeaderClient,
+  type PostMessageArgs,
+  postWithVerify,
+  SLACK_POST_SPLIT_LIMIT,
+  slackReplyArgs,
+} from "./delivery.ts";
+import {
+  createDeduper,
+  createThreadTracker,
+  dedupeKey,
+  dedupedRun,
+  channelThreadRef,
+  dmThreadRef,
+  hasContent,
+  maybeInterceptStop,
+  threadHasBotStake,
+} from "./message-gating.ts";
+import { decodeSlackEntities, toSlackMrkdwn } from "./mrkdwn.ts";
+import { postThenAckRunDelivery, refusalDelivery, refusalNote } from "./refusals.ts";
+import { safeChunks } from "./safe-cut.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { AckPresenter } from "./presenters.ts";
@@ -620,9 +623,6 @@ export function createTurnHandler(deps: {
       }
     }
 
-    // This message was folded into a run that was already live. The handler that OWNS that run
-    // delivers its reply; delivering here too is how one answer got posted twice. Settle this
-    // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
       return;

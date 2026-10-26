@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
-import { createThreadTracker, createDeduper } from "../src/slack/lib.ts";
+import { createThreadTracker, createDeduper } from "../src/slack/message-gating.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity;

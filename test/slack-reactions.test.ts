@@ -15,8 +15,8 @@ import {
   encodeTs,
   decodeTs,
   MAX_REACTIONS_PER_TURN,
-  CURATED_ACK_EMOJI,
-} from "../src/slack/lib.ts";
+} from "../src/slack/reactions.ts";
+import { CURATED_ACK_EMOJI } from "../src/slack/presenters.ts";
 
 test("normalizeReaction accepts a bare name, strips colons, and lowercases", () => {
   assert.equal(normalizeReaction("eyes"), "eyes");

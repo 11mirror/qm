@@ -8,9 +8,7 @@ import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { destinationSource } from "../types.ts";
 import {
   botIdentityArgs,
-  createThreadTracker,
   deliveryMetadata,
-  dmThreadRef,
   openConversationFor,
   findPostedByKey,
   parseDeliveryTarget,
@@ -18,13 +16,11 @@ import {
   postWithVerify,
   recoveryVerifyOldest,
   slackReplyArgs,
-  slackSectionBlocks,
-  stripReactionDirectives,
-  toSlackMrkdwn,
-  uploadAttachments,
-  uploadFailureNote,
-  applyReactions,
-} from "./lib.ts";
+} from "./delivery.ts";
+import { createThreadTracker, dmThreadRef } from "./message-gating.ts";
+import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
+import { stripReactionDirectives, applyReactions } from "./reactions.ts";
+import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { OutboundPost, PostReceipt } from "../surfaces/outbound.ts";
 import type { TurnFlow } from "./turn-flow.ts";

@@ -7,7 +7,7 @@ import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
+import { createDeduper, createThreadTracker } from "../src/slack/message-gating.ts";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

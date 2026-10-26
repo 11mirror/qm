@@ -11,7 +11,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_TURN,
   type SlackFile,
-} from "../src/slack/lib.ts";
+} from "../src/slack/attachments.ts";
 
 function fakeFetch(opts: {
   ok?: boolean;

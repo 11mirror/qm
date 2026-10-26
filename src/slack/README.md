@@ -118,7 +118,7 @@ the tokens, core simply runs without Slack.
   files are ingested** — externally-hosted ("remote") files are refused, since fetching an
   off-Slack URL from the plugin host would be an SSRF / token-leak vector.
 - **Replies render natively.** The agent emits standard Markdown; the plugin translates it
-  to Slack "mrkdwn" before posting (`toSlackMrkdwn` in [`lib.ts`](./lib.ts)) so `**bold**`,
+  to Slack "mrkdwn" before posting (`toSlackMrkdwn` in [`mrkdwn.ts`](./mrkdwn.ts)) so `**bold**`,
   `[links](url)`, `# headers`, and `- bullets` show as Slack styling instead of raw markup.
 - **The agent can react with emoji — a Slack-only feature with two paths.**
   For explicit reaction requests inside a normal assistant turn, the plugin teaches the agent the
@@ -127,7 +127,7 @@ the tokens, core simply runs without Slack.
   **just the directive with no other text** — the agent then reacts silently, the way a human drops a 👍
   without typing anything (no "(no response)" placeholder, and the streamed status is torn down
   cleanly rather than flashing an empty bubble). The plugin parses the directive out of the reply
-  (`extractReactions` in [`lib.ts`](./lib.ts)), removes it from the text, and applies the emoji
+  (`extractReactions` in [`reactions.ts`](./reactions.ts)), removes it from the text, and applies the emoji
   with `reactions.add` to the message that triggered the turn — or, when the directive carries an
   `@ <id>` target (`[[react: tada @ ~abc123]]`), to that _specific_ earlier message instead. So the
   agent can resolve a phrase like "react to Alice's last message," each channel turn
@@ -159,7 +159,7 @@ the tokens, core simply runs without Slack.
   `reactions:read` scope and the `reaction_added` / `reaction_removed` events, a reaction the bot has
   a **stake** in is surfaced to the agent: a reaction on its **own** message, a reaction in a **DM**
   with it, or one on a **thread root it's following** (`shouldSurfaceReaction` in
-  [`lib.ts`](./lib.ts)). Everything else — a stray reaction in a channel it merely sits in —
+  [`reactions.ts`](./reactions.ts)). Everything else — a stray reaction in a channel it merely sits in —
   is ignored, so a busy channel never floods the agent. A relevant reaction is delivered as an
   **unprompted turn** (exactly like a thread-follow message): the core runs **turn detection**, so a
   passing 👍 stays silent while a ✅ on the bot's "shall I deploy?" gets acted on. The reacted message
@@ -268,7 +268,7 @@ your per-dev name + tokens live only in your local app and your gitignored `.env
   with a real failure, the core supplies the admin transcript deep link (`TurnResult.adminUrl`,
   built from the session org's portal) and the plugin appends it as `Full error:`. Absent when
   there's nothing to link (boundary refusals, no portal configured).
-- Channel audience is enumerated per-member: `computeChannelAudience` (lib.ts) resolves
+- Channel audience is enumerated per-member: `computeChannelAudience` (identity.ts) resolves
   the full member list (with a Slack-Connect / guest external marker, and an actor-only
   fallback when membership is unreadable) so the core's audience-floor is fine-grained.
 

@@ -11,13 +11,6 @@ export function decodeSlackEntities(text: string): string {
 
 const SLACK_MENTION = /(?<!<)<+@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
 
-export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
-  return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
-    const name = (label && label.trim()) || lookup(id);
-    return name ? `@${name}` : `@${id}`;
-  });
-}
-
 export function mentionedUserIds(text: string): string[] {
   return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
 }

@@ -8,17 +8,16 @@ import {
   allInternalChannelMembers,
   internalChannelMembers,
   classifyUser,
-  createRefreshCoalescer,
   createUserCache,
   externalMarker,
   isExternallyShared,
-  isReservedMentionName,
   probeIdentityMode,
   resolveChannelMembership,
-  setMentionIndex,
   slackUserTimezone,
-  sleep,
-} from "./lib.ts";
+} from "./identity.ts";
+import { createRefreshCoalescer } from "./message-gating.ts";
+import { isReservedMentionName, setMentionIndex } from "./mrkdwn.ts";
+import { sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 

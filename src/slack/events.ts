@@ -5,10 +5,9 @@ import {
   isGroupMembershipMessage,
   isThreadReply,
   mentionsBot,
-  onBotJoinedChannel,
-  type SurfaceHeaderClient,
   shouldProcessMessage,
-} from "./lib.ts";
+} from "./message-gating.ts";
+import { onBotJoinedChannel, type SurfaceHeaderClient } from "./delivery.ts";
 import {
   isDirectChannelType,
   parseEventId,

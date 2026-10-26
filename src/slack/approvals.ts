@@ -8,18 +8,17 @@ import {
   type StoredApproval,
   approvalDecisionMessage,
   approvalMessage,
-  clip,
   type ApprovalDecisionRecord,
   createApprovalRegistry,
-  createThreadTracker,
   recoveredApprovalContext,
-  resolveReactionTargets,
-  slackReplyArgs,
-  stripAckPrefix,
-  toSlackMrkdwn,
-  uploadAttachments,
-  uploadFailureNote,
-} from "./lib.ts";
+} from "./approval-cards.ts";
+import { safeClip } from "./safe-cut.ts";
+import { createThreadTracker } from "./message-gating.ts";
+import { resolveReactionTargets } from "./reactions.ts";
+import { slackReplyArgs } from "./delivery.ts";
+import { stripAckPrefix } from "./presenters.ts";
+import { toSlackMrkdwn } from "./mrkdwn.ts";
+import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
@@ -435,11 +434,11 @@ export function createApprovals(deps: {
         client,
         cardChannel,
         messageTs,
-        `⚠️ ${clip(msg, 300)} — the approval is still pending; use the buttons to try again.`,
+        `⚠️ ${safeClip(msg, 300)} — the approval is still pending; use the buttons to try again.`,
         [
           {
             type: "section",
-            text: { type: "mrkdwn", text: `⚠️ ${clip(msg, 300)} — the approval is still pending; try again:` },
+            text: { type: "mrkdwn", text: `⚠️ ${safeClip(msg, 300)} — the approval is still pending; try again:` },
           },
           ...retry.blocks,
         ],

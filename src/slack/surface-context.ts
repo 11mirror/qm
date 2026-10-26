@@ -3,17 +3,10 @@ import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./hist
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
-import {
-  type RecentMessage,
-  type SlackFile,
-  buildContextWindow,
-  downloadSlackFile,
-  isExternallyShared,
-  isOversize,
-  openConversationFor,
-  oversizeMsg,
-  parseDeliveryTarget,
-} from "./lib.ts";
+import { type RecentMessage, buildContextWindow } from "./conversation.ts";
+import { type SlackFile, downloadSlackFile, isOversize, oversizeMsg } from "./attachments.ts";
+import { isExternallyShared } from "./identity.ts";
+import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";

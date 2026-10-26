@@ -1,7 +1,13 @@
-import { clip, inlineCode } from "./util.ts";
+import { safeClip, safeCutIndex } from "./safe-cut.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
+
+export function inlineCode(text: string): string {
+  const cleaned = text.replace(/`/g, "'");
+  const safe = cleaned.slice(0, safeCutIndex(cleaned, 2000));
+  return `\`${safe}${cleaned.length > safe.length ? "..." : ""}\``;
+}
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
 export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
@@ -87,7 +93,7 @@ function argText(value: unknown): string {
 
 function argLines(args: Record<string, unknown>): string[] {
   return Object.entries(args).map(([key, value]) => {
-    const text = clip(argText(value), ARG_VALUE_MAX);
+    const text = safeClip(argText(value), ARG_VALUE_MAX);
     return text.includes("\n")
       ? `${escapeSlackText(key)}:\n\`\`\`${escapeSlackText(text.replaceAll("`", "'"))}\`\`\``
       : `${escapeSlackText(key)}: ${inlineCode(escapeSlackText(text))}`;
@@ -106,7 +112,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
   const describe = (p: (typeof items)[number]): string => {
     if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
-    if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
+    if (p.purpose) return `Approval needed: ${safeClip(p.purpose, 400)}`;
     const view = toolCallView(p);
     if (view) return `Approval needed: ${toolTitle(view)}`;
     return `Approval needed before I can run ${inlineCode(p.command)}.`;
@@ -119,8 +125,8 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     let heading = view ? `:lock: *Approval needed:* ${toolTitle(view)}` : ":lock: *Approval needed.*";
     if (p.kind === "input") heading = ":lock: *My security screen flagged part of this message. Allow it?*";
     const lines = [heading];
-    if (p.summary && !view) lines.push(clip(p.summary, 400));
-    if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
+    if (p.summary && !view) lines.push(safeClip(p.summary, 400));
+    if (p.purpose) lines.push(`*Why:* ${safeClip(p.purpose, 400)}`);
     const shownArgs = view !== null && viewArgs.join("\n").length <= INLINE_COMMAND_MAX;
     const longText = view ? JSON.stringify(view.args, null, 2) : p.command;
     const longCommand = p.kind !== "input" && !shownArgs && p.command.length > INLINE_COMMAND_MAX;
@@ -135,10 +141,10 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
           : `${commandHeading} too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
       );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
-    lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
+    lines.push(`*Flagged as:* ${safeClip(p.reason, 200)}`);
     blocks.push({
       type: "section",
-      text: { type: "mrkdwn", text: clip(lines.join("\n"), 2900) },
+      text: { type: "mrkdwn", text: safeClip(lines.join("\n"), 2900) },
     });
     if (longCommand && shown) blocks.push(...sections);
     blocks.push({
@@ -185,7 +191,7 @@ function approvalDecisionLine(
   record: ApprovalDecisionRecord,
 ): string {
   const view = toolCallView(p);
-  let subject = view ? toolTitle(view) : inlineCode(clip(p.command, DECISION_SUBJECT_MAX));
+  let subject = view ? toolTitle(view) : inlineCode(safeClip(p.command, DECISION_SUBJECT_MAX));
   if (p.kind === "input") subject = "flagged message";
   const by = record.by ? ` by <@${record.by}>` : "";
   if (record.state === "pending")
@@ -202,12 +208,12 @@ function approvalDecisionDetail(p: { command: string; summary?: string; kind?: s
   if (view) {
     const entries = Object.entries(view.args);
     if (!entries.length) return null;
-    return clip(
+    return safeClip(
       entries.map(([key, value]) => `${escapeSlackText(key)}: ${escapeSlackText(argText(value))}`).join(" · "),
       DECISION_DETAIL_MAX,
     );
   }
-  return p.command.length > DECISION_SUBJECT_MAX ? inlineCode(clip(p.command, DECISION_DETAIL_MAX)) : null;
+  return p.command.length > DECISION_SUBJECT_MAX ? inlineCode(safeClip(p.command, DECISION_DETAIL_MAX)) : null;
 }
 
 export function approvalDecisionMessage(
@@ -220,7 +226,7 @@ export function approvalDecisionMessage(
   return {
     text: [line, ...extra].join("\n"),
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: clip([line, ...extra].join("\n"), 2900) } },
+      { type: "section", text: { type: "mrkdwn", text: safeClip([line, ...extra].join("\n"), 2900) } },
       ...(detail ? [{ type: "context", elements: [{ type: "mrkdwn", text: detail }] }] : []),
     ],
   };

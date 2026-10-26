@@ -11,8 +11,8 @@ import {
   type ConversationView,
   type ConversationTurn,
   type RecentMessage,
-  encodeTs,
-} from "../src/slack/lib.ts";
+} from "../src/slack/conversation.ts";
+import { encodeTs } from "../src/slack/reactions.ts";
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

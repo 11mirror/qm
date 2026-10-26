@@ -1,6 +1,6 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
-import { sleep } from "./util.ts";
+import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
 export interface SlackReplyArgs {
@@ -293,105 +293,11 @@ export function deliveryCandidatesFor(
   ];
 }
 
-const DELIVERY_MAX_ATTEMPTS = 5;
-const DELIVERY_MAX_TRACKED = 1000;
-const DELIVERY_GIVEUP_RETRY_MS = 5 * 60_000;
-
-export interface DeliveryTracker {
-  givenUp(id: string): boolean;
-  posted(id: string): { ackBody?: unknown } | undefined;
-  markPosted(id: string, ackBody?: unknown): void;
-  recordFailure(id: string): boolean;
-  clear(id: string): void;
-}
-
 function capMap<K, V>(map: Map<K, V>, max: number): void {
   while (map.size > max) {
     const oldest = map.keys().next().value;
     if (oldest === undefined) return;
     map.delete(oldest);
-  }
-}
-
-export function createDeliveryTracker(
-  opts: { maxAttempts?: number; maxTracked?: number; giveUpRetryMs?: number } = {},
-): DeliveryTracker {
-  const maxAttempts = opts.maxAttempts ?? DELIVERY_MAX_ATTEMPTS;
-  const maxTracked = opts.maxTracked ?? DELIVERY_MAX_TRACKED;
-  const giveUpRetryMs = opts.giveUpRetryMs ?? DELIVERY_GIVEUP_RETRY_MS;
-  const failures = new Map<string, number>();
-  const posted = new Map<string, { ackBody?: unknown }>();
-
-  const dead = new Map<string, number>();
-  return {
-    givenUp(id) {
-      const until = dead.get(id);
-      if (until === undefined) return false;
-      if (Date.now() < until) return true;
-      dead.delete(id);
-      console.error(`[slack-plugin] delivery ${id} give-up window expired — retrying delivery`);
-      return false;
-    },
-    posted(id) {
-      return posted.get(id);
-    },
-    markPosted(id, ackBody) {
-      posted.set(id, ackBody === undefined ? {} : { ackBody });
-      while (posted.size > maxTracked) {
-        const oldest = posted.keys().next().value;
-        if (oldest === undefined) break;
-        posted.delete(oldest);
-        failures.delete(oldest);
-        dead.set(oldest, Date.now() + giveUpRetryMs);
-        capMap(dead, maxTracked);
-      }
-    },
-    recordFailure(id) {
-      const count = (failures.get(id) ?? 0) + 1;
-      if (count >= maxAttempts) {
-        failures.delete(id);
-        posted.delete(id);
-        dead.set(id, Date.now() + giveUpRetryMs);
-        capMap(dead, maxTracked);
-        return true;
-      }
-      failures.set(id, count);
-      capMap(failures, maxTracked);
-      return false;
-    },
-    clear(id) {
-      failures.delete(id);
-      posted.delete(id);
-      dead.delete(id);
-    },
-  };
-}
-
-export async function deliverWithRetry(opts: {
-  tracker: DeliveryTracker;
-  id: string;
-  post(): Promise<unknown>;
-  ack(body?: unknown): Promise<void>;
-  onError(stage: "post" | "ack", err: unknown, gaveUp: boolean): void;
-}): Promise<void> {
-  const { tracker, id } = opts;
-  if (tracker.givenUp(id)) return;
-  let postedState = tracker.posted(id);
-  if (!postedState) {
-    try {
-      const ackBody = await opts.post();
-      tracker.markPosted(id, ackBody ?? undefined);
-      postedState = tracker.posted(id);
-    } catch (err) {
-      opts.onError("post", err, tracker.recordFailure(id));
-      return;
-    }
-  }
-  try {
-    await opts.ack(postedState?.ackBody);
-    tracker.clear(id);
-  } catch (err) {
-    opts.onError("ack", err, tracker.recordFailure(id));
   }
 }
 
@@ -569,9 +475,7 @@ export async function postWithVerify(
         try {
           const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
           if (found) return { ...found, reused: true };
-        } catch {
-          /* verification is best-effort on this path */
-        }
+        } catch {}
         continue;
       }
       let found: { ts: string; channel: string } | undefined;

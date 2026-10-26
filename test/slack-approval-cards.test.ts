@@ -6,7 +6,7 @@ import {
   approvalCardDestination,
   recoveredApprovalContext,
   createApprovalRegistry,
-} from "../src/slack/lib.ts";
+} from "../src/slack/approval-cards.ts";
 
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);

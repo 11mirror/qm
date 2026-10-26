@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS } from "./lib.ts";
+import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS } from "./presenters.ts";
 import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
