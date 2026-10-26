@@ -52,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId } from "../types.ts";
+import type { ConversationTurn } from "../types.ts";
 import { isReply, isUserMessage, type Item } from "../sessions/items.ts";
 import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
@@ -139,7 +139,6 @@ import {
 import { perTenant } from "../tenant.ts";
 
 export interface PiHarnessOptions {
-  modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
   resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
@@ -1512,19 +1511,9 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
 }
 
 export function createPiHarness(opts?: PiHarnessOptions): Harness {
-  const configuredModelId = opts?.modelId;
-  const resolveModelId = (scope?: ScopeId): string =>
-    resolveConfiguredModelId(
-      typeof configuredModelId === "function" ? configuredModelId(scope) : configuredModelId,
-      opts?.defaultModelId,
-    );
+  const resolveModelId = (): string => resolveConfiguredModelId(undefined, opts?.defaultModelId);
   const auxiliaryModelId = (): string =>
-    auxiliaryModelFor(
-      resolveConfiguredModelId(
-        opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
-        opts?.defaultModelId,
-      ),
-    );
+    auxiliaryModelFor(resolveConfiguredModelId(opts?.resolveBaseModelId?.(), opts?.defaultModelId));
   const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
   const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
   const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
@@ -1671,43 +1660,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
-          if (captureRequests) {
-            try {
-              ref.llmCapture?.push(capturedPayload!);
-            } catch (e) {
-              swallow("pi: llm request capture", e);
-            }
-          }
+          if (captureRequests) ref.llmCapture?.push(capturedPayload!);
           return finalPayload;
         };
         const priorResponse = agent.onResponse;
         agent.onResponse = async (response, model) => {
-          try {
-            const calls = ref.modelDispatch;
-            const last = calls?.[calls.length - 1];
-            if (last && last.first === undefined) last.first = Date.now();
-          } catch (e) {
-            swallow("pi: model dispatch capture", e);
-          }
+          const last = ref.modelDispatch?.at(-1);
+          if (last && last.first === undefined) last.first = Date.now();
           if (priorResponse) await priorResponse(response, model);
         };
         const priorTransform = agent.transformContext;
         agent.transformContext = async (messages, signal) => {
-          try {
-            ref.pendingTransformContext = Date.now();
-          } catch (e) {
-            swallow("pi: transformContext stamp", e);
-          }
+          ref.pendingTransformContext = Date.now();
           return priorTransform ? await priorTransform(messages, signal) : messages;
         };
         agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
         const priorPrepare = agent.prepareNextTurn;
         agent.prepareNextTurn = async (signal) => {
-          try {
-            ref.pendingPrepareNextTurn = Date.now();
-          } catch (e) {
-            swallow("pi: prepareNextTurn stamp", e);
-          }
+          ref.pendingPrepareNextTurn = Date.now();
           return priorPrepare ? await priorPrepare(signal) : undefined;
         };
       }
@@ -1724,9 +1694,23 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     return { entry };
   }
 
+  /** One isolated completion on `modelId`; null when no provider key serves that model. */
+  async function keyedOneShot(
+    prefix: string,
+    modelId: string,
+    systemPrompt: string,
+    prompt: string,
+    extra?: { signal?: AbortSignal; thinkingLevel?: LegacyThinkingLevel },
+  ): Promise<string | undefined | null> {
+    const model = requiredModel(modelId);
+    const providerKeys = await resolveProviderKeys();
+    if (!keyForModel(providerKeys, model)) return null;
+    return oneShot(prefix, model, providerKeys, systemPrompt, prompt, { modelGateway, ...extra });
+  }
+
   return defineHarness({
     async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
+      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId();
       const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
       const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
@@ -1896,13 +1880,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             steps.startStreaming();
             curStart = Date.now();
             curFirst = undefined;
-            try {
-              const calls = entry.ref.modelDispatch;
-              const last = calls?.[calls.length - 1];
-              if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
-            } catch (e) {
-              swallow("pi: stream-open capture", e);
-            }
+            const last = entry.ref.modelDispatch?.at(-1);
+            if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
           } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
             turn.onTextBlockStart?.();
           } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
@@ -2073,6 +2052,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const rawRemainingCapMs = floorCap.remainingCapMs;
         const raceCapMs = floorCap.raceCapMs;
         const extendCapMs = floorCap.extendMs;
+        const race = (prompting: Promise<void>, capMs = raceCapMs()) =>
+          raceTurnWallClock(prompting, { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() });
         const refusedModelIds = new Set<string>();
         const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
           if (userAborted || turn.cancel?.aborted) return false;
@@ -2106,11 +2087,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
           applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(
+          const outcome = await race(
             entry.agentSession.prompt(
               refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
             ),
-            { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
+            capMs,
           );
           if (userAborted) return false;
           if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
@@ -2140,11 +2121,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
-            capMs,
-            extendMs: extendCapMs,
-            abort: () => entry.agentSession.abort(),
-          });
+          const outcome = await race(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), capMs);
           if (userAborted) return false;
           if (outcome !== "ok")
             throw new NonRetryableTurnError(
@@ -2168,15 +2145,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const images = turn.images?.length
             ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
             : undefined;
-          wallClock = await raceTurnWallClock(
+          wallClock = await race(
             continueTurn
               ? continueAssistantTurn(entry.agentSession)
               : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
-            {
-              capMs: raceCapMs(),
-              extendMs: extendCapMs,
-              abort: () => entry.agentSession.abort(),
-            },
           );
           if (wallClock === "ok") await recoverFailedRound();
           const goalAfterPrompt = entry.ref.goal;
@@ -2204,20 +2176,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                       }),
                   }
                 : {}),
-              beforePrompt: async (note) => {
+              beforePrompt: async () => {
                 console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
-                void note;
                 entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
                 entry.ref.silentRequested = false;
                 await thinkTail;
               },
               prompt: async (note) => {
                 if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs: raceCapMs(),
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
+                const outcome = await race(entry.agentSession.prompt(note));
                 if (outcome === "ok") await recoverFailedRound();
                 return outcome;
               },
@@ -2246,11 +2213,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
             ) {
               try {
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs,
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
+                const outcome = await race(entry.agentSession.prompt(note), capMs);
                 if (outcome !== "ok" && !userAborted) {
                   recoveryDead = true;
                 } else if (
@@ -2457,27 +2420,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       }
     },
 
-    contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
-      const id = model && resolveModel(model) ? model : resolveModelId(scopeLabel as ScopeId | undefined);
+    contextTokenBudget(_scopeLabel?: string, model?: string): number | undefined {
+      const id = model && resolveModel(model) ? model : resolveModelId();
       return contextTokenBudgetForModel(id);
     },
 
     async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-      const model = requiredModel(resolveModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+      return (await keyedOneShot("pi-oneshot", resolveModelId(), systemPrompt, prompt)) ?? undefined;
     },
 
     async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
-      const model = requiredModel(judgeModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-        modelGateway,
+      const out = await keyedOneShot("pi-judge", judgeModelId(), systemPrompt, prompt, {
         signal,
         thinkingLevel: "low",
       });
+      return out ?? undefined;
     },
 
     async screenSecurity({
@@ -2538,32 +2495,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
-        modelGateway,
-      });
-      return sanitizeTitle(out);
+      const out = await keyedOneShot("pi-title", titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
+      return out === null ? undefined : sanitizeTitle(out);
     },
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
       if (!command.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
       const prompt = [
         `Policy flagged this as: ${reason}`,
         purpose ? `Agent's stated purpose: ${purpose}` : "",
         "",
         "Command:",
         command.slice(0, 4000),
-      ]
-        .filter((l) => l !== undefined)
-        .join("\n");
-      const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
-      )?.trim();
+      ].join("\n");
+      const out = (await keyedOneShot("pi-approval-summary", titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);
     },

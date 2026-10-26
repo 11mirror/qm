@@ -278,7 +278,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
     const modelId = "claude-opus-5";
     const harness = createPiHarness({
       apiKey: "sk-test",
-      modelId,
+      defaultModelId: modelId,
       ...(route !== "direct"
         ? {
             modelGateway: {
@@ -352,7 +352,7 @@ test("native document bytes reach the provider on every step without entering se
 });
 
 test("Pi Responses captures exclude history and document text without changing requests or entries", async () => {
-  const harness = createPiHarness({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
+  const harness = createPiHarness({ openaiApiKey: "sk-test", defaultModelId: "gpt-5.6-sol" });
   const sink: Sink = { entries: [] };
   const captures: HarnessLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
