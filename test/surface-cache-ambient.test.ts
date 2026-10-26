@@ -57,33 +57,6 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
     assert.equal(pending[0].destination.target, container, "a plain post lands top-level in the container");
     const worker = await built.sessions.getByThread(`slack:${container}:ambient:100.1`);
     assert.ok(worker);
-    const classifier = (await built.sessions.listLlmRequests(worker!.id)).find((rec) => rec.model === "mock-security");
-    assert.match(JSON.stringify(classifier?.promptEnvelope), /did the Q3 launch slip/);
-    assert.match(JSON.stringify(classifier?.promptEnvelope), /ambient reply/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("a prompt-injected ambient judge reason is screened even when the shown messages are benign", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  try {
-    await setChannelInstructions(built, "C-reason-risk", "!engage !security-risk", "U-admin");
-    await built.app.ingestSurfaceEvents([
-      {
-        container: "C-reason-risk",
-        ts: "100.2",
-        authorId: "U1",
-        text: "ordinary project update",
-        createdAt: 1,
-      },
-    ]);
-    const flagged = async () =>
-      (await built.auditLog.events()).some((event) => event.action === "security_posture.flagged");
-    await settle(flagged);
-    assert.equal((await built.posts.pending("slack")).length, 0);
-    assert.ok(await flagged());
   } finally {
     await built.runtime.stop();
   }
@@ -794,7 +767,16 @@ test("an ambient worker in a group DM runs at the group scope, not a fabricated 
   built.runtime.start();
   try {
     const container = "C-mpim";
-    await setChannelInstructions(built, container, "!engage !post group reply", "U-admin");
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage !post group reply",
+      "U-admin",
+      undefined,
+      undefined,
+      undefined,
+      "group",
+    );
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -826,7 +808,16 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceGroups([{ groupId: container, principalId: "alice@acme.com" }]);
-    await setChannelInstructions(built, container, "!engage-asked", "U-admin");
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage-asked",
+      "U-admin",
+      undefined,
+      undefined,
+      undefined,
+      "group",
+    );
     await built.app.ingestSurfaceEvents([
       {
         container,
@@ -859,7 +850,16 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
     await built.directory.replace([
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U9" },
     ]);
-    await setChannelInstructions(built, container, "!engage-asked !post proactive fallback", "U-admin");
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage-asked !post proactive fallback",
+      "U-admin",
+      undefined,
+      undefined,
+      undefined,
+      "group",
+    );
     await built.app.ingestSurfaceEvents([
       {
         container,

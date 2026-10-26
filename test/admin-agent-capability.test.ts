@@ -937,10 +937,7 @@ test("native admin tools use the authenticated handler, including its live autho
         .length,
       1,
     );
-    for (const claims of [
-      await capFor("U1"),
-      await capFor("admin-alice", { live: false }),
-    ]) {
+    for (const claims of [await capFor("U1"), await capFor("admin-alice", { live: false })]) {
       const denied = await createAdminCall(s.base, claims)({ action: "memory", scope: target });
       assert.equal(denied.status, 403);
       assert.doesNotMatch(JSON.stringify(denied.body), /synthetic admin tool fixture/);

@@ -15,8 +15,8 @@ export async function setChannelInstructions(
   bots?: Record<string, BotPolicy>,
   sessionId?: string,
   ambientEnabled?: boolean | null,
+  kind: "channel" | "group" = "channel",
 ): Promise<void> {
-  const kind = (await built.surfaceCache?.containerState(container).catch(() => null))?.kind;
   if (instructions)
     await built.config.setInstructions(scopeId(kind === "group" ? "group" : "channel", container), instructions, setBy);
   await built.channelPolicy.set(container, {

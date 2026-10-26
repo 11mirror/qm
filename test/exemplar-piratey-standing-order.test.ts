@@ -61,7 +61,10 @@ test("exemplar (piratey X-link): the worker gets the channel instructions verbat
     assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
     const prompts = JSON.stringify(await built.sessions.listLlmRequests(workerSession!.id));
     for (const line of ["DON'T: respond piratey to messages without an X link", "(per alice, updated 2026-07-01)"]) {
-      assert.ok(prompts.includes(JSON.stringify(line).slice(1, -1)), `instructions not verbatim in the prompt: "${line}"`);
+      assert.ok(
+        prompts.includes(JSON.stringify(line).slice(1, -1)),
+        `instructions not verbatim in the prompt: "${line}"`,
+      );
     }
     const entries = await built.sessions.getItems(workerSession!.id);
     assert.ok(

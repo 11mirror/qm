@@ -1401,10 +1401,7 @@ test("an org admin's live turn carries the admin prompt hint and a liveness clai
   assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
   assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
   assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
-  assert.match(
-    adminPrompt.reply ?? "",
-    /private-content reads require a DM or a turn the admin started/,
-  );
+  assert.match(adminPrompt.reply ?? "", /private-content reads require a DM or a turn the admin started/);
   assert.doesNotMatch(
     adminPrompt.reply ?? "",
     /private-content reads work only from a DM|bulk configuration imports require/,

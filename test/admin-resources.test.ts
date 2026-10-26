@@ -293,7 +293,7 @@ test("PUT to an unknown resource is a 404", async () => {
 test("a generic resource round-trips through the registry dispatch + read loop", async () => {
   const srv = start();
   try {
-    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
+    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/instructions`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ content: "be excellent", expectedVersion: 1 }),
@@ -301,17 +301,17 @@ test("a generic resource round-trips through the registry dispatch + read loop",
     assert.equal(put.status, 200);
     const get = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const body = (await get.json()) as {
-      soul: string;
+      instructions: string;
       instructionsVersion: number;
       instructionsHistory: Array<{ content: string; version: number; updatedBy?: string; updatedAt: number }>;
     };
-    assert.equal(body.soul, "be excellent");
+    assert.equal(body.instructions, "be excellent");
     assert.equal(body.instructionsVersion, 2);
     assert.equal(body.instructionsHistory[0]?.content, "be excellent");
     assert.equal(body.instructionsHistory[0]?.updatedBy, "admin-alice");
     assert.ok(body.instructionsHistory[0]?.updatedAt);
 
-    const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
+    const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/instructions`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ content: "overwrite", expectedVersion: 1 }),
