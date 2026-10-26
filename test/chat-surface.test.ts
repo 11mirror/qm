@@ -196,7 +196,6 @@ test("registry submits signed events as turns and posts outbound replies through
   });
   assert.equal(registry.label("forum"), "Forum");
   assert.equal(registry.label("slack"), "Slack");
-  assert.equal(registry.forDestination("principal"), slack);
   assert.deepEqual(await registry.receive("forum", signed(dmEvent())), {
     status: 200,
     body: { ok: true, runs: ["run-1"] },
@@ -230,37 +229,35 @@ test("registry submits signed events as turns and posts outbound replies through
 
 test("http-chat refuses posts for another account or a malformed target, and treats 4xx as permanent", async () => {
   const forum = fakeForum();
-  const ctx = (destination: { type: string; target: string; account?: string }) => ({
-    tenant: tenant(),
+  const post = (destination: { type: string; target: string; account?: string }) => ({
     destination,
+    text: "x",
     idempotencyKey: "k",
   });
   await assert.rejects(
-    forum.adapter.deliver(ctx({ type: "forum", target: "42", account: "staging" }), { text: "x" }),
+    forum.adapter.deliver(post({ type: "forum", target: "42", account: "staging" })),
     (error: Error & { permanent?: boolean }) => error.permanent === true,
   );
   await assert.rejects(
-    forum.adapter.deliver(ctx({ type: "forum", target: "a b" }), { text: "x" }),
+    forum.adapter.deliver(post({ type: "forum", target: "a b" })),
     (error: Error & { permanent?: boolean }) => error.permanent === true,
   );
   forum.failWith(404);
   await assert.rejects(
-    forum.adapter.deliver(ctx({ type: "forum", target: "42" }), { text: "x" }),
+    forum.adapter.deliver(post({ type: "forum", target: "42" })),
     (error: Error & { permanent?: boolean }) => error.permanent === true,
   );
   forum.failWith(503);
   await assert.rejects(
-    forum.adapter.deliver(ctx({ type: "forum", target: "42" }), { text: "x" }),
+    forum.adapter.deliver(post({ type: "forum", target: "42" })),
     (error: Error & { permanent?: boolean }) => error.permanent !== true,
   );
   assert.equal(forum.posts.length, 2);
 });
 
-test("native() hands out the Slack handle only from the Slack surface, and each Slack surface owns its accounts", () => {
+test("each Slack surface owns its accounts, and surface names must be unique", () => {
   const a = createSlackSurface();
   const b = createSlackSurface();
-  assert.equal(fakeForum().adapter.native("slack"), null);
-  assert.equal(a.native("slack"), a.slack);
   a.slack.accounts.set("default", { client: {}, teamId: "T1" });
   assert.equal(b.slack.accounts.has("default"), false);
   assert.throws(
@@ -325,10 +322,7 @@ test("http-chat writes its inbound and outbound messages to the surface message 
       1_700_000_000,
     ),
   );
-  await adapter.deliver(
-    { tenant: tenant(), destination: { type: "forum", target: "42:500" }, idempotencyKey: "run:1" },
-    { text: "hi back" },
-  );
+  await adapter.deliver({ destination: { type: "forum", target: "42:500" }, text: "hi back", idempotencyKey: "run:1" });
   await settle(async () => mirrored.length === 2);
   assert.deepEqual(mirrored, [
     {
