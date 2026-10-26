@@ -13,6 +13,14 @@ export interface WorkspaceStore {
   list(scopeId: ScopeId, opts?: { limit: number }): Promise<string[]>;
 }
 
+/** The path names no readable file (absent, a directory, or under a file) — every other error is real. */
+const missing = (error: unknown): boolean =>
+  ["ENOENT", "ENOTDIR", "EISDIR"].includes((error as NodeJS.ErrnoException | null)?.code ?? "");
+
+/** A bounded listing inspects at most this many entries per path it may return, so a tree of mostly
+ * directories cannot turn one listing into a full walk. */
+const LIST_SCAN_FACTOR = 8;
+
 function safeJoin(baseDir: string, relPath: string): string {
   const target = resolve(baseDir, relPath);
   const rel = relative(baseDir, target);
@@ -38,16 +46,18 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
       const path = safeJoin(scopeDir(scopeId), relPath);
       try {
         return await readFile(path, "utf8");
-      } catch {
-        return null;
+      } catch (error) {
+        if (missing(error)) return null;
+        throw error;
       }
     },
     async readBytes(scopeId, relPath) {
       const path = safeJoin(scopeDir(scopeId), relPath);
       try {
         return await readFile(path);
-      } catch {
-        return null;
+      } catch (error) {
+        if (missing(error)) return null;
+        throw error;
       }
     },
     async write(scopeId, relPath, data) {
@@ -65,10 +75,10 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
           const paths: string[] = [];
           const dirs = [scopeDir(scopeId)];
           let inspected = 0;
-          while (dirs.length && paths.length < limit && inspected < limit * 8) {
+          while (dirs.length && paths.length < limit && inspected < limit * LIST_SCAN_FACTOR) {
             const dir = dirs.shift()!;
             for await (const entry of await opendir(dir)) {
-              if (++inspected > limit * 8 || paths.length >= limit) break;
+              if (++inspected > limit * LIST_SCAN_FACTOR || paths.length >= limit) break;
               const path = join(dir, entry.name);
               if (entry.isFile()) paths.push(path);
               else if (entry.isDirectory()) dirs.push(path);
@@ -78,8 +88,9 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
         }
         const entries = await readdir(scopeDir(scopeId), { recursive: true, withFileTypes: true });
         return entries.filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
-      } catch {
-        return [];
+      } catch (error) {
+        if (missing(error)) return [];
+        throw error;
       }
     },
   };
