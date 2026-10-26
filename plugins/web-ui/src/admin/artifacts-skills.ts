@@ -4,6 +4,7 @@ import { badge, card, table, renderer, stacked } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
 import { packRepoLabel, scopeKind, shortId } from "./format.ts";
 import { statusBadge } from "./dom.ts";
+import { scopeMultiSelect } from "./scope-picker.ts";
 export async function removeSkill(s: Data, c: Context) {
   const where = c.dirLabel(s.ownerScopeId) || s.ownerScopeId;
   if (!confirm(`Remove '${s.name || s.id}' from ${where}? It stops being available to agents (kept for audit).`))
@@ -415,7 +416,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     { scopeId: "org:" + c.orgId, label: "org-wide" },
     ...c.scopeRows().map((r: Data) => ({ scopeId: r.scopeId, label: r.label || c.dirLabel(r.scopeId) || r.scopeId })),
   ];
-  const picker = c.buildScopeMultiSelect(choices, selectedScopes, recompute);
+  const picker = scopeMultiSelect(choices, selectedScopes, recompute, c.dirLabel);
   const importSelected = async () => {
     if (busy) return;
     if (!selectedScopes.size || !selected.size) {

@@ -50,11 +50,6 @@ function fixture() {
     openScopeRow: () => {},
     setCronEditing: () => {},
     scopeRows: () => [],
-    buildScopeMultiSelect: (_choices: any, selected: Set<string>, onChange: () => void) => {
-      c.selectedScopes = selected;
-      c.changeScopes = onChange;
-      return dom.window.document.createElement("div");
-    },
   };
   return { dom, root, c, ui: (dom.window as any).artifacts, skills: (dom.window as any).skillUI };
 }
@@ -227,10 +222,11 @@ test("pack selection follows target scopes and supports partial imports", async 
         }
       : { ok: true, data: { imported: [] } };
   };
+  c.scopeRows = () => [{ scopeId: "personal:alice" }];
   await skills.browsePack({ id: "pack", url: "example" }, root, c);
   assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, true);
-  c.selectedScopes.add("personal:alice");
-  c.changeScopes();
+  root.querySelector<HTMLButtonElement>(".scopepick .rowbtn")!.click();
+  root.querySelector<HTMLButtonElement>('.scope-option[title="personal:alice"]')!.click();
   assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, false);
   const b = root.querySelector<HTMLInputElement>('[data-name="b"]')!;
   b.checked = false;
