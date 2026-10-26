@@ -733,10 +733,10 @@ for (const [name, input, expected] of [
       });
       assert.equal(result.status, "ok");
       assert.ok(cap);
-      const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/security-posture`, {
+      const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/approval-grant-modes`, {
         method: "PUT",
         headers: { "x-agent-capability": cap, "content-type": "application/json" },
-        body: JSON.stringify({ posture: "auto" }),
+        body: JSON.stringify({ session: true, always: true }),
       });
       assert.equal(res.status, expected);
     } finally {

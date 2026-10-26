@@ -1403,7 +1403,7 @@ test("an org admin's live turn carries the admin prompt hint and a liveness clai
   assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
   assert.match(
     adminPrompt.reply ?? "",
-    /private-content reads require a DM or an Open conversation on a live admin turn/,
+    /private-content reads require a DM or a turn the admin started/,
   );
   assert.doesNotMatch(
     adminPrompt.reply ?? "",
