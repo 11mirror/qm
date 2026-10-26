@@ -19,22 +19,12 @@ export type DesktopRun = {
 };
 
 function desktop(): Desk | undefined {
-  return (globalThis as { window?: { qmDesktop?: { computer?: Desk; platform?: string } } }).window?.qmDesktop
-    ?.platform === "darwin"
-    ? (globalThis as { window?: { qmDesktop?: { computer?: Desk } } }).window?.qmDesktop?.computer
-    : undefined;
+  const bridge = (globalThis as { window?: { qmDesktop?: { computer?: Desk; platform?: string } } }).window?.qmDesktop;
+  return bridge?.platform === "darwin" ? bridge.computer : undefined;
 }
 
 export function desktopTurnId(): string | undefined {
   return desktop() ? crypto.randomUUID() : undefined;
-}
-
-async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
-  try {
-    return await desk.call(raw, undefined, deadline);
-  } catch (error) {
-    return { content: errMessage(error), isError: true };
-  }
 }
 
 export function createDesktopExecutor(
@@ -60,7 +50,12 @@ export function createDesktopExecutor(
         continue;
       handled.add(callId);
       if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
-      const result = await executeComputer(desk, item.body.args, item.createdAt + 50_000);
+      let result: Result;
+      try {
+        result = await desk.call(item.body.args, undefined, item.createdAt + 50_000);
+      } catch (error) {
+        result = { content: errMessage(error), isError: true };
+      }
       await send(callId, result);
     }
   };

@@ -11,51 +11,61 @@ export function newChatDraftKey(user: string | null | undefined): string {
   return `__new-chat__:${user ?? "anon"}`;
 }
 
+export function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function writeStorage(key: string, value: string | null): boolean {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parsePairs(raw: string | null, cap: number): Map<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? "[]");
+    if (Array.isArray(parsed))
+      return new Map(
+        parsed
+          .filter(
+            (p): p is [string, string] => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "string",
+          )
+          .slice(-cap),
+      );
+  } catch {
+    void 0;
+  }
+  return new Map();
+}
+
 export function clearAllDrafts(): void {
   dropPendingPersist();
   cache = null;
   cachedRaw = null;
-  try {
-    localStorage.removeItem(DRAFTS_STORAGE_KEY);
-  } catch {
-    void 0;
-  }
+  writeStorage(DRAFTS_STORAGE_KEY, null);
 }
 
 function loadDrafts(): Map<string, string> {
-  let raw: string | null = null;
-  try {
-    raw = localStorage.getItem(DRAFTS_STORAGE_KEY);
-  } catch {
-    void 0;
-  }
-  if (cache && (persistTimer !== null ? true : raw === cachedRaw)) return cache;
+  const raw = readStorage(DRAFTS_STORAGE_KEY);
+  if (cache && (persistTimer !== null || raw === cachedRaw)) return cache;
   cachedRaw = raw;
-  cache = new Map();
-  try {
-    const parsed: unknown = JSON.parse(raw ?? "[]");
-    if (Array.isArray(parsed)) {
-      const pairs = parsed.filter(
-        (p): p is [string, string] => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "string",
-      );
-      cache = new Map(pairs.slice(-DRAFTS_CAP));
-    }
-  } catch {
-    void 0;
-  }
+  cache = parsePairs(raw, DRAFTS_CAP);
   return cache;
 }
 
 function persistNow(): void {
   dropPendingPersist();
   if (!cache) return;
-  try {
-    const raw = JSON.stringify([...cache]);
-    localStorage.setItem(DRAFTS_STORAGE_KEY, raw);
-    cachedRaw = raw;
-  } catch {
-    void 0;
-  }
+  const raw = JSON.stringify([...cache]);
+  if (writeStorage(DRAFTS_STORAGE_KEY, raw)) cachedRaw = raw;
 }
 
 function schedulePersist(): void {

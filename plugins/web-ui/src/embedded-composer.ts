@@ -106,40 +106,34 @@ class EmbeddedComposer extends AsyncDirective {
     if (this.ctx?.composer.closeMenus()) this.redraw();
   };
 
-  private listen(): void {
-    document.addEventListener("click", this.closeMenus);
-    document.addEventListener("keydown", this.closeMenus);
+  private listen(on = true): void {
+    const method = on ? "addEventListener" : "removeEventListener";
+    document[method]("click", this.closeMenus);
+    document[method]("keydown", this.closeMenus);
   }
 
-  private unlisten(): void {
-    document.removeEventListener("click", this.closeMenus);
-    document.removeEventListener("keydown", this.closeMenus);
+  private teardown(): ConvCtx | null {
+    this.listen(false);
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    rememberStaged(this.key, ctx.composer.state.attachments);
+    ctx.composer.dispose();
+    const threadRef = ctx.chat.state.threadRef;
+    ctx.chat.dispose();
+    ctx.chat.state.threadRef = threadRef ?? this.key;
+    return ctx;
   }
 
   private release(): void {
-    this.unlisten();
-    if (!this.ctx) return;
-    rememberStaged(this.key, this.ctx.composer.state.attachments);
-    this.ctx.composer.dispose();
-    this.ctx.chat.dispose();
-    // An in-flight submit can still fail after navigation; restore its draft under the original key.
-    this.ctx.chat.state.threadRef = this.key;
+    this.teardown();
     this.ctx = null;
   }
 
   protected disconnected(): void {
-    this.unlisten();
-    if (this.ctx) rememberStaged(this.key, this.ctx.composer.state.attachments);
-    this.ctx?.composer.dispose();
-    // Remove chat's connector hook without destroying the composer's draft.
-    const ctx = this.ctx;
-    const threadRef = ctx?.chat.state.threadRef;
-    ctx?.chat.dispose();
-    if (ctx) {
-      ctx.chat.state.threadRef = threadRef ?? this.key;
-      ctx.chat.state.agent = this.agent;
-      ctx.chat.state.host = this.element;
-    }
+    const ctx = this.teardown();
+    if (!ctx) return;
+    ctx.chat.state.agent = this.agent;
+    ctx.chat.state.host = this.element;
   }
 
   protected reconnected(): void {

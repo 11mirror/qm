@@ -53,7 +53,6 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     const urls: string[] = [];
     globalThis.fetch = async (input) => {
       urls.push(String(input));
-      if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
       const next = String(input).includes("pageToken=");
       return Response.json({
         accountEmail: "sam@example.com",
@@ -89,7 +88,6 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
         chatRequest = JSON.parse(String(options?.body));
         return Response.json({ item: { id: "company-chat", thread: [] } });
       }
-      if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
       assert.match(String(input), /accountType=company$/);
       return Response.json({
         id: "newer",
@@ -130,7 +128,6 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     let detailRequest = "";
     let directChatAccountType: unknown;
     globalThis.fetch = async (input, options) => {
-      if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
       if (String(input).endsWith("/inbox/sent-chat")) {
         directChatAccountType = JSON.parse(String(options?.body)).accountType;
         return Response.json({ item: { id: "chat", thread: [] } });
@@ -167,32 +164,6 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       host,
     );
     assert.equal(host.querySelector(".inbox-item-thread .verified-chat")!.textContent, "Chat chat");
-    resetSentMail();
-    const seeded = {
-      accountEmail: "sam@example.com",
-      messages: [
-        {
-          id: "seeded",
-          threadId: "thread-seeded",
-          to: "Alex",
-          subject: "Seeded thread",
-          snippet: "First message",
-          sentAt: 2000,
-          conversation: [
-            { from: "Sam", to: "Alex", sentAt: 1000, body: "First message" },
-            { from: "Alex", to: "Sam", sentAt: 2000, body: "Second message", attachments: ["mockup.pdf"] },
-          ],
-        },
-      ],
-    };
-    globalThis.fetch = async () => Response.json(seeded);
-    await loadSentMail(draw);
-    await openSentEmail(seeded.messages[0], draw);
-    render(sentEmailPageTpl(draw), host);
-    assert.equal(host.querySelectorAll(".inbox-sent-message").length, 2);
-    assert.match(host.textContent!, /First message/);
-    assert.match(host.textContent!, /Second message/);
-    assert.match(host.textContent!, /mockup\.pdf/);
     resetSentMail();
     globalThis.fetch = async () => {
       throw new Error("Connect Google");

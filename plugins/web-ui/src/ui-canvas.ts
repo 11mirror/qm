@@ -175,18 +175,14 @@ export function releaseUiCanvas(conv: Conversation): void {
 
 let dock: HTMLElement | null = null;
 
+const div = (className: string): HTMLDivElement => Object.assign(document.createElement("div"), { className });
+
 function createPanel(sessionId: string, owner: Owner): Panel {
-  const el = document.createElement("div");
-  el.className = "ui-canvas";
-  const head = document.createElement("div");
-  head.className = "ui-canvas-head";
-  const body = document.createElement("div");
-  body.className = "ui-canvas-body";
+  const el = div("ui-canvas");
+  const head = div("ui-canvas-head");
+  const body = div("ui-canvas-body");
   el.append(body);
-  if (!dock) {
-    dock = document.createElement("div");
-    dock.className = "ui-canvas-dock";
-  }
+  dock ??= div("ui-canvas-dock");
   if (!dock.isConnected) document.body.append(dock);
   dock.append(head);
   const panel: Panel = {

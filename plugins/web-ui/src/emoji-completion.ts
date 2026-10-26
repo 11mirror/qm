@@ -39,11 +39,12 @@ class EmojiCompletion extends AsyncDirective {
     return nothing;
   }
 
-  private listen() {
-    this.input.addEventListener("input", this.onInput, true);
-    this.input.addEventListener("keydown", this.onKeydown, true);
-    this.input.addEventListener("click", this.close);
-    this.input.addEventListener("blur", this.close);
+  private listen(on = true) {
+    const method = on ? "addEventListener" : "removeEventListener";
+    this.input[method]("input", this.onInput, true);
+    this.input[method]("keydown", this.onKeydown as EventListener, true);
+    this.input[method]("click", this.close);
+    this.input[method]("blur", this.close);
   }
 
   private close = () => {
@@ -152,7 +153,7 @@ class EmojiCompletion extends AsyncDirective {
       event.preventDefault();
       event.stopImmediatePropagation();
       this.close();
-    } else if (!event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key === "Enter" || event.key === "Tab")) {
+    } else if (!event.shiftKey && (event.key === "Enter" || event.key === "Tab")) {
       event.preventDefault();
       event.stopImmediatePropagation();
       this.insert(this.matches[this.active]!);
@@ -166,10 +167,7 @@ class EmojiCompletion extends AsyncDirective {
 
   protected override disconnected() {
     this.close();
-    this.input.removeEventListener("input", this.onInput, true);
-    this.input.removeEventListener("keydown", this.onKeydown, true);
-    this.input.removeEventListener("click", this.close);
-    this.input.removeEventListener("blur", this.close);
+    this.listen(false);
   }
 
   protected override reconnected() {

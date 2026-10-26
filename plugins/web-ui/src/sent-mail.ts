@@ -2,18 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ArrowUpRight, ChevronRight, Mail } from "lucide";
 import type { LedgerItem } from "./inbox";
 import { api } from "./core-bridge";
+import { errMessage } from "../../chassis/src/errors";
 import { listBackLink } from "./list-page";
 import { initials, relTime } from "./ui";
 import { icon } from "./icons";
-
-interface SentThreadMessage {
-  from: string;
-  to: string;
-  cc?: string;
-  sentAt: number;
-  body: string;
-  attachments?: string[];
-}
 
 export interface SentEmail {
   accountType?: "default" | "personal" | "company";
@@ -23,8 +15,16 @@ export interface SentEmail {
   subject: string;
   snippet: string;
   sentAt: number;
-  conversation?: SentThreadMessage[];
 }
+
+type SentDetail = SentEmail & {
+  from: string;
+  cc: string;
+  body: string;
+  rfcMessageId?: string;
+  html: boolean;
+  attachments: string[];
+};
 
 interface SentMailPage {
   accountType?: SentEmail["accountType"];
@@ -42,16 +42,7 @@ let loaded = false;
 let error = "";
 let generation = 0;
 let selected: SentEmail | null = null;
-let detail:
-  | (SentEmail & {
-      from: string;
-      cc: string;
-      body: string;
-      rfcMessageId?: string;
-      html: boolean;
-      attachments: string[];
-    })
-  | null = null;
+let detail: SentDetail | null = null;
 let detailError = "";
 const chatItems = new Map<string, LedgerItem>();
 let chatItemId: string | null = null;
@@ -59,38 +50,22 @@ let chatError = "";
 let detailGeneration = 0;
 
 export async function openSentEmail(message: SentEmail, draw: () => void): Promise<void> {
+  resetSelectedSentEmail();
   selected = message;
-  chatItemId = null;
-  chatError = "";
-  detail = null;
-  detailError = "";
-  const current = ++detailGeneration;
+  const current = detailGeneration;
   draw();
   try {
-    const local = await fetchLocalSentMail();
-    const seeded = local?.messages.find((item) => item.id === message.id);
-    const result = seeded
-      ? {
-          ...seeded,
-          from: local!.accountEmail,
-          cc: "",
-          body: `${plainSnippet(seeded.snippet)}\n\nFull message text is not included in this local preview.`,
-          html: false,
-          attachments: [],
-        }
-      : await api<NonNullable<typeof detail>>(
-          `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
-        );
+    const result = await api<SentDetail>(
+      `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
+    );
     if (current === detailGeneration) {
       detail = result;
       selected = { ...message, ...result };
-      if (seeded) accountEmail = local!.accountEmail;
       draw();
       await loadSentChat(draw, current);
     }
   } catch (cause) {
-    if (current === detailGeneration)
-      detailError = cause instanceof Error ? cause.message : "Couldn't load this email.";
+    if (current === detailGeneration) detailError = errMessage(cause, "Couldn't load this email.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -101,9 +76,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
   chatError = "";
   draw();
   try {
-    let text = detail.html ? plainSnippet(detail.body) : detail.body;
-    if (detail.conversation?.length)
-      text = detail.conversation.map((entry) => `${entry.from} to ${entry.to}:\n${entry.body}`).join("\n\n");
+    const text = detail.html ? plainSnippet(detail.body) : detail.body;
     const result = await api<{ item: LedgerItem }>("/api/inbox/sent-chat", {
       method: "POST",
       body: JSON.stringify({
@@ -123,7 +96,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
       updateSentChat(result.item);
     }
   } catch (cause) {
-    if (current === detailGeneration) chatError = cause instanceof Error ? cause.message : "Couldn't load chat.";
+    if (current === detailGeneration) chatError = errMessage(cause, "Couldn't load chat.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -163,12 +136,7 @@ export async function openSentEmailById(id: string, draw: () => void): Promise<v
 export function resetSentMail(): void {
   chatItems.clear();
   generation++;
-  detailGeneration++;
-  selected = null;
-  chatItemId = null;
-  chatError = "";
-  detail = null;
-  detailError = "";
+  resetSelectedSentEmail();
   messages = [];
   nextPageToken = undefined;
   accountEmail = "";
@@ -190,8 +158,7 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
   }
   draw();
   try {
-    const local = more ? null : await fetchLocalSentMail();
-    const page = local ?? (await api<SentMailPage>(`/api/inbox/sent?${params}`));
+    const page = await api<SentMailPage>(`/api/inbox/sent?${params}`);
     if (current !== generation) return;
     accountType = page.accountType ?? (more ? accountType : "default");
     messages = [
@@ -210,53 +177,13 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
     loaded = true;
   } catch (cause) {
     if (current !== generation) return;
-    error = cause instanceof Error ? cause.message : "Couldn't load sent mail. Try again.";
+    error = errMessage(cause, "Couldn't load sent mail. Try again.");
   } finally {
     if (current === generation) {
       loading = false;
       draw();
     }
   }
-}
-
-async function fetchLocalSentMail(): Promise<SentMailPage | null> {
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return null;
-  try {
-    const response = await fetch("/sent-seed.local.json", { cache: "no-store" });
-    if (!response.ok) return null;
-    const payload = (await response.json()) as Partial<SentMailPage>;
-    if (typeof payload.accountEmail !== "string" || !Array.isArray(payload.messages)) return null;
-    const messages = payload.messages.filter(
-      (message): message is SentEmail =>
-        typeof message === "object" &&
-        message !== null &&
-        typeof message.id === "string" &&
-        typeof message.threadId === "string" &&
-        typeof message.to === "string" &&
-        typeof message.subject === "string" &&
-        typeof message.snippet === "string" &&
-        typeof message.sentAt === "number" &&
-        (message.conversation === undefined ||
-          (Array.isArray(message.conversation) && message.conversation.every(isSentThreadMessage))),
-    );
-    return messages.length ? { accountEmail: payload.accountEmail, messages } : null;
-  } catch {
-    return null;
-  }
-}
-
-function isSentThreadMessage(message: unknown): message is SentThreadMessage {
-  if (typeof message !== "object" || message === null) return false;
-  const item = message as Partial<SentThreadMessage>;
-  return (
-    typeof item.from === "string" &&
-    typeof item.to === "string" &&
-    (item.cc === undefined || typeof item.cc === "string") &&
-    typeof item.sentAt === "number" &&
-    typeof item.body === "string" &&
-    (item.attachments === undefined ||
-      (Array.isArray(item.attachments) && item.attachments.every((attachment) => typeof attachment === "string")))
-  );
 }
 
 export function isSentMailLoading(): boolean {
@@ -331,21 +258,23 @@ export function sentMailTpl(
   `;
 }
 
-function sentMessageTpl(entry: SentThreadMessage): TemplateResult {
+function sentMessageTpl(detail: SentDetail, message: SentEmail, body: string | undefined): TemplateResult {
   return html`<div class="inbox-context-msg inbox-sent-message">
-    <span class="inbox-avatar" aria-hidden="true">${initials(entry.from)}</span>
+    <span class="inbox-avatar" aria-hidden="true">${initials(detail.from)}</span>
     <div class="inbox-context-body">
       <div class="inbox-context-head">
-        <span class="inbox-context-author">${entry.from}</span>
-        <span class="inbox-context-at" title=${new Date(entry.sentAt).toLocaleString()}>${relTime(entry.sentAt)}</span>
+        <span class="inbox-context-author">${detail.from}</span>
+        <span class="inbox-context-at" title=${new Date(message.sentAt).toLocaleString()}
+          >${relTime(message.sentAt)}</span
+        >
       </div>
       <div class="inbox-sent-recipients">
-        To: ${entry.to}${entry.cc ? html`<span> · Cc: ${entry.cc}</span>` : nothing}
+        To: ${message.to}${detail.cc ? html`<span> · Cc: ${detail.cc}</span>` : nothing}
       </div>
-      <div class="inbox-context-text">${entry.body || "This email has no text body."}</div>
+      <div class="inbox-context-text">${body || "This email has no text body."}</div>
       ${
-        entry.attachments?.length
-          ? html`<div class="inbox-sent-attachments">Attachments: ${entry.attachments.join(", ")}</div>`
+        detail.attachments.length
+          ? html`<div class="inbox-sent-attachments">Attachments: ${detail.attachments.join(", ")}</div>`
           : nothing
       }
     </div>
@@ -363,19 +292,6 @@ export function sentEmailPageTpl(
   const body = detail?.html
     ? plainSnippet(detail.body.replace(/<br\s*\/?>(|\s)|<\/(p|div|tr|li|h[1-6])>/gi, "\n"))
     : detail?.body;
-  let entries: SentThreadMessage[] = [];
-  if (detail?.conversation?.length) entries = detail.conversation;
-  else if (detail)
-    entries = [
-      {
-        from: detail.from,
-        to: message.to,
-        cc: detail.cc,
-        sentAt: message.sentAt,
-        body: body || "This email has no text body.",
-        attachments: detail.attachments,
-      },
-    ];
   return html`
     <div class="pane-head inbox-item-head src-gmail">
       <div class="inbox-item-head-copy">
@@ -403,7 +319,7 @@ export function sentEmailPageTpl(
             : nothing
         }
         ${!detail && !detailError ? html`<div role="status" class="empty compact">Loading email…</div>` : nothing}
-        ${entries.length ? html`<div class="inbox-context">${entries.map(sentMessageTpl)}</div>` : nothing}
+        ${detail ? html`<div class="inbox-context">${sentMessageTpl(detail, message, body)}</div>` : nothing}
         ${draft ?? nothing}
         <div class="inbox-draft-head inbox-sent-actions">
           <a
