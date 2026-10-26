@@ -18,7 +18,6 @@ test("package-consumer deployment skill covers both self-owned providers and the
     "work-email OIDC provider",
     "check --live",
     "private live session canary",
-    "fresh UUID",
     "generated sidebar title",
     "Web chat",
     "idempotent",
@@ -135,16 +134,6 @@ test("Slack distribution stays private and deployment-owned", () => {
   assert.match(slack, /one private Socket Mode app per deployment and workspace/);
   assert.match(slack, /exact bot manifest creation URL/);
   assert.match(slack, /Admin Slack card/);
-});
-
-test("each provider has an independent agent-computer proof", () => {
-  const root = read("cli/templates/deployment/deployment.md");
-  const aws = read("cli/templates/deployment/references/aws.md");
-
-  assert.match(root, /\/root\/workspace\/qm-computer-proof\.txt/);
-  assert.match(aws, /## Agent-computer proof/);
-  assert.match(aws, /deployment-owned S3 home\s+snapshot/);
-  assert.match(aws, /workspace\/qm-computer-proof\.txt/);
 });
 
 test("onboarding composes existing access skills without a provider-setup prerequisite", () => {

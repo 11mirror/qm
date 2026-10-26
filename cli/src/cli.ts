@@ -26,7 +26,6 @@ import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
-import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
 import { runUiPublish } from "./commands/ui.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
@@ -141,7 +140,6 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
   admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
-  proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
   infra delete-image --yes                 terminate its MicroVMs and delete the AWS deploy image
@@ -622,16 +620,6 @@ async function dispatch(argv: string[]): Promise<void> {
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
       await deploymentBackend(ctx).doctor();
       note(`doctor: ${ctx.target} prerequisites are ready`);
-      return;
-    }
-
-    case "proof": {
-      if (positionals[0] !== "scope-key") throw new CliError(`usage: ${CLI_NAME} proof scope-key <scope-id>`);
-      rejectUnknownFlags(flags, []);
-      rejectExtraPositionals(positionals, 2);
-      const scope = positionals[1];
-      if (!scope) throw new CliError(`usage: ${CLI_NAME} proof scope-key <scope-id>`);
-      note(scopeStorageKey(scope));
       return;
     }
 

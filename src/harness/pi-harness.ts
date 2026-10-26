@@ -327,7 +327,7 @@ export function renderDetectPrompt(detect: HarnessDetectInput): string {
   return parts.join("\n\n");
 }
 
-export const TITLE_GENERATION_PROMPT = [
+const TITLE_GENERATION_PROMPT = [
   "You write a short title for a chat conversation — the label shown in the sidebar.",
   "Given the transcript, output ONLY the title: 2–6 words, sentence case.",
   'Phrase it as the action taken, imperative mood: "Turn qm-launch-post orange", "Fix hover gap',

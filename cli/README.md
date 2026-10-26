@@ -194,7 +194,6 @@ up [--yes] [--build-from[=repo]] [--image-label label]
 slack render
 outputs [--json]
 admin-login [--email admin@example.com]
-proof scope-key <scope-id>
 secrets push [--from file]
 status
 logs [service] [-f] [--tail n]

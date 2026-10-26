@@ -863,44 +863,18 @@ test("AWS rejects coordinates that its Terraform-derived resources cannot accept
   );
 });
 
-test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_ENV_<KEY>", () => {
-  withConfig(
-    {
-      sandbox: {
-        env: { TZ: "America/Los_Angeles" },
-        secretEnv: ["COMPANY_API_TOKEN"],
-      },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      const resolved = sandboxCoreEnv(config, (n) => (n === "COMPANY_API_TOKEN" ? "sek-ret" : undefined));
-      assert.equal(resolved.env.FLY_RESIDENT_ENV_TZ, "America/Los_Angeles");
-      assert.equal(resolved.env.FLY_RESIDENT_ENV_COMPANY_API_TOKEN, "sek-ret");
-      assert.deepEqual(resolved.missingSecrets, []);
-      const missing = sandboxCoreEnv(config);
-      assert.deepEqual(missing.missingSecrets, ["COMPANY_API_TOKEN"]);
-      assert.equal(missing.env.FLY_RESIDENT_ENV_COMPANY_API_TOKEN, undefined);
-      assert.equal(missing.env.FLY_RESIDENT_ENV_TZ, "America/Los_Angeles");
-    },
-  );
-});
-
 test("no sandbox block → no injected env, lenient undefined app", () => {
   withConfig({}, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.equal(config.sandbox, undefined);
-    assert.deepEqual(sandboxCoreEnv(config), { env: {}, missingSecrets: [] });
+    assert.deepEqual(sandboxCoreEnv(config), { env: {} });
   });
 });
 
-test("sandbox shape errors: object, env string-map, secretEnv valid names", () => {
+test("sandbox shape errors: object and backend", () => {
   const cases: Array<{ sandbox: unknown; rx: RegExp }> = [
     { sandbox: "x", rx: /"sandbox" must be an object/ },
     { sandbox: ["x"], rx: /"sandbox" must be an object/ },
-    { sandbox: { env: { TZ: 5 } }, rx: /"sandbox.env.TZ" must be a string/ },
-    { sandbox: { env: { "1BAD": "x" } }, rx: /"sandbox.env" key .* is not a valid env var name/ },
-    { sandbox: { secretEnv: "X" }, rx: /"sandbox.secretEnv" must be an array of strings/ },
-    { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
       sandbox: { backend: "k8s" },
       rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
@@ -922,7 +896,6 @@ test("docker accepts an explicit local sandbox image ", () => {
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
       env: { SANDBOX_BACKEND: "local", LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
-      missingSecrets: [],
     });
   });
 });
@@ -931,9 +904,12 @@ test("local sandbox config is docker-only and rejects unused sandbox settings", 
   withConfig({ target: "aws", sandbox: { backend: "local" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" requires target "docker"/);
   });
-  withConfig({ sandbox: { backend: "local", env: { TZ: "UTC" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" ignores "sandbox.env"/);
-  });
+  withConfig(
+    { sandbox: { backend: "local", baseImage: `ghcr.io/acme/sandbox@sha256:${"a".repeat(64)}` } },
+    ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" ignores "sandbox.baseImage"/);
+    },
+  );
 });
 
 test("agent37 is a deployment backend and rejects unused sandbox settings", () => {
@@ -941,12 +917,14 @@ test("agent37 is a deployment backend and rejects unused sandbox settings", () =
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
       env: { SANDBOX_BACKEND: "agent37" },
-      missingSecrets: [],
     });
   });
-  withConfig({ sandbox: { backend: "agent37", env: { TZ: "UTC" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.env"/);
-  });
+  withConfig(
+    { sandbox: { backend: "agent37", baseImage: `ghcr.io/acme/sandbox@sha256:${"a".repeat(64)}` } },
+    ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.baseImage"/);
+    },
+  );
 });
 
 test("e2b is a deployment backend and rejects unused sandbox settings", () => {
@@ -954,12 +932,14 @@ test("e2b is a deployment backend and rejects unused sandbox settings", () => {
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
       env: { SANDBOX_BACKEND: "e2b" },
-      missingSecrets: [],
     });
   });
-  withConfig({ sandbox: { backend: "e2b", env: { TZ: "UTC" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.env"/);
-  });
+  withConfig(
+    { sandbox: { backend: "e2b", baseImage: `ghcr.io/acme/sandbox@sha256:${"a".repeat(64)}` } },
+    ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.baseImage"/);
+    },
+  );
 });
 
 test("superserve backend requires the agent template in env.core", () => {
@@ -976,7 +956,7 @@ test("superserve backend requires the agent template in env.core", () => {
     { sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
     ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] });
+      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" } });
     },
   );
   withConfig(
@@ -1004,14 +984,14 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   });
   withConfig(
     {
-      sandbox: { backend: "sprites", secretEnv: ["COMPANY_API_TOKEN"] },
+      sandbox: { backend: "sprites" },
       env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
     },
     ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.deepEqual(
         sandboxCoreEnv(config),
-        { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] },
+        { env: { SANDBOX_BACKEND: "superserve" } },
         "the overridden backend's settings are not demanded or injected",
       );
     },
@@ -1099,12 +1079,15 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     assert.equal(config.sandbox?.backend, "agent37");
     assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "agent37");
   });
-  withConfig({ target: "aws", aws, sandbox: { backend: "aws", env: { TZ: "UTC" } } }, ({ path }) => {
-    assert.throws(
-      () => loadConfigAt(path),
-      /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.env"/,
-    );
-  });
+  withConfig(
+    { target: "aws", aws, sandbox: { backend: "aws", baseImage: `ghcr.io/acme/sandbox@sha256:${"a".repeat(64)}` } },
+    ({ path }) => {
+      assert.throws(
+        () => loadConfigAt(path),
+        /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.baseImage"/,
+      );
+    },
+  );
   withConfig({ target: "aws", aws }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox, undefined);
   });
