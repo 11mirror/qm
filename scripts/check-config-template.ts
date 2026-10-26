@@ -6,6 +6,7 @@ function configEnvNames(source: string): Set<string> {
   for (const m of source.matchAll(/\benv\??\.([A-Z][A-Z0-9_]+)\b/g)) names.add(m[1]!);
   for (const m of source.matchAll(/\benv\[\s*"([A-Z][A-Z0-9_]+)"\s*\]/g)) names.add(m[1]!);
   for (const m of source.matchAll(/"([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{3,})"/g)) names.add(m[1]!);
+  for (const m of source.matchAll(/(?:^\s+|\{ )([A-Z][A-Z0-9_]{2,}):/gm)) names.add(m[1]!);
   return names;
 }
 
