@@ -33,6 +33,8 @@ export interface ApiCtx extends BaseCtx {
   body: unknown;
   capability: CapabilityClaims | null;
   actor?: PortalIdentity | null;
+  /** Who is calling, resolved once by the gate: the capability's actor, the route's verified actor field, or the signed portal identity. */
+  caller?: string | null;
 }
 
 export type RouteAuth = "either" | "source" | "public" | { aud: string };
