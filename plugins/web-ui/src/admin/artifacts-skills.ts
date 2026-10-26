@@ -1,3 +1,4 @@
+import { errMessage } from "../../../chassis/src/errors";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { badge, card, table, renderer, stacked } from "./shared.ts";
@@ -17,7 +18,8 @@ export async function removeSkill(s: Data, c: Context) {
     if (!response.ok) return alert(response.data?.message || "1 scope(s) could not be removed.");
     c.invalidate();
     await c.reload();
-  } catch {
+  } catch (error) {
+    console.warn("[swallowed] admin: remove skill", errMessage(error));
     alert("Could not remove skill.");
   }
 }
@@ -115,18 +117,16 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
   let [menu, menuTop, menuLeft] = [null as string | null, 0, 0];
   const statuses = new Map<string, Data>();
   const pending = new Set<string>();
-  const closeMenu = () => menu && ((menu = null), draw());
   const abort = new AbortController();
+  const closeMenu = () => {
+    if (!root.isConnected) return abort.abort();
+    if (!menu) return;
+    menu = null;
+    draw();
+  };
   document.addEventListener("click", closeMenu, { signal: abort.signal });
   document.addEventListener("scroll", closeMenu, { signal: abort.signal, capture: true });
   window.addEventListener("resize", closeMenu, { signal: abort.signal });
-  const observer = new MutationObserver(() => {
-    if (!root.isConnected) {
-      abort.abort();
-      observer.disconnect();
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
   const change = (key: keyof typeof draft) => (e: Event) => {
     draft[key] = (e.target as HTMLInputElement).value;
     draw();
@@ -155,7 +155,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         if (JSON.stringify(draft) === submitted) await c.reload();
         else [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: register skill pack", errMessage(error));
       [message, tone] = ["Registration failed.", "err"];
     } finally {
       registering = false;
@@ -205,7 +206,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         c.invalidate();
         await c.reload();
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: skill pack " + action, errMessage(error));
       statuses.set(s.id, { text: "Request failed.", tone: "err" });
     } finally {
       pending.delete(s.id);
@@ -443,7 +445,8 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
           if (root.isConnected && !closed) c.reload();
         }, 1500);
       }
-    } catch {
+    } catch (error) {
+      console.warn("[swallowed] admin: skill pack import", errMessage(error));
       [message, tone] = ["Import failed.", "err"];
     } finally {
       busy = false;

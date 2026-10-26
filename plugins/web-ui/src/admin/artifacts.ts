@@ -96,6 +96,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
   const items = c.own ? all.filter((f) => scopeKind(f.scopeId) === "org") : all;
   const capped = all.length >= 2000;
   let [query, remote, request] = ["", null as Data[] | null, 0];
+  let searchFailed = false;
   let timer: ReturnType<typeof setTimeout>;
   const failedImages = new Set<string>();
   const row = (f: Data) => {
@@ -131,7 +132,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
           c,
           query,
           html`${scopeList(all, c, "file", (f) => f.createdAt || 0, "No documents saved yet.")}${capped ? empty("Only the newest 2,000 files are indexed, so a scope with only older files won't appear.") : nothing}`,
-          dense(remote ?? local, row, c.downloadFile, query ? "No files match." : "No documents saved yet."),
+          html`${searchFailed ? empty("Search failed, so only matches among the newest 2,000 files are shown.") : nothing}${dense(remote ?? local, row, c.downloadFile, query ? "No files match." : "No documents saved yet.")}`,
           "file-scope-index",
         ),
       ),
@@ -140,17 +141,20 @@ export function files(root: HTMLElement, d: Data, c: Context) {
   const onQuery = (q: string) => {
     query = q;
     remote = null;
+    searchFailed = false;
     request++;
     clearTimeout(timer);
     draw();
     if (!capped || !q) return;
     const token = request;
     timer = setTimeout(async () => {
-      const response = await c
-        .api("GET", "/api/files?scope=" + encodeURIComponent(c.scope) + "&q=" + encodeURIComponent(q))
-        .catch(() => null);
+      const response = await c.api(
+        "GET",
+        "/api/files?scope=" + encodeURIComponent(c.scope) + "&q=" + encodeURIComponent(q),
+      );
       if (token !== request || !root.isConnected) return;
-      if (response?.ok) {
+      searchFailed = !response.ok;
+      if (response.ok) {
         remote = [...(response.data?.files || [])]
           .filter((f) => !c.own || scopeKind(f.scopeId) === "org")
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -433,7 +437,7 @@ function memoryIndex(root: HTMLElement, d: Data, c: Context) {
     );
   c.pageShell({
     title: "Memory",
-    count: plural(written.length, "notebook"),
+    tally: [written.length, "notebooks"],
     search: { placeholder: "Search notebooks…", onInput: (value: string) => draw(value.trim().toLowerCase()) },
     context: written.length && !hasTimestamps ? "sorted by size (this backend keeps no edit history)" : "",
   });

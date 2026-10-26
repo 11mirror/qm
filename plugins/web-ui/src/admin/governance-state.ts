@@ -173,7 +173,7 @@ export function patternError(pattern: string): string {
   }
 }
 export const states = new Map(Object.keys(fieldNames).map((key) => [key, new GovernanceState(key)]));
-export const { owns, collect, capture, commit, status } = settingRegistry(states);
+export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
@@ -197,13 +197,6 @@ export function load(data: Record<string, any>, scope: string, only?: string) {
     state.disabled = key === "egress" && !data.egressEnforcement?.active;
     state.load(body, data, scope);
   }
-}
-
-export function statusKey(id: string): string | undefined {
-  const key = id.replace(/^st-/, "");
-  if (key === "policy") return "command-policy";
-  if (key === "governance-org-ambient") return "org-ambient";
-  return owns(key) ? key : undefined;
 }
 
 export function updateCatalog(data: Record<string, any>) {

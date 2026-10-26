@@ -18,7 +18,7 @@ function setup() {
   });
   dom.window.eval(
     bundle +
-      ';window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:{}}),orgScope:()=>"org:test",connectorName:id=>id});',
+      ';window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:{}}),orgScope:()=>"org:test",connectorName:id=>id,save:()=>{}});',
   );
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   return dom;
@@ -124,6 +124,7 @@ test("Connector saves use captured payloads and retain edits made during a reque
   let resolve!: (value: any) => void;
   const bodies: unknown[] = [];
   configure({
+    save: () => {},
     orgScope: () => "org:test",
     connectorName: (x) => x,
     api: async (method, _path, body) => {
@@ -150,6 +151,7 @@ test("Connector saves use captured payloads and retain edits made during a reque
 test("Connector load ignores out of order responses and preserves the open editor", async () => {
   const pending: Array<(value: any) => void> = [];
   configure({
+    save: () => {},
     orgScope: () => "org:test",
     connectorName: (x) => x,
     api: () => new Promise((r) => pending.push(r)),
@@ -171,6 +173,7 @@ test("Connector load ignores out of order responses and preserves the open edito
 test("Slack connection validates token drafts before submitting", async () => {
   let called = false;
   configure({
+    save: () => {},
     orgScope: () => "org:test",
     connectorName: (x) => x,
     api: async () => {

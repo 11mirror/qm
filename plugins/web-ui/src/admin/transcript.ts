@@ -286,13 +286,14 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + relTime(session.createdAt) : ""),
     actions: owner ? [s.webUiAsButton(owner)] : [],
   });
-  const requests: Row[] = await llmPromise.then((llm: Row) => (llm.ok ? llm.data.requests || [] : [])).catch(() => []);
+  const llm: Row = await llmPromise;
+  const requests: Row[] = llm.ok ? llm.data?.requests || [] : [];
   if (!current()) return;
   const { units, dur, originPromptSeq } = prepare(data, requests),
     open = new Set<Row>(),
     bodyNodes = new Map<Row, Node>(),
     toolNodes = new Map<Row, Row>();
-  let errors: Row[] = [],
+  let errors: Row[] | null = [],
     first = 0,
     paused = false;
   const observer =
@@ -442,7 +443,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     draw(
       html`<div class="detail">
         <div>
-          ${errors.length ? errorStripBox(errors, plural(errors.length, "error") + " logged in this session", 5) : nothing}
+          ${llm.ok ? nothing : html`<div class="statline">Couldn't load the model context for this conversation.</div>`}${errors === null ? html`<div class="statline">Couldn't load this session's errors.</div>` : nothing}${errors?.length ? errorStripBox(errors, plural(errors.length, "error") + " logged in this session", 5) : nothing}
         </div>
         ${
           units.length
@@ -491,13 +492,12 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   observe();
   void s
     .adminErrors("scope=" + encodeURIComponent(s.scope) + "&sessionId=" + encodeURIComponent(sessionId))
-    .then((rows: Row[]) => {
+    .then((rows: Row[] | null) => {
       if (current()) {
         errors = rows;
         paint();
       }
-    })
-    .catch(() => {});
+    });
   requestAnimationFrame(() => {
     if (current()) scroller(root).scrollTo({ top: expand ? 0 : scroller(root).scrollHeight });
   });

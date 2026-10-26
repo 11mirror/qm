@@ -65,8 +65,16 @@ export class Onboarding {
       this.context.api("GET", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "?view=onboarding"),
     ]);
     if (token !== this.request || view !== this.context.view()) return;
-    if (!models.ok || !slack.ok || !catalog.ok || !config.ok)
-      return this.say("Setup status could not be loaded. Try again.", "err");
+    const failed = Object.entries({
+      "model providers": models,
+      Slack: slack,
+      "connector catalog": catalog,
+      settings: config,
+    })
+      .filter(([, result]) => !result.ok)
+      .map(([name, result]) => name + " (" + (result.status || "network") + ")");
+    if (failed.length)
+      return this.say("Setup status could not be loaded: " + failed.join(", ") + ". Try again.", "err");
     this.providers = models.data.providers || [];
     this.models = {};
     this.mergeModels([...(models.data.models || []), ...(config.data.baseModelOptions || [])]);
@@ -113,14 +121,11 @@ export class Onboarding {
     this.context.loaded();
     this.draw();
     if (models.data.modelCatalogRefreshing)
-      void this.context
-        .api("GET", "/api/model-providers")
-        .then((fresh: Data) => {
-          if (!fresh.ok || token !== this.request || view !== this.context.view()) return;
-          this.mergeModels(fresh.data.models || []);
-          this.draw();
-        })
-        .catch(() => {});
+      void this.context.api("GET", "/api/model-providers").then((fresh: Data) => {
+        if (!fresh.ok || token !== this.request || view !== this.context.view()) return;
+        this.mergeModels(fresh.data.models || []);
+        this.draw();
+      });
   }
   keepsBaseModel() {
     return Boolean(this.baseModel) && !(this.models[this.provider] || []).some((m) => m.id === this.baseModel);
