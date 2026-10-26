@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const section = (lines: string[], heading: string) => {
+export const section = (lines: string[], heading: string) => {
   const start = lines.indexOf(heading);
   if (start < 0) return undefined;
   const level = `${heading.split(" ")[0]} `;
@@ -9,7 +9,7 @@ const section = (lines: string[], heading: string) => {
   return lines.slice(start + 1, end < 0 ? undefined : end);
 };
 
-const lines = (text: string) => text.replaceAll("\r\n", "\n").split("\n");
+export const lines = (text: string) => text.replaceAll("\r\n", "\n").split("\n");
 
 const lensHeadings = (spec: string) =>
   (section(lines(spec), "## Wall of shame") ?? []).filter((line) => line.startsWith("### "));
