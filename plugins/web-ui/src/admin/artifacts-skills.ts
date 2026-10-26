@@ -98,7 +98,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
                 ),
               )
             : nothing
-        }${card("Instructions", "The SKILL.md the agent reads when this skill is in play.", html`<pre class="skillbody" style="white-space:pre-wrap;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;margin:0">${k.body || "(empty)"}</pre>`)}
+        }${card("Instructions", "The SKILL.md the agent reads when this skill is in play.", html`<pre class="skillbody">${k.body || "(empty)"}</pre>`)}
       </div>`,
     ),
   );
@@ -454,9 +454,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
     }
   };
   const action = (bottom = false) =>
-    html`<div
-      style=${"display:flex;flex-direction:column;align-items:flex-start;gap:6px;" + (bottom ? "margin-top:10px" : "")}
-    >
+    html`<div class=${"pack-action" + (bottom ? " bottom" : "")}>
       <button type="button" class="primary" ?disabled=${busy} @click=${importSelected}>Import selected</button
       ><span class=${"status" + (tone ? " " + tone : "")}>${message}</span>
     </div>`;
@@ -471,7 +469,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
       imported: candidates.filter(all).length,
     };
     paint(
-      html`<section class="card" style="position:relative">
+      html`<section class="card pack-browser">
         <div class="head">
           <h2>${"Browse: " + pack.url}</h2>
           <p>
@@ -481,24 +479,19 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
         </div>
         <div class="body">
           <div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 4px">
-              <span style="font-size:12px;opacity:0.7">Add to scopes:</span>${picker}
-            </div>
+            <div class="pack-scopes"><span class="pack-scopes-label">Add to scopes:</span>${picker}</div>
             ${
               plan.bundlePaths?.length
-                ? html`<details style="margin:8px 0">
+                ? html`<details class="pack-files">
                     <summary>
                       ${plan.bundlePaths.length + " shared pack file" + (plan.bundlePaths.length === 1 ? "" : "s") + " (contained under a pack-owned directory)"}
                     </summary>
-                    <pre
-                      style="max-height:180px;overflow:auto;font-size:11px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)"
-                    >
-${plan.bundlePaths.join("\n")}</pre>
+                    <pre class="pack-files-list">${plan.bundlePaths.join("\n")}</pre>
                   </details>`
                 : nothing
             }
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px">
-              <div class="badges" style="flex:1">
+            <div class="pack-filters">
+              <div class="badges">
                 ${Object.entries(reasons)
                   .filter(
                     ([key]) =>
@@ -509,8 +502,7 @@ ${plan.bundlePaths.join("\n")}</pre>
                   .map(
                     ([key, reason]) =>
                       html`<span
-                        class=${"badge " + reason.tone}
-                        style=${"cursor:pointer;" + (filter === key ? "background:var(--text);color:#fff;border-color:var(--text)" : "")}
+                        class=${"badge pack-filter " + reason.tone + (filter === key ? " active" : "")}
                         title=${reason.help + " " + (key === "all" ? "" : "Click to show only these.")}
                         @click=${() => ((filter = key), draw())}
                         >${(tally[key] ?? (counts[key] || 0)) + " " + reason.label}</span
@@ -561,9 +553,7 @@ ${plan.bundlePaths.join("\n")}</pre>
           type="button"
           title="Close"
           aria-label="Close browse"
-          style="position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px"
-          @mouseenter=${(e: Event) => ((e.target as HTMLElement).style.opacity = "1")}
-          @mouseleave=${(e: Event) => ((e.target as HTMLElement).style.opacity = "0.55")}
+          class="pack-close"
           @click=${() => ((closed = true), paint(nothing))}
         >
           ✕

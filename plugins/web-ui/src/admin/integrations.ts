@@ -28,18 +28,10 @@ cards["card-external-slack"] = () => {
       </p>
     </div>
     <div class="body">
-      <input
-        type="checkbox"
-        id="external-slack-participants"
-        .checked=${!!s.draft.on}
-        @change=${(e: Event) => s.change({ on: (e.target as HTMLInputElement).checked })}
-        hidden
-      />
       ${choiceGroup(
         {
           name: "external-slack-choice",
           value: ({ true: "on", false: "off" } as Record<string, string>)[String(s.draft.on)] || "",
-          checkboxFor: "external-slack-participants",
           onChange: (event: Event) => s.change({ on: (event.target as HTMLInputElement).value === "on" }),
         },
         [
@@ -114,8 +106,8 @@ cards["card-ack-emoji"] = () => {
       </p>
     </div>
     <div class="body">
-      <div id="ack-emoji-chips" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
-        ${emojiChips(s)}<span style="position: relative; display: inline-block">
+      <div id="ack-emoji-chips">
+        ${emojiChips(s)}<span class="ack-emoji-add">
           <button type="button" id="ack-emoji-open" @click=${() => toggleEmoji(s)} class="ghost" aria-haspopup="true">
             + Add emoji
           </button>
@@ -154,11 +146,7 @@ cards["card-connectors"] = () => {
     <div class="body">
       <div id="conn-list" class=${connectors.displayed.length ? "" : "hint"}>${connectorRows()}</div>
     </div>
-    <div
-      class=${classMap({ body: true, hidden: !s.editor })}
-      id="conn-editor"
-      style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px"
-    >
+    <div class=${classMap({ body: true, hidden: !s.editor })} id="conn-editor">
       <div class="sc-form-head">
         <p class="hint" id="conn-form-title">
           ${s.editing ? "Editing " + context.connectorName(s.editing) : "Add a connector"}
@@ -413,15 +401,13 @@ function emojiChips(s: SlackSetting) {
     s.draft.names || [],
     (name: string) => name,
     (name: string) =>
-      html`<span
-        data-chip=${name}
-        style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border, #d4d4d4);border-radius:999px;font-size:13px"
+      html`<span data-chip=${name} class="ack-emoji-chip"
         ><span
-          >${emoji.catalog[name] ? html`<img src=${emoji.catalog[name]} alt=${name} class="ack-emoji-img" style="margin-right:4px" />` : (emoji.standard.find((e) => e[0] === name)?.[1] || "") + " "}${":" + name + ":"}</span
+          >${emoji.catalog[name] ? html`<img src=${emoji.catalog[name]} alt=${name} class="ack-emoji-img" />` : (emoji.standard.find((e) => e[0] === name)?.[1] || "") + " "}${":" + name + ":"}</span
         ><button
           type="button"
           aria-label=${"Remove " + name}
-          style="border:0;background:none;cursor:pointer;padding:0;font-size:14px;line-height:1"
+          class="ack-emoji-remove"
           @click=${() =>
             emojiChanged(
               s,

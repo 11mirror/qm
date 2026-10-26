@@ -5,7 +5,7 @@ import { adminApi, scopeUrl } from "./api.ts";
 import { startSettings } from "./settings-controller.ts";
 import { scopeMultiSelect } from "./scope-picker.ts";
 import * as routes from "./routes.ts";
-import { fire, watchCustomDropdowns } from "./dropdown.ts";
+import { watchCustomDropdowns } from "./dropdown.ts";
 import { backArrow, badge, el, kpis, linkClick, searchField, stacked } from "./dom.ts";
 import { KIND_LABEL, fileName, fmtBytes, historyCategory, relTime, scopeKind, titleCase } from "./format.ts";
 
@@ -22,22 +22,6 @@ export function startAdmin(host, env) {
     " in a DM. It can make the edit for you and confirm what changed.";
   document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
     link.closest("section.card").querySelector(":scope > .head").appendChild(link);
-  });
-  document.querySelectorAll("[data-choice-for]").forEach((input) => {
-    if (input.closest(".sv-governance, .sv-slack-settings, .sv-models, .sv-customize")) return;
-    input.onchange = () => {
-      const select = $(input.dataset.choiceFor);
-      select.value = input.value;
-      fire(select);
-    };
-  });
-  document.querySelectorAll("[data-checkbox-for]").forEach((input) => {
-    if (input.closest(".sv-slack-settings")) return;
-    input.onchange = () => {
-      const checkbox = $(input.dataset.checkboxFor);
-      checkbox.checked = input.value === "on";
-      fire(checkbox);
-    };
   });
   const ERRORS_PAGE_SIZE = 50;
   const brandSelfLabel = () => env.productName;

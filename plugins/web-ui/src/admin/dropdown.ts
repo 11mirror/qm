@@ -5,7 +5,7 @@ const CHEVRON =
 let openDropdown: HTMLElement | null = null;
 let sequence = 0;
 
-export const fire = (target: Element) =>
+const fire = (target: Element) =>
   ["input", "change"].forEach((type) => target.dispatchEvent(new Event(type, { bubbles: true })));
 
 function closeDropdown(dd: HTMLElement | null) {

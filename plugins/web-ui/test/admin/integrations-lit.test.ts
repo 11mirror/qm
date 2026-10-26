@@ -38,7 +38,7 @@ test("Slack settings are state driven and preserve newer drafts when committing"
     doc.querySelector<HTMLInputElement>('[name="external-slack-choice"][value="off"]')!.click();
     dom.window.eval('ui.commit("external-slack-participants",{on:true})');
     assert.equal(doc.getElementById("st-external-slack-participants")!.textContent, "Unsaved changes");
-    assert.equal(doc.querySelector<HTMLInputElement>("#external-slack-participants")!.checked, false);
+    assert.equal(doc.querySelector<HTMLInputElement>('[name="external-slack-choice"][value="off"]')!.checked, true);
   } finally {
     dom.window.close();
   }

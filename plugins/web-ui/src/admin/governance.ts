@@ -15,22 +15,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <p>Choose how the agent screens external content and when it requires your approval.</p>
       </div>
       <div class="body">
-        <select
-          id="security-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("security-posture")}
-          @change=${(event: Event) => changeField(s, "security-posture", event)}
-        >
-          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
-          <option value="auto">Auto — use the deployment’s configured screener</option>
-          <option value="strict">Strict — approve tool actions</option>
-        </select>
         ${choiceGroup(
           {
             name: "security-posture-choice",
             value: s.draft.posture,
-            choiceFor: "security-posture",
             onChange: (event: Event) => changeField(s, "security-posture", event),
           },
           [
@@ -227,21 +215,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
       <div class="body">
         <p id="sharing-posture-effective">${sharingLabel(s)}</p>
-        <select
-          id="sharing-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("sharing-posture")}
-          @change=${(event: Event) => changeField(s, "sharing-posture", event)}
-        >
-          <option value="isolated">Isolated</option>
-          <option value="open">Open</option>
-        </select>
         ${choiceGroup(
           {
             name: "sharing-posture-choice",
             value: s.draft.posture,
-            choiceFor: "sharing-posture",
             onChange: (event: Event) => changeField(s, "sharing-posture", event),
           },
           [
@@ -352,21 +329,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button>
       </div>
       <div class="body">
-        <select
-          id="governance-org-ambient"
-          data-choice-state
-          hidden
-          .value=${s.draft.on ? "on" : "off"}
-          @change=${(event: Event) => changeField(s, "governance-org-ambient", event)}
-        >
-          <option value="on">Agent judges all messages and replies when useful</option>
-          <option value="off">Agent does not read messages or reply unless @-mentioned</option>
-        </select>
         ${choiceGroup(
           {
             name: "ambient-reply-choice",
             value: ({ true: "on", false: "off" } as Record<string, string>)[String(s.draft.on)] || "",
-            choiceFor: "governance-org-ambient",
             onChange: (event: Event) => changeField(s, "governance-org-ambient", event),
           },
           [

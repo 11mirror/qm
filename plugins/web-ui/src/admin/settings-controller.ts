@@ -241,10 +241,7 @@ export function startSettings({
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope());
     const opts = r.data.baseModelOptions || [];
     if (requestedView === "models") {
-      for (const key of "runtime cron-runtime subagent-runtime fallback-runtime webui-models memory-embedding-model".split(
-        " ",
-      ))
-        settings.load(r.data, scope(), key);
+      for (const key of settings.modelSettingKeys) settings.load(r.data, scope(), key);
       void settings.loadProviders();
     }
     if (requestedView === "credentials") {
@@ -305,11 +302,6 @@ export function startSettings({
   function loadServiceCredDirectory(data: any) {
     serviceCredDirectory = data.directoryMembers || [];
     serviceCredChannels = data.directoryChannels || [];
-    $("sc-people-options").replaceChildren(
-      ...serviceCredDirectory.map((member: any) =>
-        Object.assign(new Option(), { value: member.principalId, label: member.displayName }),
-      ),
-    );
   }
   let savedBranding = {};
   settings.configureDecisions({
