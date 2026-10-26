@@ -402,6 +402,7 @@ async function drive(
     finish(d, submit.reply ?? "");
   } catch (e) {
     if (!(e instanceof TypeError)) throw e;
+    reportHandledError("web:send_failed", e);
     settle("failed");
     const errorMessage = "Message wasn’t sent. Check your connection and try again.";
     const message = latestUserMessage(agent);
@@ -667,7 +668,8 @@ async function streamRunViaSse(live: Live, runId: string): Promise<"done" | "fal
       }
     }
     return "fallback";
-  } catch {
+  } catch (error) {
+    if (!controller.signal.aborted) reportHandledError("web:run_stream", error);
     return "fallback";
   } finally {
     clearTimeout(timer);
