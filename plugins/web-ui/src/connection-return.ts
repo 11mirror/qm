@@ -22,33 +22,36 @@ export function saveConnectionAttempt(attempt: ConnectionAttempt): void {
   sessionStorage.setItem(key(attempt.user), JSON.stringify(attempt));
 }
 
-export function readConnectionAttempt(user: string, state: string, path: string): ConnectionAttempt | null {
+function storedAttempt(user: string): ConnectionAttempt | null {
   try {
-    const attempt = JSON.parse(sessionStorage.getItem(key(user)) ?? "null") as ConnectionAttempt | null;
-    if (
-      !attempt ||
-      attempt.user !== user ||
-      attempt.state !== state ||
-      attempt.path !== path ||
-      !Number.isFinite(attempt.expiresAt) ||
-      attempt.expiresAt <= Date.now() ||
-      typeof attempt.accountId !== "string" ||
-      !ACCOUNT_ID.test(attempt.accountId) ||
-      (attempt.replaces !== undefined &&
-        (typeof attempt.replaces !== "string" || !ACCOUNT_ID.test(attempt.replaces))) ||
-      typeof attempt.widget !== "string" ||
-      typeof attempt.service?.id !== "string" ||
-      typeof attempt.service.name !== "string" ||
-      typeof attempt.picker?.query !== "string" ||
-      typeof attempt.picker.expanded !== "boolean" ||
-      !Number.isFinite(attempt.scrollTop) ||
-      attempt.scrollTop < 0
-    )
-      return null;
-    return attempt;
+    return JSON.parse(sessionStorage.getItem(key(user)) ?? "null");
   } catch {
     return null;
   }
+}
+
+export function readConnectionAttempt(user: string, state: string, path: string): ConnectionAttempt | null {
+  const attempt = storedAttempt(user);
+  if (
+    !attempt ||
+    attempt.user !== user ||
+    attempt.state !== state ||
+    attempt.path !== path ||
+    !Number.isFinite(attempt.expiresAt) ||
+    attempt.expiresAt <= Date.now() ||
+    typeof attempt.accountId !== "string" ||
+    !ACCOUNT_ID.test(attempt.accountId) ||
+    (attempt.replaces !== undefined && (typeof attempt.replaces !== "string" || !ACCOUNT_ID.test(attempt.replaces))) ||
+    typeof attempt.widget !== "string" ||
+    typeof attempt.service?.id !== "string" ||
+    typeof attempt.service.name !== "string" ||
+    typeof attempt.picker?.query !== "string" ||
+    typeof attempt.picker.expanded !== "boolean" ||
+    !Number.isFinite(attempt.scrollTop) ||
+    attempt.scrollTop < 0
+  )
+    return null;
+  return attempt;
 }
 
 export function clearConnectionAttempt(user: string): void {
@@ -60,13 +63,8 @@ export function clearConnectionAttempt(user: string): void {
 }
 
 let initialReturnUrl: URL | null = null;
-let capturedReturn: {
-  user: string;
-  widget: string;
-  url: URL;
-  attempt: ConnectionAttempt | null;
-  verified: boolean;
-} | null = null;
+type ConnectionReturn = { url: URL; attempt: ConnectionAttempt | null; verified: boolean };
+let capturedReturn: (ConnectionReturn & { user: string; widget: string }) | null = null;
 export function captureConnectionReturn(url: string): void {
   initialReturnUrl = new URL(url);
   capturedReturn = null;
@@ -74,20 +72,11 @@ export function captureConnectionReturn(url: string): void {
 export function isConnectionReturn(): boolean {
   return initialReturnUrl?.searchParams.has("composioReturn") === true;
 }
-export function takeConnectionReturn(
-  user: string,
-  widget: string,
-): { url: URL; attempt: ConnectionAttempt | null; verified: boolean } | null {
+export function takeConnectionReturn(user: string, widget: string): ConnectionReturn | null {
   if (!isConnectionReturn()) return null;
   if (capturedReturn) return capturedReturn.user === user && capturedReturn.widget === widget ? capturedReturn : null;
-  let owner = "settings";
-  try {
-    const attempt = JSON.parse(sessionStorage.getItem(key(user)) ?? "null") as ConnectionAttempt | null;
-    if (typeof attempt?.widget === "string") owner = attempt.widget;
-  } catch {
-    owner = "settings";
-  }
-  if (owner !== widget) return null;
+  const owner = storedAttempt(user)?.widget;
+  if ((typeof owner === "string" ? owner : "settings") !== widget) return null;
   const url = new URL(initialReturnUrl!.href);
   capturedReturn = {
     user,

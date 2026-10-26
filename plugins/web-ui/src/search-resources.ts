@@ -1,3 +1,4 @@
+import { html, nothing, type TemplateResult } from "lit";
 import { deepLinkPath } from "./deep-link.ts";
 
 export interface ResourceHit {
@@ -33,13 +34,7 @@ export function resourceResults(
       title: hit.title,
       description: hit.snippet,
       group: labels[hit.kind]!,
-      href: deepLinkPath(
-        base,
-        hit.kind,
-        null,
-        hit.kind === "contexts" ? hit.id : null,
-        hit.kind === "contexts" ? null : hit.id,
-      ),
+      href: deepLinkPath(base, hit.kind, null, ...(hit.kind === "contexts" ? [hit.id, null] : [null, hit.id])),
     })),
     failed: result.failed.map((kind) => labels[kind] ?? kind),
   };
@@ -52,4 +47,12 @@ export function matchResources(hits: ResourceHit[], query: string): ResourceHit[
     const text = `${h.title} ${h.description} ${h.group}`.toLocaleLowerCase();
     return terms.every((term) => text.includes(term));
   });
+}
+
+export function searchGroup(title: string, archived: boolean, recency: string): TemplateResult {
+  return html`<div class="chat-search-group ${archived ? "archived" : ""}">
+    <b dir="auto">${title}</b>${archived ? html`<em class="chat-search-archived-tag">Archived</em>` : nothing}<span
+      >${recency}</span
+    >
+  </div>`;
 }

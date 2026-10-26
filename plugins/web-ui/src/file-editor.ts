@@ -5,12 +5,7 @@ import { tags } from "@lezer/highlight";
 import { languages } from "@codemirror/language-data";
 import { search, searchKeymap } from "@codemirror/search";
 
-export async function mountFileEditor(
-  parent: HTMLElement,
-  text: string,
-  name: string,
-  mime: string,
-): Promise<() => void> {
+export async function mountFileEditor(parent: HTMLElement, text: string, name: string, mime: string) {
   const language =
     LanguageDescription.matchFilename(languages, name) ??
     languages.find((entry) => entry.alias.includes(mime.replace(/^application\/(?:x-)?/, "")));

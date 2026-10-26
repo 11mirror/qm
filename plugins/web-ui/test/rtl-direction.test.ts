@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 test("search group headers select direction from the authored session title", async () => {
   const dom = new JSDOM('<!doctype html><main id="host"></main>');
   Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
-  const [{ render }, { searchGroup }] = await Promise.all([import("lit"), import("../src/search-group.ts")]);
+  const [{ render }, { searchGroup }] = await Promise.all([import("lit"), import("../src/search-resources.ts")]);
   const host = dom.window.document.querySelector<HTMLElement>("#host")!;
   render(searchGroup("مراجعة الإطلاق", false, "Today"), host);
   const title = host.querySelector<HTMLElement>(".chat-search-group > b")!;

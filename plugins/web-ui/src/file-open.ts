@@ -23,3 +23,29 @@ export function previewFile(event: MouseEvent, name: string, href: string, mimet
     .then(({ openFileViewer }) => openFileViewer(name, href, kind, mimetype))
     .catch(() => window.open(href, "_blank", "noopener,noreferrer"));
 }
+
+export function createFileDragState(onChange: (dragging: boolean) => void) {
+  let target: EventTarget | null = null;
+  const eventTarget = (event: Event): EventTarget | null => event.composedPath()[0] ?? event.target;
+  const clear = (): boolean => {
+    if (!target) return false;
+    target.removeEventListener("dragleave", leave);
+    target = null;
+    return true;
+  };
+  const reset = (): void => {
+    if (clear()) onChange(false);
+  };
+  const leave = (event: Event): void => {
+    if (eventTarget(event) === target) reset();
+  };
+  const enter = (event: DragEvent): void => {
+    const next = eventTarget(event);
+    if (!next || next === target) return;
+    const wasDragging = clear();
+    target = next;
+    target.addEventListener("dragleave", leave);
+    if (!wasDragging) onChange(true);
+  };
+  return { enter, leave, reset, dispose: clear };
+}

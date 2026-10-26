@@ -1,15 +1,9 @@
 import { html, LitElement, nothing } from "lit";
 import { UI_BASE } from "./deep-link.ts";
 
-class SlackSetup extends LitElement {
-  private timer?: ReturnType<typeof setTimeout>;
-  private request?: AbortController;
-  private appReady = false;
-  private connected = false;
-  private unavailable = false;
-  private forbidden = false;
-  private startedAt = 0;
-  private links?: { tokenUrl: string; submitUrl: string; installUrl: string };
+export abstract class SlackStatus extends LitElement {
+  protected request?: AbortController;
+  protected timer?: ReturnType<typeof setTimeout>;
 
   protected createRenderRoot() {
     return this;
@@ -17,66 +11,94 @@ class SlackSetup extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.startedAt = Date.now();
-    document.addEventListener("visibilitychange", this.refreshVisible);
     window.addEventListener("focus", this.refreshVisible);
-    void this.refresh();
+    document.addEventListener("visibilitychange", this.refreshVisible);
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    clearTimeout(this.timer);
-    this.request?.abort();
-    document.removeEventListener("visibilitychange", this.refreshVisible);
     window.removeEventListener("focus", this.refreshVisible);
+    document.removeEventListener("visibilitychange", this.refreshVisible);
+    this.request?.abort();
+    clearTimeout(this.timer);
   }
 
-  private refreshVisible = (): void => {
-    if (!document.hidden && !this.request) void this.refresh();
+  protected refreshVisible = (): void => {
+    if (!document.hidden) void this.refresh();
   };
 
-  private async refresh(): Promise<void> {
+  protected abstract refresh(): Promise<void>;
+
+  protected async installation(
+    apply: (response: Response) => Promise<void>,
+    fail: () => void,
+    poll: () => boolean,
+  ): Promise<void> {
     if (this.request || !this.isConnected) return;
     clearTimeout(this.timer);
-    const controller = new AbortController();
-    this.request = controller;
+    const controller = (this.request = new AbortController());
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await fetch(`${UI_BASE}/api/admin/slack-installation`, {
-        signal: controller.signal,
-        credentials: "same-origin",
-        redirect: "error",
-      });
-      this.forbidden = response.status === 401 || response.status === 403;
-      if (!response.ok) throw new Error("Status unavailable");
-      const data = await response.json();
-      if (!data.setup || data.setupUnavailable) throw new Error("Status unavailable");
-      const { tokenUrl, submitUrl, installUrl } = data.setup;
-      if (
-        tokenUrl !== "https://api.slack.com/apps" ||
-        submitUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=setup` ||
-        installUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=install`
-      )
-        throw new Error("Invalid setup links");
-      this.links = { tokenUrl, submitUrl, installUrl };
-      this.appReady = data.setup.appReady === true;
-      this.connected = data.configured === true && data.setup.connected === true;
-      this.unavailable = false;
+      await apply(
+        await fetch(`${UI_BASE}/api/admin/slack-installation`, {
+          signal: controller.signal,
+          credentials: "same-origin",
+          redirect: "error",
+          cache: "no-store",
+        }),
+      );
     } catch {
-      this.unavailable = true;
-      this.connected = false;
+      fail();
     } finally {
       clearTimeout(timeout);
       this.request = undefined;
-      if (this.isConnected) {
-        this.requestUpdate();
-        if (!this.connected && !this.forbidden && Date.now() - this.startedAt < 10 * 60_000) {
-          this.timer = setTimeout(() => {
-            if (!document.hidden) void this.refresh();
-          }, 5_000);
-        }
-      }
+      if (poll()) this.timer = setTimeout(this.refreshVisible, 5_000);
     }
+  }
+}
+
+class SlackSetup extends SlackStatus {
+  private appReady = false;
+  private connected = false;
+  private unavailable = false;
+  private forbidden = false;
+  private startedAt = 0;
+  private links?: { tokenUrl: string; submitUrl: string; installUrl: string };
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    this.startedAt = Date.now();
+    void this.refresh();
+  }
+
+  protected refresh(): Promise<void> {
+    return this.installation(
+      async (response) => {
+        this.forbidden = response.status === 401 || response.status === 403;
+        const data = response.ok ? await response.json() : {};
+        const { tokenUrl, submitUrl, installUrl } = data.setup ?? {};
+        if (
+          data.setupUnavailable ||
+          tokenUrl !== "https://api.slack.com/apps" ||
+          submitUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=setup` ||
+          installUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=install`
+        )
+          throw new Error("Status unavailable");
+        this.links = { tokenUrl, submitUrl, installUrl };
+        this.appReady = data.setup.appReady === true;
+        this.connected = data.configured === true && data.setup.connected === true;
+        this.unavailable = false;
+      },
+      () => {
+        this.unavailable = true;
+        this.connected = false;
+      },
+      () => {
+        if (!this.isConnected) return false;
+        this.requestUpdate();
+        return !this.connected && !this.forbidden && Date.now() - this.startedAt < 10 * 60_000;
+      },
+    );
   }
 
   protected render() {

@@ -1,41 +1,23 @@
 import type { SkillItem } from "./composer";
 
 export type SkillStatusFilter = "active" | "archived" | "all";
+type Filters = { query: string; scope: string; source: string; status: SkillStatusFilter };
+type SkillGroup = { name: string; skills: SkillItem[] };
 
-export interface SkillRegistryFilters {
-  query: string;
-  scope: string;
-  source: string;
-  status: SkillStatusFilter;
-}
-
-export interface SkillGroup {
-  name: string;
-  skills: SkillItem[];
-}
-
-export type SkillEmptyState = "none" | "loading" | "filtered" | "empty";
-
-const SCOPE_ORDER = new Map([
-  ["personal", 0],
-  ["channel", 1],
-  ["group", 2],
-  ["team", 3],
-  ["org", 4],
-]);
+const SCOPE_ORDER = ["personal", "channel", "group", "team", "org"];
+const scopeRank = (skill: SkillItem) => (SCOPE_ORDER.indexOf(skill.scope) + 100) % 100;
 
 export function isArchivedSkill(skill: SkillItem): boolean {
   return skill.status === "archived";
 }
 
-export function filterSkills(skills: readonly SkillItem[], filters: SkillRegistryFilters): SkillItem[] {
+export function filterSkills(skills: readonly SkillItem[], filters: Filters): SkillItem[] {
   const query = filters.query.trim().toLowerCase();
   return skills.filter((skill) => {
     if (filters.status !== "all" && (isArchivedSkill(skill) ? "archived" : "active") !== filters.status) return false;
     if (filters.scope !== "all" && skill.scope !== filters.scope) return false;
     if (filters.source === "overrides" ? !skill.shadowed : filters.source !== "all" && skill.source !== filters.source)
       return false;
-    if (!query) return true;
     return [skill.name, skill.description, skill.scope, skill.scopeId, skill.pack?.upstreamName]
       .filter(Boolean)
       .join(" ")
@@ -46,34 +28,27 @@ export function filterSkills(skills: readonly SkillItem[], filters: SkillRegistr
 
 export function groupSkills(skills: readonly SkillItem[]): SkillGroup[] {
   const groups = new Map<string, SkillItem[]>();
-  for (const skill of skills) {
-    const key = skill.name;
-    const variants = groups.get(key) ?? [];
-    variants.push(skill);
-    groups.set(key, variants);
-  }
+  for (const skill of skills) groups.set(skill.name, [...(groups.get(skill.name) ?? []), skill]);
   return [...groups.values()]
-    .map((variants) => {
-      variants.sort((a, b) => {
-        const archived = Number(isArchivedSkill(a)) - Number(isArchivedSkill(b));
-        if (archived) return archived;
-        return (SCOPE_ORDER.get(a.scope) ?? 99) - (SCOPE_ORDER.get(b.scope) ?? 99);
-      });
-      return { name: variants[0]!.name, skills: variants };
-    })
+    .map((variants) => ({
+      name: variants[0]!.name,
+      skills: variants.sort(
+        (a, b) => Number(isArchivedSkill(a)) - Number(isArchivedSkill(b)) || scopeRank(a) - scopeRank(b),
+      ),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function filterSkillGroups(groups: readonly SkillGroup[], filters: SkillRegistryFilters): SkillGroup[] {
+export function filterSkillGroups(groups: readonly SkillGroup[], filters: Filters): SkillGroup[] {
   return groups.flatMap((group) => {
-    const activeVariants = group.skills.filter((skill) => !isArchivedSkill(skill)).length;
-    if (filters.source === "overrides" && activeVariants < 2) return [];
-    const skills = filterSkills(group.skills, filters.source === "overrides" ? { ...filters, source: "all" } : filters);
+    const overrides = filters.source === "overrides";
+    if (overrides && group.skills.filter((skill) => !isArchivedSkill(skill)).length < 2) return [];
+    const skills = filterSkills(group.skills, overrides ? { ...filters, source: "all" } : filters);
     return skills.length ? [{ ...group, skills }] : [];
   });
 }
 
-export function skillEmptyState(total: number, visible: number, loading: boolean): SkillEmptyState {
+export function skillEmptyState(total: number, visible: number, loading: boolean) {
   if (loading && total === 0) return "loading";
   if (visible > 0) return "none";
   return total > 0 ? "filtered" : "empty";

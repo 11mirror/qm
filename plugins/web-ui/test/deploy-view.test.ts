@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deploymentCanManage,
-  deploymentContextScope,
   deploymentInScope,
   deploymentLatestAt,
   deploymentSlug,
   deploymentTab,
-  deploymentTabEmptyMessage,
   deploymentTitle,
   filterDeployments,
   friendlyPrincipal,
@@ -37,13 +35,11 @@ test("deployment labels prefer friendly metadata and retain durable fallbacks", 
   assert.equal(friendlyPrincipal("blair.reeves@example.com"), "Blair Reeves");
 });
 
-test("deployment context prefers its creation scope and filtering accepts either creation or ownership", () => {
+test("deployment filtering accepts either creation or ownership scope", () => {
   const fromChannel = deployment({ createdInScope: "channel:launch", ownerScopeId: "personal:blair@example.com" });
-  assert.equal(deploymentContextScope(fromChannel), "channel:launch");
   assert.equal(deploymentInScope(fromChannel, "channel:launch"), true);
   assert.equal(deploymentInScope(fromChannel, "personal:blair@example.com"), true);
   assert.equal(deploymentInScope(fromChannel, "channel:other"), false);
-  assert.equal(deploymentContextScope(deployment({ createdInScope: undefined, ownerScopeId: "org:acme" })), "org:acme");
 });
 
 test("tabs separate manageable, shared, and archived deployments", () => {
@@ -72,7 +68,6 @@ test("the empty Yours message stays tab-local when a manageable transfer is Shar
     permission: "write",
   });
   assert.equal(deploymentTab(transferred, "blair@example.com"), "shared");
-  assert.equal(deploymentTabEmptyMessage("yours"), "No apps of your own yet.");
 });
 
 test("management actions fail closed when permission is missing or unknown", () => {

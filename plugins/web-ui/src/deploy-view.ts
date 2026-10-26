@@ -1,10 +1,3 @@
-interface DeploymentVersionView {
-  version: number;
-  createdAt: number;
-  commit?: string;
-  parentCommit?: string;
-}
-
 export interface DeploymentView {
   id: string;
   status?: "running" | "stopped" | "archived" | string;
@@ -14,26 +7,17 @@ export interface DeploymentView {
   currentVersion?: number;
   appliedVersion?: number;
   webUrl?: string;
-  gitUrl?: string;
   name?: string;
   displayName?: string;
   permission?: "read" | "write";
   embedAncestors?: string[];
-  public?: boolean;
-  createdAt?: number;
-  updatedAt?: number;
-  lastAccessAt?: number;
-  versions?: DeploymentVersionView[];
+  versions?: Array<{ version: number; createdAt: number }>;
 }
 
 export type DeploymentTab = "yours" | "shared" | "archived";
 
 export function deploymentCanManage(d: DeploymentView): boolean {
   return d.permission === "write";
-}
-
-export function deploymentContextScope(d: DeploymentView): string | undefined {
-  return d.createdInScope ?? d.ownerScopeId;
 }
 
 export function deploymentInScope(d: DeploymentView, scope: string | null): boolean {
@@ -58,12 +42,6 @@ export function deploymentTab(d: DeploymentView, viewer: string | undefined): De
   if (!viewer) return "shared";
   if (d.ownerScopeId === `personal:${viewer}`) return "yours";
   return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer ? "yours" : "shared";
-}
-
-export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
-  if (tab === "shared") return "No apps shared with you.";
-  if (tab === "archived") return "Nothing archived.";
-  return "No apps of your own yet.";
 }
 
 export function filterDeployments(

@@ -2,7 +2,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ArrowLeft, Plus, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { contextsState, scopeFilterControl } from "./contexts";
+import { contextsState, ensureContexts, scopeFilterControl } from "./contexts";
 import { fieldSelect } from "./ui";
 import { appState, type View } from "./shell-state";
 import { scopedSession, scopedViewTopbar, type SessionTool } from "./session-scope";
@@ -69,6 +69,25 @@ export function listTabs<T extends string>(
         </button>`,
     )}
   </div>`;
+}
+
+export type OwnershipTab = "yours" | "shared" | "archived";
+
+export function ownershipTabs(
+  label: string,
+  counts: Record<OwnershipTab, number>,
+  active: OwnershipTab,
+  onSelect: (value: OwnershipTab) => void,
+  show: (tab: OwnershipTab) => boolean = () => false,
+): TemplateResult {
+  return listTabs(
+    label,
+    (["yours", "shared", "archived"] as const)
+      .filter((value) => value === "yours" || show(value) || counts[value] > 0 || value === active)
+      .map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1), count: counts[value] })),
+    active,
+    onSelect,
+  );
 }
 
 export function listSelect(
@@ -288,6 +307,33 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       return flash;
     },
 
+    flashRows(): TemplateResult[] {
+      const flash = this.takeFlash();
+      return flash ? [html`<div class="action-notice">${flash}</div>`] : [];
+    },
+
+    search(placeholder: string, redraw: () => void): NonNullable<ListPageOpts["search"]> {
+      return {
+        value: this.query,
+        placeholder,
+        onInput: (value) => {
+          this.query = value;
+          redraw();
+        },
+      };
+    },
+
+    async attempt(run: () => Promise<unknown>, failure: string, ok?: string): Promise<boolean> {
+      try {
+        await run();
+        if (ok) this.flash = ok;
+        return true;
+      } catch (e) {
+        this.flash = errMessage(e, failure);
+        return false;
+      }
+    },
+
     async refresh(run: () => Promise<void>, failure: string, showLoading = false): Promise<boolean> {
       const current = ++seq;
       if (showLoading) {
@@ -331,16 +377,17 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       draw: () => void;
       missing: string;
     }): Promise<void> {
+      if (appState.currentView !== view) return;
+      this.adoptScope();
+      await ensureContexts();
       o.draw();
       const loaded = await o.load();
       const wanted = this.pending;
       this.pending = null;
       if (appState.currentView !== view) return;
       if (!loaded) return o.draw();
-      const item = wanted ? o.find(wanted) : undefined;
-      if (wanted && !item) this.flash = o.missing;
-      if (item) o.open(item);
-      else o.draw();
+      if (wanted && !o.find(wanted)) this.flash = o.missing;
+      this.route(wanted, o.find, o.open, o.draw);
     },
 
     route<T>(id: string | null, find: (id: string) => T | undefined, open: (item: T) => void, draw: () => void): void {
