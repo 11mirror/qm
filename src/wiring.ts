@@ -1401,6 +1401,11 @@ export function buildApp(
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
   const egressAudit = createPostgresEgressAuditSink(databaseUrl);
   const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
+  const contextRequestCreated = createPostgresNotifyBus<string>(
+    databaseUrl,
+    "context_request_created",
+    "context requests",
+  );
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
@@ -2055,6 +2060,11 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequestCreated,
+    contextViewerTokenKey: deriveConnectorKey(
+      keychainKeyMaterial ?? config.signingSecret ?? randomBytes(32),
+      "context-viewer-tokens",
+    ),
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2628,6 +2638,7 @@ export function buildApp(
           runSignals.close?.(),
           turnLedger?.close(),
           turnReady?.close?.(),
+          contextRequestCreated.close?.(),
           turnCancels?.close?.(),
           turnYields?.close?.(),
           sessionStateBus.close?.(),

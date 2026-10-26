@@ -405,6 +405,7 @@ export interface SurfaceContextRequest {
   query: SurfaceContextQuery;
   result?: SurfaceContextResult;
   error?: string;
+  sealedViewerToken?: string;
 }
 
 export interface EgressPolicy {
