@@ -71,12 +71,14 @@ export function cronRunSummaryTitle(c: CronTimingView): string {
 }
 
 export function formatCronDateTime(ms: number, now = Date.now(), timeZone?: string): string {
-  const zonedDate = timeZone ? zoned(ms, timeZone) : null;
-  const zonedToday = timeZone ? zoned(now, timeZone) : null;
-  const tz = zonedDate && zonedToday ? timeZone : undefined;
-  const date = zonedDate && zonedToday ? zonedDate : new Date(ms);
-  const today = zonedDate && zonedToday ? zonedToday : new Date(now);
-  const time = formatTime(ms, tz);
+  const tz = timeZone && validZone(ms, timeZone) && validZone(now, timeZone) ? timeZone : undefined;
+  const date = tz ? new TZDate(ms, tz) : new Date(ms);
+  const today = tz ? new TZDate(now, tz) : new Date(now);
+  const time = new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
   if (isSameDay(date, today)) return time;
   if (isSameDay(date, addDays(today, 1))) return `tomorrow ${time}`;
   const dateOpts: Intl.DateTimeFormatOptions = {
@@ -89,50 +91,15 @@ export function formatCronDateTime(ms: number, now = Date.now(), timeZone?: stri
 }
 
 function calendarTimezone(schedule: { timezone?: string }): string | undefined {
-  const configured = schedule.timezone?.trim();
-  if (configured) return configured;
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
+  return schedule.timezone?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
 }
 
-const TIMEZONE_VALIDITY = new Map<string, boolean>();
-
-function isIntlTimezone(timeZone: string): boolean {
-  let valid = TIMEZONE_VALIDITY.get(timeZone);
-  if (valid === undefined) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone });
-      valid = true;
-    } catch {
-      valid = false;
-    }
-    TIMEZONE_VALIDITY.set(timeZone, valid);
-  }
-  return valid;
-}
-
-function zoned(ms: number, timeZone: string): TZDate | null {
-  if (!isIntlTimezone(timeZone)) return null;
+function validZone(ms: number, timeZone: string): boolean {
   try {
-    const date = new TZDate(ms, timeZone);
-    return Number.isNaN(date.getFullYear()) ? null : date;
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return !Number.isNaN(new TZDate(ms, timeZone).getFullYear());
   } catch {
-    return null;
-  }
-}
-
-function formatTime(ms: number, timeZone?: string): string {
-  try {
-    return new Date(ms).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-      ...(timeZone ? { timeZone } : {}),
-    });
-  } catch {
-    return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return false;
   }
 }
 

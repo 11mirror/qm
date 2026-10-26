@@ -71,6 +71,30 @@ export function listTabs<T extends string>(
   </div>`;
 }
 
+export type OwnershipTab = "yours" | "shared" | "archived";
+
+export function ownershipTabs(
+  label: string,
+  counts: Record<OwnershipTab, number>,
+  active: OwnershipTab,
+  onSelect: (value: OwnershipTab) => void,
+  show: (tab: OwnershipTab) => boolean = () => false,
+): TemplateResult {
+  const tabs: Array<[OwnershipTab, string]> = [
+    ["yours", "Yours"],
+    ["shared", "Shared"],
+    ["archived", "Archived"],
+  ];
+  return listTabs(
+    label,
+    tabs
+      .filter(([value]) => value === "yours" || show(value) || counts[value] > 0 || value === active)
+      .map(([value, text]) => ({ value, label: text, count: counts[value] })),
+    active,
+    onSelect,
+  );
+}
+
 export function listSelect(
   label: string,
   value: string,
@@ -286,6 +310,33 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       const flash = this.flash;
       this.flash = "";
       return flash;
+    },
+
+    flashRows(): TemplateResult[] {
+      const flash = this.takeFlash();
+      return flash ? [html`<div class="action-notice">${flash}</div>`] : [];
+    },
+
+    search(placeholder: string, redraw: () => void): NonNullable<ListPageOpts["search"]> {
+      return {
+        value: this.query,
+        placeholder,
+        onInput: (value) => {
+          this.query = value;
+          redraw();
+        },
+      };
+    },
+
+    async attempt(run: () => Promise<unknown>, failure: string, ok?: string): Promise<boolean> {
+      try {
+        await run();
+        if (ok) this.flash = ok;
+        return true;
+      } catch (e) {
+        this.flash = errMessage(e, failure);
+        return false;
+      }
     },
 
     async refresh(run: () => Promise<void>, failure: string, showLoading = false): Promise<boolean> {

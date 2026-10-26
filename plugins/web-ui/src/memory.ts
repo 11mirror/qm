@@ -1,7 +1,6 @@
 import { html } from "lit";
 import { Pencil, Trash2 } from "lucide";
 import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
 import { appState } from "./shell";
 import { artifactPage, iconBtn, listPageTpl } from "./list-page";
 
@@ -12,14 +11,13 @@ interface Fact {
 }
 
 let facts: Fact[] = [];
-let notice = "";
 let busy = false;
 let editing: { id: string; text: string } | null = null;
 const page = artifactPage("memory", "memory-page", "memory");
 
 export function resetMemoryState(): void {
   facts = [];
-  notice = "";
+  page.notice = "";
   busy = false;
   page.query = "";
   editing = null;
@@ -27,18 +25,15 @@ export function resetMemoryState(): void {
 
 async function change(method: "PATCH" | "DELETE", body: object, done: string): Promise<void> {
   busy = true;
-  notice = "";
+  page.notice = "";
   drawMemory();
-  try {
+  const save = async () => {
     facts = (await api<{ facts?: Fact[] }>("/api/memory", { method, body: JSON.stringify(body) })).facts ?? [];
-    editing = null;
-    notice = done;
-  } catch (e) {
-    notice = errMessage(e, "Failed to save memory.");
-  } finally {
-    busy = false;
-    drawMemory();
-  }
+  };
+  if (await page.attempt(save, "Failed to save memory.", done)) editing = null;
+  busy = false;
+  page.notice = page.takeFlash();
+  drawMemory();
 }
 
 function factRow(fact: Fact) {
@@ -91,39 +86,30 @@ function factRow(fact: Fact) {
   </div>`;
 }
 
-function drawMemory(loading = false): void {
+function drawMemory(): void {
   page.paint(
     listPageTpl({
       title: "Memory",
-      search: {
-        value: page.query,
-        placeholder: "Search remembered facts",
-        onInput: (value) => {
-          page.query = value;
-          drawMemory();
-        },
-      },
-      notice: notice || (loading ? "Loading…" : ""),
+      search: page.search("Search remembered facts", drawMemory),
+      notice: page.notice || (page.loading ? "Loading…" : ""),
       rows: facts.filter((fact) => page.matches(fact.text)).map(factRow),
       empty: page.query ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet.",
     }),
-    () => drawMemory(),
+    drawMemory,
   );
 }
 
 export async function renderMemory(): Promise<void> {
   if (appState.currentView !== "memory") return;
-  if (editing) return void drawMemory();
-  const seq = appState.viewRenderSeq;
-  notice = "";
-  drawMemory(true);
-  try {
-    const r = await api<{ facts?: Fact[] }>("/api/memory");
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
-    facts = r.facts ?? [];
-  } catch (e) {
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
-    notice = errMessage(e, "Failed to load memory.");
-  }
+  if (editing) return drawMemory();
+  const load = page.refresh(
+    async () => {
+      facts = (await api<{ facts?: Fact[] }>("/api/memory")).facts ?? [];
+    },
+    "Failed to load memory.",
+    true,
+  );
+  drawMemory();
+  await load;
   drawMemory();
 }

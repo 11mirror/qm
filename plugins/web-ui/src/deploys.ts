@@ -6,18 +6,16 @@ import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
-import { artifactPage, confirmDialogTpl, iconBtn, listBackLink, listPageTpl, listTabs } from "./list-page";
+import { artifactPage, confirmDialogTpl, iconBtn, listBackLink, listPageTpl, ownershipTabs } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { focusDialogCancel, restoreDialogFocus } from "./dialog-focus";
 import {
   deploymentCanManage as canManage,
-  deploymentContextScope,
   deploymentInScope,
   deploymentLatestAt,
   deploymentSlug,
   deploymentTab,
-  deploymentTabEmptyMessage,
   deploymentTitle,
   filterDeployments,
   friendlyPrincipal,
@@ -25,12 +23,6 @@ import {
   type DeploymentView,
 } from "./deploy-view";
 import { tip } from "./tooltip";
-
-const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
-  { value: "yours", label: "Yours" },
-  { value: "shared", label: "Shared" },
-  { value: "archived", label: "Archived" },
-];
 
 type DeployEditField = "displayName" | "name" | "embedAncestors";
 
@@ -41,10 +33,7 @@ const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue
 };
 
 let deployList: DeploymentView[] = [];
-let listNotice = "";
 let detailNotice: { id: string; text: string } | null = null;
-const notice = (id: string, text: string) => ({ id, text });
-let deployLoading = false;
 let deployTab: DeploymentTab = "yours";
 const page = artifactPage("deploys", "deploys-page", "apps");
 let activeDeploy: DeploymentView | null = null;
@@ -56,28 +45,18 @@ let deploySaving = false;
 let archiveCandidate: DeploymentView | null = null;
 let restoreArchiveFocus = false;
 let deployToast: { deployment: DeploymentView; text: string; undo?: boolean } | null = null;
-let deployRefreshSeq = 0;
 
-function deploying(d: DeploymentView): boolean {
-  return (
-    d.status === "running" &&
+function statusTpl(d: DeploymentView): TemplateResult {
+  const status = d.status || "unknown";
+  const deploying =
+    status === "running" &&
     d.appliedVersion !== undefined &&
     d.currentVersion !== undefined &&
-    d.appliedVersion !== d.currentVersion
-  );
-}
-
-function statusLabel(d: DeploymentView): string {
-  if (deploying(d)) return "Deploying";
-  const status = d.status || "unknown";
-  return status.charAt(0).toLocaleUpperCase() + status.slice(1);
-}
-
-function statusClass(d: DeploymentView): string {
-  if (deploying(d)) return "deploying";
-  if (d.status === "running") return "running";
-  if (d.status === "archived") return "archived";
-  return "stopped";
+    d.appliedVersion !== d.currentVersion;
+  let cls = status === "running" || status === "archived" ? status : "stopped";
+  let label = status.charAt(0).toLocaleUpperCase() + status.slice(1);
+  if (deploying) [cls, label] = ["deploying", "Deploying"];
+  return html`<span class="deploy-status ${cls}"><span></span>${label}</span>`;
 }
 
 function permissionBadge(d: DeploymentView): TemplateResult {
@@ -100,22 +79,12 @@ function ownerLabel(d: DeploymentView): string {
 }
 
 function deployTabs(): TemplateResult {
-  const inContext = deployList.filter((d) => deploymentInScope(d, page.scope));
-  const viewer = appState.me?.user;
-  const counts = Object.fromEntries(
-    DEPLOY_TABS.map((tab) => [tab.value, inContext.filter((d) => deploymentTab(d, viewer) === tab.value).length]),
-  ) as Record<DeploymentTab, number>;
-  return listTabs(
-    "App view",
-    DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value).map(
-      (tab) => ({ ...tab, count: counts[tab.value] }),
-    ),
-    deployTab,
-    (tab) => {
-      deployTab = tab;
-      drawDeploysPage();
-    },
-  );
+  const counts = { yours: 0, shared: 0, archived: 0 };
+  for (const d of deployList) if (deploymentInScope(d, page.scope)) counts[deploymentTab(d, appState.me?.user)]++;
+  return ownershipTabs("App view", counts, deployTab, (tab) => {
+    deployTab = tab;
+    drawDeploysPage();
+  });
 }
 
 function deploymentRow(d: DeploymentView): TemplateResult {
@@ -140,7 +109,7 @@ function deploymentRow(d: DeploymentView): TemplateResult {
           : html`<span class="deploy-row-main">${title}</span>`
       }
       <div class="deploy-row-actions" aria-label="App status and actions">
-        <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+        ${statusTpl(d)}
         <button
           class="btn deploy-manage"
           type="button"
@@ -167,16 +136,18 @@ function drawDeploysPage(): void {
   const allForTab = deployList.filter(
     (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, page.scope),
   );
-  let empty = deploymentTabEmptyMessage(deployTab);
-  if (!deployList.length && listNotice) empty = listNotice;
-  else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
+  let empty = { yours: "No apps of your own yet.", shared: "No apps shared with you.", archived: "Nothing archived." }[
+    deployTab
+  ];
+  if (!deployList.length && page.notice) empty = page.notice;
+  else if (page.loading && deployList.length === 0) empty = "Loading apps…";
   else if (page.query && allForTab.length) empty = "No apps match your search.";
   else if (page.scope) empty = "No apps in this context.";
   const content = deployList.length
     ? [
         deployTabs(),
-        ...(listNotice
-          ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${listNotice}</div>`]
+        ...(page.notice
+          ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${page.notice}</div>`]
           : []),
         ...(rows.length
           ? rows.map(deploymentRow)
@@ -187,14 +158,7 @@ function drawDeploysPage(): void {
     html`
       ${listPageTpl({
         title: "Apps",
-        search: {
-          value: page.query,
-          placeholder: "Search apps",
-          onInput: (value) => {
-            page.query = value;
-            drawDeploysPage();
-          },
-        },
+        search: page.search("Search apps", drawDeploysPage),
         rows: content,
         empty,
       })}
@@ -223,7 +187,7 @@ async function openDeploy(d: DeploymentView): Promise<void> {
     drawDeployDetail(activeDeploy);
   } catch (error) {
     if (activeDeploy?.id !== d.id) return;
-    detailNotice = notice(d.id, errMessage(error, "Could not load app details."));
+    detailNotice = { id: d.id, text: errMessage(error, "Could not load app details.") };
     drawDeployDetail(d);
   }
 }
@@ -234,7 +198,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
   host.className = "resource-pane deploy-detail-pane";
   const versions = [...(d.versions ?? [])].sort((a, b) => b.version - a.version);
   const running = d.status === "running";
-  const contextScope = deploymentContextScope(d);
+  const contextScope = d.createdInScope ?? d.ownerScopeId;
   render(
     html`
       <div class="resource-detail deploy-detail">
@@ -243,7 +207,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <div>
             <div class="deploy-heading-title">
               <h2 dir="auto">${deploymentTitle(d)}</h2>
-              <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+              ${statusTpl(d)}
             </div>
             <div class="deploy-detail-url">/d/${deploymentSlug(d)}/</div>
           </div>
@@ -514,7 +478,7 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
   const next = field === "embedAncestors" ? embedAncestors.join("\n") : value;
   if (next === current) return cancelEditDeploy();
   if (field === "name" && !value) {
-    detailNotice = notice(d.id, "A URL slug is required.");
+    detailNotice = { id: d.id, text: "A URL slug is required." };
     return drawDeployDetail(d);
   }
   deploySaving = true;
@@ -565,26 +529,21 @@ function closeArchiveDialog(): void {
 }
 
 function setDeployBackgroundInert(inert: boolean): void {
-  if (inert && appState.currentView !== "deploys") return;
-  const roots = new Set<HTMLElement>();
-  if (page.host) roots.add(page.host);
-  if (appState.currentView === "deploys" && appState.mainEl) roots.add(appState.mainEl);
-  roots.forEach((root) =>
-    root
-      .querySelectorAll<HTMLElement>(".list-page-head, .list-search, .list-rows, .deploy-detail, .deploy-toast")
-      .forEach((element) => {
-        element.inert = inert;
-      }),
-  );
+  if (appState.currentView !== "deploys") return;
+  appState.mainEl
+    ?.querySelectorAll<HTMLElement>(".list-page-head, .list-search, .list-rows, .deploy-detail, .deploy-toast")
+    .forEach((element) => {
+      element.inert = inert;
+    });
 }
 
 function deployFailed(d: DeploymentView, message: string): void {
   deploySaving = false;
   if (actionView(d.id) === "target") {
-    detailNotice = notice(d.id, message);
+    detailNotice = { id: d.id, text: message };
     drawDeployDetail(activeDeploy!);
   } else {
-    listNotice = "";
+    page.notice = "";
     deployToast = { deployment: d, text: message };
     drawCurrentDeployView();
   }
@@ -617,8 +576,8 @@ function archiveDialog(d: DeploymentView): TemplateResult {
 async function archiveDeploy(d: DeploymentView): Promise<void> {
   if (deploySaving) return;
   deploySaving = true;
-  if (activeDeploy?.id === d.id) detailNotice = notice(d.id, "Archiving deployment…");
-  else listNotice = "Archiving deployment…";
+  if (activeDeploy?.id === d.id) detailNotice = { id: d.id, text: "Archiving deployment…" };
+  else page.notice = "Archiving deployment…";
   setDeployBackgroundInert(false);
   archiveCandidate = null;
   drawCurrentDeployView();
@@ -635,10 +594,8 @@ async function archiveDeploy(d: DeploymentView): Promise<void> {
     if (destination === "target" || destination === "list") {
       activeDeploy = null;
       deployTab = "yours";
-      drawDeploysPage();
-    } else {
-      drawCurrentDeployView();
     }
+    drawCurrentDeployView();
   } catch (error) {
     deployFailed(d, errMessage(error, "Could not archive deployment."));
   }
@@ -648,8 +605,8 @@ async function restoreDeploy(d: DeploymentView): Promise<void> {
   if (deploySaving) return;
   const restoringActive = activeDeploy?.id === d.id;
   deploySaving = true;
-  if (restoringActive) detailNotice = notice(d.id, "Restoring deployment…");
-  else if (!activeDeploy) listNotice = "Restoring deployment…";
+  if (restoringActive) detailNotice = { id: d.id, text: "Restoring deployment…" };
+  else if (!activeDeploy) page.notice = "Restoring deployment…";
   if (restoringActive || !activeDeploy) drawCurrentDeployView();
   try {
     const response = await api<{ deployment?: DeploymentView }>(
@@ -659,21 +616,13 @@ async function restoreDeploy(d: DeploymentView): Promise<void> {
     deploySaving = false;
     const optimistic = { ...(response.deployment ?? d), status: "running" };
     deployToast = { deployment: optimistic, text: `${deploymentTitle(d)} is restored and running.` };
-    const failed = (await refreshDeployments()) === "failed";
+    const failed = !(await refreshDeployments());
     const restored = (!failed && deployList.find((item) => item.id === d.id)) || optimistic;
     if (failed) deployList = [restored, ...deployList.filter((item) => item.id !== restored.id)];
     const destination = actionView(d.id);
-    if (destination === "target") {
-      deployTab = deploymentTab(restored, appState.me?.user);
-      activeDeploy = restored;
-      await openDeploy(restored);
-    } else if (destination === "list") {
-      deployTab = deploymentTab(restored, appState.me?.user);
-      activeDeploy = null;
-      drawDeploysPage();
-    } else {
-      drawCurrentDeployView();
-    }
+    if (destination === "target" || destination === "list") deployTab = deploymentTab(restored, appState.me?.user);
+    if (destination === "target") await openDeploy(restored);
+    else drawCurrentDeployView();
   } catch (error) {
     deployFailed(d, errMessage(error, "Could not restore deployment."));
   }
@@ -695,21 +644,10 @@ function undoToast(toast: { deployment: DeploymentView; text: string; undo?: boo
   </div>`;
 }
 
-async function refreshDeployments(): Promise<"updated" | "failed" | "superseded"> {
-  const seq = ++deployRefreshSeq;
-  try {
-    const response = await api<{ deployments?: DeploymentView[] }>("/api/deployments");
-    if (seq !== deployRefreshSeq) return "superseded";
-    deployList = response.deployments ?? [];
-    listNotice = "";
-    return "updated";
-  } catch (error) {
-    if (seq !== deployRefreshSeq) return "superseded";
-    listNotice = errMessage(error, "Failed to load apps.");
-    return "failed";
-  } finally {
-    if (seq === deployRefreshSeq) deployLoading = false;
-  }
+function refreshDeployments(): Promise<boolean> {
+  return page.refresh(async () => {
+    deployList = (await api<{ deployments?: DeploymentView[] }>("/api/deployments")).deployments ?? [];
+  }, "Failed to load apps.");
 }
 
 export async function renderDeploys(): Promise<void> {
@@ -722,8 +660,8 @@ export async function renderDeploys(): Promise<void> {
   page.adoptScope();
   const seq = appState.viewRenderSeq;
   await ensureContexts();
-  deployLoading = deployList.length === 0;
-  listNotice = "";
+  page.loading = deployList.length === 0;
+  page.notice = "";
   drawDeploysPage();
   await refreshDeployments();
   if (seq !== appState.viewRenderSeq || appState.currentView !== "deploys") return;

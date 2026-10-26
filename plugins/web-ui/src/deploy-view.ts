@@ -32,10 +32,6 @@ export function deploymentCanManage(d: DeploymentView): boolean {
   return d.permission === "write";
 }
 
-export function deploymentContextScope(d: DeploymentView): string | undefined {
-  return d.createdInScope ?? d.ownerScopeId;
-}
-
 export function deploymentInScope(d: DeploymentView, scope: string | null): boolean {
   return !scope || d.createdInScope === scope || d.ownerScopeId === scope;
 }
@@ -58,12 +54,6 @@ export function deploymentTab(d: DeploymentView, viewer: string | undefined): De
   if (!viewer) return "shared";
   if (d.ownerScopeId === `personal:${viewer}`) return "yours";
   return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer ? "yours" : "shared";
-}
-
-export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
-  if (tab === "shared") return "No apps shared with you.";
-  if (tab === "archived") return "Nothing archived.";
-  return "No apps of your own yet.";
 }
 
 export function filterDeployments(
