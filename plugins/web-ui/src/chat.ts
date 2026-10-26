@@ -1,6 +1,6 @@
 import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
-import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
+import { assistantSidebar, messageRow, userBubble } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
@@ -278,7 +278,7 @@ export function createChatSurface(
     ctx.composer.state.error = message;
   });
   let pendingFork: { index: number } | null = null;
-  const transcriptViewport = createTranscriptViewport({ pinPrompt: pinLatestPrompt });
+  const transcriptViewport = createTranscriptViewport({ pinPrompt: () => !ctx.inbox && pinLatestPrompt() });
   const stopPrefsWatch = onChatPrefsChange(() => transcriptViewport.refresh());
   let preserveConnectionScroll = isConnectionReturn();
   let connectionReturnMessageCount: number | null = null;
@@ -1668,12 +1668,6 @@ export function createChatSurface(
     return tpl;
   }
 
-  function messageRow(cls: string, index: number, seqs: number[], body: TemplateResult): TemplateResult {
-    return html`<article class="message-row ${cls}" data-index=${index} data-entry-seqs=${seqs.join(" ")}>
-      ${body}
-    </article>`;
-  }
-
   function chatMessage(
     message: AgentMessage,
     index: number,
@@ -1707,34 +1701,17 @@ export function createChatSurface(
             </button>
           </div>`
         : nothing;
-      if (ctx.inbox)
-        return assistantMessage({
-          role: "human",
-          text: `${text}${revision ? ` (${revision})` : ""}`,
-          index,
-          entrySeqs: seqs.join(" "),
-          before,
-          after: failure,
-          meta: messageMeta(message, index),
-        });
       return messageRow(
         `user-row ${speaker ? "named-user-row" : ""} ${m.steered ? "steered-row" : ""}`,
         index,
         seqs,
         html`${before}
-          <div
-            class="message-bubble user-bubble ${m.deleted ? "deleted-bubble" : ""}"
-            ?hidden=${!text.trim() && !revision}
-          >
-            <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(text) : markdown(text)}
-              ${revision ? html`<span class="revision-badge">(${revision})</span>` : nothing}
-            </div>
-            <button class="pin-toggle" type="button" hidden aria-expanded="false">
-              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
-            </button>
-          </div>
-          ${failure} ${messageMeta(message, index)}`,
+        ${userBubble(isReadOnlySlackView() ? slackWireBubble(text) : markdown(text), {
+          hidden: !text.trim() && !revision,
+          deleted: m.deleted,
+          revision,
+        })}
+        ${failure} ${messageMeta(message, index)}`,
       );
     }
     if (m.role === "approval-decision") {
@@ -1789,15 +1766,6 @@ export function createChatSurface(
     ${assistantFileList(msg.deliveredFiles)}
     ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`;
     const meta = isStreaming ? nothing : messageMeta(msg, index);
-    if (ctx.inbox)
-      return assistantMessage({
-        role: "agent",
-        index,
-        entrySeqs: shownSeqs.join(" "),
-        streaming: isStreaming,
-        content: body,
-        meta,
-      });
     return messageRow(
       `assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}`,
       index,

@@ -76,9 +76,14 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     const text = "Summarize this inbox\nKeep it brief.";
     conversation.state.agent.state.messages = [{ role: "user", content: text, timestamp: 100 }];
     conversation.redraw();
-    assert.equal(sidebar.querySelector(".inbox-chat-msg.human .inbox-chat-text")?.textContent, text);
-    assert.equal(sidebar.querySelector(".user-row, .pin-toggle"), null);
+    const bubble = sidebar.querySelector<HTMLElement & { content: string }>(
+      ".user-row > .user-bubble > .pin-content > qm-markdown",
+    );
+    assert.equal(bubble?.content, text);
+    assert.equal(sidebar.querySelector(".user-row.latest-prompt"), null);
     assert.ok(sidebar.querySelector('[aria-label="Copy message"]'));
+    conversation.state.agent.state.messages = [];
+    conversation.redraw();
     assert.ok(sidebar.querySelector(".inbox-chat-composer .composer-wrap"));
     const count = allConversations().length;
     host.replaceChildren();
@@ -102,8 +107,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
 test("shared sidebar prompts follow thread state and whole inbox context", async () => {
   const { vite, host, close } = await createInboxFixture();
   try {
-    const { assistantPrompts, assistantSidebar, assistantMessage } =
-      await vite.ssrLoadModule("/src/assistant-sidebar.ts");
+    const { assistantPrompts, assistantSidebar, threadMessage } = await vite.ssrLoadModule("/src/assistant-sidebar.ts");
     const { render, html } = await vite.ssrLoadModule("lit");
     const thread = { kind: "thread", source: "gmail", hasDraft: true, sent: false, resolved: false };
     assert.deepEqual(assistantPrompts(thread), ["Make it shorter", "Make it more friendly", "Remove the salutations"]);
@@ -130,22 +134,19 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
       render(
         assistantSidebar({
           context,
-          messages: assistantMessage({ role: "human", text: "Keep it short.\nTwo lines." }),
+          messages: threadMessage({ role: "system", text: "Keep it short." }, 0),
           composer: html`<textarea></textarea>`,
           showPrompts: true,
           onPrompt: (prompt: string) => clicked.push(prompt),
         }),
         host,
       );
-      assert.equal(host.querySelector(".inbox-chat-text")!.textContent, "Keep it short.\nTwo lines.");
+      assert.equal(host.querySelector(".system-note-row .system-note-text")!.textContent, "Keep it short.");
       host.querySelector<HTMLButtonElement>(".inbox-chat-suggestion")!.click();
       assert.deepEqual(clicked, [assistantPrompts(context)[0]]);
       classes.push([...new Set([...host.querySelectorAll("[class]")].map((element) => element.className))].join("|"));
     }
     assert.equal(classes[0], classes[1]);
-    render(assistantMessage({ role: "human", text: "", before: html`<a>Attachment</a>` }), host);
-    assert.equal(host.querySelector<HTMLElement>(".inbox-chat-text")!.hidden, true);
-    assert.equal(host.querySelector("a")!.textContent, "Attachment");
   } finally {
     await close();
   }
