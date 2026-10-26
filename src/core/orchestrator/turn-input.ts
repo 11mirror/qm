@@ -1,3 +1,11 @@
+import type { TurnCtx } from "./turn-context.ts";
+import { ProjectRosterChanged } from "./admit.ts";
+import type { InboundScreen } from "./inbound-screen.ts";
+import type { frameTurnPrompt } from "./turn-prompt.ts";
+import type { buildTurnTools } from "./turn-tools.ts";
+import type { SecurityClassifier } from "./security-screen.ts";
+import type { Session } from "../../types.ts";
+import { MAX_TURN_DOCUMENTS } from "../document-inputs.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import {
   documentText,
@@ -10,7 +18,7 @@ import { type PendingApprovalRecord } from "../../types.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { recentPrincipalDeliveryNote } from "../../surfaces/recent-dm-posts.ts";
 import type { Lease } from "../../sessions/session-store.ts";
-import { isOverheard, isUserMessage, type Item } from "../../sessions/items.ts";
+import { isOverheard, isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { isPollSurface } from "../../triggers/run-trigger.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, unscreenedNotice, type SecurityScreenVerdict } from "../../security/security-posture.ts";
@@ -18,6 +26,8 @@ import { skillsIndex } from "../../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../../onboarding/onboarding.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import {
+  environmentNote,
+  inboundIssuesNote,
   inboundIssueList,
   inboundManifest,
   materializeInbound,
@@ -38,15 +48,6 @@ import type { OrchestratorDeps } from "./types.ts";
 import { completedSurfaceEnqueues } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
-
-import type { TurnCtx } from "./turn-context.ts";
-import { ProjectRosterChanged } from "./admit.ts";
-import { MAX_TURN_DOCUMENTS } from "../document-inputs.ts";
-import type { InboundScreen } from "./inbound-screen.ts";
-import type { frameTurnPrompt } from "./turn-prompt.ts";
-import type { buildTurnTools } from "./turn-tools.ts";
-import type { SecurityClassifier } from "./security-screen.ts";
-import type { Session } from "../../types.ts";
 
 export async function prepareTurnInput(
   ctx: TurnCtx,
@@ -373,4 +374,25 @@ export async function prepareTurnInput(
     continueTurn,
     isPollFire,
   };
+}
+
+export function turnFailureUserItem(
+  ctx: TurnCtx,
+  inboundIssues: Awaited<ReturnType<typeof prepareTurnInput>>["inboundIssues"],
+): NewItem<"UserMessage"> | undefined {
+  const { input, actor, humanInput, messageTs, entryTs } = ctx;
+  return input.text.trim() || inboundIssues.length
+    ? {
+        kind: "UserMessage",
+        text: input.text,
+        externalId: messageTs ?? entryTs ?? null,
+        author: actor.id,
+        body: {
+          ...(inboundIssues.length ? { environment: environmentNote(inboundIssuesNote(inboundIssues)) } : {}),
+          ...(humanInput ? { speakerId: actor.id } : {}),
+          ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+          ...(input.displayText?.trim() ? { display: input.displayText } : {}),
+        },
+      }
+    : undefined;
 }

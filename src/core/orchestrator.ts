@@ -1,6 +1,5 @@
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
-import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
@@ -9,13 +8,12 @@ import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-p
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { environmentNote, inboundIssuesNote } from "./attachments.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { personKey } from "../directory/person.ts";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { admitTurn } from "./orchestrator/admit.ts";
-import { acquireTurnLeaseOrRefuse } from "./orchestrator/turn-lease.ts";
+import { holdTurnLease } from "./orchestrator/turn-lease.ts";
 import { openTurnSession, resolveTurnScope, resolveTurnWorkspace } from "./orchestrator/turn-context.ts";
 import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
@@ -24,8 +22,8 @@ import { concludeTurn, mapTurnFailure, settleTurnResult } from "./orchestrator/s
 import { detectAmbientDecline, findRecordedTurn, replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import { openTurnSandboxes } from "./orchestrator/turn-sandboxes.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
-import { buildTurnTools } from "./orchestrator/turn-tools.ts";
-import { prepareTurnInput } from "./orchestrator/turn-input.ts";
+import { buildTurnTools, firstAckPublisher } from "./orchestrator/turn-tools.ts";
+import { prepareTurnInput, turnFailureUserItem } from "./orchestrator/turn-input.ts";
 import { selectTurnRuntime } from "./orchestrator/turn-runtime.ts";
 import { createHarnessSegment, runSegments, type TurnRunState } from "./orchestrator/turn-segment.ts";
 import {
@@ -36,9 +34,7 @@ import {
 import { createSessionTitles } from "./session-title.ts";
 import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
-import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
-import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -54,7 +50,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       `session lease TTL ${deps.sessions.leaseTtlMs}ms is below the ${MIN_SESSION_LEASE_TTL_MS}ms floor the turn keepalive needs`,
     );
   }
-  const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
   const transcripts = createTranscriptSource(deps.sessions);
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
@@ -214,9 +209,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         automatedTurn,
         ambientTurn,
         sessionTurn,
-        humanInput,
-        messageTs,
-        entryTs,
         delegatedSession,
         withManagedRosterVersion,
         mirrorRunActivity,
@@ -325,42 +317,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         emitGapWork,
       });
       const { provision, reclaimBox } = sandboxes;
-      const leaseStart = Date.now();
-      const acquired = await acquireTurnLeaseOrRefuse(deps, {
-        sessionId: session.id,
-        site: "turn",
-        scopeId,
-        automated: automatedTurn,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.turnFenceToken ? { fenceToken: input.turnFenceToken } : {}),
-        ...(input.surface ? { surface: input.surface } : {}),
-      });
-      if (!acquired.lease) return acquired.refusal;
-      const lease = acquired.lease;
-      if (!ambientTurn) assignSessionTitle();
-      const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
-      const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
-      const catchUpMessageRevisions = async (): Promise<void> => {
-        if (!trackRevisions || !deps.surfaceCache) return;
-        await reconcileMessageRevisions({
-          sessions: deps.sessions,
-          surfaceCache: deps.surfaceCache,
-          lease,
-          session,
-          anchorAt: revisionAnchor,
-          fallbackSince: leaseStart,
-          ...(messageTs ? { triggerTs: messageTs } : {}),
-        }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
-      };
+      const held = await holdTurnLease(ctx, { session, run });
+      if ("refused" in held) return held.refused;
+      const { lease, turnAbort, catchUpMessageRevisions, stopLeaseKeepalive, leaseState } = held;
       let tailOwnsCleanup = false;
-      let leaseReleased = false;
-      const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
-      const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
-        progress: () => run.turnProgress,
-        onStalled: () => turnAbort.abort(),
-      });
+      if (!ambientTurn) assignSessionTitle();
       try {
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
@@ -458,35 +419,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           captureDependencies,
           blobTransfer,
         });
-        const { spine, spineFirst, postProvenance, turnKey, surfaceToolDeps, attachStaging } = turnTools;
-        const publishFirstAck = (deliberatePost: boolean) => {
-          if (
-            !input.runId ||
-            !input.addressed ||
-            sessionTurn ||
-            isPollFire ||
-            !spineFirst.open ||
-            resume ||
-            approvalReplay
-          )
-            return;
-          spineFirst.open = false;
-          const ack = spineFirst.block.trim();
-          if (deliberatePost || !ack || !defaultDestination || !deps.outbound) return;
-          spineFirst.ackText = ack;
-          const runId = input.runId;
-          const ackKey = `ack:${turnKey}`;
-          void reachPost({
-            outbound: deps.outbound,
-            destination: defaultDestination,
-            text: ack,
-            idempotencyKey: ackKey,
-            provenance: postProvenance(ackKey),
-          })
-            .then(() => deps.turnStream?.markSurfacePosted(runId))
-            .catch(swallowAs("orchestrator: first-block ack", undefined));
-        };
-
+        const { spine, surfaceToolDeps, attachStaging } = turnTools;
         const prepared = await prepareTurnInput(ctx, {
           screen: screened.screen,
           strictReadOnly,
@@ -513,24 +446,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         run.remainingDocumentCount = prepared.remainingDocumentCount;
         run.remainingDocumentTokens = prepared.remainingDocumentTokens;
         const { inboundIssues, partial, approvalReplay, resume, turnInput, isPollFire } = prepared;
+        const publishFirstAck = firstAckPublisher(ctx, {
+          turnTools,
+          defaultDestination,
+          isPollFire,
+          resume,
+          approvalReplay,
+        });
         const turnStart = Date.now();
         const emittedEntries: Item[] = [];
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
-        run.failureUserItem =
-          !syntheticPrompt && (input.text.trim() || inboundIssues.length)
-            ? {
-                kind: "UserMessage",
-                text: input.text,
-                externalId: messageTs ?? entryTs ?? null,
-                author: actor.id,
-                body: {
-                  ...(inboundIssues.length ? { environment: environmentNote(inboundIssuesNote(inboundIssues)) } : {}),
-                  ...(humanInput ? { speakerId: actor.id } : {}),
-                  ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
-                  ...(input.displayText?.trim() ? { display: input.displayText } : {}),
-                },
-              }
-            : undefined;
+        run.failureUserItem = syntheticPrompt ? undefined : turnFailureUserItem(ctx, inboundIssues);
         const selected = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
         const { restoredRuntime } = selected;
         const runHarnessSegment = createHarnessSegment(ctx, {
@@ -626,7 +552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tailOwnsCleanup = true;
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
-          leaseReleased = true;
+          leaseState.released = true;
           void tail().catch(swallowAs("orchestrator: background tail", undefined));
         } else {
           await tail();
@@ -640,7 +566,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.runId) deps.turnStream?.end(input.runId);
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
-        if (!leaseReleased) {
+        if (!leaseState.released) {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }

@@ -1,3 +1,9 @@
+import type { TurnCtx } from "./turn-context.ts";
+import type { TurnRunState } from "./turn-segment.ts";
+import type { Session } from "../../types.ts";
+import { startLeaseKeepalive } from "./lease-keepalive.ts";
+import { reconcileMessageRevisions, revisionAnchorAt } from "../message-revisions.ts";
+import { swallowAs } from "../../util/errors.ts";
 import type { Lease, LeaseAttempt } from "../../sessions/session-store.ts";
 import { acquireLeaseWithin } from "../../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "../failure-copy.ts";
@@ -101,4 +107,62 @@ export async function acquireTurnLeaseOrRefuse(
       reason: args.automated ? SESSION_BUSY_FIRE_TEXT : SESSION_BUSY_USER_TEXT,
     },
   };
+}
+
+export async function holdTurnLease(
+  ctx: TurnCtx,
+  turn: { session: Session; run: TurnRunState },
+): Promise<
+  | { refused: TurnResult }
+  | {
+      lease: Lease;
+      turnAbort: AbortController;
+      catchUpMessageRevisions: () => Promise<void>;
+      stopLeaseKeepalive: () => void;
+      leaseState: { released: boolean };
+    }
+> {
+  const { deps, input, automatedTurn, scopeId, messageTs } = ctx;
+  const { session, run } = turn;
+  const leaseStart = Date.now();
+  const acquired = await acquireTurnLeaseOrRefuse(deps, {
+    sessionId: session.id,
+    site: "turn",
+    scopeId,
+    automated: automatedTurn,
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.turnFenceToken ? { fenceToken: input.turnFenceToken } : {}),
+    ...(input.surface ? { surface: input.surface } : {}),
+  });
+  if (!acquired.lease) return { refused: acquired.refusal };
+  const lease = acquired.lease;
+  const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
+  const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+  const catchUpMessageRevisions = async (): Promise<void> => {
+    if (!trackRevisions || !deps.surfaceCache) return;
+    await reconcileMessageRevisions({
+      sessions: deps.sessions,
+      surfaceCache: deps.surfaceCache,
+      lease,
+      session,
+      anchorAt: revisionAnchor,
+      fallbackSince: leaseStart,
+      ...(messageTs ? { triggerTs: messageTs } : {}),
+    }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
+  };
+  const leaseState = { released: false };
+  const turnAbort = new AbortController();
+  if (input.cancel?.aborted) turnAbort.abort();
+  else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+  const stopLeaseKeepalive = startLeaseKeepalive(
+    deps.sessions,
+    lease,
+    Math.floor(deps.sessions.leaseTtlMs / 3),
+    () => leaseState.released,
+    {
+      progress: () => run.turnProgress,
+      onStalled: () => turnAbort.abort(),
+    },
+  );
+  return { lease, turnAbort, catchUpMessageRevisions, stopLeaseKeepalive, leaseState };
 }

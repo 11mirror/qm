@@ -1,11 +1,17 @@
+import type { TurnCtx } from "./turn-context.ts";
+import type { ApprovalLedger } from "./approvals.ts";
+import type { buildCredentialCatalog } from "./credential-catalog.ts";
+import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { Session } from "../../types.ts";
+import type { MemoryProvenance } from "../../memory/facts.ts";
 import { createAdminCall } from "../../tools/admin.ts";
 import { externalTools } from "./external-tools.ts";
-import { type DeliveryProvenance, type ScopeId } from "../../types.ts";
+import { type DeliveryProvenance, type Destination, type ScopeId } from "../../types.ts";
 import { scopeId as toScopeId, personalScope } from "../../types.ts";
 import { desktopClientForTurn } from "../turn-origin.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { resolveReachableChannel } from "../../resolution/scope-reach.ts";
+import { reachPost } from "../../reach/reach.ts";
 import { turnPostProvenance } from "../../surfaces/outbound.ts";
 import { supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../../connectors/background-exec-broker.ts";
@@ -19,19 +25,13 @@ import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
 import { defaultPublishAudience } from "../../resolution/publish-audience.ts";
 import { type ArtifactRegistration } from "../attachments.ts";
-import { errMessage, swallow } from "../../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
 import { turnPostKeys } from "./turn-helpers.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./surface-tools.ts";
 import { createAttachStaging } from "./attach-tool.ts";
-
-import type { TurnCtx } from "./turn-context.ts";
-import type { ApprovalLedger } from "./approvals.ts";
-import type { buildCredentialCatalog } from "./credential-catalog.ts";
-import type { frameTurnPrompt } from "./turn-prompt.ts";
-import type { MemoryProvenance } from "../../memory/facts.ts";
 
 export async function buildTurnTools(
   ctx: TurnCtx,
@@ -431,5 +431,39 @@ export async function buildTurnTools(
     surfaceToolDeps,
     attachStaging,
     tools,
+  };
+}
+
+export function firstAckPublisher(
+  ctx: TurnCtx,
+  turn: {
+    turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
+    defaultDestination: Destination | undefined;
+    isPollFire: boolean;
+    resume: unknown;
+    approvalReplay: boolean;
+  },
+): (deliberatePost: boolean) => void {
+  const { deps, input, sessionTurn } = ctx;
+  const { spineFirst, postProvenance, turnKey } = turn.turnTools;
+  const { defaultDestination, isPollFire, resume, approvalReplay } = turn;
+  return (deliberatePost: boolean) => {
+    if (!input.runId || !input.addressed || sessionTurn || isPollFire || !spineFirst.open || resume || approvalReplay)
+      return;
+    spineFirst.open = false;
+    const ack = spineFirst.block.trim();
+    if (deliberatePost || !ack || !defaultDestination || !deps.outbound) return;
+    spineFirst.ackText = ack;
+    const runId = input.runId;
+    const ackKey = `ack:${turnKey}`;
+    void reachPost({
+      outbound: deps.outbound,
+      destination: defaultDestination,
+      text: ack,
+      idempotencyKey: ackKey,
+      provenance: postProvenance(ackKey),
+    })
+      .then(() => deps.turnStream?.markSurfacePosted(runId))
+      .catch(swallowAs("orchestrator: first-block ack", undefined));
   };
 }
