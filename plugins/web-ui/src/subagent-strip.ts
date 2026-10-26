@@ -1,3 +1,4 @@
+import { reportHandledError } from "./browser-errors";
 import type { ConvCtx } from "./conv-types";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -65,7 +66,10 @@ export function createSubagentStrip({
   }
 
   async function refreshSubagentPeek(id: string): Promise<void> {
-    const page = await fetchTranscript(id, { tailTurns: 1 }).catch(() => null);
+    const page = await fetchTranscript(id, { tailTurns: 1 }).catch((error: unknown) => {
+      reportHandledError("web:subagent_peek", error);
+      return null;
+    });
     if (subagentUi.peekId !== id) return;
     subagentUi.peek = page ? peekLines(page.items) : [];
     drawActiveChat();

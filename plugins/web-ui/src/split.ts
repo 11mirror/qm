@@ -1,3 +1,4 @@
+import { reportHandledError } from "./browser-errors";
 import { openSessionShare } from "./session-share";
 import { preserveTranscriptScroll } from "./transcript-viewport";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
@@ -292,7 +293,8 @@ function ensureCanvas(): boolean {
     } else if (seed) {
       dockApi.fromJSON(seed);
     }
-  } catch {
+  } catch (error) {
+    reportHandledError("web:split_layout_restore", error);
     disposeDock();
     canvasHost.replaceChildren();
     lastLayout = null;
