@@ -229,7 +229,7 @@ Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CO
 `CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
-`PORTAL_SESSION_TTL_S`. A session's total life from authentication is capped at the larger of 30 days and `PORTAL_SESSION_TTL_S`.
+`PORTAL_SESSION_TTL_S`. A session's total life from authentication is capped at the larger of 30 days and three times `PORTAL_SESSION_TTL_S`.
 There is no `PORTAL_ADMIN_PRINCIPALS` — admin
 access is derived from the core (see the security model above).
 `PORTAL_API_ALLOWED_ORIGINS` (default empty) opens the chat API to other first-party origins;

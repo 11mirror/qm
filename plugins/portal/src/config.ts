@@ -20,7 +20,7 @@ export const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 
 export const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 
-export const SESSION_MAX_TTL_S = Math.max(2592000, SESSION_TTL_S);
+export const SESSION_MAX_TTL_S = Math.max(2592000, 3 * SESSION_TTL_S);
 
 export const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 
