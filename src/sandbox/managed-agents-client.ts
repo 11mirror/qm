@@ -46,7 +46,6 @@ export interface ManagedAgentsSession {
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   createCheckpoint(label?: string): Promise<ManagedAgentsCheckpoint>;
-  deleteCheckpoint(checkpointId: string): Promise<void>;
   close(): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
@@ -54,16 +53,17 @@ export interface ManagedAgentsSession {
 }
 
 export class ManagedAgentsSandboxGoneError extends Error {
-  constructor(sessionId: string, detail: string) {
-    super(`do-managed-agents session ${sessionId} is gone: ${detail}`);
+  constructor(sessionId: string, detail: string, options?: ErrorOptions) {
+    super(`do-managed-agents session ${sessionId} is gone: ${detail}`, options);
     this.name = "ManagedAgentsSandboxGoneError";
   }
 }
 
 export class ManagedAgentsCommandLostError extends Error {
-  constructor(sessionId: string, detail: string) {
+  constructor(sessionId: string, detail: string, options?: ErrorOptions) {
     super(
       `do-managed-agents session ${sessionId} was lost while a command was running (${detail}); the command may have partially executed and was not retried`,
+      options,
     );
     this.name = "ManagedAgentsCommandLostError";
   }
@@ -88,6 +88,7 @@ export interface ManagedAgentsClient {
   connect(sessionId: string): Promise<ManagedAgentsSession>;
   list(name: string): Promise<ManagedAgentsSessionSummary[]>;
   rollback(sessionId: string, checkpointId: string): Promise<ManagedAgentsSessionInfo>;
+  deleteCheckpoint(sessionId: string, checkpointId: string): Promise<void>;
   kill(sessionId: string): Promise<void>;
 }
 
@@ -120,7 +121,6 @@ const DOWNLOAD_CHUNK_BYTES = 256 * 1024;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 30_000;
 const GRPC_NOT_FOUND = 5;
-const GRPC_INTERNAL = 13;
 const GRPC_UNAVAILABLE = 14;
 
 const PROTO_PATH = fileURLToPath(new URL("./managed-agents-sandbox-agent.proto", import.meta.url));
@@ -159,15 +159,14 @@ export function managedAgentsManifest(opts: {
   idleTimeoutSec?: number;
   egressAllow?: readonly string[];
 }): string {
-  const lines = [`name: ${JSON.stringify(opts.name)}`, `agent: ${JSON.stringify(AGENT)}`];
-  if (opts.template) lines.push(`template: ${JSON.stringify(opts.template)}`);
-  if (opts.idleTimeoutSec) lines.push(`idle_timeout: ${JSON.stringify(`${opts.idleTimeoutSec}s`)}`);
-  if (opts.egressAllow?.length) {
-    lines.push("egress:");
-    for (const host of opts.egressAllow) lines.push(`  - ${JSON.stringify(host)}`);
-  }
-  lines.push("permissions:", "  default: allow", "  rules:", "    - tool: bash", "      action: allow");
-  return `${lines.join("\n")}\n`;
+  return JSON.stringify({
+    name: opts.name,
+    agent: AGENT,
+    ...(opts.template ? { template: opts.template } : {}),
+    ...(opts.idleTimeoutSec ? { idle_timeout: `${opts.idleTimeoutSec}s` } : {}),
+    ...(opts.egressAllow?.length ? { egress: opts.egressAllow } : {}),
+    permissions: { default: "allow", rules: [{ tool: "bash", action: "allow" }] },
+  });
 }
 
 interface WireSession {
@@ -220,6 +219,9 @@ const isGuestGone = (err: unknown): boolean => {
   const code = grpcCode(err);
   return code === GRPC_NOT_FOUND || code === GRPC_UNAVAILABLE;
 };
+
+const isMissingFile = (err: unknown): boolean =>
+  grpcCode(err) === GRPC_NOT_FOUND || /\bdownload status 404\b/.test((err as GrpcCallError).details ?? "");
 
 type ProtoLoader = typeof import("@grpc/proto-loader");
 type Grpc = typeof import("@grpc/grpc-js");
@@ -460,7 +462,9 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         } catch (e) {
           const detail = tunnel.lastFailure() ?? errMessage(e);
           await tunnel.close();
-          throw new ManagedAgentsSandboxGoneError(sessionId, `guest unreachable over the port-forward: ${detail}`);
+          throw new ManagedAgentsSandboxGoneError(sessionId, `guest unreachable over the port-forward: ${detail}`, {
+            cause: e,
+          });
         }
       })().catch((e: unknown) => {
         guest = null;
@@ -495,7 +499,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         }) as (arg: never) => void);
         stream.on("error", ((err: unknown) => {
           settle(() => {
-            if (grpcCode(err) === GRPC_NOT_FOUND) {
+            if (isMissingFile(err)) {
               resolve(null);
               return;
             }
@@ -503,7 +507,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
             void disconnect();
             reject(
               grpcCode(err) === GRPC_UNAVAILABLE
-                ? new ManagedAgentsSandboxGoneError(sessionId, detail)
+                ? new ManagedAgentsSandboxGoneError(sessionId, detail, { cause: err })
                 : new Error(`do-managed-agents download ${absPath} failed: ${detail}`, { cause: err }),
             );
           });
@@ -526,7 +530,6 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
           const out: Buffer[] = [];
           const errOut: Buffer[] = [];
           let outBytes = 0;
-          let errBytes = 0;
           let exit: { exit_code?: number; hitl_rejected?: boolean } | undefined;
           let settled = false;
           let quietSince = Date.now();
@@ -559,13 +562,15 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
 
           stream.on("data", ((frame: ExecOutputFrame) => {
             quietSince = Date.now();
-            if (frame.stdout && outBytes < MAX_EXEC_OUTPUT_BYTES) {
-              out.push(frame.stdout);
-              outBytes += frame.stdout.length;
-            }
-            if (frame.stderr && errBytes < MAX_EXEC_OUTPUT_BYTES) {
-              errOut.push(frame.stderr);
-              errBytes += frame.stderr.length;
+            if (frame.stdout) out.push(frame.stdout);
+            if (frame.stderr) errOut.push(frame.stderr);
+            outBytes += (frame.stdout?.length ?? 0) + (frame.stderr?.length ?? 0);
+            if (outBytes > MAX_EXEC_OUTPUT_BYTES) {
+              settle(() => {
+                stream.cancel();
+                reject(new Error(`do-managed-agents exec ${sessionId}: output exceeds ${MAX_EXEC_OUTPUT_BYTES} bytes`));
+              });
+              return;
             }
             if (frame.exit) exit = frame.exit;
           }) as (arg: never) => void);
@@ -576,8 +581,8 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
               void disconnect();
               reject(
                 isGuestGone(err)
-                  ? new ManagedAgentsCommandLostError(sessionId, detail)
-                  : new Error(`do-managed-agents exec failed: ${detail}`),
+                  ? new ManagedAgentsCommandLostError(sessionId, detail, { cause: err })
+                  : new Error(`do-managed-agents exec failed: ${detail}`, { cause: err }),
               );
             });
           }) as (arg: never) => void);
@@ -613,16 +618,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         });
       },
 
-      async readFileBytes(absPath): Promise<Uint8Array | null> {
-        try {
-          return await download(absPath);
-        } catch (err) {
-          if (grpcCode((err as { cause?: unknown }).cause) !== GRPC_INTERNAL) throw err;
-          const probe = await this.runCommand(`test -e '${absPath.replaceAll("'", "'\\''")}'`, { timeoutMs: 30_000 });
-          if (probe.exitCode === 1) return null;
-          throw err;
-        }
-      },
+      readFileBytes: download,
 
       async writeFileBytes(absPath, data): Promise<void> {
         const { agent } = await connect();
@@ -636,8 +632,8 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
             void disconnect();
             reject(
               isGuestGone(err)
-                ? new ManagedAgentsSandboxGoneError(sessionId, detail)
-                : new Error(`do-managed-agents upload ${absPath} failed: ${detail}`),
+                ? new ManagedAgentsSandboxGoneError(sessionId, detail, { cause: err })
+                : new Error(`do-managed-agents upload ${absPath} failed: ${detail}`, { cause: err }),
             );
           });
           stream.write({ header: { path: absPath, mode: 0o644, is_archive: false } });
@@ -672,14 +668,6 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
           status: captured.status,
           ...(Number.isFinite(createdAtMs) ? { createdAtMs } : {}),
         };
-      },
-
-      async deleteCheckpoint(checkpointId: string): Promise<void> {
-        await callJson<void>(
-          "DELETE",
-          `/v2/agents/sessions/${sessionId}/checkpoints/${encodeURIComponent(checkpointId)}`,
-          sessionId,
-        );
       },
 
       async close(): Promise<void> {
@@ -740,6 +728,14 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         name,
       );
       return (body.sessions ?? []).map(toSummary).filter((s) => s.name === name && !GONE_STATES.has(s.state));
+    },
+
+    async deleteCheckpoint(sessionId, checkpointId): Promise<void> {
+      await callJson<void>(
+        "DELETE",
+        `/v2/agents/sessions/${sessionId}/checkpoints/${encodeURIComponent(checkpointId)}`,
+        sessionId,
+      );
     },
 
     async kill(sessionId): Promise<void> {

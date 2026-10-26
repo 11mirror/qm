@@ -164,13 +164,13 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
       req.on("data", (c: Buffer) => (body += c.toString("utf8")));
       req.on("end", () => {
         manifests.push(body);
-        const name = /^name:\s*"?([^"\n]+)"?/m.exec(body)?.[1] ?? "unnamed";
+        const manifest = JSON.parse(body) as { name?: string; template?: string };
         const row: SessionRow = {
           session_id: randomUUID(),
           sandbox_id: `sbx-${rows.size + 1}`,
-          name,
+          name: manifest.name ?? "unnamed",
           status: "SESSION_STATUS_READY",
-          template: /^template:\s*"?([^"\n]+)"?/m.exec(body)?.[1] ?? "",
+          template: manifest.template ?? "",
           created_at: new Date().toISOString(),
         };
         rows.set(row.session_id, row);

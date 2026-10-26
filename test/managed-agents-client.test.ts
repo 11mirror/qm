@@ -54,32 +54,29 @@ test("the port-forward url targets sandbox-agent over wss", () => {
 });
 
 test("the manifest asks for a bare sandbox and pre-allows bash so Managed Agents never gates a command", () => {
-  const yaml = managedAgentsManifest({ name: "qm-personal-tester", template: "base" });
-  assert.match(yaml, /^name: "qm-personal-tester"$/m);
-  assert.match(yaml, /^agent: "none"$/m);
-  assert.match(yaml, /^template: "base"$/m);
-  assert.match(yaml, /tool: bash/);
-  assert.match(yaml, /action: allow/);
-  assert.doesNotMatch(yaml, /persistent_workspace/, "Managed Agents deprecated the key and warns when it is sent");
+  const manifest = JSON.parse(managedAgentsManifest({ name: "qm-personal-tester", template: "base" }));
+  assert.deepEqual(manifest, {
+    name: "qm-personal-tester",
+    agent: "none",
+    template: "base",
+    permissions: { default: "allow", rules: [{ tool: "bash", action: "allow" }] },
+  });
 });
 
 test("the manifest omits the template so Managed Agents lands a bare session on its own base", () => {
-  const yaml = managedAgentsManifest({ name: "n", template: "" });
-  assert.match(yaml, /^agent: "none"$/m);
-  assert.doesNotMatch(yaml, /^template:/m);
+  const manifest = JSON.parse(managedAgentsManifest({ name: "n", template: "" }));
+  assert.equal(manifest.agent, "none");
+  assert.equal("template" in manifest, false);
 });
 
 test("the manifest carries the idle timeout and the egress allowlist only when configured", () => {
-  const bare = managedAgentsManifest({ name: "n", template: "base" });
-  assert.doesNotMatch(bare, /idle_timeout:|egress:/);
-  const full = managedAgentsManifest({
-    name: "n",
-    template: "base",
-    idleTimeoutSec: 600,
-    egressAllow: ["proxy.example.com"],
-  });
-  assert.match(full, /^idle_timeout: "600s"$/m);
-  assert.match(full, /^ {2}- "proxy\.example\.com"$/m);
+  const bare = JSON.parse(managedAgentsManifest({ name: "n", template: "base" }));
+  assert.equal("idle_timeout" in bare || "egress" in bare, false);
+  const full = JSON.parse(
+    managedAgentsManifest({ name: "n", template: "base", idleTimeoutSec: 600, egressAllow: ["proxy.example.com"] }),
+  );
+  assert.equal(full.idle_timeout, "600s");
+  assert.deepEqual(full.egress, ["proxy.example.com"]);
 });
 
 test("the vendored proto is the client subset and carries nothing provider-internal", () => {
@@ -96,7 +93,7 @@ test("creating a session posts a yaml manifest and waits for ready", async () =>
   const s = await session("qm-create");
   assert.ok(s.sessionId);
   assert.equal(service.sessions().length, 1);
-  assert.match(service.manifests()[0] ?? "", /template: "base"/);
+  assert.equal(JSON.parse(service.manifests()[0] ?? "{}").template, "base");
   assert.equal(service.sessions()[0]?.template, "base");
 });
 
@@ -157,6 +154,11 @@ test("files round trip through the guest upload and download streams", async () 
   const read = await s.readFileBytes("/home/user/notes/a.txt");
   assert.ok(read);
   assert.equal(Buffer.from(read).toString("utf8"), "managed agents file payload");
+});
+
+test("exec output past the cap fails instead of returning a truncated result", async () => {
+  const s = await session("qm-overflow");
+  await assert.rejects(() => s.runCommand("head -c 17000000 /dev/zero"), /output exceeds 16777216 bytes/);
 });
 
 test("a missing file reads as null rather than an error", async () => {
@@ -243,7 +245,7 @@ test("create checkpoint posts to the session checkpoint route and returns the re
   assert.equal(stored[0]?.checkpoint_id, captured.checkpointId);
   assert.equal(stored[0]?.label, "qm teardown");
   assert.equal(stored[0]?.status, "READY");
-  await s.deleteCheckpoint(captured.checkpointId);
+  await client.deleteCheckpoint(s.sessionId, captured.checkpointId);
   assert.equal(service.checkpoints(s.sessionId).length, 0);
 });
 
