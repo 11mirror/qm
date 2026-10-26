@@ -123,7 +123,6 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: Item[];
   goal?: GoalRecord | null;
-  goalContinuation?: boolean;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
@@ -138,7 +137,6 @@ export interface HarnessTurnInput {
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
-  onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;

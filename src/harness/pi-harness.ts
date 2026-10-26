@@ -1132,6 +1132,32 @@ function removeIsolatedDirs(dirs: { agentDir: string; ephemeralCwd?: string }): 
   }
 }
 
+async function openAgentSession(
+  prefix: string,
+  systemPrompt: string,
+  options: Pick<
+    Parameters<typeof createAgentSession>[0] & object,
+    "model" | "modelRuntime" | "customTools" | "sessionManager" | "thinkingLevel"
+  >,
+): Promise<{ session: AgentSession; dirs: IsolatedResources }> {
+  const dirs = await createIsolatedResources(prefix, systemPrompt);
+  try {
+    const { resourceLoader, settingsManager, cwd, agentDir } = dirs;
+    const { session } = await createAgentSession({
+      ...options,
+      resourceLoader,
+      settingsManager,
+      noTools: "builtin",
+      cwd,
+      agentDir,
+    });
+    return { session, dirs };
+  } catch (err) {
+    removeIsolatedDirs(dirs);
+    throw err;
+  }
+}
+
 export interface ProviderKeys {
   anthropic?: string;
   openai?: string;
@@ -1292,23 +1318,14 @@ export async function oneShot(
   opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig; thinkingLevel?: LegacyThinkingLevel },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
-    prefix,
-    systemPrompt,
-  );
+  const { session, dirs } = await openAgentSession(prefix, systemPrompt, {
+    model,
+    modelRuntime,
+    customTools: [],
+    sessionManager: SessionManager.inMemory(),
+    ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+  });
   try {
-    const { session } = await createAgentSession({
-      model,
-      modelRuntime,
-      resourceLoader,
-      settingsManager,
-      customTools: [],
-      noTools: "builtin",
-      sessionManager: SessionManager.inMemory(),
-      ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
-      cwd,
-      agentDir,
-    });
     const messagesBefore = session.messages.length;
     if (opts?.signal?.aborted) return undefined;
     const onAbort = () => {
@@ -1328,7 +1345,7 @@ export async function oneShot(
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
-    removeIsolatedDirs({ agentDir, ephemeralCwd });
+    removeIsolatedDirs(dirs);
   }
 }
 
@@ -1565,7 +1582,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
-  ): Promise<{ entry: TurnSession }> {
+  ): Promise<TurnSession> {
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -1573,8 +1590,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
       reconstructed = null;
     }
-    const seedSource = reconstructed;
-    const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
+    const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
     const modelRuntime = await buildModelRuntime(
@@ -1582,111 +1598,93 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
-      tempDirPrefix,
-      composedPrompt,
-    );
+    const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
+      model,
+      modelRuntime,
+      customTools: tools,
+      sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
+    });
 
-    let session: AgentSession;
-    try {
-      ({ session } = await createAgentSession({
-        model,
-        modelRuntime,
-        resourceLoader,
-        settingsManager,
-        customTools: tools,
-        noTools: "builtin",
-        sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
-        cwd,
-        agentDir,
-      }));
-    } catch (err) {
-      removeIsolatedDirs({ agentDir, ephemeralCwd });
-      throw err;
-    }
-
-    if (seedPlan === "structured") {
+    if (seedPlan === "structured" || seedPlan === "priorTurns") {
+      const structured = seedPlan === "structured";
       try {
-        seedRawMessagesIntoSession(session, seedSource!);
+        seedRawMessagesIntoSession(
+          session,
+          structured ? reconstructed! : seedPriorTurns(priorTurns!, []).map(toPiMessage),
+        );
       } catch (err) {
-        console.error("[pi-harness] failed to seed reconstructed history (continuing without it):", errMessage(err));
-      }
-    } else if (seedPlan === "priorTurns") {
-      try {
-        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
-      } catch (err) {
-        console.error("[pi-harness] failed to seed prior turns (continuing without them):", errMessage(err));
+        console.error(
+          `[pi-harness] failed to seed ${structured ? "reconstructed history (continuing without it)" : "prior turns (continuing without them)"}:`,
+          errMessage(err),
+        );
       }
     }
 
-    {
-      const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
-      if (agent) {
-        const prior = agent.onPayload;
-        agent.onPayload = async (payload, model) => {
-          ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          (ref.modelDispatch ??= []).push({
-            start: Date.now(),
-            ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
-            ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-          });
-          ref.pendingPrepareNextTurn = undefined;
-          ref.pendingTransformContext = undefined;
-          applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const result = prior ? await prior(payload, model) : payload;
-          const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
-          let finalPayload = await withDocumentInputs(
-            result ?? payload,
-            model as DocumentModel,
-            ref.documents ?? [],
-            ref.abortSignal,
-            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+    const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
+    if (agent) {
+      const prior = agent.onPayload;
+      agent.onPayload = async (payload, model) => {
+        ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+        (ref.modelDispatch ??= []).push({
+          start: Date.now(),
+          ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
+          ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
+        });
+        ref.pendingPrepareNextTurn = undefined;
+        ref.pendingTransformContext = undefined;
+        applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+        applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+        const result = prior ? await prior(payload, model) : payload;
+        const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+        let finalPayload = await withDocumentInputs(
+          result ?? payload,
+          model as DocumentModel,
+          ref.documents ?? [],
+          ref.abortSignal,
+          ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+        );
+        const guarded = guardOutputBudget(finalPayload, model);
+        if (guarded.kind === "raised") {
+          console.error(
+            `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
           );
-          const guarded = guardOutputBudget(finalPayload, model);
-          if (guarded.kind === "raised") {
-            console.error(
-              `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-            );
-          }
-          try {
-            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
-            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
-          } catch (e) {
-            swallow("pi: request byte budget", e);
-          }
-          if (captureRequests) ref.llmCapture?.push(capturedPayload!);
-          return finalPayload;
-        };
-        const priorResponse = agent.onResponse;
-        agent.onResponse = async (response, model) => {
-          const last = ref.modelDispatch?.at(-1);
-          if (last && last.first === undefined) last.first = Date.now();
-          if (priorResponse) await priorResponse(response, model);
-        };
-        const priorTransform = agent.transformContext;
-        agent.transformContext = async (messages, signal) => {
-          ref.pendingTransformContext = Date.now();
-          return priorTransform ? await priorTransform(messages, signal) : messages;
-        };
-        agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
-        const priorPrepare = agent.prepareNextTurn;
-        agent.prepareNextTurn = async (signal) => {
-          ref.pendingPrepareNextTurn = Date.now();
-          return priorPrepare ? await priorPrepare(signal) : undefined;
-        };
-      }
+        }
+        try {
+          const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+        } catch (e) {
+          swallow("pi: request byte budget", e);
+        }
+        if (captureRequests) ref.llmCapture?.push(capturedPayload!);
+        return finalPayload;
+      };
+      const priorResponse = agent.onResponse;
+      agent.onResponse = async (response, model) => {
+        const last = ref.modelDispatch?.at(-1);
+        if (last && last.first === undefined) last.first = Date.now();
+        if (priorResponse) await priorResponse(response, model);
+      };
+      const priorTransform = agent.transformContext;
+      agent.transformContext = async (messages, signal) => {
+        ref.pendingTransformContext = Date.now();
+        return priorTransform ? await priorTransform(messages, signal) : messages;
+      };
+      agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+      const priorPrepare = agent.prepareNextTurn;
+      agent.prepareNextTurn = async (signal) => {
+        ref.pendingPrepareNextTurn = Date.now();
+        return priorPrepare ? await priorPrepare(signal) : undefined;
+      };
     }
 
-    const entry: TurnSession = {
+    return {
       agentSession: session,
       ref,
       composedPromptTokens: countTokens(composedPrompt),
-      cwd,
-      agentDir,
-      ...(ephemeralCwd ? { ephemeralCwd } : {}),
+      cwd: dirs.cwd,
+      agentDir: dirs.agentDir,
+      ...(dirs.ephemeralCwd ? { ephemeralCwd: dirs.ephemeralCwd } : {}),
     };
-    return { entry };
   }
 
   /** One isolated completion on `modelId`; null when no provider key serves that model. */
@@ -1733,7 +1731,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
       const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-      const { entry } = await createTurnSession(
+      const entry = await createTurnSession(
         withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
         turn.session.id,
         turn.systemPrompt,
