@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { createPgPool, type Rows, tenantCols } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../persistence/durable-map.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -139,7 +140,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
     },
 
-    onSignal(runId, cb) {
+    onSignal(runId, listener) {
+      // Wake the waiter in its own (tenant) context, not the shared LISTEN connection's.
+      const cb = AsyncResource.bind(listener);
       const set = listeners.get(runId) ?? new Set();
       set.add(cb);
       listeners.set(runId, set);
