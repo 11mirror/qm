@@ -176,20 +176,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
   },
   {
-    name: "AGENT37_API_KEY",
-    service: "core",
-    required: { when: { kind: "sandbox-backend", backend: "agent37" } },
-    description: "Agent37 API key for the agent-computer substrate.",
-    generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
-  },
-  {
-    name: "SUPERSERVE_API_KEY",
-    service: "core",
-    required: { when: { kind: "sandbox-backend", backend: "superserve" } },
-    description: "API key for Superserve sandboxes.",
-    generate: "create an API key in the Superserve console (https://console.superserve.ai/api-keys)",
-  },
-  {
     name: "DATABASE_URL",
     service: "core",
     required: { when: { kind: "target", target: "aws" } },

@@ -145,8 +145,6 @@ export async function doctorCommon(
   }
   if (localSandboxActive(config)) {
     step("local Docker sandbox: configured");
-  } else if (config.target === "aws") {
-    step("AWS Lambda MicroVM sandbox: configured");
   } else if (config.sandbox) {
     step(`sandbox: ${config.sandbox.backend ?? "sprites"} boots the platform's stock image`);
   } else {

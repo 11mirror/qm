@@ -150,7 +150,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   reachExecEnabled: boolean;
   eagerProvisionEnabled: boolean;
   sandbox: ReturnType<typeof sandboxEnv>;
-  awsSandbox: ReturnType<typeof awsSandboxEnv>;
   porterDeploy: ReturnType<typeof porterDeployEnv>;
   awsDeploy: ReturnType<typeof awsDeployEnv>;
 }
@@ -267,9 +266,6 @@ function sandboxProvidersEnv(env: Env) {
     LOCAL_SANDBOX_DOCKER_BIN: str,
     SPRITES_TOKEN: str,
     SMOLMACHINES_TOKEN: str,
-    AGENT37_API_KEY: str,
-    SUPERSERVE_API_KEY: str,
-    SUPERSERVE_TEMPLATE: trimmed,
     E2B_API_KEY: str,
     E2B_TEMPLATE_ID: str,
     DO_AGENTS_API_TOKEN: str,
@@ -279,9 +275,7 @@ function sandboxProvidersEnv(env: Env) {
     MODAL_APP_NAME: str,
     MODAL_ENVIRONMENT: str,
     MODAL_IMAGE: str,
-    PORTER_DEPLOY_API_TOKEN: str,
   });
-  const porterBaseUrl = porterApiBaseUrl(env);
   return {
     // coreContainer has no env name; the live-Slack harness sets it.
     localSandbox: defined({
@@ -291,8 +285,6 @@ function sandboxProvidersEnv(env: Env) {
     }),
     spritesSandbox: defined({ token: e.SPRITES_TOKEN }),
     smolmachinesSandbox: defined({ token: e.SMOLMACHINES_TOKEN }),
-    agent37Sandbox: defined({ apiKey: e.AGENT37_API_KEY }),
-    superserveSandbox: defined({ apiKey: e.SUPERSERVE_API_KEY, template: e.SUPERSERVE_TEMPLATE }),
     e2bSandbox: defined({ apiKey: e.E2B_API_KEY, templateId: e.E2B_TEMPLATE_ID }),
     managedAgentsSandbox: defined({ apiToken: e.DO_AGENTS_API_TOKEN, template: e.DO_AGENTS_TEMPLATE }),
     modalSandbox: defined({
@@ -301,34 +293,6 @@ function sandboxProvidersEnv(env: Env) {
       appName: e.MODAL_APP_NAME,
       environment: e.MODAL_ENVIRONMENT,
       image: e.MODAL_IMAGE,
-    }),
-    porterSandbox: defined({ token: e.PORTER_DEPLOY_API_TOKEN, baseUrl: porterBaseUrl }),
-  };
-}
-
-function awsSandboxEnv(env: Env) {
-  const e = readEnv(env, {
-    AWS_SANDBOX_REGION: raw,
-    AWS_REGION: raw,
-    AWS_DEFAULT_REGION: raw,
-    AWS_SANDBOX_PROFILE: str,
-    AWS_SANDBOX_IMAGE: raw,
-    AWS_SANDBOX_IMAGE_VERSION: str,
-    AWS_SANDBOX_EXEC_ROLE_ARN: str,
-    AWS_SANDBOX_INGRESS_CONNECTORS: csv,
-    AWS_SANDBOX_EGRESS_CONNECTORS: csv,
-    QM_CORE_CONTAINER: str,
-  });
-  return {
-    region: e.AWS_SANDBOX_REGION ?? e.AWS_REGION ?? e.AWS_DEFAULT_REGION ?? "us-west-2",
-    imageIdentifier: e.AWS_SANDBOX_IMAGE ?? "qm-microvm-sandbox",
-    ...defined({
-      profile: e.AWS_SANDBOX_PROFILE,
-      imageVersion: e.AWS_SANDBOX_IMAGE_VERSION,
-      executionRoleArn: e.AWS_SANDBOX_EXEC_ROLE_ARN,
-      ingressConnectorArns: e.AWS_SANDBOX_INGRESS_CONNECTORS,
-      egressConnectorArns: e.AWS_SANDBOX_EGRESS_CONNECTORS,
-      coreContainer: e.QM_CORE_CONTAINER,
     }),
   };
 }
@@ -600,13 +564,9 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
-    agent37: Boolean(config.agent37Sandbox?.apiKey),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
-    aws: Boolean(config.awsSandbox?.executionRoleArn),
-    porter: Boolean(config.porterSandbox?.token),
   };
   const enabled = new Set<Config["sandboxBackend"]>([config.sandboxBackend]);
   for (const [name, on] of Object.entries(credentialed)) {
@@ -742,15 +702,10 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
   }
-  for (const [selected, label] of [
-    [env.SANDBOX_BACKEND === "porter", "SANDBOX_BACKEND=porter"],
-    [env.DEPLOY_PROVIDER === "porter", "DEPLOY_PROVIDER=porter"],
-  ] as const) {
-    if (selected && !porterLocatorPresent(env)) {
-      throw new Error(
-        `${label} requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.`,
-      );
-    }
+  if (env.DEPLOY_PROVIDER === "porter" && !porterLocatorPresent(env)) {
+    throw new Error(
+      "DEPLOY_PROVIDER=porter requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.",
+    );
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(`SANDBOX_BACKEND must be set explicitly in production — use ${orList(SANDBOX_BACKEND_NAMES)}.`);
@@ -772,11 +727,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   if (selectedBackend && selectedBackend !== "local" && !env.SANDBOX_EGRESS_PROXY_URL?.trim()) {
     console.warn(
       `[config] SANDBOX_BACKEND=${selectedBackend} without SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SANDBOX_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.`,
-    );
-  }
-  if (sandboxBackend === "superserve" && !env.SUPERSERVE_TEMPLATE?.trim()) {
-    throw new Error(
-      "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
     );
   }
   const ignoredPostureEnv = [
@@ -980,7 +930,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     eagerProvisionEnabled: e.EAGER_PROVISION ?? true,
     sandbox: sandboxEnv(env),
     ...sandboxProvidersEnv(env),
-    awsSandbox: awsSandboxEnv(env),
     porterDeploy: porterDeployEnv(env),
     awsDeploy: awsDeployEnv(env, deployAppsDomain),
   };
