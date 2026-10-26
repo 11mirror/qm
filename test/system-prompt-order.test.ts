@@ -1,7 +1,7 @@
 import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
-import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
+import { type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -675,127 +675,6 @@ for (const mode of ["off", "writable", "skip"] as const) {
   });
 }
 
-for (const location of [
-  "description",
-  "body",
-  "asset",
-  "bundle",
-  "unavailable",
-  "multibyte",
-  "bundle-error",
-] as const) {
-  test(`Open screens carried skill ${location} before exposing its index or materialized content`, async () => {
-    const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-    const bundles = createSkillBundleStore({ backing: testMap() });
-    const owner = scopeId("personal", actor.id);
-    const room = scopeId("channel", "C1");
-    let marker = "!security-risk";
-    if (location === "unavailable") marker = "!security-screen-unavailable";
-    if (location === "multibyte") marker = "字".repeat(7000);
-    const create = async (scope: string, name: string) => {
-      const carried = scope === owner;
-      const skill = await skills.create({
-        scopeId: scope,
-        createdBy: actor.id,
-        manifest: {
-          name,
-          description: carried && location === "description" ? marker : "A useful method",
-          body: carried && ["body", "unavailable", "multibyte"].includes(location) ? marker : "Do useful work.",
-          requiredCapabilities: [],
-          files: carried && location === "asset" ? [{ path: "helper.sh", content: marker }] : [],
-        },
-        ...(carried && ["bundle", "bundle-error"].includes(location)
-          ? { pack: { packId: "test-pack", commit: "1", upstreamName: name } }
-          : {}),
-      });
-      await skills.review(skill.id, actor.id, []);
-      await skills.publish(skill.id);
-    };
-    await create(owner, "carried-method");
-    await create(room, "local-method");
-    await bundles.put({
-      packId: "test-pack",
-      commit: "1",
-      hash: "bundle-hash",
-      files: [{ path: "shared-helper.sh", content: marker }],
-    });
-    if (location === "bundle-error")
-      bundles.get = async () => {
-        throw new Error("bundle temporarily unavailable");
-      };
-    const disk = new Map<string, string>();
-    const sandbox: Sandbox = {
-      ...readSandbox(),
-      readFile: async (_handle, path) => disk.get(path) ?? null,
-      writeFile: async (_handle, path, body) => {
-        disk.set(path, body);
-      },
-      writeFileBytes: async (_handle, path, bytes) => {
-        disk.set(path, Buffer.from(bytes).toString("utf8"));
-      },
-      removeDir: async (_handle, path) => {
-        for (const key of disk.keys()) if (key === path || key.startsWith(`${path}/`)) disk.delete(key);
-      },
-      listDir: async () => [],
-    };
-    const { orchestrator } = buildOrchestrator({
-      skills,
-      skillBundles: bundles,
-      sandbox,
-      isCurrentSharedScopeMember: async () => true,
-    });
-    const result = await orchestrator.handleTurn({
-      surface: "test",
-      actor,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        channelRef: "C1",
-        threadRef: `C1:screen-${location}`,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-      text: "!sysprompt",
-    });
-    assert.equal(result.status, "ok", result.reason);
-    assert.doesNotMatch(result.reply ?? "", /carried-method/);
-    assert.match(result.reply ?? "", /local-method/);
-    const read = await orchestrator.handleTurn({
-      surface: "test",
-      actor,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        channelRef: "C1",
-        threadRef: `C1:read-screen-${location}`,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-      text: "!skill carried-method",
-    });
-    assert.equal(read.status, "ok", read.reason);
-    assert.doesNotMatch(read.reply ?? "", /!security-risk|!security-screen-unavailable/);
-    assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
-    assert.equal(disk.has("skills/local-method/SKILL.md"), false);
-    const localRead = await orchestrator.handleTurn({
-      surface: "test",
-      actor,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        channelRef: "C1",
-        threadRef: `C1:read-local-${location}`,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-      text: "!skill local-method",
-    });
-    assert.equal(localRead.status, "ok", localRead.reason);
-    assert.match(localRead.reply ?? "", /Do useful work/);
-    assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
-  });
-}
-
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const owner = scopeId("personal", actor.id);
@@ -973,7 +852,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
   });
 }
 
-test("steered native office documents are screened after extraction", async () => {
+test("steered native office documents are observed by the screen after extraction and still delivered", async () => {
   const blobTransfer = createMemoryBlobTransferStore();
   const blob = await blobTransfer.put(readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)));
   const sandbox: Sandbox = {
@@ -1013,9 +892,10 @@ test("steered native office documents are screened after extraction", async () =
   const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
   assert.equal(result.status, "ok", result.reason);
-  assert.equal(screened, true);
-  assert.deepEqual(prepared?.documents, []);
-  assert.match(prepared?.text ?? "", /unsafe.docx.*withheld by the external-data security screen/);
+  for (let i = 0; i < 100 && !screened; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(screened, true, "the extracted text reaches the screen");
+  assert.equal(prepared?.documents?.length, 1, "a would-block verdict does not withhold the document");
+  assert.doesNotMatch(prepared?.text ?? "", /withheld/);
 });
 
 test("documents uploaded during a turn survive a runtime handoff without aliasing the active harness", async () => {

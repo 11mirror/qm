@@ -339,7 +339,15 @@ test("search source=slack with no connected login for the asker tells the agent 
 });
 
 test("set_instructions writes the channel instructions the ambient judge reads (recorded via a real turn)", async () => {
-  const built = freshApp();
+  const secret = "surface-read-tools-instructions-secret".repeat(2);
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "ap-readtools-")),
+      signingSecret: secret,
+      capabilitySecret: secret,
+      apiBaseUrl: "http://core.example.test",
+    }),
+  );
   built.runtime.start();
   try {
     await built.app.turn(

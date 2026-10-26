@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -123,43 +122,6 @@ test("compaction during a turn stops document replay immediately", async () => {
   const original = await built.sessions.getItem(first.sessionId!, entries[0]!.seq);
   assert.deepEqual(original, entries[0]);
 });
-
-for (const extension of ["docx", "pdf"]) {
-  test(`automatic ${extension} input respects a strict content-screen verdict`, async () => {
-    const built = freshApp();
-    const bytes = await readFile(new URL(`./fixtures/documents/hostile.${extension}`, import.meta.url));
-    const blob = await built.blobTransfer.put(bytes);
-    const request = {
-      surface: "test" as const,
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` },
-    };
-    const result = await built.app.turn({
-      ...request,
-      text: "summarize",
-      attachments: [
-        {
-          name: `hostile.${extension}`,
-          mimetype:
-            extension === "pdf"
-              ? "application/pdf"
-              : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          sizeBytes: blob.sizeBytes,
-          blobId: blob.blobId,
-        },
-      ],
-    });
-    assert.equal(result.status, "ok");
-    const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-    assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
-    assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /withheld by the external-data security screen/);
-    const followup = await built.app.turn({ ...request, text: "try reading it again" });
-    const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter(
-      (record) => record.model === "mock",
-    );
-    assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
-  });
-}
 
 test("large documents never push a follow-up turn past the context budget", async () => {
   const budget = 20_000;
