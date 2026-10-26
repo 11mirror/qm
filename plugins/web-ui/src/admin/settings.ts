@@ -1,5 +1,5 @@
 import { mountTemplate } from "./shared.ts";
-import { saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { cardClass, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
 import { mountCredentials } from "./settings-credentials.ts";
 export {
@@ -82,53 +82,40 @@ export const states = new Map(
 );
 export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Data, scope: string, only?: string) {
+  const org = scope.startsWith("org:");
   for (const [key, s] of states) {
     if (only && only !== key) continue;
     s.context = data;
+    s.saving = false;
     if (key === "branding") {
-      s.draft = {
-        accent: data.branding?.accent || "",
-        mark: data.branding?.mark || "",
-        selfLabel: data.branding?.selfLabel || "",
-        orgName: data.branding?.orgName || "",
-        markUrl: data.branding?.markUrl || "",
-      };
-      s.available = scope.startsWith("org:") && "branding" in data;
-      s.saving = false;
-      capture(key);
-      continue;
-    }
-    if (key === "memory-embedding-model") {
+      const fields = ["accent", "mark", "selfLabel", "orgName", "markUrl"];
+      s.draft = Object.fromEntries(fields.map((field) => [field, data.branding?.[field] || ""]));
+      s.available = org && "branding" in data;
+    } else if (key === "memory-embedding-model") {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
-      s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
-      s.saving = false;
-      capture(key);
-      continue;
-    }
-    if (key === "soul") {
+      s.available = org && "memoryEmbeddingModel" in data;
+    } else if (key === "soul") {
       s.draft = { content: data.soul || "", expectedVersion: data.soulVersion || 0 };
       s.history = data.soulHistory || [];
       s.editing = false;
       s.available = true;
-      s.saving = false;
-      capture(key);
-      continue;
+    } else {
+      const runtime = runtimeKeys.includes(key);
+      const saved = data[runtimeReadKey(key)];
+      s.available =
+        org &&
+        !!data.baseModelOptions?.length &&
+        (!runtime || (!!data.baseModelDefault && runtimeReadKey(key) in data));
+      s.draft = runtime
+        ? {
+            ...(key !== "runtime" ? { inherit: !saved } : {}),
+            modelId: saved?.modelId || data.baseModel || data.baseModelDefault || "",
+            effortLevel: saved?.effortLevel || "auto",
+            fastMode: saved?.fastMode === true,
+          }
+        : { ids: (data.webuiModels || []).filter(Boolean) };
+      s.selected = "";
     }
-    s.available =
-      scope.startsWith("org:") &&
-      !!data.baseModelOptions?.length &&
-      (!runtimeKeys.includes(key) || (!!data.baseModelDefault && runtimeReadKey(key) in data));
-    const runtime = data[runtimeReadKey(key)];
-    s.draft = runtimeKeys.includes(key)
-      ? {
-          ...(key !== "runtime" ? { inherit: !runtime } : {}),
-          modelId: runtime?.modelId || data.baseModel || data.baseModelDefault || "",
-          effortLevel: runtime?.effortLevel || "auto",
-          fastMode: runtime?.fastMode === true,
-        }
-      : { ids: (data.webuiModels || []).filter(Boolean) };
-    s.saving = false;
-    s.selected = "";
     capture(key);
   }
 }
@@ -149,10 +136,7 @@ function card(s: SettingsState) {
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
   const canAdd = available.some((m) => m.id === s.selected);
-  return html`<section
-    class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
-    id="card-webui-models"
-  >
+  return html`<section class=${cardClass(s, "sv-models")} id="card-webui-models">
     <div class="head"><h2>Enabled models</h2></div>
     <div class="body">
       <div class="model-add-row">
@@ -214,11 +198,9 @@ export function mountCards() {
   mountProviders();
   mountCredentials();
   mountRuntimes();
-  for (const [key, s] of states) {
-    const id = (
-      { soul: "card-soul", branding: "card-branding", "webui-models": "card-webui-models" } as Record<string, string>
-    )[key];
-    if (id) s.render = mountTemplate(`template[data-settings-card="${id}"]`, () => card(s));
+  for (const key of ["webui-models", "soul", "branding"]) {
+    const s = states.get(key)!;
+    s.render = mountTemplate(`template[data-settings-card="card-${key}"]`, () => card(s));
   }
 }
 

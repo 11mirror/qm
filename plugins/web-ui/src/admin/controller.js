@@ -29,65 +29,14 @@ export function startAdmin(host, env) {
   const root = $("app-view");
   const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
   const VIEWS = [...ADMIN_VIEWS];
-  function prepareParityCards() {
-    const content = document.querySelector("#view-governance .governance-content");
-    const providers = document.createElement("section");
-    providers.className = "card sv-models";
-    providers.id = "card-custom-providers";
-    providers.innerHTML =
-      '<div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div>';
-
-    const keychains = document.createElement("section");
-    keychains.className = "card sv-credentials";
-    keychains.id = "card-personal-keychains";
-    keychains.innerHTML =
-      '<div class="head"><h2>Personal keychains</h2></div><div class="body"><div class="keychain-summary"><strong id="keychain-user-count">—</strong> users with keychain entries · <strong id="keychain-standing-count">—</strong> standing grants</div></div><div class="foot"><button type="button" class="viewlink" data-viewlink="users">View users ›</button></div>';
-    $("card-feature-flags").classList.remove("hidden");
-    $("card-slack-installation").classList.add("sv-slack-settings");
-    content.append(
-      $("card-ambient-policy"),
-      $("card-runtimes"),
-      providers,
-      $("card-webui-models"),
-      $("card-soul"),
-      $("card-branding"),
-      $("card-feature-flags"),
-      $("card-decisions"),
-      $("card-service-credentials"),
-      keychains,
-      $("card-security-posture"),
-      $("card-auto-flagger"),
-      $("card-sharing-posture"),
-      governanceUI.createCard("card-governance-org-ambient"),
-      $("card-command-policy"),
-      $("card-egress"),
-      $("card-slack-installation"),
-      $("card-external-slack"),
-      $("card-channel-header-pin-default"),
-      $("card-ack-emoji"),
-    );
-    const connectorView = $("view-connectors");
-    const connectorTip = document.createElement("aside");
-    connectorTip.className = "connector-dm-tip admin-notice hidden";
-    connectorTip.id = "connector-dm-tip";
-    connectorTip.setAttribute("role", "note");
-    connectorTip.appendChild(document.createElement("p"));
-    connectorTip.querySelector("p").textContent =
-      "Tip: the easiest way to change these settings is to ask " +
-      env.productName +
-      " in a DM. It can make the edit for you and confirm what changed.";
-    connectorView.before(connectorTip);
-    const builtIns = document.createElement("section");
-    builtIns.className = "card";
-    builtIns.id = "card-built-in-connectors";
-    builtIns.innerHTML =
-      '<div class="head"><h2>Built-in connectors</h2></div><div class="body" id="built-in-connectors">Loading connectors…</div>';
-    connectorView.appendChild(builtIns);
-    document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
-      link.closest("section.card").querySelector(":scope > .head").appendChild(link);
-    });
-  }
-  prepareParityCards();
+  $("card-feature-flags").classList.remove("hidden");
+  $("connector-dm-tip").firstChild.textContent =
+    "Tip: the easiest way to change these settings is to ask " +
+    env.productName +
+    " in a DM. It can make the edit for you and confirm what changed.";
+  document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
+    link.closest("section.card").querySelector(":scope > .head").appendChild(link);
+  });
   const scAddButton = $("sc-add");
   const scStatusHome = $("st-service-credentials").parentElement;
   const dialog = document.createElement("dialog");
