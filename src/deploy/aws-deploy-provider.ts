@@ -1,5 +1,6 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
+import { LRUCache } from "lru-cache";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
@@ -108,7 +109,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const store = opts.store;
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock;
-  const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
   const bumpResolveGen = (id: string): void => {
@@ -135,6 +135,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     Math.max(stored.createdAtMs + Math.max(lifetimeMs / 2, lifetimeMs - RENEW_AHEAD_MS), stored.rotateNotBeforeMs ?? 0);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
   const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
+  const resolveCache = new LRUCache<string, { endpoint: DeployEndpoint; checkedMs: number }>({
+    max: 500,
+    ttl: Math.max(1, awakeForMs),
+    updateAgeOnGet: true,
+    perf: Date,
+  });
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
@@ -279,10 +285,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `[ "$(wc -c < ${shq(tarPath)})" -le ${MAX_DATA_TAR_BYTES} ] || { rm -f ${shq(tarPath)}; exit 4; }`;
     const made = await execRaw(id, endpoint, script, 180);
     if (made.code === 3) return false;
-    if (made.code === 4) {
-      swallow("aws-deploy: data snapshot skipped, /data over size cap", new Error(deploymentId));
-      return false;
-    }
+    if (made.code === 4)
+      throw new Error(`data snapshot refused: /data is over the ${MAX_DATA_TAR_BYTES / 1024 / 1024} MB snapshot cap`);
     if (made.code !== 0) throw new Error(`data snapshot tar failed (code ${made.code}): ${made.stderr.slice(0, 200)}`);
     const tar = await readAbsBytes(id, endpoint, tarPath);
     await execRaw(id, endpoint, `rm -f ${shq(tarPath)}`, 30).catch(
@@ -300,9 +304,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const got = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId) }));
       tar = (await got.Body?.transformToByteArray()) ?? null;
     } catch (e) {
-      const code = (e as { name?: string })?.name ?? "";
-      const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
-      if (/NoSuchKey|NotFound/.test(code) || status === 404) return;
+      if (e instanceof NoSuchKey) return;
       throw e;
     }
     if (!tar?.length) return;
@@ -657,10 +659,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
               resolveCache.delete(d.id);
               return endpoint;
             }
-            if (resolveCache.size > 500) {
-              for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
-            }
-            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            resolveCache.set(d.id, { endpoint, checkedMs: Date.now() });
             return endpoint;
           })
           .finally(() => {
@@ -671,8 +670,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       };
       const cached = resolveCache.get(d.id);
       const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
-      if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
-        cached.usedMs = Date.now();
+      if (cached && samePlacement) {
         if (Date.now() - cached.checkedMs >= RESOLVE_CACHE_MS)
           void revalidate().catch((e) => swallow("aws-deploy: background revalidate", e));
         return cached.endpoint;
@@ -695,7 +693,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       bumpResolveGen(d.id);
       const stored = await store.get(d.id);
       if (stored) {
-        await api.terminate(stored.microvmId).catch((e) => swallow("aws-deploy: destroy terminate", e));
+        await api.terminate(stored.microvmId).catch((e: unknown) => {
+          if (!(e instanceof AwsApiError && e.status === 404)) throw e;
+        });
         evict(stored.microvmId);
       }
       await store.delete(d.id).catch((e) => swallow("aws-deploy: destroy clear pointer", e));

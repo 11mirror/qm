@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { NoSuchKey } from "@aws-sdk/client-s3";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -134,11 +135,7 @@ function fakeS3(objects: Map<string, Uint8Array> = new Map()) {
       if (kind === "DeleteObjectCommand") objects.delete(key);
       if (kind === "GetObjectCommand") {
         const bytes = objects.get(key);
-        if (!bytes) {
-          const e = new Error("no such key") as Error & { name: string };
-          e.name = "NoSuchKey";
-          throw e;
-        }
+        if (!bytes) throw new NoSuchKey({ message: "no such key", $metadata: {} });
         return { Body: { transformToByteArray: async () => bytes } };
       }
       if (kind === "ListObjectsV2Command") {
@@ -713,6 +710,25 @@ test("destroy: terminates the body and clears its pointer", async () => {
   assert.equal(await store.get(ID), null, "the pointer is cleared");
 });
 
+test("destroy: a failed terminate fails the destroy and keeps the pointer for a retry", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = testMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  api.terminate = async () => {
+    throw new AwsApiError("bad gateway", 502);
+  };
+  await assert.rejects(p.destroy(d), /bad gateway/);
+  assert.ok(await store.get(ID), "the pointer survives so cleanup can be retried");
+  api.terminate = async () => {
+    throw new AwsApiError("not found", 404);
+  };
+  await p.destroy(d);
+  assert.equal(await store.get(ID), null, "an already-gone body clears the pointer");
+});
+
 test("profile: scale-to-zero is platform-managed and versions apply from git bundles", () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
@@ -838,7 +854,7 @@ test("app data: a failed hydrate terminates the fresh body instead of leaking it
   assert.equal(counts.terminate, 1, "the un-pointered body is terminated, not leaked to the 8h cap");
 });
 
-test("app data: an over-cap /data is skipped loudly, never uploaded or thrown", async () => {
+test("app data: an over-cap /data fails the snapshot, so rotation defers and the old body keeps its data", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("wc -c") ? 4 : 0) });
   const { s3, calls } = fakeS3();
@@ -851,8 +867,11 @@ test("app data: an over-cap /data is skipped loudly, never uploaded or thrown", 
     endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws",
     createdAtMs: 0,
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  const e = await p.apply(deployment(ID), version(localSnapshot("a", "1")));
   assert.ok(!calls.some((c) => c.startsWith("PutObjectCommand")), "no upload for an oversized /data");
+  assert.equal(vms.get("mvm-old")!.state, "RUNNING", "the old body is not terminated with unsaved data");
+  assert.equal(e.host, "mvm-old.lambda-microvm.us-west-2.on.aws", "the old body keeps serving");
+  assert.ok((await store.get(ID))!.rotateNotBeforeMs! > Date.now(), "rotation deferred");
 });
 
 test("app data: a deferred rotation serves the stale body from resolveEndpoint instead of forcing re-apply per reach", async () => {
