@@ -1576,21 +1576,13 @@ export function startAdmin(host, env) {
     )
       return;
     sel.dataset.ddHost = "1";
-    const dd = document.createElement("div");
-    dd.className = "dd";
+    const dd = el("div.dd");
     if (sel.getAttribute("style")) dd.setAttribute("style", sel.getAttribute("style"));
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("aria-haspopup", "listbox");
-    btn.setAttribute("aria-expanded", "false");
-    const lab = document.createElement("span");
-    btn.appendChild(lab);
-    btn.insertAdjacentHTML("beforeend", DD_CHEVRON);
-    const menu = document.createElement("div");
-    menu.className = "dd-menu";
-    menu.setAttribute("role", "listbox");
-    menu.id = "dd-menu-" + ++dropdownSequence;
+    const lab = el("span");
+    const menu = el("div.dd-menu", { role: "listbox", id: "dd-menu-" + ++dropdownSequence });
+    const btn = el("button", { type: "button", "aria-haspopup": "listbox", "aria-expanded": "false" }, lab);
     btn.setAttribute("aria-controls", menu.id);
+    btn.insertAdjacentHTML("beforeend", DD_CHEVRON);
     dd.append(btn, menu);
     sel.after(dd);
     let activeIndex = -1;
@@ -1606,50 +1598,47 @@ export function startAdmin(host, env) {
       if (ddNativeValue.get.call(sel) === value) return;
       ddNativeValue.set.call(sel, value);
       syncLabel();
-      sel.dispatchEvent(new Event("input", { bubbles: true }));
-      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(sel);
     };
     const enabledOptions = () => Array.from(sel.options).filter((o) => !o.disabled);
+    const closeThis = () => {
+      closeDropdown(dd);
+      openDropdown = null;
+    };
     const setActive = (index) => {
       const items = Array.from(menu.querySelectorAll(".dd-item:not(.dis)"));
-      if (!items.length) {
-        activeIndex = -1;
-        return;
-      }
-      activeIndex = Math.max(0, Math.min(items.length - 1, index));
+      activeIndex = items.length ? Math.max(0, Math.min(items.length - 1, index)) : -1;
       items.forEach((it, i) => {
         it.classList.toggle("active", i === activeIndex);
-        if (i === activeIndex) {
-          btn.setAttribute("aria-activedescendant", it.id);
-          it.scrollIntoView({ block: "nearest" });
-        }
+        if (i !== activeIndex) return;
+        btn.setAttribute("aria-activedescendant", it.id);
+        it.scrollIntoView({ block: "nearest" });
       });
     };
     const buildMenu = () => {
-      menu.textContent = "";
       activeIndex = -1;
       let enabledIndex = 0;
-      Array.from(sel.options).forEach((o) => {
-        const it = document.createElement("div");
-        it.className = "dd-item" + (o.selected ? " sel" : "") + (o.disabled ? " dis" : "");
-        it.id = menu.id + "-option-" + menu.children.length;
-        it.setAttribute("role", "option");
-        if (o.selected) it.setAttribute("aria-selected", "true");
-        it.textContent = o.textContent;
-        if (!o.disabled) {
-          if (o.selected) activeIndex = enabledIndex;
-          enabledIndex += 1;
-        }
-        it.onclick = (e) => {
-          e.stopPropagation();
-          if (o.disabled) return;
-          closeDropdown(dd);
-          openDropdown = null;
-          commit(o.value);
-          btn.focus();
-        };
-        menu.appendChild(it);
-      });
+      menu.replaceChildren(
+        ...Array.from(sel.options).map((o, i) => {
+          const it = el("div", {
+            className: "dd-item" + (o.selected ? " sel" : "") + (o.disabled ? " dis" : ""),
+            id: menu.id + "-option-" + i,
+            role: "option",
+            textContent: o.textContent,
+            onclick: (e) => {
+              e.stopPropagation();
+              if (o.disabled) return;
+              closeThis();
+              commit(o.value);
+              btn.focus();
+            },
+          });
+          if (o.selected) it.setAttribute("aria-selected", "true");
+          if (!o.disabled && o.selected) activeIndex = enabledIndex;
+          if (!o.disabled) enabledIndex += 1;
+          return it;
+        }),
+      );
       setActive(activeIndex);
     };
     const open = () => {
@@ -1660,45 +1649,25 @@ export function startAdmin(host, env) {
       btn.setAttribute("aria-expanded", "true");
       openDropdown = dd;
     };
-    const toggle = () => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
       const wasOpen = dd.classList.contains("open");
       closeDropdown(openDropdown);
       openDropdown = null;
-      if (!wasOpen) {
-        open();
-      }
-    };
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      toggle();
+      if (!wasOpen) open();
     };
     btn.onkeydown = (e) => {
-      if (e.key === "Escape") {
-        closeDropdown(dd);
-        openDropdown = null;
-        e.preventDefault();
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (!dd.classList.contains("open")) {
-          open();
-          return;
-        }
+      if (!["Escape", "Enter", "ArrowDown", "ArrowUp"].includes(e.key)) return;
+      e.preventDefault();
+      const isOpen = dd.classList.contains("open");
+      if (e.key === "Escape") return closeThis();
+      if (e.key === "Enter" && isOpen) {
         const option = enabledOptions()[activeIndex];
         if (option) commit(option.value);
-        closeDropdown(dd);
-        openDropdown = null;
-        return;
+        return closeThis();
       }
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-      e.preventDefault();
-      const enabled = enabledOptions();
-      if (!enabled.length) return;
-      if (!dd.classList.contains("open")) {
-        open();
-        return;
-      }
+      if (e.key !== "Enter" && !enabledOptions().length) return;
+      if (!isOpen) return open();
       setActive(activeIndex + (e.key === "ArrowDown" ? 1 : -1));
     };
     Object.defineProperty(sel, "value", {
@@ -2176,9 +2145,8 @@ export function startAdmin(host, env) {
   document.addEventListener("scroll", closeOvMenus, true);
   window.addEventListener("resize", closeOvMenus);
   function buildScopeMultiSelect(choices, selected, onChange) {
-    const pick = document.createElement("div");
-    pick.className = "scopepick";
-    pick.style.cssText = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const row = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const pick = el("div.scopepick", { style: row });
     const labelOf = (id) => (choices.find((c) => c.scopeId === id) || {}).label || dirLabel(id) || id;
     const orgFirst = (ids) =>
       ids.sort((a, b) => {
@@ -2186,133 +2154,109 @@ export function startAdmin(host, env) {
         if (scopeKind(b) === "org") return 1;
         return a.localeCompare(b);
       });
-
-    const chips = document.createElement("div");
-    chips.style.cssText = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const changed = () => {
+      renderChips();
+      renderList();
+      onChange();
+    };
+    const chips = el("div", { style: row });
     const renderChips = () => {
-      chips.textContent = "";
-      if (!selected.size) {
-        const none = document.createElement("span");
-        none.style.cssText = "font-size:12px; color:var(--muted);";
-        none.textContent = "no scopes selected";
-        chips.appendChild(none);
-        return;
-      }
-      for (const id of orgFirst([...selected])) {
-        const chip = document.createElement("span");
-        chip.style.cssText =
-          "display:inline-flex; align-items:center; gap:5px; padding:2px 5px 2px 9px; border:1px solid var(--border); border-radius:12px; background:var(--subtle); font-size:12px; white-space:nowrap;";
-        chip.title = id;
-        const t = document.createElement("span");
-        t.textContent = labelOf(id);
-        chip.appendChild(t);
-        const x = document.createElement("button");
-        x.type = "button";
-        x.textContent = "✕";
-        x.setAttribute("aria-label", "Remove " + labelOf(id));
-        x.style.cssText =
-          "border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:11px; line-height:1; padding:0 1px;";
-        x.onclick = (e) => {
-          e.stopPropagation();
-          selected.delete(id);
-          renderChips();
-          renderList();
-          onChange();
-        };
-        chip.appendChild(x);
-        chips.appendChild(chip);
-      }
+      if (!selected.size)
+        return chips.replaceChildren(
+          el("span", { style: "font-size:12px; color:var(--muted);", textContent: "no scopes selected" }),
+        );
+      chips.replaceChildren(
+        ...orgFirst([...selected]).map((id) => {
+          const remove = el("button", {
+            type: "button",
+            textContent: "✕",
+            "aria-label": "Remove " + labelOf(id),
+            style:
+              "border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:11px; line-height:1; padding:0 1px;",
+            onclick: (e) => {
+              e.stopPropagation();
+              selected.delete(id);
+              changed();
+            },
+          });
+          const style =
+            "display:inline-flex; align-items:center; gap:5px; padding:2px 5px 2px 9px; border:1px solid var(--border); border-radius:12px; background:var(--subtle); font-size:12px; white-space:nowrap;";
+          return el("span", { style, title: id }, el("span", labelOf(id)), remove);
+        }),
+      );
     };
-
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.className = "rowbtn";
-    addBtn.textContent = "+ Add scope ▾";
-    addBtn.setAttribute("aria-haspopup", "listbox");
-    addBtn.setAttribute("aria-expanded", "false");
-
-    const menu = document.createElement("div");
-    menu.className = "scope-menu hidden";
-    menu.style.cssText = "left:0; right:auto; width:min(320px, 80vw);";
-    const filterWrap = document.createElement("div");
-    filterWrap.className = "scope-filter";
-    const filter = document.createElement("input");
-    filter.type = "text";
-    filter.placeholder = "Filter scopes…";
+    const addBtn = el("button.rowbtn", {
+      type: "button",
+      textContent: "+ Add scope ▾",
+      "aria-haspopup": "listbox",
+      "aria-expanded": "false",
+    });
+    const filter = el("input", {
+      type: "text",
+      placeholder: "Filter scopes…",
+      autocapitalize: "none",
+      style:
+        "width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); font:inherit;",
+    });
     filter.spellcheck = false;
-    filter.setAttribute("autocapitalize", "none");
-    filter.style.cssText =
-      "width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); font:inherit;";
-    filterWrap.appendChild(filter);
-    const list = document.createElement("div");
-    list.className = "scope-list";
-    list.setAttribute("role", "listbox");
-    const bulk = document.createElement("div");
-    bulk.style.cssText = "display:flex; gap:14px; padding:8px 10px; border-top:1px solid var(--border);";
-    const mkLink = (text, fn) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = text;
-      b.style.cssText =
-        "border:none; background:transparent; cursor:pointer; color:var(--text); font:inherit; font-size:12px; text-decoration:underline; text-underline-offset:2px; padding:0;";
-      b.onclick = fn;
-      return b;
-    };
-    bulk.append(
-      mkLink("Select all", () => {
+    const list = el("div.scope-list", { role: "listbox" });
+    const bulkLink = (text, onclick) =>
+      el("button", {
+        type: "button",
+        textContent: text,
+        style:
+          "border:none; background:transparent; cursor:pointer; color:var(--text); font:inherit; font-size:12px; text-decoration:underline; text-underline-offset:2px; padding:0;",
+        onclick,
+      });
+    const bulk = el(
+      "div",
+      { style: "display:flex; gap:14px; padding:8px 10px; border-top:1px solid var(--border);" },
+      bulkLink("Select all", () => {
         choices.forEach((c) => selected.add(c.scopeId));
-        renderChips();
-        renderList();
-        onChange();
+        changed();
       }),
-      mkLink("Clear", () => {
+      bulkLink("Clear", () => {
         selected.clear();
-        renderChips();
-        renderList();
-        onChange();
+        changed();
       }),
     );
-
     const renderList = () => {
       const q = filter.value.trim().toLowerCase();
-      list.textContent = "";
       const shown = choices.filter(
         (c) => !q || c.label.toLowerCase().includes(q) || c.scopeId.toLowerCase().includes(q),
       );
-      if (!shown.length) {
-        const p = document.createElement("div");
-        p.className = "scope-note";
-        p.textContent = "No scopes match.";
-        list.appendChild(p);
-        return;
-      }
-      for (const c of shown) {
-        const on = selected.has(c.scopeId);
-        const opt = document.createElement("button");
-        opt.type = "button";
-        opt.className = "scope-option" + (on ? " selected" : "");
-        opt.setAttribute("role", "option");
-        opt.setAttribute("aria-selected", String(on));
-        opt.title = c.scopeId;
-        const name = document.createElement("span");
-        name.className = "scope-name";
-        name.appendChild(stacked(c.label, c.label === c.scopeId ? "" : c.scopeId));
-        const mark = document.createElement("span");
-        mark.className = "count";
-        mark.textContent = on ? "✓" : "";
-        opt.append(name, mark);
-        opt.onclick = () => {
-          if (selected.has(c.scopeId)) selected.delete(c.scopeId);
-          else selected.add(c.scopeId);
-          renderChips();
-          renderList();
-          onChange();
-          filter.focus();
-        };
-        list.appendChild(opt);
-      }
+      if (!shown.length) return list.replaceChildren(el("div.scope-note", "No scopes match."));
+      list.replaceChildren(
+        ...shown.map((c) => {
+          const on = selected.has(c.scopeId);
+          const name = el("span.scope-name", {}, stacked(c.label, c.label === c.scopeId ? "" : c.scopeId));
+          return el(
+            "button.scope-option" + (on ? " selected" : ""),
+            {
+              type: "button",
+              role: "option",
+              "aria-selected": String(on),
+              title: c.scopeId,
+              onclick: () => {
+                if (selected.has(c.scopeId)) selected.delete(c.scopeId);
+                else selected.add(c.scopeId);
+                changed();
+                filter.focus();
+              },
+            },
+            name,
+            el("span.count", on ? "✓" : ""),
+          );
+        }),
+      );
     };
-
+    const menu = el(
+      "div.scope-menu hidden",
+      { style: "left:0; right:auto; width:min(320px, 80vw);" },
+      el("div.scope-filter", {}, filter),
+      list,
+      bulk,
+    );
     let onDocClick = null;
     const setOpen = (open) => {
       menu.classList.toggle("hidden", !open);
@@ -2341,8 +2285,6 @@ export function startAdmin(host, env) {
         addBtn.focus();
       }
     });
-
-    menu.append(filterWrap, list, bulk);
     pick.append(chips, addBtn, menu);
     renderChips();
     return pick;
