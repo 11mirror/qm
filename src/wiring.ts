@@ -696,11 +696,13 @@ export function buildApp(
         ]).then(() => undefined)
       : layerSettled;
     if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
-    started = {
-      ready: Promise.all([configStore.hydrate?.(), identity.hydrate(), layerReady]).then(() => {}),
-      skillsReady,
-    };
-    started.ready.catch(reportFailureAs("startup: hydrate stores", undefined));
+    const identityReady = identity.hydrate();
+    const configReady = configStore.hydrate?.();
+    identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
+    configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
+    const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
+    ready.catch(() => {}); // each part reports its own failure; start() callers still see the rejection
+    started = { ready, skillsReady };
     return started;
   };
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
