@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compilePath, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
+import { compilePath, createRouter, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
 
 function matched(path: string, pathname: string): Record<string, string> | null {
@@ -65,4 +65,21 @@ test("each API route's literals survive URL decoding and its own path resolves t
     const sample = segments.map((segment) => (segment.startsWith(":") ? "x" : segment)).join("/");
     assert.equal(findRoute(apiRoutes, route.method, sample)?.route, route, `${route.method} ${route.path}`);
   }
+});
+
+test("createRouter prefers a literal segment over a :param regardless of table order", () => {
+  const routes: Route<BaseCtx>[] = [
+    { method: "GET", path: "/v1/x/:id/content", auth: "source", handle: () => {} },
+    { method: "GET", path: "/v1/x/uploads/:id", auth: "source", handle: () => {} },
+    { method: "GET", path: "/v1/x/:id", auth: "source", handle: () => {} },
+    { method: "GET", path: "/v1/x/pending", auth: "source", handle: () => {} },
+    { match: (m, p) => m === "GET" && p.startsWith("/v1/x/"), auth: "source", handle: () => {} },
+  ];
+  const match = createRouter(routes);
+  assert.equal(match("GET", "/v1/x/uploads/content")?.route, routes[1]);
+  assert.deepEqual(match("GET", "/v1/x/uploads/content")?.params, { id: "content" });
+  assert.equal(match("GET", "/v1/x/pending")?.route, routes[3]);
+  assert.deepEqual(match("GET", "/v1/x/7")?.params, { id: "7" });
+  assert.equal(match("GET", "/v1/x/a/b/c")?.route, routes[4], "match routes answer only when no path route does");
+  assert.equal(match("POST", "/v1/x/7"), null);
 });

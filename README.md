@@ -95,7 +95,7 @@ core over its HTTP API on loopback. See [combined services](docs/combined-servic
 configuration and migration; Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 
-The core runs TypeScript directly on Node and uses Fastify for HTTP. The Slack plugin
+The core runs TypeScript directly on Node and serves HTTP with node:http. The Slack plugin
 uses Bolt; the web UI builds with Vite and renders with Lit.
 
 The core itself is generic. Everything specific to one company — org config, custom tools
