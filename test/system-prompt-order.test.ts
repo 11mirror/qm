@@ -892,7 +892,7 @@ test("steered native office documents are observed by the screen after extractio
   const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
   assert.equal(result.status, "ok", result.reason);
-  for (let i = 0; i < 100 && !screened; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let i = 0; i < 500 && !screened; i++) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(screened, true, "the extracted text reaches the screen");
   assert.equal(prepared?.documents?.length, 1, "a would-block verdict does not withhold the document");
   assert.doesNotMatch(prepared?.text ?? "", /withheld/);

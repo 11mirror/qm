@@ -1290,7 +1290,8 @@ const apiRoutes: readonly WebRoute[] = [
     shape: (p, c) => ({
       principalId: c.user,
       scope: c.params.scope,
-      orders: p.orders,
+      instructions: p.instructions,
+      instructionsVersion: p.instructionsVersion,
       bots: p.bots,
       ambientEnabled: p.ambientEnabled,
       baseUpdatedAt: p.baseUpdatedAt,
