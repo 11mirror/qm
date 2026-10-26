@@ -27,6 +27,8 @@ import {
 } from "../aws-lease.ts";
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
+  awsMicrovmExecRoleArn,
+  awsTaskRoleArn,
   awsWorkloadArchitecture,
   requiresAwsMicrovmImage,
   isDigestPinned,
@@ -413,8 +415,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         AWS_SANDBOX_REGION: aws.region,
         AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
         AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
-        AWS_SANDBOX_EXEC_ROLE_ARN:
-          config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+        AWS_SANDBOX_EXEC_ROLE_ARN: awsMicrovmExecRoleArn(config, aws),
         AWS_DEPLOY_DATA_BUCKET: awsObjectStoreBucket(config),
         ...stores,
       });
@@ -487,10 +488,7 @@ export function renderTaskDefinition(
   const def = isServiceName(service) ? serviceDef(service) : undefined;
   const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const managedTaskRole = spec.assumeRoleArns?.length
-    ? `${aws.cluster}-${service}-task`
-    : `${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
-  const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
+  const taskRoleArn = awsTaskRoleArn(aws, service, spec);
   const secrets = workloadSecrets(config, service, secretArns)
     .flatMap((secret) =>
       containerSecretNames(service, secret).map((name) => ({

@@ -74,6 +74,22 @@ export interface AwsServiceConfig {
   stopTimeout?: number;
 }
 
+type AwsAccount = Pick<AwsConfig, "accountId" | "cluster">;
+
+/** The per-service task role Terraform creates when it manages the role. */
+export const awsManagedTaskRoleArn = (aws: AwsAccount, name: string): string =>
+  `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-${name}-task`;
+
+/** The task role a service runs as: configured, its own managed role, or the shared default. */
+export function awsTaskRoleArn(aws: AwsAccount, name: string, service: AwsServiceConfig): string {
+  if (service.taskRoleArn) return service.taskRoleArn;
+  if (name === "core" || service.assumeRoleArns?.length) return awsManagedTaskRoleArn(aws, name);
+  return `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task`;
+}
+
+export const awsMicrovmExecRoleArn = (config: QmConfig, aws: AwsAccount): string =>
+  config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`;
+
 export interface AwsConfig {
   deploymentState?: { table: string; namespace: string };
   accountId: string;
@@ -1295,12 +1311,8 @@ function validateAws(
     }
     services[name] = service;
   }
-  const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string => {
-    if (service.taskRoleArn) return service.taskRoleArn;
-    if (name === "core") return `arn:aws:iam::${accountId}:role/${cluster}-core-task`;
-    const roleName = service.assumeRoleArns ? `${cluster}-${name}-task` : `${cluster}-task`;
-    return `arn:aws:iam::${accountId}:role/${roleName}`;
-  };
+  const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string =>
+    awsTaskRoleArn({ accountId, cluster }, name, service);
   const taskRoleOwners = new Map<string, string[]>();
   for (const [name, service] of Object.entries(services)) {
     const role = effectiveTaskRoleArn(name, service);
