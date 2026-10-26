@@ -3,13 +3,19 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
-import { MAX_OUTBOUND_FILES } from "../../core/attachments.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { CommandDenied, NeedsApproval } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
-import { PRESSURE_WARN_FULL60, fmtStatus, optionalBoolean, optionalString, text } from "./shared.ts";
+import {
+  FILE_SEND_GUIDANCE,
+  PRESSURE_WARN_FULL60,
+  fmtStatus,
+  optionalBoolean,
+  optionalString,
+  text,
+} from "./shared.ts";
 
 export function computerTools(kit: ToolKit) {
   const {
@@ -187,23 +193,6 @@ export function computerTools(kit: ToolKit) {
 
   const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
     recordFail(callId, summary, message);
-
-  const outboundFilesSchema = Type.Array(
-    Type.Union([
-      Type.String({ minLength: 1 }),
-      Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-    ]),
-    { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
-  );
-  const outboundSandboxSchema = Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
-    }),
-  );
-  const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
-  const FILE_SEND_GUIDANCE =
-    "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
 
   const scopedBullet =
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
@@ -657,7 +646,7 @@ export function computerTools(kit: ToolKit) {
       }
     },
   });
-  return { outboundFilesSchema, outboundSandboxSchema, sandboxSelector, execute, sandboxManagement, background };
+  return { execute, sandboxManagement, background };
 }
 
 /**

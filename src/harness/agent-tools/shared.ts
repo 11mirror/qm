@@ -1,6 +1,7 @@
 // Schema helpers, result capping and list/cron formatting shared by the agent tool families.
 
 import { Type } from "typebox";
+import { MAX_OUTBOUND_FILES } from "../../core/attachments.ts";
 import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import type { CronFireLogEntry } from "../../types.ts";
 import { headTailSlice } from "../../util/text.ts";
@@ -220,3 +221,20 @@ export const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may
 
 export const outsideWorkspace = (path: string): string =>
   `[not in the computer's workspace: ${path}; only workspace files can be read, so copy it there or name it relative to the workspace]`;
+
+export const outboundFilesSchema = Type.Array(
+  Type.Union([
+    Type.String({ minLength: 1 }),
+    Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  ]),
+  { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+);
+export const outboundSandboxSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+  }),
+);
+export const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
+export const FILE_SEND_GUIDANCE =
+  "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
