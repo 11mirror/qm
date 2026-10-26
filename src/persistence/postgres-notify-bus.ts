@@ -6,19 +6,24 @@ import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 import { subscribePostgresChannel } from "./postgres-listener.ts";
 export const MAX_NOTIFY_PAYLOAD_BYTES = 7_500;
 
-function encodeCapped<T>(event: T): string | null {
+function encodeCapped<T>(event: T, label: string): string | null {
   const payload = JSON.stringify(event);
-  return Buffer.byteLength(payload, "utf8") <= MAX_NOTIFY_PAYLOAD_BYTES ? payload : null;
+  const bytes = Buffer.byteLength(payload, "utf8");
+  if (bytes <= MAX_NOTIFY_PAYLOAD_BYTES) return payload;
+  console.warn(
+    `[${label}] event of ${bytes} bytes exceeds the ${MAX_NOTIFY_PAYLOAD_BYTES}-byte NOTIFY limit; other instances will not see it`,
+  );
+  return null;
 }
 
 export function createPostgresNotifyBus<T>(
   connectionString: string,
   channel: string,
   label: string,
-  encode: (event: T) => string | null = encodeCapped,
+  encode: (event: T) => string | null = (event) => encodeCapped(event, label),
 ): EventBus<T> {
   if (!/^[a-z][a-z0-9_]*$/.test(channel)) throw new Error(`invalid NOTIFY channel name: ${channel}`);
-  const pg = createPgPool(connectionString, []);
+  const pg = createPgPool(connectionString);
   const local = createMemoryEventBus<T>(label);
 
   let stopListening: (() => Promise<void>) | null = null;

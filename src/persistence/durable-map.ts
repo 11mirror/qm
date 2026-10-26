@@ -1,5 +1,6 @@
 import { createPgPool, type PgPool, type PoolClient, tenantCols } from "./pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -154,7 +155,7 @@ export function createPostgresMap<T>(
       await client.query("COMMIT");
       return result;
     } catch (e) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(swallowAs(`durable-map ${table}: rollback`, undefined));
       throw e;
     } finally {
       client.release();
