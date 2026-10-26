@@ -1,7 +1,6 @@
-import { decodeSlackEntities, escapeSlackText } from "./mrkdwn.ts";
+import { escapeSlackText } from "./mrkdwn.ts";
 import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
-import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackContextSource } from "./config.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -30,14 +29,6 @@ export type SlackHistoryReader = (
 
 const MIRROR_CONTEXT_NOTE =
   "Context comes from stored Slack events. Earlier messages, missed events, reactions, and attachment details may be absent; this is not a complete Slack history.";
-
-const fileKey = (values: Array<{ id?: string; name?: string; mimetype?: string }>): string =>
-  JSON.stringify(
-    values
-      .filter((f) => f.id)
-      .map((f) => [f.id, f.name ?? null, f.mimetype ?? null])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-  );
 
 export function createSlackHistoryReader(deps: {
   core: SlackCoreClient;
@@ -123,81 +114,7 @@ export function createSlackHistoryReader(deps: {
     };
   }
 
-  async function compareShadow(
-    live: SlackHistoryPage,
-    channel: string,
-    threadTs?: string,
-    before?: string,
-    expandThreads = false,
-  ): Promise<void> {
-    if (!deps.core.readSurfaceMessages) return;
-    try {
-      const mirrorPage = await mirrorHistory(channel, threadTs, before, expandThreads, limit);
-      const timestamps = new Set(mirrorPage.rows.map((m) => m.ts));
-      const liveTimestamps = new Set(live.raw.flatMap((m) => (m.ts ? [m.ts] : [])));
-      const ids = [...liveTimestamps];
-      const storedRows: CachedMessage[] = [];
-      for (let i = 0; i < ids.length; i += 500) storedRows.push(...(await readStored(channel, ids.slice(i, i + 500))));
-      const byTs = new Map(storedRows.map((m) => [m.ts, m]));
-      let textMismatches = 0;
-      let staleEditedMessages = 0;
-      let threadParentMismatches = 0;
-      let fileMismatches = 0;
-      let matchingMessages = 0;
-      let storedMessages = 0;
-      for (const message of live.raw) {
-        const stored = message.ts ? byTs.get(message.ts) : undefined;
-        if (!stored || stored.deleted) continue;
-        storedMessages++;
-        const content = messageWithForwardedContent(message);
-        const textMatches = stored.text === decodeSlackEntities(content.text);
-        const parentMatches =
-          stored.sub === (message.thread_ts && message.thread_ts !== message.ts ? message.thread_ts : undefined);
-        const filesMatch =
-          fileKey(content.files) === fileKey((stored.files ?? []).map((f) => ({ ...f, id: f.fileId })));
-        const stale = Math.round(Number(message.edited?.ts) * 1000) > (stored.editedAt ?? 0);
-        if (!textMatches) textMismatches++;
-        if (!parentMatches) threadParentMismatches++;
-        if (!filesMatch) fileMismatches++;
-        if (stale) staleEditedMessages++;
-        if (textMatches && parentMatches && filesMatch && !stale && timestamps.has(stored.ts)) matchingMessages++;
-      }
-      console.info(
-        JSON.stringify({
-          event: "slack_mirror_shadow",
-          version: 2,
-          thread: Boolean(threadTs),
-          expandThreads,
-          conversationKind: channel.startsWith("D") ? "dm" : "channel_or_group",
-          staleEditedMessages,
-          liveMessages: liveTimestamps.size,
-          mirroredMessages: timestamps.size,
-          mirrorHasMore: mirrorPage.hasMore,
-          mirrorTruncatedExpansions: mirrorPage.truncatedExpansions ?? 0,
-          storedMessages,
-          matchingMessages,
-          textMismatches,
-          threadParentMismatches,
-          fileMismatches,
-          liveMessagesMissingFromStorage: ids.filter((ts) => !byTs.has(ts) || byTs.get(ts)!.deleted).length,
-          liveMessagesMissingFromMirror: ids.filter((ts) => !timestamps.has(ts)).length,
-          mirrorMessagesOutsideLiveWindow: [...timestamps].filter((ts) => !liveTimestamps.has(ts)).length,
-          missingThreadParent: Boolean(threadTs && !timestamps.has(threadTs)),
-          liveHasMore: live.hasMore,
-          liveExpansionFailures: live.expansionFailures ?? 0,
-          liveTruncatedExpansions: live.truncatedExpansions ?? 0,
-          liveComplete: !live.hasMore && !live.expansionFailures && !live.truncatedExpansions,
-        }),
-      );
-    } catch {
-      console.info(
-        JSON.stringify({ event: "slack_mirror_shadow", version: 2, outcome: "read_failed", thread: Boolean(threadTs) }),
-      );
-    }
-  }
-
   const backfilled = new Set<string>();
-  let shadowPending = false;
   return async (client, channel, threadTs, before, expandThreads, live) => {
     if (live) {
       const page = await liveHistory(client, channel, threadTs, before, expandThreads);
@@ -205,16 +122,7 @@ export function createSlackHistoryReader(deps: {
         throw new Error("Live Slack thread exceeds the history limit; its replies could not be read completely.");
       return page;
     }
-    if (deps.source !== "mirror") {
-      const live = await liveHistory(client, channel, threadTs, before, expandThreads);
-      if (deps.source === "shadow" && !shadowPending) {
-        shadowPending = true;
-        void compareShadow(structuredClone(live), channel, threadTs, before, expandThreads).finally(() => {
-          shadowPending = false;
-        });
-      }
-      return live;
-    }
+    if (deps.source !== "mirror") return liveHistory(client, channel, threadTs, before, expandThreads);
     const key = threadTs ? `${channel}:${threadTs}` : channel;
     let mirrored: SlackHistoryMessage[] = [];
     let mirrorResult: SlackHistoryPage | undefined;

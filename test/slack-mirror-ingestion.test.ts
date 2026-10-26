@@ -457,17 +457,13 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
   assert.equal(f.events[1].broadcast, undefined);
 });
 
-test("real message handler checks prior stake before ingesting the current reply without a shadow miss", async (t) => {
+test("real message handler checks prior stake before ingesting the current reply", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
     { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
   ]);
   const calls: any[] = [];
-  const records: any[] = [];
-  t.mock.method(console, "info", (text: string) => {
-    records.push(JSON.parse(text));
-  });
   const currentTs = "3.000001";
   const client = {
     conversations: {
@@ -486,7 +482,7 @@ test("real message handler checks prior stake before ingesting the current reply
     },
   };
   const reader = createSlackHistoryReader({
-    source: "shadow",
+    source: "live",
     ids,
     core: { readSurfaceMessages: (channel: string, opts: any) => cache.readMessages(channel, opts) } as any,
     historyClient: client as never,
@@ -508,15 +504,9 @@ test("real message handler checks prior stake before ingesting the current reply
     thread_ts: "1.000001",
     text: "follow-up",
   });
-  for (let i = 0; i < 200 && (f.dispatches.length === 0 || records.length === 0); i++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let i = 0; i < 200 && f.dispatches.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(f.dispatches.length, 1);
   assert.equal(calls.length, 1);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].liveMessages, 2);
-  assert.equal(records[0].matchingMessages, 2);
-  assert.equal(records[0].liveMessagesMissingFromStorage, 0);
-  assert.equal(records[0].liveMessagesMissingFromMirror, 0);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
   assert.equal(calls.length, 1);
 });

@@ -7,12 +7,11 @@ import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
 
-export type SlackContextSource = "live" | "shadow" | "mirror";
+export type SlackContextSource = "live" | "mirror";
 
 export function parseSlackContextSource(value: string | undefined): SlackContextSource {
   const source = value?.trim() || "live";
-  if (source !== "live" && source !== "shadow" && source !== "mirror")
-    throw new Error("SLACK_CONTEXT_SOURCE must be live, shadow, or mirror");
+  if (source !== "live" && source !== "mirror") throw new Error("SLACK_CONTEXT_SOURCE must be live or mirror");
   return source;
 }
 

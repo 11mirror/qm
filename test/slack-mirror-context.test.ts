@@ -324,8 +324,8 @@ test("deleted messages do not consume context page slots or reappear through fal
   );
 });
 
-test("shared-app shadow compares equal pages while mirror reads retain stored history", async (t) => {
-  const { cache, core, readHistory, client } = fixture();
+test("shared-app mirror reads retain stored history beyond the live page", async () => {
+  const { cache, readHistory, client } = fixture();
   const messages = Array.from({ length: 30 }, (_, i) => ({
     ts: `${1000 + i}.000000`,
     text: `message ${i}`,
@@ -333,22 +333,6 @@ test("shared-app shadow compares equal pages while mirror reads retain stored hi
   }));
   await cache.ingest(messages.map((m) => ({ container: "C1", ts: m.ts, text: m.text, authorId: m.user })));
   assert.equal((await readHistory(client, "C1")).raw.length, 30);
-  let resolveReport!: (value: any) => void;
-  const report = new Promise<any>((resolve) => {
-    resolveReport = resolve;
-  });
-  t.mock.method(console, "info", (value: string) => resolveReport(JSON.parse(value)));
-  const shadow = createSlackHistoryReader({ core, ids, source: "shadow", managed: true });
-  const liveClient = {
-    conversations: {
-      history: async () => ({ messages: messages.slice(-15).reverse(), has_more: true }),
-    },
-  };
-  assert.equal((await shadow(liveClient, "C1")).raw.length, 15);
-  const comparison = await report;
-  assert.equal(comparison.matchingMessages, 15);
-  assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 0);
-  assert.equal(comparison.mirrorHasMore, true);
 });
 
 test("thread history keeps file references and authors but only current files are turn attachments", async () => {

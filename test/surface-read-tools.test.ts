@@ -13,7 +13,7 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
+function freshApp(slackContextSource?: "live" | "mirror") {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));
   return buildApp(testConfig({ dataDir, ...(slackContextSource ? { slackContextSource } : {}) }));
 }

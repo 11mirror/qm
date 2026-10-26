@@ -126,23 +126,21 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
   assert.equal(stored.files?.length ?? 0, 0);
 });
 
-test("live and shadow do not repair their own comparison source", async () => {
-  for (const source of ["live", "shadow"] as const) {
-    let writes = 0;
-    const read = createSlackHistoryReader({
-      ids,
-      source,
-      core: {
-        readSurfaceMessages: async () => [],
-        rememberSurfaceHistory: async () => {
-          writes++;
-        },
-      } as unknown as SlackCoreClient,
-    });
-    await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "live" }] }) } }, "C");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(writes, 0);
-  }
+test("live reads do not repair the mirror", async () => {
+  let writes = 0;
+  const read = createSlackHistoryReader({
+    ids,
+    source: "live",
+    core: {
+      readSurfaceMessages: async () => [],
+      rememberSurfaceHistory: async () => {
+        writes++;
+      },
+    } as unknown as SlackCoreClient,
+  });
+  await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "live" }] }) } }, "C");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes, 0);
 });
 
 test("event mirroring preserves mention IDs for current-context rendering", async () => {
