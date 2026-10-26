@@ -34,7 +34,6 @@ const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((r) => surface.listen(0, r));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 const IDENTITY = {
-  cookie: "webuiuser=alice",
   [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET),
   "content-type": "application/json",
 };

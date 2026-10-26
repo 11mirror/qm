@@ -1,7 +1,5 @@
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
-export type AuthMode = "portal" | "dev";
-
 export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
   analytics?: { apiKey: string; host: string };
@@ -10,7 +8,6 @@ export interface Me {
   suggestedActivitiesGeneration?: boolean;
   individualModelAuth?: boolean;
   modelAuthConnected?: boolean;
-  mode?: AuthMode;
   user: string;
   org: string;
   slackWorkspaceUrl?: string | null;

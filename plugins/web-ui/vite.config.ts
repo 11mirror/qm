@@ -104,7 +104,6 @@ export default defineConfig({
     port: Number(process.env.VITE_PORT ?? 5173),
     fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] },
     proxy: {
-      "/signin": SERVER,
       "/share": SERVER,
       "/me": SERVER,
       "/api": SERVER,

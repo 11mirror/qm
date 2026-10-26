@@ -1,3 +1,4 @@
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -38,7 +39,8 @@ const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
-const headers = { cookie: "webuiuser=alice", "x-portal-identity": "tok-file-view" };
+const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 3_600_000 }, "file-content-portal-identity-test");
+const headers = { [PORTAL_IDENTITY_HEADER]: token };
 
 test.after(() => {
   surface.close();
@@ -54,7 +56,7 @@ test("file content forwards the portal identity so core's viewer gate is satisfi
   const coreCall = calls.slice(before).find((c) => c.method === "GET" && c.url.startsWith("/v1/files/f1/content"));
   assert.equal(
     coreCall?.portalIdentity,
-    "tok-file-view",
+    token,
     "web-ui must forward x-portal-identity — dropping it 401s and breaks every inline image",
   );
   assert.match(coreCall?.url ?? "", /[?&]viewer=alice(&|$)/, "web-ui must send viewer alongside the token");

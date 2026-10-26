@@ -68,7 +68,6 @@ test.after(() => {
 });
 
 const IDENTITY = {
-  cookie: "webuiuser=alice",
   [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET),
 };
 

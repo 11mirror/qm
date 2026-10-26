@@ -1,3 +1,4 @@
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
@@ -25,6 +26,12 @@ const core = createServer(async (req, res) => {
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "suggestions-route-test";
+const IDENTITY = {
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { p: "alice", exp: Date.now() + 3_600_000 },
+    process.env.CORE_SIGNING_SECRET!,
+  ),
+};
 process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.WEB_UI_SUGGESTED_ACTIVITIES = JSON.stringify(activities);
 const { handler } = await import("../server/index.ts");
@@ -41,7 +48,7 @@ test("only signed-in users receive configured suggestions", async () => {
   const anonymous = await fetch(`${base}/me`);
   assert.equal(anonymous.status, 401);
   assert.equal((await anonymous.json()).suggestedActivities, undefined);
-  const signedIn = await fetch(`${base}/me`, { headers: { cookie: "webuiuser=alice" } });
+  const signedIn = await fetch(`${base}/me`, { headers: { ...IDENTITY } });
   assert.equal(signedIn.status, 200);
   assert.deepEqual((await signedIn.json()).suggestedActivities, activities);
 });
@@ -50,7 +57,7 @@ test("generation requires sign-in and derives identity and seeds server-side", a
   assert.equal((await fetch(`${base}/api/suggested-activities`, { method: "POST" })).status, 401);
   const result = await fetch(`${base}/api/suggested-activities`, {
     method: "POST",
-    headers: { cookie: "webuiuser=alice", "content-type": "application/json" },
+    headers: { ...IDENTITY, "content-type": "application/json" },
     body: JSON.stringify({ principalId: "bob", seeds: [] }),
   });
   assert.equal(result.status, 200);
@@ -60,7 +67,7 @@ test("generation requires sign-in and derives identity and seeds server-side", a
 test("with generation on, the page load leaves fallback suggestions to the generation request so dismissed ones never flash", async () => {
   generation = true;
   try {
-    const body = await (await fetch(`${base}/me`, { headers: { cookie: "webuiuser=alice" } })).json();
+    const body = await (await fetch(`${base}/me`, { headers: { ...IDENTITY } })).json();
     assert.equal(body.suggestedActivitiesGeneration, true);
     assert.equal(body.suggestedActivities, undefined);
   } finally {

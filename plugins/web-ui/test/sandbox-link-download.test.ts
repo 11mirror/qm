@@ -1,3 +1,4 @@
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -29,9 +30,14 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 process.env.NODE_ENV = "test";
-process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "1";
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = "sandbox-link-download-test";
+const IDENTITY = {
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { p: "alice", exp: Date.now() + 3_600_000 },
+    process.env.CORE_SIGNING_SECRET!,
+  ),
+};
 process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
@@ -46,7 +52,7 @@ test.after(() => {
 
 test("sandbox markdown download resolves an authorized file-library item", async () => {
   const response = await fetch(`${base}/api/files/by-name/content?name=interview-list.csv`, {
-    headers: { cookie: "webuiuser=alice" },
+    headers: { ...IDENTITY },
     redirect: "manual",
   });
   assert.equal(response.status, 302);
@@ -56,7 +62,7 @@ test("sandbox markdown download resolves an authorized file-library item", async
 
 test("sandbox markdown download stays unavailable when no visible file matches", async () => {
   const response = await fetch(`${base}/api/files/by-name/content?name=missing.csv`, {
-    headers: { cookie: "webuiuser=alice" },
+    headers: { ...IDENTITY },
     redirect: "manual",
   });
   assert.equal(response.status, 404);
