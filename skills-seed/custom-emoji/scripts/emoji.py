@@ -182,7 +182,7 @@ MOTIONS = {
 }
 
 
-def frame(src, t, motion, size=128):
+def frame(src, t, motion, size=128, matte=None):
     m = {"dx": 0, "dy": 0, "rot": 0, "sx": 1, "sy": 1, "scale": 1, "ground": False, **MOTIONS[motion](t)}
     big = src.width
     layer = src.convert("RGBa").resize((int(big * m["scale"] * m["sx"]), int(big * m["scale"] * m["sy"])), Image.LANCZOS)
@@ -195,6 +195,10 @@ def frame(src, t, motion, size=128):
     shot = canvas.resize((size, size), Image.LANCZOS).convert("RGBA")
     alpha = shot.getchannel("A")
     rgb = shot.convert("RGB")
+    if matte:
+        rgb = Image.composite(rgb, Image.new("RGB", rgb.size, matte), alpha)
+        rgb.putalpha(alpha.point(lambda a: 255 if a >= 48 else 0))
+        return rgb
     rgb.paste(rgb.filter(ImageFilter.MinFilter(3)), mask=alpha.point(lambda a: 255 if 0 < a < 255 else 0))
     rgb.putalpha(alpha.point(lambda a: 255 if a >= 128 else 0))
     return rgb
@@ -224,16 +228,24 @@ def flat_palette(src, share=0.004, merge=40):
     return img, len(pal) // 3 - 1
 
 
-def animate(src_path, out, motion, frames=10, loop_ms=700):
+def animate(src_path, out, motion, frames=10, loop_ms=700, matte=None):
     if not 8 <= frames <= 12 or not 300 <= loop_ms <= 900:
         sys.exit("use 8-12 frames and a 300-900 ms loop")
     src = Image.open(src_path).convert("RGBA")
     if src.width < 256:
         src = src.resize((512, 512), Image.LANCZOS)
-    pal, clear = flat_palette(src)
+    shots = [frame(src, i / frames, motion, matte=matte) for i in range(frames)]
+    if matte:
+        strip = Image.new("RGB", (128 * frames, 128), matte)
+        for i, s in enumerate(shots):
+            strip.paste(s.convert("RGB"), (128 * i, 0), s.getchannel("A"))
+        pal = strip.quantize(63, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        pal.putpalette(pal.getpalette()[: 63 * 3] + [255, 0, 255])
+        clear = 63
+    else:
+        pal, clear = flat_palette(src)
     out_frames = []
-    for i in range(frames):
-        shot = frame(src, i / frames, motion)
+    for shot in shots:
         q = shot.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
         q.paste(clear, mask=shot.getchannel("A").point(lambda a: 255 - a))
         out_frames.append(q)
@@ -304,6 +316,7 @@ def main():
     an.add_argument("--motion", choices=sorted(MOTIONS), required=True)
     an.add_argument("--frames", type=int, default=10)
     an.add_argument("--loop-ms", type=int, default=700)
+    an.add_argument("--matte", help="hex colour to blend the edge ring against, e.g. 808080")
     jd = sub.add_parser("judge")
     jd.add_argument("subject")
     jd.add_argument("images", nargs="+")
@@ -313,7 +326,8 @@ def main():
     elif a.cmd == "process":
         print(process(a.src, a.out))
     elif a.cmd == "animate":
-        print(json.dumps(review_motion(animate(a.src, a.out, a.motion, a.frames, a.loop_ms), a.subject), indent=2))
+        matte = tuple(int(a.matte[i:i + 2], 16) for i in (0, 2, 4)) if a.matte else None
+        print(json.dumps(review_motion(animate(a.src, a.out, a.motion, a.frames, a.loop_ms, matte), a.subject), indent=2))
     else:
         scores, bar = judge({os.path.basename(i): i for i in a.images}, a.subject)
         print(json.dumps({"reference_median": bar, "candidates": scores}, indent=2))
