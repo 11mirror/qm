@@ -1,8 +1,6 @@
 import { SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
-import { createAdminCall } from "../tools/admin.ts";
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
-import { externalTools } from "./orchestrator/external-tools.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -16,38 +14,24 @@ import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTex
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../harness/goal.ts";
-import {
-  type DeliveryProvenance,
-  type ScopeId,
-  type TurnResult,
-  type TurnRuntime,
-  type PendingApprovalRecord,
-} from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn } from "./turn-origin.ts";
+import { type ScopeId, type TurnResult, type TurnRuntime, type PendingApprovalRecord } from "../types.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { loadProtocolFile } from "../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
-import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachPost } from "../reach/reach.ts";
-import { turnPostProvenance } from "../surfaces/outbound.ts";
 import { recentPrincipalDeliveryNote } from "../surfaces/recent-dm-posts.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { isOverheard, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
-import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
-import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { environmentDelta, renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { GapWork, HarnessDetectResult, HarnessTurnInput, RuntimeChoice } from "../harness/harness.ts";
-import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
+import { forModelContext } from "../harness/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -63,13 +47,8 @@ import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
-import { createToolContext, type CommandCredential } from "../tools/primitives.ts";
-import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../harness/replay-images.ts";
-import { principalEntitledToScope } from "../resolution/context-filter.ts";
-import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   environmentNote,
   inboundIssuesNote,
@@ -78,7 +57,6 @@ import {
   materializeInbound,
   safeAttachmentName,
   senderNote,
-  type ArtifactRegistration,
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import {
@@ -110,6 +88,7 @@ import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
 import { mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
 import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
+import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
@@ -124,15 +103,12 @@ import {
   isScreenableTextAttachment,
   renderTitleTranscript,
   stripAckPrefix,
-  turnPostKeys,
   visibleTitleItemText,
 } from "./orchestrator/turn-helpers.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
-import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
-import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -317,7 +293,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessionTurn,
         humanInput,
         authorizationOrigin,
-        liveTurn,
         liveAuthorTurn,
         messageTs,
         entryTs,
@@ -378,7 +353,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         directory: deps.directory,
         projects: deps.projects,
       });
-      const { sharingSources, memoryScopeId, memoryAccess } = context;
+      const { sharingSources, memoryScopeId } = context;
       resolution.grantedHandles = context.listFiles();
       let memoryView = await context.memorySnapshot(false);
       const framed = await frameTurnPrompt(ctx, {
@@ -395,7 +370,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let systemPrompt = framed.systemPrompt;
       const {
         surfaceName,
-        sessionSyscalls,
         delegateWork,
         turnContextBlocks,
         scopeProfile,
@@ -486,25 +460,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const {
-        openSpeakerKeychain,
-        ownerAuthAvailable,
-        connectorEnv,
-        commandCredentials,
-        credentialDescriptions,
-        credentialBroker,
-        registerKeychainCredentials,
-        registerConnectorCredentials,
-        serviceCredRecords,
-        grantedCredSlugs,
-        actorIsOrgAdmin,
-        controlClaims,
-        scopeAttestation,
-        egressTokenForPolicy,
-        egressTokenForTurn,
-        registerServiceCredentials,
-        openAutomationKeychain,
-      } = await buildCredentialCatalog(ctx, {
+      const catalog = await buildCredentialCatalog(ctx, {
         securityPolicy,
         strictReadOnly,
         sharingSources,
@@ -512,11 +468,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         defaultDestination,
         session,
       });
+      const {
+        openSpeakerKeychain,
+        ownerAuthAvailable,
+        connectorEnv,
+        credentialDescriptions,
+        serviceCredRecords,
+        grantedCredSlugs,
+        actorIsOrgAdmin,
+        controlClaims,
+        scopeAttestation,
+        egressTokenForPolicy,
+        egressTokenForTurn,
+        openAutomationKeychain,
+      } = catalog;
       let toolCalls = 0;
-      let harnessOnGapWork: ((work: GapWork) => void) | undefined;
+      const gapWork: { listener?: (work: GapWork) => void } = {};
       const emitGapWork = (phase: GapPhase, start: number, end: number): void => {
         try {
-          harnessOnGapWork?.({ phase, start, end });
+          gapWork.listener?.({ phase, start, end });
         } catch (e) {
           swallow("gap-work emit", e);
         }
@@ -552,18 +522,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnContextBlocks["Sandbox environment profile"] = renderComputerBlock(scopeProfile.spec, workspaceLayout);
       }
 
-      const {
-        ownerAuthCommand,
-        provision,
-        provisionScratch,
-        accessResource,
-        provisionResource,
-        provisionOwnerAuth,
-        useSkill,
-        provisionForReach,
-        reclaimBox,
-        invalidateProvision,
-      } = createTurnSandboxes({
+      const sandboxes = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
         input,
         actor,
@@ -583,6 +542,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         visibleSkillsForTurn,
         emitGapWork,
       });
+      const { provision, reclaimBox } = sandboxes;
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse(deps, {
         sessionId: session.id,
@@ -752,150 +712,50 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.turnStream?.begin(input.runId);
         }
 
-        const backgroundBroker =
-          deps.processes && supportsProcessSessions(deps.sandbox)
-            ? createBackgroundBroker({
-                sandbox: deps.sandbox,
-                registry: deps.processes,
-                provisionSandbox: provisionResource,
-                onExit: (handle, processId) =>
-                  finishProcessCredentials(
-                    {
-                      sandbox: deps.sandbox,
-                      processes: deps.processes!,
-                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
-                    },
-                    handle,
-                    processId,
-                  ),
-                scopeId: memoryScopeId,
-                sessionRef: conversation.threadRef,
-                ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
-                ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
-              })
-            : undefined;
-
-        const readOutputTail = backgroundBroker
-          ? async (processId: string, maxBytes: number) => {
-              const handle = (await backgroundBroker.handleFor?.(processId)) ?? (await provision());
-              return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
-                const read = await backgroundBroker.poll(handle, processId, {
-                  sinceCursor: cursor,
-                  maxBytes: readMaxBytes,
-                  waitMs: 0,
-                });
-                return {
-                  chunks: read.chunks,
-                  cursor: read.cursor,
-                  ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
-                };
-              });
-            }
-          : undefined;
-
-        const monitorBroker =
-          deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
-            ? createMonitorBroker({
-                store: deps.monitors,
-                registry: deps.processes,
-                readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
-                scopeId: memoryScopeId,
-                owner: actor.id,
-                ownerScopeId: scopeId,
-                threadRef: conversation.threadRef,
-                ...(defaultDestination ? { destination: defaultDestination } : {}),
-              })
-            : undefined;
-
-        const spine: SpineState = {
-          surfaceOutboundCount: 0,
-          crossConversationPosts: 0,
-          turnUserEntrySeq: undefined,
-        };
-        const turnKey = input.runId ?? randomUUID();
-        const postKeys = turnPostKeys(turnKey);
-        let spineFirstBlock = "";
-        let spineFirstBlockOpen = true;
-        let spineAckText: string | undefined;
-        const fileAudience =
-          !external && resolution.orgScopeId
-            ? defaultPublishAudience({
-                kind: conversation.kind,
-                ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-                ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-                ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
-                orgScopeId: resolution.orgScopeId,
-                ownerId: actor.id,
-              }).grantees
-            : [];
-        // Files posted into a group/DM conversation (e.g. a project web session) get no
-        // per-member grants from defaultPublishAudience ("auto-share deferred"), which left
-        // other members unable to load them. Grant the conversation scope itself read access
-        // so everyone party to the conversation can fetch what was posted into it.
-        const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
-        const fileGrantees = [...fileAudience];
-        if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
-          fileGrantees.push(scopeId);
-        }
-        const fileRegistration: ArtifactRegistration = {
-          store: deps.files,
-          ownerScopeId: fileOwnerScopeId,
-          createdBy: actor.id,
-          createdInScope: scopeId,
-          seed: input.runId ?? `${session.id}:${Date.now()}`,
-          ...(fileGrantees.length
-            ? {
-                onRegistered: async ({ ownerScopeId, id }) => {
-                  for (const granteeScopeId of fileGrantees) {
-                    await deps.acl.grant({
-                      ownerScopeId,
-                      ref: id,
-                      granteeScopeId,
-                      permission: "read",
-                      grantedBy: actor.id,
-                    });
-                  }
-                },
-              }
-            : {}),
-          onError: (e) =>
-            deps.errors?.record(
-              {
-                category: "file_store",
-                code: "register_failed",
-                message: errMessage(e),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              },
-              e,
-            ),
-        };
-        const postProvenance = (deliveryKey: string): DeliveryProvenance =>
-          turnPostProvenance({
-            origin: input.origin,
-            surface: input.surface,
-            fireKey: deliveryKey,
-            sourceScopeId: scopeId as ScopeId,
-            sourceThreadRef: session.threadRef,
-            sourceSessionId: session.id,
-          });
-        const earlyTaskAck =
-          input.surface === "slack" && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor;
+        const {
+          spine,
+          postKeys,
+          spineFirst,
+          fileRegistration,
+          postProvenance,
+          earlyTaskAck,
+          turnKey,
+          mayReadArtifact,
+          surfaceToolDeps,
+          attachStaging,
+          tools,
+        } = await buildTurnTools(ctx, {
+          session,
+          strictReadOnly,
+          context,
+          framed,
+          catalog,
+          sandboxes,
+          approvalLedger,
+          commandPolicy,
+          layerCommandRules,
+          reachAvailable,
+          turnSandboxResources,
+          gapWork,
+          turnAbort,
+          captureDependencies,
+          blobTransfer,
+        });
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
             !input.addressed ||
             sessionTurn ||
             isPollFire ||
-            !spineFirstBlockOpen ||
+            !spineFirst.open ||
             resume ||
             approvalReplay
           )
             return;
-          spineFirstBlockOpen = false;
-          const ack = spineFirstBlock.trim();
+          spineFirst.open = false;
+          const ack = spineFirst.block.trim();
           if (deliberatePost || !ack || !defaultDestination || !deps.outbound) return;
-          spineAckText = ack;
+          spineFirst.ackText = ack;
           const runId = input.runId;
           const ackKey = `ack:${turnKey}`;
           void reachPost({
@@ -908,209 +768,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(() => deps.turnStream?.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
-        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-        const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
-          if (
-            conversation.audience.every((principal) =>
-              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
-            )
-          )
-            return true;
-          let handles = fresh ? undefined : readableHandles;
-          handles ??= await deps.acl.handlesForAudience(
-            conversation.audience,
-            scopeId,
-            resolution.orgScopeId,
-            principalEntitledToScope,
-          );
-          if (!fresh) readableHandles = handles;
-          return handles.some(
-            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id,
-          );
-        };
-        const provisionOutbound = (sandboxId?: string) =>
-          sandboxId !== undefined ? provisionResource(sandboxId) : provision();
-        const openStoredOutbound = async (id: string) => {
-          const artifact = await deps.files.get(id);
-          if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
-          const opened = await deps.files.open(id);
-          return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
-        };
-        const surfaceToolDeps = createSurfaceToolDeps({
-          deps,
-          input,
-          actor,
-          conversation,
-          session,
-          scopeId,
-          strictReadOnly,
-          defaultDestination,
-          blobTransfer,
-          fileRegistration,
-          provision: provisionOutbound,
-          openStored: openStoredOutbound,
-          postProvenance,
-          postKeys,
-          spine,
-        });
-        const attachStaging = createAttachStaging({
-          sandbox: deps.sandbox,
-          provision: provisionOutbound,
-          openStored: openStoredOutbound,
-          blobTransfer,
-          fileRegistration,
-        });
-        if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
-          console.error(
-            `[orchestrator] trigger delivery has no surface tools (no outbound sender?) — reply would be lost session=${session.id}`,
-          );
-
-        const canInstallCanvas =
-          deps.installSharedCanvas &&
-          liveTurn &&
-          (await deps.featureFlags?.enabled("ui_canvas", personalScope(actor.id))) === true;
-        const baseTools = createToolContext({
-          desktopClientId: desktopClientForTurn(input),
-          ...(canInstallCanvas
-            ? {
-                installSharedCanvas: (fileId: string) =>
-                  deps.installSharedCanvas!(actor.id, fileId, {
-                    threadRef: conversation.threadRef,
-                    sessionId: session.id,
-                  }),
-              }
-            : {}),
-          sandbox: deps.sandbox,
-          sandboxResources: turnSandboxResources,
-          invalidateProvision,
-          provision,
-          provisionScratch,
-          provisionResource,
-          accessSandboxResource: accessResource,
-          ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
-          ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
-          useSkill,
-          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
-          ...(reachAvailable
-            ? {
-                reach: {
-                  resolveChannel: (q: string) =>
-                    resolveReachableChannel(q, { directory: deps.directory!, actorId: actor.id }),
-                  provisionFor: provisionForReach,
-                },
-              }
-            : {}),
-          layers: resolution.layers,
-          commandPolicy: () => commandPolicy,
-          layerCommandRules: () => layerCommandRules,
-          authorizeCommand,
-          grantedHandles: resolution.grantedHandles,
-          context,
-          workspace: deps.workspace,
-          deploy: deps.deploy,
-          acl: deps.acl,
-          files: deps.files,
-          auditLog: deps.auditLog,
-          createdBy: actor.id,
-          commandCredentials,
-          resolveCommandCredentials: async (handles) => {
-            const refreshed = new Map<string, CommandCredential>();
-            const identities = new Map<string, string>();
-            const add: Parameters<typeof registerKeychainCredentials>[0] = (
-              credential,
-              _description,
-              identity = credential.handle,
-            ) => {
-              const prior = identities.get(credential.handle);
-              if (prior !== undefined) {
-                if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-                return;
-              }
-              identities.set(credential.handle, identity);
-              refreshed.set(credential.handle, credential);
-            };
-            const broker = credentialBroker(handles);
-            await registerKeychainCredentials(add, broker);
-            await registerConnectorCredentials(add, broker);
-            await registerServiceCredentials(add, broker);
-            for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
-              add(credential, "");
-            return [...refreshed.values()];
-          },
-          ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
-          publishContext: {
-            conversationKind: conversation.kind,
-            ...(conversation.channelRef ? { channelRef: conversation.channelRef } : {}),
-            ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-            ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-            ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
-          },
-          ...(deps.config ? { config: deps.config } : {}),
-          ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
-          ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
-            ? {
-                admin: {
-                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
-                  operationsAvailable:
-                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
-                },
-              }
-            : {}),
-          ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external ? { humanTurn: true } : {}),
-          ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
-          ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(sessionSyscalls
-            ? {
-                sessionSyscalls: sessionSyscalls.forTurn({
-                  session,
-                  scopeId: scopeId as ScopeId,
-                  orgScopeId: resolution.orgScopeId,
-                  liveTurn,
-                  request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
-                }),
-              }
-            : {}),
-          ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          memory: context.memory,
-          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
-          memoryScopeId,
-          ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
-          ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
-          ...(deps.deploymentLayer
-            ? {
-                layerAuth: {
-                  credentialPaths: deps.deploymentLayer.credentialPaths,
-                  splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
-                },
-              }
-            : {}),
-          sessionHistory: (() => {
-            const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
-            return {
-              search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
-              open: async (seq: number) => openSessionItem(await historyView(), seq),
-            };
-          })(),
-          ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
-          ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-          ...(deps.ledger ? { ledger: deps.ledger } : {}),
-          ...(deps.signals ? { signals: deps.signals } : {}),
-          ...(input.runId ? { runId: input.runId } : {}),
-          attempt: input.attempt ?? 1,
-          ...(backgroundBroker ? { backgroundBroker } : {}),
-          ...(monitorBroker ? { monitorBroker } : {}),
-          onGapWork: (work) => {
-            try {
-              harnessOnGapWork?.(work);
-            } catch (e) {
-              swallow("gap-work forward", e);
-            }
-          },
-        });
-
-        const tools = external ? externalTools(baseTools, accessResource) : baseTools;
 
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(
@@ -1931,8 +1588,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 markFirstToken();
               }
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
-              if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
-                spineFirstBlock += chunk;
+              if (input.surfaceTools && spineFirst.open && spineFirst.block.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
+                spineFirst.block += chunk;
             },
             onReasoningDelta: (step: string, index: number, chunk: string) => {
               if (input.runId && deps.turnStream && !input.surfaceTools)
@@ -1945,7 +1602,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
-              if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
+              if (input.surfaceTools && spineFirst.block) spineFirst.open = false;
               if (!input.surfaceTools) {
                 const streamOffset =
                   input.runId && deps.turnStream
@@ -1964,7 +1621,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             },
             onGapWork: (cb) => {
-              harnessOnGapWork = cb;
+              gapWork.listener = cb;
             },
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
@@ -2040,7 +1697,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
-          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+          const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
           if (primaryReply && defaultDestination && deps.outbound) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
@@ -2063,7 +1720,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               history: nudgeHistory,
             });
             if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-              const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+              const fallback = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
               if (fallback && defaultDestination && deps.outbound) {
                 try {
                   const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
