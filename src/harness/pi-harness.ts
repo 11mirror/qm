@@ -156,10 +156,8 @@ export interface PiHarnessOptions {
   captureRequests?: boolean;
   systemCacheSplit?: boolean;
   scratchExec?: boolean;
-  ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
-  sandboxResources?: boolean;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -1550,7 +1548,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const captureRequests = opts?.captureRequests ?? true;
   const systemCacheSplit = opts?.systemCacheSplit ?? false;
   const scratchExec = opts?.scratchExec ?? false;
-  const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -1560,7 +1557,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
       scratchExec,
-      ownerAuthExec,
       reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
@@ -1573,7 +1569,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
       ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
       ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-      sandboxResources: opts?.sandboxResources,
     });
   }
   async function createTurnSession(

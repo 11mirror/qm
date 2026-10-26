@@ -318,7 +318,6 @@ export interface AgentToolsOptions {
   sessionTools?: boolean;
   commandCredentialHandles?: readonly string[];
   scratchExec?: boolean;
-  ownerAuthExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -326,7 +325,6 @@ export interface AgentToolsOptions {
   backgroundJobTtlMaxMs?: number;
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
-  sandboxResources?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
@@ -341,10 +339,7 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
-    // Availability is checked per turn; Open can be enabled without restarting the harness.
-    ownerAuthExec: true,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -378,7 +373,6 @@ const outsideWorkspace = (path: string): string =>
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const scratchExec = !!opts?.scratchExec;
-  const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -783,7 +777,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
-    (ownerAuthExec ? '"owner" | ' : "") +
+    '"owner" | ' +
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
@@ -791,9 +785,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     (scratchExec
       ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
-    (ownerAuthExec
-      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n'
-      : "") +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
     (scratchExec
@@ -804,18 +796,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
-    (ownerAuthExec
-      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
-      : "") +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
     (scratchExec
       ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
       : "") +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
-  const legacyDescription =
-    "Run a shell command in the isolated sandbox and return its stdout/stderr/exit code. " +
-    "Use this for any computation, file inspection, or running programs. " +
     EXECUTE_TIMEOUT_GUIDANCE;
 
   const runScopedExecute = async (
@@ -834,7 +820,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const keyword = scope.toLowerCase();
     const durable = params.durable;
     if (keyword === "scoped") {
-      if ((scratchExec || ownerAuthExec) && durable === false) {
+      if (durable === false) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
@@ -856,14 +842,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return runExecute(callId, params, { scratch: true });
     }
     if (keyword === "owner") {
-      if (!ownerAuthExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "owner_unavailable" },
-          '[error] an owner-auth box is not available on this turn — use scope:"scoped".',
-        );
-      }
       if (durable === true) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(
@@ -891,17 +869,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        ...(scratchExec || ownerAuthExec
-          ? {
-              durable: Type.Optional(
-                Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored when reaching a room.` }),
-              ),
-            }
-          : {}),
+        durable: Type.Optional(Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored when reaching a room.` })),
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
-  } else if (scratchExec || ownerAuthExec) {
+  } else {
     execute = defineTool({
       name: "execute",
       label: "execute",
@@ -910,11 +882,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...executeBaseParams,
         scope: Type.Optional(
           Type.Union(
-            [
-              Type.Literal("scoped"),
-              ...(scratchExec ? [Type.Literal("scratch")] : []),
-              ...(ownerAuthExec ? [Type.Literal("owner")] : []),
-            ],
+            [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
             {
               description:
                 'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
@@ -925,21 +893,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
-  } else {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: legacyDescription,
-      parameters: Type.Object(executeBaseParams),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
   }
 
-  const sandboxActions = [
-    "status",
-    "restart",
-    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
-  ];
+  const sandboxActions = ["status", "restart", "list", "create", "set_default", "retire"];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
@@ -1083,13 +1039,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       path: Type.Optional(
         Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
       ),
-      ...(opts?.sandboxResources
-        ? {
-            sandbox_id: Type.Optional(
-              Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
-            ),
-          }
-        : {}),
+      sandbox_id: Type.Optional(
+        Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
+      ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
