@@ -3,7 +3,7 @@ import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { workingSessionThreadRefs } from "../subagents/tree.ts";
 import {
   type GetItemsOptions,
   type ParticipantPageQuery,

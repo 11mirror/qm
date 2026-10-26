@@ -25,7 +25,7 @@ import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
 import type { SessionStateBus } from "../../runs/session-state-bus.ts";
-import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
+import type { SessionSyscallsFactory } from "../../subagents/session-tools.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { RecentDmPosts } from "../../surfaces/recent-dm-posts.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";

@@ -29,16 +29,16 @@ import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
+import { createSessionSyscalls } from "./subagents/session-tools.ts";
+import { deliverSubagentMail } from "./subagents/mail.ts";
 import {
-  createSessionSyscalls,
-  deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRunCount,
   sessionTreeWorking,
   stoppableAncestors,
-  SUBAGENT_THREAD_PREFIX,
   SUBAGENT_TREE_RUN_CAP,
-} from "./sessions/session-syscalls.ts";
+} from "./subagents/tree.ts";
+import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -2174,8 +2174,7 @@ export function buildApp(
         throw error;
       });
   runs.onTerminal((run) => {
-    if (run.sessionId.startsWith(SUBAGENT_THREAD_PREFIX))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+    if (isSubagentThreadRef(run.sessionId)) void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;

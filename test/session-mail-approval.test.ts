@@ -22,7 +22,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";

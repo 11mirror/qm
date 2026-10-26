@@ -1,6 +1,7 @@
 import { scopeTeamsToTurn } from "../../teams/teams.ts";
 import { externalSlackRequestAllowed } from "../../resolution/external-slack.ts";
-import { delegatedAuthorizationOrigin, isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
+import { delegatedAuthorizationOrigin } from "../../subagents/delegation.ts";
+import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
 import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
 import { isSessionTurn } from "../turn-origin.ts";

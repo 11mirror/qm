@@ -8,17 +8,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
-import {
-  createSessionSyscalls,
-  deliverSubagentMail,
-  isSubagentThreadRef,
-  renderSubagentMail,
-  SUBAGENT_TREE_RUN_CAP,
-  requiresDelegation,
-  sessionTreeRunCount,
-  delegatedAuthorizationOrigin,
-  stopSessionTree,
-} from "../src/sessions/session-syscalls.ts";
+import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
+import { deliverSubagentMail, renderSubagentMail } from "../src/subagents/mail.ts";
+import { requiresDelegation, delegatedAuthorizationOrigin } from "../src/subagents/delegation.ts";
+import { SUBAGENT_TREE_RUN_CAP, sessionTreeRunCount, stopSessionTree } from "../src/subagents/tree.ts";
+import { isSubagentThreadRef } from "../src/sessions/thread-ref.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
