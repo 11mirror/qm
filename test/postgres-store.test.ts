@@ -909,6 +909,36 @@ test("pg latestItemSeq and participant windows round-trip", { skip }, async () =
   );
 });
 
+test("pg attributed turns follow later appends, window changes and session deletes", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "ATTRIB-CACHE");
+  const session = await s.getOrCreateByThread(`attrib-cache-${randomUUID()}`, "dm", scope);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  const turns = async () =>
+    (await s.attributedTurns())
+      .filter((t) => t.sessionId === session.id)
+      .map((t) => [t.principalId, t.turns])
+      .sort();
+  await s.addParticipant(session.id, "attrib-a");
+  await s.append(lease!, { kind: "UserMessage", text: "one" });
+  assert.deepEqual(await turns(), [["attrib-a", 1]]);
+  await s.append(lease!, { kind: "UserMessage", text: "two" });
+  await s.append(lease!, { kind: "AgentMessage", text: "reply" });
+  assert.deepEqual(await turns(), [["attrib-a", 2]], "a later user message is counted on the next read");
+  await s.addParticipant(session.id, "attrib-b", undefined, { includeHistory: true });
+  assert.deepEqual(
+    await turns(),
+    [
+      ["attrib-a", 2],
+      ["attrib-b", 2],
+    ],
+    "a widened window is picked up",
+  );
+  await s.deleteSession(session.id);
+  assert.deepEqual(await turns(), [], "a deleted session leaves nothing behind");
+});
+
 test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {
   const at = Date.now() + 1_000_000;
   const s = createPostgresSessionStore(URL!, { now: () => at });
