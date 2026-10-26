@@ -227,7 +227,7 @@ export function sandboxCoreEnv(config: QmConfig): { env: Record<string, string> 
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve" || backend === "e2b") env.SANDBOX_BACKEND = backend;
+  if (backend && backend !== "sprites" && backend !== "aws") env.SANDBOX_BACKEND = backend;
   return { env };
 }
 

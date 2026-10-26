@@ -1,12 +1,13 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
+import type { SandboxBackendId } from "./providers.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue } from "./util.ts";
 
 type SecretCondition =
   | { kind: "background-work-control" }
-  | { kind: "sandbox-backend"; backend: string }
+  | { kind: "sandbox-backend"; backend: SandboxBackendId }
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
   | { kind: "env-all-absent"; service: DeclaredServiceName; names: string[] }
