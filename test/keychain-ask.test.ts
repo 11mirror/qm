@@ -33,6 +33,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -311,6 +312,50 @@ test("sweep is the durable retry for approve/decline resolutions that never fire
   t += ASK_PRUNE_AFTER_MS + 1;
   await sweep(t);
   assert.equal(await k.getAsk(ask.id), null, "resolved+notified asks are pruned after the retention window");
+});
+
+test("a sweep over ask history makes one grant query and no per-ask lookups", async () => {
+  let t = 1_000_000;
+  const lookups: string[] = [];
+  const counted = <T>(name: string, map: DurableMap<T>): DurableMap<T> => ({
+    ...map,
+    get: (id) => {
+      lookups.push(name);
+      return map.get(id);
+    },
+    selectEntries: (query) => {
+      lookups.push(`${name} batch`);
+      return map.selectEntries(query);
+    },
+  });
+  const k = createKeychain({
+    lock: testAdvisoryLock(),
+    creds: counted("creds", testMap()),
+    grants: counted("grants", testMap()),
+    asks: testMap(),
+    key: KEY,
+    now: () => t,
+  });
+  const cred = await k.save(GH);
+  for (const channel of ["C1", "C2", "C3"])
+    await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: `channel:${channel}`,
+      requesterThreadRef: `cron:task-${channel}:fire:1`,
+      purpose: "p",
+    });
+  t += ASK_TTL_MS + 1;
+  const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+  await sweep(t);
+  lookups.length = 0;
+  await sweep(t);
+  assert.deepEqual(lookups, ["grants batch"], "one grant query covers every unsettled ask");
+  t += ASK_PRUNE_AFTER_MS + 1;
+  lookups.length = 0;
+  await sweep(t);
+  assert.deepEqual(lookups, ["grants batch", "creds"], "the retention check reads each credential once per sweep");
+  assert.equal((await k.listAsks({ requesterScopeId: "channel:C1" })).length, 1, "each task keeps its latest decision");
 });
 
 test("sweep isolates per-ask failures — one failed fire doesn't starve the batch", async () => {

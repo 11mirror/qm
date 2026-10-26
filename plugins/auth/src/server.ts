@@ -124,7 +124,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     (Boolean(cfg.allowedEmailDomain) && email.endsWith(`@${cfg.allowedEmailDomain}`)) ||
     invited(email);
   const now = deps.now ?? Date.now;
-  const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
+  const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task);
   const formAction = `${cfg.publicPath}/authorize`;
   const passwords = passwordConfigured(cfg);
   const signInForm = (
@@ -142,16 +142,21 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     });
   const linkTtlMinutes = Math.max(1, Math.round(cfg.linkTtlS / 60));
   let inFlightSends = 0;
-  const background = (task: () => Promise<void>): void => {
+  const background = (email: string, task: () => Promise<void>): void => {
     if (inFlightSends >= MAX_INFLIGHT_SENDS) {
       console.warn("[auth] sign-in link suppressed: too many deliveries already in flight");
       return;
     }
     inFlightSends++;
     notify(
-      task().finally(() => {
-        inFlightSends--;
-      }),
+      task()
+        .catch((e: unknown) => {
+          reportBackendError(e);
+          console.error(`[auth] sign-in link to ${email} could not be delivered: ${errMessage(e)}`);
+        })
+        .finally(() => {
+          inFlightSends--;
+        }),
     );
   };
 
@@ -269,7 +274,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       let session: RememberedSession | null;
       try {
         session = await sessions.use(token);
-      } catch {
+      } catch (e) {
+        reportBackendError(e);
         return problem(
           res,
           503,
@@ -341,7 +347,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     let session: RememberedSession & { token: string };
     try {
       session = await sessions.create(email, cfg.sessionIdleS, cfg.sessionAbsoluteS);
-    } catch {
+    } catch (e) {
+      reportBackendError(e);
       return problem(
         res,
         503,
@@ -380,15 +387,10 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     }
     const sealed = await signer.sealLink({ ...request, email }, cfg.linkTtlS, nowMs);
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
-    try {
-      const receipt = await sender.send(
-        renderSignInEmail({ to: email, brandName: brandName(), link, ttlMinutes: linkTtlMinutes }),
-      );
-      console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
-    } catch (e) {
-      reportBackendError(e);
-      console.error(`[auth] sign-in link to ${email} could not be delivered: ${errMessage(e)}`);
-    }
+    const receipt = await sender.send(
+      renderSignInEmail({ to: email, brandName: brandName(), link, ttlMinutes: linkTtlMinutes }),
+    );
+    console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
   }
 
   async function authorizeSubmit(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -429,7 +431,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         ttlMinutes: linkTtlMinutes,
       }),
     );
-    background(() => sendLink(request, email, ip, mailer));
+    background(email, () => sendLink(request, email, ip, mailer));
   }
 
   function confirmVerify(res: ServerResponse): void {
@@ -483,7 +485,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     let session: RememberedSession & { token: string };
     try {
       session = await sessions.create(link.email, cfg.sessionIdleS, cfg.sessionAbsoluteS);
-    } catch {
+    } catch (e) {
+      reportBackendError(e);
       return problem(
         res,
         503,
