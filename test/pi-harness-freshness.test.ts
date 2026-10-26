@@ -96,15 +96,28 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}"));
     calls.push({ url: String(url), model: body.model, thinking: body.thinking });
-    return new Response(
-      JSON.stringify({
-        content: [
-          { type: "thinking", thinking: "" },
-          { type: "text", text: '{"emoji":"eyes"}' },
-        ],
-      }),
-      { status: 200 },
-    );
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_ack",
+          type: "message",
+          role: "assistant",
+          model: body.model,
+          content: [],
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: '{"emoji":"eyes"}' } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+      { type: "message_stop" },
+    ];
+    return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
   }) as typeof globalThis.fetch;
   try {
     const picked = await harness.models.pickAckEmoji?.("ship it", ["eyes", "rocket"]);
