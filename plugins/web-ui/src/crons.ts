@@ -3,7 +3,6 @@ import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2, type IconNode } 
 import { api, userSendMessage } from "./core-bridge";
 import {
   artifactPage,
-  confirmDialogTpl,
   detailTpl,
   fieldTpl,
   iconBtn,
@@ -20,6 +19,7 @@ import { startNewChat } from "./sessions";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { cronNextFire, cronRunSummary, cronScheduleDetail, cronScheduleSummary } from "./cron-format";
 import { tip } from "./tooltip";
+import { confirmDialogTpl } from "./dialog-focus";
 
 export interface CronView {
   id: string;

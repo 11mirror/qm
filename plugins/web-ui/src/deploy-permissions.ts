@@ -7,7 +7,7 @@ import { icon } from "./icons";
 import { scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./deploy-view";
 import { errMessage } from "../../chassis/src/errors";
-import { peopleResults, type DirectoryMatch } from "./people-results";
+import { PeopleSearch, peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
 
 interface Grant {
@@ -28,22 +28,22 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   let grantees: Grant[] = [];
   let publicAccess = false;
   let externalSharing = true;
-  let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
   let selected: (DirectoryMatch & { email?: string }) | null = null;
-  let searchSequence = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let searching = false;
   const names = new Map<string, string>();
   let busy = true;
   let loaded = false;
   let error = "";
-  let searched = false;
   const endpoint = `/api/deployments/${encodeURIComponent(id)}/share`;
+  const people = new PeopleSearch(
+    () => draw(),
+    (person) =>
+      `personal:${person.principalId}` !== owner &&
+      !grantees.some((grant) => grant.scope === `personal:${person.principalId}`),
+  );
   const close = () => {
-    clearTimeout(timer);
-    searchSequence++;
+    people.clear();
     closeFormMenus();
     dialog.close();
     dialog.remove();
@@ -85,9 +85,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
         error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
       query = "";
-      searched = false;
-      searchSequence++;
-      matches = [];
+      people.clear();
     });
   };
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
@@ -106,41 +104,6 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       if (next === "restricted" && grant) await post({ scope: grant.scope, access: "none" });
     });
   };
-  const search = async () => {
-    const sequence = ++searchSequence;
-    const term = query.trim();
-    if (!term) {
-      matches = [];
-      searched = false;
-      searching = false;
-      draw();
-      return;
-    }
-    searching = true;
-    error = "";
-    draw();
-    try {
-      const response = await api<{ matches?: DirectoryMatch[] }>(
-        `/api/directory/resolve?q=${encodeURIComponent(term)}`,
-      );
-      if (sequence !== searchSequence || !dialog.isConnected) return;
-      matches = (response.matches ?? [])
-        .filter(
-          (person) =>
-            `personal:${person.principalId}` !== owner &&
-            !grantees.some((grant) => grant.scope === `personal:${person.principalId}`),
-        )
-        .slice(0, 8);
-      searched = true;
-    } catch (e) {
-      if (sequence === searchSequence) error = errMessage(e, "Could not find people.");
-    } finally {
-      if (sequence === searchSequence && dialog.isConnected) {
-        searching = false;
-        draw();
-      }
-    }
-  };
   const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
   const generalAccessNote = (): string => {
     const level = generalAccess();
@@ -153,7 +116,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     if (!externalSharing) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
     const taken = [owner, ...grantees.map((g) => g.scope)].some((s) => s.toLowerCase() === `personal:${email}`);
-    return taken || matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
+    return taken || people.matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
   };
   const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
     html`<fieldset class="permission-control" ?disabled=${busy}>
@@ -235,8 +198,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                     : html`<form
                         @submit=${(event: SubmitEvent) => {
                           event.preventDefault();
-                          clearTimeout(timer);
-                          void search();
+                          if (query.trim()) void people.run(query.trim());
                         }}
                       >
                         <div class="project-member-search-row">
@@ -251,21 +213,17 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                             ?disabled=${busy}
                             @input=${(event: Event) => {
                               query = (event.currentTarget as HTMLInputElement).value;
-                              searchSequence++;
-                              matches = [];
-                              searched = false;
-                              clearTimeout(timer);
-                              timer = setTimeout(() => void search(), 200);
+                              people.schedule(query);
                             }}
                           />
                         </div>
-                        ${peopleResults(matches, busy, (person) => {
+                        ${peopleResults(people.matches, busy, (person) => {
                           selected = person;
                           closeFormMenus();
                           draw();
                         })}
                         ${
-                          !searching && searched && emailCandidate()
+                          !people.searching && people.searchedQuery && emailCandidate()
                             ? html`
                                 <button
                                   class="project-member-result"
@@ -289,8 +247,8 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                               `
                             : nothing
                         }
-                        ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
-                        ${!searching && searched && !matches.length && !emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
+                        ${people.searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
+                        ${!people.searching && people.searchedQuery && !people.matches.length && !emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
                       </form>`
                 }
               </div>`
@@ -353,7 +311,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
             : nothing
         }
         ${busy ? html`<p role="status">Loading…</p>` : nothing}
-        ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}
+        ${error || people.error ? html`<p class="composer-error" role="alert">${error || people.error}</p>` : nothing}
         <div class="project-dialog-actions actions"><button class="btn" @click=${close}>Done</button></div>
       `,
       dialog,

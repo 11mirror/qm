@@ -13,7 +13,6 @@ import {
 } from "./skill-registry";
 import {
   artifactPage,
-  confirmDialogTpl,
   detailTpl,
   fieldTpl,
   listBackLink,
@@ -24,7 +23,7 @@ import {
 } from "./list-page";
 import { fieldSelect } from "./ui";
 import { scopeTitle } from "./contexts";
-import { focusDialogCancel, restoreDialogFocus } from "./dialog-focus";
+import { confirmDialogTpl, focusDialogCancel, restoreDialogFocus } from "./dialog-focus";
 import { tip } from "./tooltip";
 
 let skillRows: SkillItem[] = [];

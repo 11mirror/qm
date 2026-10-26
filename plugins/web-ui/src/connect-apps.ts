@@ -11,6 +11,8 @@ import {
 import { LitElement, html, nothing, render } from "lit";
 import { ArrowUpRight, Check, RefreshCw, Search, TriangleAlert } from "lucide";
 import { icon } from "./icons";
+import { askConfirm } from "./dialog-focus";
+import { brandName } from "./ui";
 import { webFetch } from "./core-bridge";
 import { connectorLogo } from "./connector-logo";
 import type { Me } from "./shell-state";
@@ -284,9 +286,14 @@ export class ConnectApps extends LitElement {
       this.drawPicker();
     }
   }
-  private confirmDisconnect(account: ConnectedAccount, name: string): void {
-    if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
-      void this.disconnect(account, name);
+  private async confirmDisconnect(account: ConnectedAccount, name: string): Promise<void> {
+    const confirmed = await askConfirm({
+      id: "connect-apps-disconnect",
+      title: `Disconnect ${name}?`,
+      body: `${brandName()} will lose access to it until you connect it again.`,
+      confirm: "Disconnect",
+    });
+    if (confirmed) void this.disconnect(account, name);
   }
   private requestedToolkit(): string {
     return this.services.some((service) => service.id === this.toolkit) ? this.toolkit : "";
@@ -508,7 +515,7 @@ export class ConnectApps extends LitElement {
                                     type="button"
                                     class="kc-text-action danger"
                                     ?disabled=${Boolean(this.authorizing || this.disconnecting)}
-                                    @click=${() => this.confirmDisconnect(account, service.name)}
+                                    @click=${() => void this.confirmDisconnect(account, service.name)}
                                   >
                                     Disconnect
                                   </button>`
