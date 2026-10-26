@@ -12,6 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -255,10 +256,7 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
       expiresAt: Date.now() + 3_600_000,
     });
     let linked = (await read()).providers.orders;
-    for (let attempt = 0; attempt < 100 && !linked?.connected; attempt++) {
-      await new Promise((r) => setTimeout(r, 20));
-      linked = (await read()).providers.orders;
-    }
+    await settle(async () => (linked = (await read()).providers.orders)?.connected === true);
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");
     assert.equal(linked?.available, true);

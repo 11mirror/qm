@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { createEnvelopeStaging, envelopeKey, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";
 import { testMap } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const LANDS = { stageTimeoutMs: 30_000 };
 
 async function staged(read: () => Promise<unknown>): Promise<void> {
-  for (let attempt = 0; attempt < 300 && (await read()) === null; attempt++) await tick(10);
+  await settle(async () => (await read()) !== null);
 }
 
 async function cleared(read: () => Promise<unknown>): Promise<unknown> {
-  for (let attempt = 0; attempt < 300 && (await read()) !== null; attempt++) await tick(10);
+  await settle(async () => (await read()) === null);
   return read();
 }
 
@@ -28,7 +30,7 @@ test("the staging key is scoped by account, event type, channel and ts, and igno
 
 test("staging lands within its budget, or reports that it did not", async () => {
   const map = testMap<StagedEnvelope>();
-  const staging = createEnvelopeStaging(map, { account: "acct" });
+  const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   assert.equal(await staging.stage("k1", envelope("message", "1.0")), true);
   assert.ok(await map.get("k1"));
   const slow = createEnvelopeStaging({ ...map, putIfAbsent: () => new Promise(() => {}) } as typeof map, {
@@ -56,7 +58,7 @@ test("the sweep replays only stale unclaimed rows of its own account, claims the
   assert.deepEqual(replayed, ["3.0"], "only the stale row of this account replays");
   assert.equal(await staging.sweep(replay), 0, "a claimed row is not replayed again inside its claim window");
   staging.accepted("fresh");
-  await tick(0);
+  await cleared(() => map.get("fresh"));
   now += 10 * 60_000;
   assert.equal(await staging.sweep(replay), 1);
   now += 10 * 60_000;
@@ -76,7 +78,7 @@ test("a replay whose handler durably accepts clears the row through accepted()",
 
 test("gate: when the cap fires first, the envelope is staged before the ack; later acceptance clears it", async () => {
   const map = testMap<StagedEnvelope>();
-  const staging = createEnvelopeStaging(map, { account: "acct" });
+  const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const events: string[] = [];
   const { ack, gate } = createDeferredEnvelopeAck(
@@ -87,7 +89,7 @@ test("gate: when the cap fires first, the envelope is staged before the ack; lat
   );
   await ack();
   await staged(() => map.get("slack:acct:message:C1:1.0"));
-  for (let attempt = 0; attempt < 300 && events.length === 0; attempt++) await tick(10);
+  await settle(async () => events.length > 0);
   assert.deepEqual(events, ["ack"]);
   assert.ok(await map.get("slack:acct:message:C1:1.0"), "the row exists while acceptance is unknown");
   gate.persisted();
@@ -108,21 +110,31 @@ test("gate: when staging cannot land before the cap, the ack is withheld so Slac
   const body = envelope("message", "1.0");
   let acks = 0;
   let withheld = 0;
+  let onWithhold!: () => void;
+  const withholding = new Promise<void>((resolve) => (onWithhold = resolve));
   const { ack } = createDeferredEnvelopeAck(
     async () => {
       acks++;
     },
-    { gated: true, capMs: 10, onWithhold: () => withheld++, ...envelopeStageFor(slow, body) },
+    {
+      gated: true,
+      capMs: 10,
+      onWithhold: () => {
+        withheld++;
+        onWithhold();
+      },
+      ...envelopeStageFor(slow, body),
+    },
   );
   await ack();
-  await tick(60);
+  await withholding;
   assert.equal(acks, 0);
   assert.equal(withheld, 1);
 });
 
 test("gate: a handler failure after the cap leaves the staged row for the sweeper", async () => {
   const map = testMap<StagedEnvelope>();
-  const staging = createEnvelopeStaging(map, { account: "acct" });
+  const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const { ack, gate } = createDeferredEnvelopeAck(async () => {}, {
     gated: true,
@@ -261,7 +273,7 @@ test("gate: acceptance that lands while the stage write is still in flight still
 
 test("gate: a handler failure after the cap keeps the staged row even though the receiver reports completion", async () => {
   const map = testMap<StagedEnvelope>();
-  const staging = createEnvelopeStaging(map, { account: "acct" });
+  const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const { ack, gate } = createDeferredEnvelopeAck(async () => {}, {
     gated: true,

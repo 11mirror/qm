@@ -2603,7 +2603,8 @@ test("pg participant view: pin/color are per-participant, survive re-add, and cl
 });
 
 test("pg conversation pins: add, list, remove, and delete with the session", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
+  let clock = Date.now();
+  const s = createPostgresSessionStore(URL!, { now: () => ++clock });
   const scope = scopeId("personal", "UPINS");
   const sess = await s.getOrCreateByThread("pins-1", "dm", scope);
 
