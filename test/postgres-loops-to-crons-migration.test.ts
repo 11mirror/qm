@@ -2,11 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { LOOPS_TO_CRONS_MIGRATION } from "../src/cron/cron-store.ts";
-import { renderSourceInboxTask } from "../src/inbox/sync-task.ts";
+import { pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
 import { applyTenancy } from "../src/persistence/tenancy.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the loops-to-crons migration test";
+
+test("the loops-to-crons migration stays byte-identical as the inbox task evolves", () => {
+  assert.equal(
+    pgMigrationChecksum(LOOPS_TO_CRONS_MIGRATION.statements),
+    "61ac2ad5d1909cfbe1119e0e16519a0f6e551a653d154b132349305ac12cd20a",
+  );
+});
 
 test("loops become crons with an inbox and keep their items", { skip }, async () => {
   const pg = (await import("pg")).default;
@@ -64,7 +71,10 @@ test("loops become crons with an inbox and keep their items", { skip }, async ()
       assert.equal(cronRows["c-paused"]!.enabled, false);
       assert.deepEqual(cronRows["c-mail"]!.inbox, { source: "gmail" });
       assert.equal(cronRows["c-mail"]!.title, "Email sync");
-      assert.equal(cronRows["c-mail"]!.action, renderSourceInboxTask("gmail"));
+      assert.match(
+        cronRows["c-mail"]!.action as string,
+        /^Source restriction: scan only gmail\. [^\n]*\nInbox sync v8\. /,
+      );
       assert.deepEqual(cronRows["c-plain"], { id: "c-plain", ...crons["c-plain"] });
 
       const itemRows: Record<string, Record<string, unknown>> = Object.fromEntries(

@@ -542,6 +542,14 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   assert.equal((disabled.body as { syncCron: { enabled: boolean } }).syncCron.enabled, false);
 });
 
+test("inbox sync keeps its scan watermark in Files, not on sandbox disk", () => {
+  for (const source of ["gmail", "slack"]) {
+    const task = renderSourceInboxTask(source);
+    assert.ok(task.includes("Keep a lastScanAt watermark in this cron's state file in Files"));
+    assert.ok(!task.includes("~/workspace"));
+  }
+});
+
 test("a send carrying the draft it saw is refused when the agent redrafted in between", async () => {
   const w = world();
   const { cron, item } = await seed(w);
