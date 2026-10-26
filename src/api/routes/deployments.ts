@@ -1,6 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
-import { SocksProxyAgent } from "socks-proxy-agent";
+import { DeployAccessError, type DeployAccessErrorCode, type Reach } from "../../deploy/deploy-service.ts";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import {
@@ -15,14 +14,13 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, verifyOrReject } from "../http.ts";
+import { sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { resolveShareTarget as resolveShareTargetGrammar, type ResolvedShareTarget } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
@@ -33,11 +31,7 @@ import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-an
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { tenant } from "../../tenant.ts";
 
-function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
-  if (port === undefined) return {};
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid deployment SOCKS port");
-  return { agent: new SocksProxyAgent(`socks5h://127.0.0.1:${port}`, { keepAlive: false }) };
-}
+const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 const isStringRecord = (v: unknown): v is Record<string, string> =>
   isObj(v) && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
@@ -59,24 +53,13 @@ function isDeployInput(b: unknown): b is DeployInput {
 }
 
 async function proxyDeployment(ctx: BaseCtx): Promise<void> {
-  const { req, res, app, deps, secret, auth, url, pathname, method } = ctx;
+  const { req, res, app, deps, secret, url, pathname, method } = ctx;
   const rest = pathname.slice("/d/".length);
   const slash = rest.indexOf("/");
   const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
   const subPath = slash === -1 ? "/" : rest.slice(slash);
   const principal = (req.headers["x-as-principal"] as string) ?? "";
-  if (
-    !(await verifyOrReject(
-      req,
-      res,
-      secret,
-      auth,
-      canonicalPayload(method, pathname + url.search, principal),
-      false,
-      ctx.allowUnsignedSourceAuth,
-    ))
-  )
-    return;
+  if (!(await verifySignedRoute(ctx, principal))) return;
   if (deps.requireSignedPortalIdentity || deps.production) {
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawTok = req.headers[PORTAL_IDENTITY_HEADER];
@@ -100,7 +83,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   ) {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+    if (d && slug && APP_SLUG.test(slug)) {
       res.writeHead(302, {
         location: `https://${slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
@@ -130,22 +113,10 @@ function adminDeploymentProxyParts(pathname: string): { id: string; subPath: str
 }
 
 async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
-  const { req, res, app, deps, secret, auth, url, pathname, method } = ctx;
-  const parts = adminDeploymentProxyParts(pathname);
+  const { req, res, app, deps } = ctx;
+  const parts = adminDeploymentProxyParts(ctx.pathname);
   if (!parts) return sendJson(res, 404, { error: "not_found" });
-  const actorHeader = (req.headers["x-admin-actor"] as string) ?? "";
-  if (
-    !(await verifyOrReject(
-      req,
-      res,
-      secret,
-      auth,
-      canonicalPayload(method, pathname + url.search, actorHeader),
-      false,
-      ctx.allowUnsignedSourceAuth,
-    ))
-  )
-    return;
+  if (!(await verifySignedRoute(ctx, (req.headers["x-admin-actor"] as string) ?? ""))) return;
   const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
   const actor = await authorizeAdmin(
     { req, res, deps, capability: null },
@@ -183,18 +154,50 @@ const AGENT_FETCH_MAX_REDIRECTS = 5;
 const THROTTLE_SHIELD_MS = 5_000;
 const throttledUpstreams = new Map<string, number>();
 
+function setPruned(map: Map<string, number>, key: string, value: number, stale: (value: number) => boolean): void {
+  if (map.size > 1000) for (const [k, v] of map) if (stale(v)) map.delete(k);
+  map.set(key, value);
+}
+
 function armThrottleShield(upstreamKey: string, statusCode: number, upstream: NodeJS.EventEmitter): void {
   if (statusCode !== 429) return;
   let sawBody = false;
   upstream.on("data", () => (sawBody = true));
   upstream.on("end", () => {
     if (sawBody) return;
-    if (throttledUpstreams.size > 1000) {
-      for (const [k, until] of throttledUpstreams) if (Date.now() >= until) throttledUpstreams.delete(k);
-    }
-    throttledUpstreams.set(upstreamKey, Date.now() + THROTTLE_SHIELD_MS);
+    setPruned(throttledUpstreams, upstreamKey, Date.now() + THROTTLE_SHIELD_MS, (until) => Date.now() >= until);
   });
 }
+type OkReach = Extract<Reach, { status: "ok" }>;
+type ProxyOptions = { sandbox?: boolean; frameAncestors?: readonly string[] };
+
+const endpointOrigin = ({ endpoint: { host, port, tls } }: OkReach): string =>
+  `${tls ? "https" : "http"}://${host}:${port}`;
+const endpointAuthority = ({ endpoint: { host, port, tls } }: OkReach): string => (tls ? host : `${host}:${port}`);
+
+function writeUpstreamHead(
+  res: BaseCtx["res"],
+  upstreamKey: string,
+  status: number,
+  headers: Record<string, string | string[] | number | undefined>,
+  upstream: NodeJS.EventEmitter,
+  opts: ProxyOptions,
+): void {
+  markUpstreamUp(upstreamKey);
+  armThrottleShield(upstreamKey, status, upstream);
+  const safeHeaders = gatewaySafeResponseHeaders(headers, opts.sandbox ?? false, opts.frameAncestors);
+  if (opts.frameAncestors !== undefined) res.removeHeader("content-security-policy");
+  res.writeHead(status, safeHeaders);
+}
+
+function sendUpstreamFailure(res: BaseCtx["res"], htmlNav: boolean, timedOut: boolean): boolean {
+  if (res.headersSent) return false;
+  if (htmlNav) sendWarmingPage(res);
+  else if (timedOut) sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
+  else sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
+  return true;
+}
+
 const HTTP2_IDLE_TIMEOUT_MS = 60_000;
 const HTTP2_DRAIN_TIMEOUT_MS = 5_000;
 interface DeploymentHttp2Connection {
@@ -224,9 +227,9 @@ function frameAncestorsDirective(ancestors: readonly string[]): string {
   return `frame-ancestors 'self' ${ancestors.join(" ")}`;
 }
 
-function cspMentionsFrameAncestors(value: string | string[] | undefined): boolean {
-  if (!value) return false;
-  return (Array.isArray(value) ? value : [value]).some((v) => /frame-ancestors/i.test(v));
+function appendHeader(out: Record<string, string | string[]>, name: string, value: string): void {
+  const existing = out[name];
+  out[name] = existing ? [...(Array.isArray(existing) ? existing : [existing]), value] : value;
 }
 
 function gatewaySafeResponseHeaders(
@@ -251,19 +254,10 @@ function gatewaySafeResponseHeaders(
     else delete out["set-cookie"];
   }
   delete out["clear-site-data"];
-  if (sandbox) {
-    const existing = out["content-security-policy"];
-    out["content-security-policy"] = existing
-      ? [...(Array.isArray(existing) ? existing : [existing]), APP_SANDBOX_CSP]
-      : APP_SANDBOX_CSP;
-  }
-  if (frameAncestors?.length && !out["x-frame-options"] && !cspMentionsFrameAncestors(out["content-security-policy"])) {
-    const directive = frameAncestorsDirective(frameAncestors);
-    const existing = out["content-security-policy"];
-    out["content-security-policy"] = existing
-      ? [...(Array.isArray(existing) ? existing : [existing]), directive]
-      : directive;
-  }
+  if (sandbox) appendHeader(out, "content-security-policy", APP_SANDBOX_CSP);
+  const csp = [out["content-security-policy"] ?? []].flat();
+  if (frameAncestors?.length && !out["x-frame-options"] && !csp.some((v) => /frame-ancestors/i.test(v)))
+    appendHeader(out, "content-security-policy", frameAncestorsDirective(frameAncestors));
   return out;
 }
 
@@ -309,6 +303,11 @@ function releaseDeploymentHttp2Stream(origin: string, connection: DeploymentHttp
   connection.idleTimer.unref();
 }
 
+function http2SessionFailed(connection: DeploymentHttp2Connection, error: unknown, codes: string[]): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return connection.session.closed || connection.session.destroyed || (!!code && codes.includes(code));
+}
+
 function checkDeploymentHttp2Session(connection: DeploymentHttp2Connection): void {
   const timer = setTimeout(() => connection.session.destroy(), 1_000);
   timer.unref();
@@ -325,20 +324,20 @@ function checkDeploymentHttp2Session(connection: DeploymentHttp2Connection): voi
 
 function proxyReachHttp2(
   ctx: BaseCtx,
-  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  endpoint: OkReach,
   subPath: string,
   headers: Record<string, string | string[]>,
   bufferedBody: Buffer | null,
-  sandbox: boolean,
-  frameAncestors?: readonly string[],
+  opts: ProxyOptions,
 ): void {
   const { req, res, deps, url, method } = ctx;
-  const { host, port, tls } = endpoint.endpoint;
-  const origin = `${tls ? "https" : "http"}://${host}:${port}`;
+  const { host, port } = endpoint.endpoint;
+  const origin = endpointOrigin(endpoint);
+  const htmlNav = wantsWarmingPage(req, method);
   const requestHeaders: OutgoingHttpHeaders = {
     ":method": method,
     ":path": subPath + url.search,
-    ":authority": tls ? host : `${host}:${port}`,
+    ":authority": endpointAuthority(endpoint),
   };
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() !== "host") requestHeaders[name.toLowerCase()] = value;
@@ -358,13 +357,11 @@ function proxyReachHttp2(
     try {
       up = connection.session.request(requestHeaders);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      const sessionFailed =
-        connection.session.closed ||
-        connection.session.destroyed ||
-        code === "ERR_HTTP2_GOAWAY_SESSION" ||
-        code === "ERR_HTTP2_OUT_OF_STREAMS" ||
-        code === "ERR_HTTP2_INVALID_SESSION";
+      const sessionFailed = http2SessionFailed(connection, error, [
+        "ERR_HTTP2_GOAWAY_SESSION",
+        "ERR_HTTP2_OUT_OF_STREAMS",
+        "ERR_HTTP2_INVALID_SESSION",
+      ]);
       if (sessionFailed) retireDeploymentHttp2Connection(origin, connection);
       if (replaySafe && !retried && sessionFailed && !res.headersSent && !res.destroyed && !res.writableEnded)
         return start(true);
@@ -379,13 +376,11 @@ function proxyReachHttp2(
     const fail = (error?: unknown): void => {
       if (failureHandled) return;
       failureHandled = true;
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      const sessionFailed =
-        connection.session.closed ||
-        connection.session.destroyed ||
-        code === "ECONNRESET" ||
-        code === "ERR_HTTP2_SESSION_ERROR" ||
-        code === "ERR_HTTP2_INVALID_SESSION";
+      const sessionFailed = http2SessionFailed(connection, error, [
+        "ECONNRESET",
+        "ERR_HTTP2_SESSION_ERROR",
+        "ERR_HTTP2_INVALID_SESSION",
+      ]);
       if (sessionFailed) retireDeploymentHttp2Connection(origin, connection);
       const moved = deploymentHttp2Sessions.get(origin) !== connection;
       if (
@@ -402,25 +397,19 @@ function proxyReachHttp2(
         return start(true);
       }
       if (res.destroyed || res.writableEnded) return;
-      if (wantsWarmingPage(req, method) && !res.headersSent) sendWarmingPage(res);
-      else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
-      else res.destroy();
+      if (!sendUpstreamFailure(res, htmlNav, false)) res.destroy();
     };
     up.once("close", () => {
       releaseDeploymentHttp2Stream(origin, connection);
       if (!responseStarted || !up.readableEnded || up.rstCode !== http2Constants.NGHTTP2_NO_ERROR) fail();
       else if (!failureHandled && !res.destroyed && !res.writableEnded) res.end();
     });
-    const htmlNav = wantsWarmingPage(req, method);
     up.setTimeout(
       warmingDialTimeoutMs(`${host}:${port}`, htmlNav, deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs),
       () => {
         if (failureHandled) return;
         failureHandled = true;
-        if (htmlNav && !res.headersSent) sendWarmingPage(res);
-        else if (!res.headersSent)
-          sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
-        else res.end();
+        if (!sendUpstreamFailure(res, htmlNav, true)) res.end();
         up.close(http2Constants.NGHTTP2_CANCEL);
         checkDeploymentHttp2Session(connection);
       },
@@ -432,12 +421,7 @@ function proxyReachHttp2(
       }
       responseStarted = true;
       up.setTimeout(0);
-      markUpstreamUp(`${host}:${port}`);
-      armThrottleShield(`${host}:${port}`, Number(responseHeaders[":status"] ?? 0), up);
-      const status = Number(responseHeaders[":status"] ?? 502);
-      const safeHeaders = gatewaySafeResponseHeaders(responseHeaders, sandbox, frameAncestors);
-      if (frameAncestors !== undefined) res.removeHeader("content-security-policy");
-      res.writeHead(status, safeHeaders);
+      writeUpstreamHead(res, `${host}:${port}`, Number(responseHeaders[":status"] ?? 502), responseHeaders, up, opts);
       up.pipe(res, { end: false });
     });
     up.on("error", fail);
@@ -448,20 +432,12 @@ function proxyReachHttp2(
   start(false);
 }
 
-// --- cold-start warming page -------------------------------------------------
-// AWS microVMs auto-resume on first connect, which can take many seconds. During
-// that window a browser navigation would otherwise hang for the full dial timeout
-// and then land on raw gateway JSON. For document requests we instead answer
-// quickly with a small self-refreshing "warming up" page.
 const WARM_RECENT_MS = 60_000;
 const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
 const upstreamLastOk = new Map<string, number>();
 
 function markUpstreamUp(upstreamKey: string): void {
-  if (upstreamLastOk.size > 1000) {
-    for (const [k, at] of upstreamLastOk) if (Date.now() - at > WARM_RECENT_MS) upstreamLastOk.delete(k);
-  }
-  upstreamLastOk.set(upstreamKey, Date.now());
+  setPruned(upstreamLastOk, upstreamKey, Date.now(), (at) => Date.now() - at > WARM_RECENT_MS);
 }
 
 function wantsWarmingPage(req: BaseCtx["req"], method: string): boolean {
@@ -520,14 +496,13 @@ function sendWarmingPage(res: BaseCtx["res"]): void {
   });
   res.end(WARMING_PAGE_HTML);
 }
-// -----------------------------------------------------------------------------
 
 async function proxyReach(
   ctx: BaseCtx,
-  reach: Awaited<ReturnType<App["reachDeployment"]>>,
+  reach: Reach,
   subPath: string,
   viewer?: string,
-  opts?: { sandbox?: boolean; frameAncestors?: readonly string[] },
+  opts: ProxyOptions = {},
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
   if (res.destroyed) return;
@@ -546,12 +521,10 @@ async function proxyReach(
     res.end(JSON.stringify({ error: "throttled", message: "deployment is rate limited upstream" }));
     return;
   }
-  const requestFn = reach.endpoint.tls ? httpsRequest : httpRequest;
-  const hostHeader = reach.endpoint.tls ? host : `${host}:${port}`;
   let bufferedBody: Buffer | null = null;
   const headers: Record<string, string | string[]> = {
     ...forwardableHeaders(req),
-    host: hostHeader,
+    host: endpointAuthority(reach),
     ...reach.endpoint.proxyHeaders,
   };
 
@@ -580,50 +553,38 @@ async function proxyReach(
   }
   if (res.destroyed) return;
   if (reach.endpoint.httpVersion === "2") {
-    proxyReachHttp2(ctx, reach, subPath, headers, bufferedBody, opts?.sandbox ?? false, opts?.frameAncestors);
+    proxyReachHttp2(ctx, reach, subPath, headers, bufferedBody, opts);
     return;
   }
   const htmlNav = wantsWarmingPage(req, method);
-  const up = requestFn(
+  const up = (reach.endpoint.tls ? httpsRequest : httpRequest)(
     {
       hostname: host,
       port,
       path: subPath + url.search,
       method,
       headers,
-      ...deploymentProxyAgent(reach.endpoint.socksProxyPort),
     },
     (upRes) => {
       up.setTimeout(0);
-      markUpstreamUp(upstreamKey);
       upRes.on("error", () => res.destroy());
-      armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
-      const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false, opts?.frameAncestors);
-      if (opts?.frameAncestors !== undefined) res.removeHeader("content-security-policy");
-      res.writeHead(upRes.statusCode ?? 502, headers);
+      writeUpstreamHead(res, upstreamKey, upRes.statusCode ?? 502, upRes.headers, upRes, opts);
       upRes.pipe(res);
     },
   );
-  const dialMs = warmingDialTimeoutMs(
-    upstreamKey,
-    htmlNav,
-    deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+  up.setTimeout(
+    warmingDialTimeoutMs(upstreamKey, htmlNav, deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs),
+    () => {
+      if (!sendUpstreamFailure(res, htmlNav, true)) res.end();
+      up.destroy();
+    },
   );
-  up.setTimeout(dialMs, () => {
-    if (htmlNav && !res.headersSent) sendWarmingPage(res);
-    else if (!res.headersSent) sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
-    else res.end();
-    up.destroy();
-  });
   up.on("error", () => {
-    if (htmlNav && !res.headersSent) sendWarmingPage(res);
-    else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
-    else res.end();
+    if (!sendUpstreamFailure(res, htmlNav, false)) res.end();
   });
   req.on("error", () => up.destroy());
   if (bufferedBody !== null) up.end(bufferedBody);
   else req.pipe(up);
-  return;
 }
 
 interface DeploymentFetchResult {
@@ -671,22 +632,20 @@ function boundedResponseBody(
 }
 
 function deploymentFetchHttp1(
-  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  endpoint: OkReach,
   path: string,
   maxBytes: number,
   deadline: number,
 ): Promise<DeploymentFetchResult> {
   return new Promise((resolve, reject) => {
     const { host, port, tls, proxyHeaders } = endpoint.endpoint;
-    const requestFn = tls ? httpsRequest : httpRequest;
-    const request = requestFn(
+    const request = (tls ? httpsRequest : httpRequest)(
       {
         hostname: host,
         port,
         path,
         method: "GET",
         headers: { ...proxyHeaders, "accept-encoding": "identity" },
-        ...deploymentProxyAgent(endpoint.endpoint.socksProxyPort),
       },
       async (response) => {
         clearTimeout(timeout);
@@ -709,21 +668,20 @@ function deploymentFetchHttp1(
 }
 
 function deploymentFetchHttp2(
-  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  endpoint: OkReach,
   path: string,
   maxBytes: number,
   deadline: number,
 ): Promise<DeploymentFetchResult> {
   return new Promise((resolve, reject) => {
-    const { host, port, tls, proxyHeaders } = endpoint.endpoint;
-    const origin = `${tls ? "https" : "http"}://${host}:${port}`;
+    const origin = endpointOrigin(endpoint);
     const connection = deploymentHttp2Session(origin);
     const stream = connection.session.request({
       ":method": "GET",
       ":path": path,
-      ":authority": tls ? host : `${host}:${port}`,
+      ":authority": endpointAuthority(endpoint),
       "accept-encoding": "identity",
-      ...proxyHeaders,
+      ...endpoint.endpoint.proxyHeaders,
     });
     connection.activeStreams++;
     let headers: Record<string, string | string[] | number | undefined> = {};
@@ -764,14 +722,13 @@ function normalizedDeploymentFetchPath(raw: string | null): string | null {
 }
 
 function redirectPath(
-  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  endpoint: OkReach,
   location: string | string[] | number | undefined,
   currentPath: string,
 ): string | null {
   if (typeof location !== "string") return null;
   try {
-    const { host, port, tls } = endpoint.endpoint;
-    const origin = `${tls ? "https" : "http"}://${host}:${port}`;
+    const origin = endpointOrigin(endpoint);
     const next = new URL(location, `${origin}${currentPath}`);
     if (next.origin !== origin) return null;
     return normalizedDeploymentFetchPath(next.pathname + next.search);
@@ -781,7 +738,7 @@ function redirectPath(
 }
 
 async function fetchDeploymentResponse(
-  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  endpoint: OkReach,
   initialPath: string,
   maxBytes: number,
 ): Promise<DeploymentFetchResult> {
@@ -805,30 +762,23 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
-  if (!appsDomain || !gateSecret) {
-    if (!fromAppHost) return false;
-    sendJson(res, 503, { error: "unavailable", message: "app gateway is not configured" });
+  const reply = (status: number, body: Record<string, unknown>): true => {
+    sendJson(res, status, body);
     return true;
-  }
+  };
+  if (!appsDomain || !gateSecret)
+    return fromAppHost && reply(503, { error: "unavailable", message: "app gateway is not configured" });
   const rawHost = (req.headers.host ?? "").split(":")[0]!.toLowerCase();
   const suffix = `.${appsDomain.toLowerCase()}`;
-  if (!rawHost || !rawHost.endsWith(suffix)) {
-    if (!fromAppHost) return false;
-    sendJson(res, 404, { error: "not_found" });
-    return true;
-  }
+  if (!rawHost || !rawHost.endsWith(suffix)) return fromAppHost && reply(404, { error: "not_found" });
   const slug = rawHost.slice(0, -suffix.length);
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
-    sendJson(res, 404, { error: "not_found" });
-    return true;
-  }
+  if (!APP_SLUG.test(slug)) return reply(404, { error: "not_found" });
+  const dest = req.headers["sec-fetch-dest"];
+  const site = req.headers["sec-fetch-site"];
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
-    const site = req.headers["sec-fetch-site"];
-    if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {
-      sendJson(res, 403, { error: "forbidden", message: "cross-origin app request refused" });
-      return true;
-    }
+    if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin"))
+      return reply(403, { error: "forbidden", message: "cross-origin app request refused" });
   }
   const safePathname =
     pathname.startsWith("/") && !pathname.startsWith("//") && !/[\\\x00-\x1f]/.test(pathname) ? pathname : "/";
@@ -838,15 +788,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   url.searchParams.delete("owner");
   const signInAttempted = url.searchParams.get("dpl_signin") === "1";
   url.searchParams.delete("dpl_signin");
-  const cleanUrlRedirect = (): void => {
-    const qs = url.searchParams.toString();
-    res.writeHead(302, { location: safePathname + (qs ? `?${qs}` : ""), "cache-control": "no-store" });
+  const redirect = (location: string): true => {
+    res.writeHead(302, { location, "cache-control": "no-store" });
     res.end();
-  };
-  if ((staleAccess || staleOwner) && ctx.method === "GET") {
-    cleanUrlRedirect();
     return true;
-  }
+  };
+  const cleanUrlRedirect = (): true => {
+    const qs = url.searchParams.toString();
+    return redirect(safePathname + (qs ? `?${qs}` : ""));
+  };
+  if ((staleAccess || staleOwner) && ctx.method === "GET") return cleanUrlRedirect();
   const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
   const externalAllowed = deployment
     ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
@@ -856,8 +807,6 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
   let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
-  const dest = req.headers["sec-fetch-dest"];
-  const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
@@ -865,32 +814,17 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   }
   const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
-  if (!isPublic && (!sessionSecret || !loginUrl)) {
-    sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
-    return true;
-  }
+  if (!isPublic && (!sessionSecret || !loginUrl))
+    return reply(503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
   if (!sub && !isPublic) {
     const qs = url.searchParams.toString();
     const returnTo = `https://${rawHost}${safePathname}?${qs ? `${qs}&` : ""}dpl_signin=1`;
     const signIn = `${loginUrl}${deps.deployAppsLoginPath ?? "/auth/login"}?returnTo=${encodeURIComponent(returnTo)}`;
-    if (!wantsHtml) {
-      sendJson(res, 401, { error: "unauthorized", message: "sign-in required", loginUrl: signIn });
-    } else if (signInAttempted) {
-      res.writeHead(401, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      });
-      res.end(signInFailedHtml(signIn));
-    } else {
-      res.writeHead(302, { location: signIn, "cache-control": "no-store" });
-      res.end();
-    }
-    return true;
+    if (!wantsHtml) return reply(401, { error: "unauthorized", message: "sign-in required", loginUrl: signIn });
+    return signInAttempted ? sendGateHtml(res, 401, signInFailedHtml(signIn)) : redirect(signIn);
   }
   const bareApp = url.searchParams.get("__qm_no_shell") === "1";
   url.searchParams.delete("__qm_no_shell");
-  const isTopDocument = String(req.headers["sec-fetch-dest"] ?? "") === "document";
   const isShellRequest = pathname.startsWith(APP_SHELL_PATH_PREFIX);
   const canManage = sub && !session?.appOnly ? await app.canManageDeployment(slug, sub) : false;
   let authenticatedPermission: Permission | null = null;
@@ -931,25 +865,22 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       })
       .catch(reportFailureAs("app page view log", undefined, deployment.id));
   };
-  if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
+  if (ctx.method === "GET" && ((!bareApp && dest === "document") || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
       !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
-    if (signInAttempted) {
-      cleanUrlRedirect();
-      return true;
-    }
+    if (signInAttempted) return cleanUrlRedirect();
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment)
-        sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else if (annotationsEnabled && (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")) {
-        const kind = pathname.endsWith(".js") ? "js" : "css";
-        res.writeHead(200, {
-          "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
-          "cache-control": "no-cache",
-          "x-content-type-options": "nosniff",
-        });
-        res.end(appAnnotationAsset(kind));
-      } else sendJson(res, 404, { error: "not_found" });
+        return reply(200, { version: deployment.appliedVersion ?? deployment.currentVersion });
+      if (!annotationsEnabled || (pathname !== "/__claw__/annotate.js" && pathname !== "/__claw__/annotate.css"))
+        return reply(404, { error: "not_found" });
+      const kind = pathname.endsWith(".js") ? "js" : "css";
+      res.writeHead(200, {
+        "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(appAnnotationAsset(kind));
       return true;
     }
     recordPageView("signed_in");
@@ -975,13 +906,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
           canManage || isPublic || session?.appOnly ? { bypassAcl: true } : undefined,
         );
   if (reach.status === "denied") {
-    const owner = (await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null)))?.ownerScopeId;
     const ev = {
       at: Date.now(),
       principalId: viewer,
       action: "deployment.reach_denied",
       resource: slug,
-      scopeLabel: owner ?? scopeId("personal", viewer),
+      scopeLabel: deployment?.ownerScopeId ?? scopeId("personal", viewer),
       status: "denied",
     };
     const hour = Math.floor(ev.at / 3_600_000);
@@ -989,16 +919,11 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     else deps.auditLog?.record(ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
-    const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
-    if (!d) {
-      sendJson(res, 404, { error: "not_found" });
-      return true;
-    }
-    // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
+    const d = deployment;
+    if (!d) return reply(404, { error: "not_found" });
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
     const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
-    // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
       await app.postToSurface({
@@ -1011,25 +936,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
           `They signed in but the app isn't shared with them. To grant it, share the deployment with personal:${viewer}.`,
         idempotencyKey: `deploy-access-request:${slug}:${viewer}:${day}`,
       });
-      sendJson(res, 200, { ok: true });
+      return reply(200, { ok: true });
     } catch {
-      sendJson(res, 502, { error: "delivery_failed", message: "the request could not be delivered — try again later" });
+      return reply(502, { error: "delivery_failed", message: "the request could not be delivered — try again later" });
     }
-    return true;
   }
-  if (reach.status === "denied" && wantsHtml) {
-    res.writeHead(403, {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-    });
-    res.end(notSharedHtml(viewer));
-    return true;
-  }
-  if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
-    cleanUrlRedirect();
-    return true;
-  }
+  if (reach.status === "denied" && wantsHtml) return sendGateHtml(res, 403, notSharedHtml(viewer));
+  if (reach.status === "ok" && signInAttempted && ctx.method === "GET") return cleanUrlRedirect();
   if (reach.status === "ok") {
     let authMode: AppViewAuthMode = "public";
     if (session?.appOnly) authMode = "app_only";
@@ -1039,6 +952,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
     frameAncestors: embedAncestors,
   });
+  return true;
+}
+
+function sendGateHtml(res: BaseCtx["res"], status: number, html: string): true {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  res.end(html);
   return true;
 }
 
@@ -1135,11 +1058,6 @@ function gitTokenFrom(ctx: BaseCtx): string | null {
   return ctx.url.searchParams.get("token") ?? ctx.url.searchParams.get("access_token");
 }
 
-function rejectGitAuth(res: BaseCtx["res"], message = "deployment git token required"): void {
-  res.writeHead(401, { "content-type": "application/json", "www-authenticate": 'Basic realm="deployment git"' });
-  res.end(JSON.stringify({ error: "unauthorized", message }));
-}
-
 async function readRequestBytes(req: BaseCtx["req"]): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.from(chunk as Buffer));
@@ -1222,8 +1140,9 @@ async function runGitHttpBackend(input: {
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
   if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
+  const forbid = (message: string): void => sendJson(ctx.res, 403, { error: "forbidden", message });
   const service = gitServiceOf(parts.tail, ctx.url);
-  if (!service) return sendJson(ctx.res, 403, { error: "forbidden", message: "unsupported deployment git service" });
+  if (!service) return forbid("unsupported deployment git service");
   const isPush = service === "git-receive-pack";
   if (isPush && !ctx.secret)
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
@@ -1231,20 +1150,22 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   if (ctx.secret) {
     const token = gitTokenFrom(ctx);
     access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
-    if (!access) return rejectGitAuth(ctx.res);
-    if (access.deploymentId !== parts.id)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
-    if (isPush && access.permission !== "write")
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
+    if (!access) {
+      ctx.res.writeHead(401, {
+        "content-type": "application/json",
+        "www-authenticate": 'Basic realm="deployment git"',
+      });
+      ctx.res.end(JSON.stringify({ error: "unauthorized", message: "deployment git token required" }));
+      return;
+    }
+    if (access.deploymentId !== parts.id) return forbid("token is for a different deployment");
+    if (isPush && access.permission !== "write") return forbid("deployment git token is read-only");
     if (
       access.principalId &&
       !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))
-    ) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git access has been revoked" });
-    }
-    if (isPush && !access.principalId) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git write access has been revoked" });
-    }
+    )
+      return forbid("deployment git access has been revoked");
+    if (isPush && !access.principalId) return forbid("deployment git write access has been revoked");
   }
   const repoPath = await ctx.app.deploymentGitRepoPath(parts.id);
   if (!repoPath) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -1290,15 +1211,17 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
 }
 
 function gitUrlBase(ctx: ApiCtx): string {
-  if (ctx.deps.apiBaseUrl) {
-    return ctx.deps.apiBaseUrl;
-  } else if (ctx.deps.publicUrl) {
-    return ctx.deps.publicUrl;
-  } else {
-    const host = (ctx.req.headers["x-forwarded-host"] as string) ?? ctx.req.headers.host ?? "localhost";
-    const proto = (ctx.req.headers["x-forwarded-proto"] as string) ?? "http";
-    return `${proto}://${host}`;
-  }
+  if (ctx.deps.apiBaseUrl) return ctx.deps.apiBaseUrl;
+  if (ctx.deps.publicUrl) return ctx.deps.publicUrl;
+  const host = (ctx.req.headers["x-forwarded-host"] as string) ?? ctx.req.headers.host ?? "localhost";
+  const proto = (ctx.req.headers["x-forwarded-proto"] as string) ?? "http";
+  return `${proto}://${host}`;
+}
+
+async function withGitUrl<T extends { id: string }>(ctx: ApiCtx, d: T, principalId: string): Promise<T> {
+  if (!ctx.secret) return d;
+  const git = await ctx.app.deploymentGitUrlFor(d.id, principalId, { secret: ctx.secret, baseUrl: gitUrlBase(ctx) });
+  return git ? { ...d, gitUrl: git.url } : d;
 }
 
 async function deploymentGitUrl(ctx: ApiCtx): Promise<void> {
@@ -1327,19 +1250,11 @@ async function createDeployment(ctx: ApiCtx): Promise<void> {
 }
 
 async function listDeployments(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, secret, capability, actor } = ctx;
+  const { res, app, url, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 200, { deployments: (await app.listDeployments()).map(deploymentView) });
   const visible = await app.listDeploymentsForViewer(principalId);
-  const baseUrl = gitUrlBase(ctx);
-  const deployments = await Promise.all(
-    visible.map(async (d) => {
-      if (!secret) return d;
-      const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
-      return git ? { ...d, gitUrl: git.url } : d;
-    }),
-  );
-  return sendJson(res, 200, { deployments });
+  return sendJson(res, 200, { deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
 }
 
 function textContentType(contentType: string): boolean {
@@ -1353,18 +1268,20 @@ function textContentType(contentType: string): boolean {
 const LOGS_DEFAULT_TAIL_LINES = 200;
 const LOGS_MAX_TAIL_LINES = 2000;
 
+function boundedIntParam(ctx: ApiCtx, name: string, fallback: number, max: number): number | null {
+  const raw = ctx.url.searchParams.get(name);
+  const value = raw === null ? fallback : Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= max) return value;
+  sendJson(ctx.res, 400, { error: "bad_request", message: `${name} must be an integer from 1 to ${max}` });
+  return null;
+}
+
 async function deploymentLogs(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, actor, url } = ctx;
+  const { res, app, params, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const rawTail = url.searchParams.get("tailLines");
-  const tailLines = rawTail === null ? LOGS_DEFAULT_TAIL_LINES : Number(rawTail);
-  if (!Number.isInteger(tailLines) || tailLines < 1 || tailLines > LOGS_MAX_TAIL_LINES) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`,
-    });
-  }
+  const tailLines = boundedIntParam(ctx, "tailLines", LOGS_DEFAULT_TAIL_LINES, LOGS_MAX_TAIL_LINES);
+  if (tailLines === null) return;
   const result = await app.deploymentLogsFor(params.id!, viewer, { tailLines });
   if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this deployment" });
@@ -1377,33 +1294,20 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
   const path = normalizedDeploymentFetchPath(url.searchParams.get("path"));
   if (!path) return sendJson(res, 400, { error: "bad_request", message: "path must be a safe absolute path" });
-  const rawMaxBytes = url.searchParams.get("maxBytes");
-  const maxBytes = rawMaxBytes === null ? AGENT_FETCH_DEFAULT_MAX_BYTES : Number(rawMaxBytes);
-  if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > AGENT_FETCH_MAX_BYTES) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`,
-    });
-  }
+  const maxBytes = boundedIntParam(ctx, "maxBytes", AGENT_FETCH_DEFAULT_MAX_BYTES, AGENT_FETCH_MAX_BYTES);
+  if (maxBytes === null) return;
   const reach = await app.reachDeployment(params.id!, viewer);
   if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   try {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
-    if (textContentType(contentType)) {
-      return sendJson(res, 200, {
-        status: response.status,
-        contentType,
-        body: response.body.toString("utf8"),
-        truncated: response.truncated,
-      });
-    }
+    const text = textContentType(contentType);
     return sendJson(res, 200, {
       status: response.status,
       contentType,
-      body: response.body.toString("base64"),
-      encoding: "base64",
+      body: response.body.toString(text ? "utf8" : "base64"),
+      ...(text ? {} : { encoding: "base64" }),
       truncated: response.truncated,
     });
   } catch {
@@ -1412,7 +1316,7 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
 }
 
 export async function getDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, secret, capability, params } = ctx;
+  const { res, app, url, capability, params } = ctx;
   const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
   const id = params.id!;
   let deployment;
@@ -1423,44 +1327,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
     deployment = stored ? deploymentView(stored) : undefined;
   }
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (!principalId || !secret) return sendJson(res, 200, { deployment });
-  const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
-  return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
-}
-
-async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
-  const b = body as { version?: unknown };
-  if (typeof b.version !== "number")
-    return sendJson(res, 400, { error: "bad_request", message: "version (number) required" });
-  try {
-    await app.rollbackDeployment(id, b.version);
-    return sendJson(res, 200, { ok: true });
-  } catch (e) {
-    return sendJson(res, 400, { error: "rollback_failed", message: errMessage(e) });
-  }
-}
-
-async function redeployDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
-  if (!isRedeployInput(body)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message:
-        "entrypoint (string) and files (array) required; env must be a string map, homeFiles an array, alwaysOn a boolean",
-    });
-  }
-  try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, body)) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
-  }
+  return sendJson(res, 200, { deployment: principalId ? await withGitUrl(ctx, deployment, principalId) : deployment });
 }
 
 async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boolean> {
@@ -1468,97 +1335,116 @@ async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boole
   return !principalId || ctx.app.canManageDeployment(id, principalId, ctx.capability?.scopeId);
 }
 
-export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can archive it" });
-  try {
-    await app.archiveDeployment(id);
-    return sendJson(res, 200, { ok: true });
-  } catch (e) {
-    return sendJson(res, 400, { error: "archive_failed", message: errMessage(e) });
-  }
+function manageDeployment<T = undefined>(spec: {
+  verb?: string;
+  failure: string;
+  parse?: { input: (body: unknown) => T | null | undefined; invalid: string };
+  run: (ctx: ApiCtx, id: string, input: T) => Promise<unknown>;
+}): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const { res, app, params, body } = ctx;
+    const id = await deploymentId(app, params.id!);
+    if (!id) return sendJson(res, 404, { error: "not_found" });
+    if (!(await callerMayManageDeployment(ctx, id)))
+      return sendJson(
+        res,
+        403,
+        spec.verb
+          ? { error: "forbidden", message: `only someone who manages this app can ${spec.verb}` }
+          : { error: "forbidden" },
+      );
+    const input = spec.parse?.input(body);
+    if (spec.parse && (input === undefined || input === null))
+      return sendJson(res, 400, { error: "bad_request", message: spec.parse.invalid });
+    try {
+      return sendJson(res, 200, await spec.run(ctx, id, input as T));
+    } catch (e) {
+      return sendJson(res, 400, { error: spec.failure, message: errMessage(e) });
+    }
+  };
 }
 
-export async function restoreDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can restore it" });
-  try {
+const stringField = (field: string) => (body: unknown) => {
+  const value = (body as Record<string, unknown>)[field];
+  return typeof value === "string" ? value : undefined;
+};
+
+const rollbackDeployment = manageDeployment({
+  failure: "rollback_failed",
+  parse: {
+    input: (body) => {
+      const version = (body as { version?: unknown }).version;
+      return typeof version === "number" ? version : undefined;
+    },
+    invalid: "version (number) required",
+  },
+  run: async ({ app }, id, version) => {
+    await app.rollbackDeployment(id, version);
+    return { ok: true };
+  },
+});
+
+const redeployDeployment = manageDeployment({
+  failure: "deploy_failed",
+  parse: {
+    input: (body) => (isRedeployInput(body) ? body : undefined),
+    invalid:
+      "entrypoint (string) and files (array) required; env must be a string map, homeFiles an array, alwaysOn a boolean",
+  },
+  run: async ({ app }, id, input) => ({ deployment: deploymentView(await app.redeploy(id, input)) }),
+});
+
+export const archiveDeployment = manageDeployment({
+  verb: "archive it",
+  failure: "archive_failed",
+  run: async ({ app }, id) => {
+    await app.archiveDeployment(id);
+    return { ok: true };
+  },
+});
+
+export const restoreDeployment = manageDeployment({
+  verb: "restore it",
+  failure: "restore_failed",
+  run: async ({ app, capability, actor, body }, id) => {
     const principalId =
       capability?.actorId ??
-      ctx.actor?.p ??
+      actor?.p ??
       (isObj(body) && typeof body.principalId === "string" ? body.principalId : undefined);
-    return sendJson(res, 200, {
-      deployment: { ...deploymentView(await app.restoreDeployment(id, principalId)), permission: "write" },
-    });
-  } catch (e) {
-    return sendJson(res, 400, { error: "restore_failed", message: errMessage(e) });
-  }
-}
+    return { deployment: { ...deploymentView(await app.restoreDeployment(id, principalId)), permission: "write" } };
+  },
+});
 
-export async function renameDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
-  const b = body as { name?: unknown };
-  if (typeof b.name !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
-  try {
-    return sendJson(res, 200, { deployment: await app.renameDeployment(id, b.name) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
-  }
-}
+export const renameDeployment = manageDeployment({
+  verb: "rename it",
+  failure: "rename_failed",
+  parse: { input: stringField("name"), invalid: "name (string) required" },
+  run: async ({ app }, id, name) => ({ deployment: await app.renameDeployment(id, name) }),
+});
 
-export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
-  const b = body as { displayName?: unknown };
-  if (typeof b.displayName !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
-  try {
-    return sendJson(res, 200, { deployment: await app.setDeploymentDisplayName(id, b.displayName) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
-  }
-}
+export const setDeploymentDisplayName = manageDeployment({
+  verb: "rename it",
+  failure: "display_name_failed",
+  parse: { input: stringField("displayName"), invalid: "displayName (string) required" },
+  run: async ({ app }, id, displayName) => ({ deployment: await app.setDeploymentDisplayName(id, displayName) }),
+});
 
-async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
-  const ancestors = parseEmbedAncestors((body as { embedAncestors?: unknown }).embedAncestors);
-  if (!ancestors)
-    return sendJson(res, 400, { error: "bad_request", message: `embedAncestors (${EMBED_ANCESTORS_HINT}) required` });
-  try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentEmbedAncestors(id, ancestors)) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
-  }
-}
-
-type ShareTarget =
-  | { kind: "ok"; scope: string; label: string }
-  | { kind: "none" }
-  | { kind: "ambiguous"; candidates: Array<{ principalId: string; displayName: string }> }
-  | { kind: "invalid"; message: string };
+const setDeploymentEmbedAncestors = manageDeployment({
+  verb: "change this",
+  failure: "embed_ancestors_failed",
+  parse: {
+    input: (body) => parseEmbedAncestors((body as { embedAncestors?: unknown }).embedAncestors),
+    invalid: `embedAncestors (${EMBED_ANCESTORS_HINT}) required`,
+  },
+  run: async ({ app }, id, ancestors) => ({
+    deployment: deploymentView(await app.setDeploymentEmbedAncestors(id, ancestors)),
+  }),
+});
 
 export function resolveShareTarget(
   app: App,
   input: { scope?: string; recipient?: string; email?: string },
-): Promise<ShareTarget> {
+): Promise<ResolvedShareTarget> {
   return resolveShareTargetGrammar(app, input, {
     allowEmail: true,
     invalidScope: (scope) => `invalid scope "${scope}" — use "org" or a scope id like personal:<id> or org:<id>`,
@@ -1585,21 +1471,12 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability } = ctx;
   if (!capability)
     return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
-  const b = (isObj(body) ? body : {}) as {
-    scope?: unknown;
-    recipient?: unknown;
-    email?: unknown;
-    access?: unknown;
-    public?: unknown;
-  };
+  const b: Record<string, unknown> = isObj(body) ? body : {};
+  const badRequest = (message: string): void => sendJson(res, 400, { error: "bad_request", message });
   if (b.public !== undefined) {
-    if (typeof b.public !== "boolean")
-      return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
+    if (typeof b.public !== "boolean") return badRequest("public must be a boolean");
     if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "public access and person/scope access must be changed separately",
-      });
+      return badRequest("public access and person/scope access must be changed separately");
     try {
       const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: capability.actorId });
       return sendJson(res, 200, {
@@ -1612,23 +1489,19 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       return sendShareFailure(res, e);
     }
   }
-  if (b.email !== undefined && typeof b.email !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "email must be a string" });
+  if (b.email !== undefined && typeof b.email !== "string") return badRequest("email must be a string");
   if (b.email !== undefined && (b.scope !== undefined || b.recipient !== undefined))
-    return sendJson(res, 400, { error: "bad_request", message: "pass only one of email, scope, or recipient" });
+    return badRequest("pass only one of email, scope, or recipient");
   const access = typeof b.access === "string" ? b.access.toLowerCase() : "view";
-  if (access !== "view" && access !== "manage" && access !== "none") {
-    return sendJson(res, 400, { error: "bad_request", message: 'access must be "view", "manage", or "none"' });
-  }
-  let permission: Permission | null = "read";
-  if (access === "none") permission = null;
-  else if (access === "manage") permission = "write";
+  if (access !== "view" && access !== "manage" && access !== "none")
+    return badRequest('access must be "view", "manage", or "none"');
+  const permission: Permission | null = { view: "read" as const, manage: "write" as const, none: null }[access];
   const target = await resolveShareTarget(app, {
     ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
     ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
     ...(typeof b.email === "string" ? { email: b.email } : {}),
   });
-  if (target.kind === "invalid") return sendJson(res, 400, { error: "bad_request", message: target.message });
+  if (target.kind === "invalid") return badRequest(target.message);
   if (target.kind === "none")
     return sendJson(res, 404, {
       error: "recipient_not_found",

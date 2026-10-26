@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
+import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import type { BaseCtx } from "./routes/route.ts";
 
 export { sendJson };
 
@@ -142,4 +144,17 @@ export async function verifyOrReject(
 export function contentDispositionAttachment(name: string, kind: "attachment" | "inline" = "attachment"): string {
   const fallback = name.replace(/[\r\n"\\]/g, "_").replace(/[^\x20-\x7e]/g, "_") || "download";
   return `${kind}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+export function verifySignedRoute(ctx: BaseCtx, tail: string): Promise<boolean> {
+  const { req, res, secret, auth, url, pathname, method } = ctx;
+  return verifyOrReject(
+    req,
+    res,
+    secret,
+    auth,
+    canonicalPayload(method, pathname + url.search, tail),
+    false,
+    ctx.allowUnsignedSourceAuth,
+  );
 }

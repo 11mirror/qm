@@ -6,20 +6,25 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifyOrReject } from "../http.ts";
-
-const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
+import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifySignedRoute } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 import { reportForeignTenant } from "../../tenant.ts";
 
-type BlobDir = "read" | "write";
+const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 
-type BlobAuthz = { via: "capability" | "source" } | null;
+function rejectBlob(ctx: BaseCtx, message: string): null {
+  ctx.req.resume();
+  sendJson(ctx.res, 403, { error: "forbidden", message });
+  return null;
+}
 
-async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null): Promise<BlobAuthz> {
-  const { req, res, secret, auth, url, pathname, method } = ctx;
-  const capSecret = ctx.deps.capabilitySecret ?? secret;
+async function authorizeBlob(
+  ctx: BaseCtx,
+  dir: "read" | "write",
+  blobId: string | null,
+): Promise<"capability" | "source" | null> {
+  const { req, method } = ctx;
+  const capSecret = ctx.deps.capabilitySecret ?? ctx.secret;
   const capToken = headerValue(req, CAPABILITY_HEADER);
   if (capSecret && capToken) {
     const claims = await verifyBlobTransferCapability(
@@ -27,57 +32,40 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       capSecret,
       dir === "read" ? { dir, id: blobId ?? "" } : { dir },
     );
-    if (!claims) {
-      req.resume();
-      sendJson(res, 403, { error: "forbidden", message: "blob-transfer capability token not valid for this transfer" });
-      return null;
-    }
+    if (!claims) return rejectBlob(ctx, "blob-transfer capability token not valid for this transfer");
     reportForeignTenant(claims.orgId, "blob transfer capability");
-    if (!(await ctx.app.authorizesCapabilityScope(claims))) {
-      req.resume();
-      sendJson(res, 403, {
-        error: "forbidden",
-        message: "the acting user is not currently authorized for this conversation",
-      });
-      return null;
-    }
-    return { via: "capability" };
+    if (!(await ctx.app.authorizesCapabilityScope(claims)))
+      return rejectBlob(ctx, "the acting user is not currently authorized for this conversation");
+    return "capability";
   }
   const tail = method === "POST" ? (headerValue(req, "x-content-sha256") ?? "") : "";
-  if (
-    !(await verifyOrReject(
-      req,
-      res,
-      secret,
-      auth,
-      canonicalPayload(method, pathname + url.search, tail),
-      false,
-      ctx.allowUnsignedSourceAuth,
-    ))
-  ) {
-    req.resume();
-    return null;
-  }
-  return { via: "source" };
+  if (await verifySignedRoute(ctx, tail)) return "source";
+  req.resume();
+  return null;
+}
+
+function blobStore(ctx: BaseCtx): NonNullable<BaseCtx["deps"]["blobTransfer"]> | null {
+  if (ctx.deps.blobTransfer) return ctx.deps.blobTransfer;
+  ctx.req.resume();
+  sendJson(ctx.res, 501, { error: "not_configured", message: "no blob transfer store wired" });
+  return null;
 }
 
 async function putBlob(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps } = ctx;
-  if (!deps.blobTransfer) {
-    req.resume();
-    return sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
-  }
+  const { req, res } = ctx;
+  const store = blobStore(ctx);
+  if (!store) return;
   const declaredSha = headerValue(req, "x-content-sha256") ?? "";
   if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !/^[0-9a-f]{64}$/.test(declaredSha)) {
     req.resume();
     return sendJson(res, 400, { error: "bad_request", message: "x-content-sha256 (hex sha-256) required" });
   }
-  const authz = await authorizeBlob(ctx, "write", null);
-  if (!authz) return;
-  if (authz.via === "capability") extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
+  const via = await authorizeBlob(ctx, "write", null);
+  if (!via) return;
+  if (via === "capability") extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
   try {
-    const info = await deps.blobTransfer.put(req, {
-      maxBytes: authz.via === "capability" ? MAX_STAGE_BLOB_BYTES : MAX_BLOB_BYTES,
+    const info = await store.put(req, {
+      maxBytes: via === "capability" ? MAX_STAGE_BLOB_BYTES : MAX_BLOB_BYTES,
       ...(declaredSha ? { expectedSha256: declaredSha } : {}),
     });
     return sendJson(res, 200, { blobId: info.blobId, sizeBytes: info.sizeBytes });
@@ -90,18 +78,13 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
 }
 
 async function getBlob(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps, params } = ctx;
-  if (!deps.blobTransfer) {
-    req.resume();
-    return sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
-  }
-  const id = params.id!;
-  if (!(await authorizeBlob(ctx, "read", id))) return;
-  const blob = await deps.blobTransfer.open(id);
+  const { res, params } = ctx;
+  const store = blobStore(ctx);
+  if (!store || !(await authorizeBlob(ctx, "read", params.id!))) return;
+  const blob = await store.open(params.id!);
   if (!blob) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(blob.sizeBytes) });
   pipeToResponse(res, blob.stream, "blob read failed");
-  return;
 }
 
 export const blobRoutes: ReadonlyArray<Route<BaseCtx>> = [

@@ -1,4 +1,3 @@
-import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -6,6 +5,7 @@ import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import {
   credentialInjectionError,
   credentialRequestHeaders,
+  isComposioHost,
   type DecryptedServiceCredential,
   type ServiceCredentialReader,
 } from "../credentials/keychain.ts";
@@ -93,6 +93,40 @@ export function brokerRequestHeaders(
   return { ...headers, ...injected };
 }
 
+export function brokerMethodAllowed(rec: DecryptedServiceCredential, method: string): boolean {
+  return (rec.allowedMethods?.length ? rec.allowedMethods : ["GET"]).some((m) => m.toUpperCase() === method);
+}
+
+interface BrokerSinks {
+  usage?: CredentialUsageSink;
+  audit?: (e: {
+    principalId: string;
+    action: string;
+    resource: string;
+    scopeLabel: string;
+    status?: string;
+    detail?: string;
+  }) => void;
+}
+
+export function recordBrokerOutcome(
+  sinks: BrokerSinks,
+  claims: CapabilityClaims,
+  kind: "broker" | "git",
+  call: { slug: string; host: string; status: "ok" | "error" | "denied"; upstreamStatus?: number; detail?: string },
+): void {
+  const { slug, host, status, upstreamStatus, detail } = call;
+  const who = { scopeLabel: claims.scopeId, principalId: claims.actorId };
+  sinks.usage?.record({ slug, host, status, ...(upstreamStatus === undefined ? {} : { upstreamStatus }), ...who });
+  sinks.audit?.({
+    ...who,
+    action: `credential.${kind}.${status === "ok" ? "use" : status}`,
+    resource: slug || "(none)",
+    status,
+    ...(detail ? { detail } : {}),
+  });
+}
+
 type CredentialGrant =
   | { rec: DecryptedServiceCredential }
   | { rec?: undefined; status: number; code: string; message: string; host: string };
@@ -123,37 +157,22 @@ export async function grantedCredential(
   return { rec };
 }
 
-export async function brokerCredentialCall(opts: {
-  claims: CapabilityClaims;
-  body: BrokerRequest;
-  orgScopeId: ScopeId;
-  reader: ServiceCredentialReader;
-  fetchImpl: BrokerFetch;
-  usage?: CredentialUsageSink;
-  audit?: (e: {
-    principalId: string;
-    action: string;
-    resource: string;
-    scopeLabel: string;
-    status?: string;
-    detail?: string;
-  }) => void;
-}): Promise<BrokerResult> {
+export async function brokerCredentialCall(
+  opts: BrokerSinks & {
+    claims: CapabilityClaims;
+    body: BrokerRequest;
+    orgScopeId: ScopeId;
+    reader: ServiceCredentialReader;
+    fetchImpl: BrokerFetch;
+  },
+): Promise<BrokerResult> {
   const { claims, body, orgScopeId, reader, fetchImpl } = opts;
   const slug = typeof body.credential === "string" ? body.credential : "";
   const method = (typeof body.method === "string" ? body.method : "GET").toUpperCase();
   const rawUrl = typeof body.url === "string" ? body.url : "";
 
   const deny = (httpStatus: number, code: string, message: string, host: string): BrokerResult => {
-    opts.usage?.record({ slug, host, status: "denied", scopeLabel: claims.scopeId, principalId: claims.actorId });
-    opts.audit?.({
-      principalId: claims.actorId,
-      action: "credential.broker.denied",
-      resource: slug || "(none)",
-      scopeLabel: claims.scopeId,
-      status: "denied",
-      detail: code,
-    });
+    recordBrokerOutcome(opts, claims, "broker", { slug, host, status: "denied", detail: code });
     return { status: httpStatus, json: { error: code, message } };
   };
 
@@ -195,10 +214,7 @@ export async function brokerCredentialCall(opts: {
   if (rec.injection?.actor && parsed.port) {
     return deny(403, "port_not_allowed", "actor-attested credentials require standard HTTPS", rec.host);
   }
-  const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
-    m.toUpperCase(),
-  );
-  if (!methods.includes(method))
+  if (!brokerMethodAllowed(rec, method))
     return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, rec.host);
   if (!brokerPathAllowed(parsed.pathname, rec.allowedPathPrefixes)) {
     return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
@@ -239,20 +255,7 @@ export async function brokerCredentialCall(opts: {
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
   } catch {
-    opts.usage?.record({
-      slug,
-      host: rec.host,
-      status: "error",
-      scopeLabel: claims.scopeId,
-      principalId: claims.actorId,
-    });
-    opts.audit?.({
-      principalId: claims.actorId,
-      action: "credential.broker.error",
-      resource: slug,
-      scopeLabel: claims.scopeId,
-      status: "error",
-    });
+    recordBrokerOutcome(opts, claims, "broker", { slug, host: rec.host, status: "error" });
     return {
       status: 502,
       json: { error: "upstream_unreachable", message: "the credential's host could not be reached" },
@@ -265,20 +268,11 @@ export async function brokerCredentialCall(opts: {
     text = text.slice(0, MAX_RESPONSE_BYTES);
     truncated = true;
   }
-  opts.usage?.record({
+  recordBrokerOutcome(opts, claims, "broker", {
     slug,
     host: rec.host,
     status: "ok",
     upstreamStatus: resp.status,
-    scopeLabel: claims.scopeId,
-    principalId: claims.actorId,
-  });
-  opts.audit?.({
-    principalId: claims.actorId,
-    action: "credential.broker.use",
-    resource: slug,
-    scopeLabel: claims.scopeId,
-    status: "ok",
     ...(claims.deployment ? { detail: `deployment:${claims.deployment}` } : {}),
   });
   return {
