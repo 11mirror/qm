@@ -26,9 +26,10 @@ function freshApp(overrides: Partial<Config> = {}) {
 }
 
 async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
-  for (let i = 0; i < 20; i++) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     if ((await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published")) return;
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 20));
   }
   assert.fail("onboarding skill was not seeded");
 }

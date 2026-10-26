@@ -30,13 +30,14 @@ async function pkColumns(p: Pg): Promise<{ oid: string; columns: string[] } | un
 async function bootAndClose(): Promise<void> {
   const { runs, close } = createPostgresRunStore(URL!);
   await migrateRegisteredPgSchemas(URL!);
-  await runs.enqueue({ sessionId: "sMigrationPing", request: { text: "ping" } as never });
+  await runs.activeSessionIds();
   await close();
 }
 
 before(async () => {
   if (!URL) return;
   const p = await pool();
+  await p.query("DROP TABLE IF EXISTS turns CASCADE");
   await p.query("DROP TABLE IF EXISTS runs, tool_calls, turn_metrics CASCADE");
   await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();
@@ -45,6 +46,7 @@ before(async () => {
 after(async () => {
   if (!URL) return;
   const p = await pool();
+  await p.query("DROP TABLE IF EXISTS turns CASCADE");
   await p.query("DROP TABLE IF EXISTS runs, tool_calls, turn_metrics CASCADE");
   await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();

@@ -10,6 +10,8 @@ import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capabi
 import { externalTools } from "../src/core/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { appTurns, claimTurn, testRunStore } from "./support/turns.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -91,6 +93,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
     /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
   );
   assert.match(prompt.reply!, /safe/);
+  await selectDefaultSandbox(b, "U1", `channel:${namespace}:C1`);
   const provisions: string[][] = [];
   const provision = b.sandbox.provision.bind(b.sandbox);
   b.sandbox.provision = (layers, opts) => {
@@ -155,11 +158,11 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   assert.equal(runs, 1);
 });
 
-test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
+test("external broker requires the current run lease and both external-safe and ordinary grants", async (t) => {
   const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
-  const { createMemoryRunStore } = await import("../src/runs/memory-run-store.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const acl = createAclStore();
   const req = request("test");
   const { run: queued } = await runs.enqueue({
@@ -171,7 +174,7 @@ test("external broker requires the current run lease and both external-safe and 
       origin: { kind: "human" },
     },
   });
-  const run = (await runs.claimById(queued.id, "test-worker", 60_000))!;
+  const { run, token } = (await claimTurn(ledger, queued.id))!;
   const claims: CapabilityClaims = {
     actorId: "U1",
     scopeId: `channel:${namespace}:C1`,
@@ -180,7 +183,7 @@ test("external broker requires the current run lease and both external-safe and 
     credentials: ["safe"],
     runId: run.id,
     runAttempt: run.attempts,
-    runLeaseToken: run.leaseToken!,
+    runLeaseToken: token,
     threadRef: run.sessionId,
     exp: Date.now() + 60_000,
   };
@@ -301,7 +304,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       origin: { kind: "human" },
     },
   });
-  const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
+  const { run, token } = (await claimTurn(appTurns(b), queued.id))!;
   let forwarded = 0;
   const server = createServer(b.app, {
     ...serverDeps(config, b),
@@ -325,7 +328,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
     externalSlack: true,
     runId: run.id,
     runAttempt: run.attempts,
-    runLeaseToken: run.leaseToken!,
+    runLeaseToken: token,
     threadRef: run.sessionId,
     exp: Date.now() + 60_000,
   };

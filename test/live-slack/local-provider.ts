@@ -21,8 +21,6 @@ async function main(): Promise<void> {
   const built = buildApp({
     ...config,
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    sessionStore: "memory",
-    runStore: "memory",
     harness: "pi",
     sandboxBackend: "local",
 

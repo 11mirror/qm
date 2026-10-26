@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { resolveSwarmSettings, SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
-import { processRun } from "../src/runs/worker.ts";
-import type { Orchestrator } from "../src/core/orchestrator.ts";
+import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { TURN_QUEUES } from "../src/turns/absurd-schema.ts";
+import { createTurnRunner } from "../src/turns/turn-runner.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 test("backend defaults validate every setting and preserve unspecified defaults", () => {
@@ -128,21 +129,21 @@ test("unknown and unsupported providers reject before creating a swarm", async (
   assert.equal(await f.store.get(f.root.id), null);
 });
 
-test("worker cancellation honors the persisted override instead of the backend default", async (context) => {
+test("the turn runner cancels a worker at the persisted turn override instead of the backend default", async () => {
   const f = await swarmFixture();
-  await f.service.spawn(f.caller, { requestId: "pool", text: "work", settings: { turnMs: 250 } });
+  await f.service.spawn(f.caller, { requestId: "pool", text: "work", settings: { turnMs: 400 } });
   await f.service.sweep();
   const pending = (await f.runs.list()).find((r) => r.request.swarm)!;
-  const run = (await f.runs.claimById(pending.id, "deadline-test", 60_000))!;
-  context.mock.timers.enable({ apis: ["setTimeout"] });
-  let cancelled = false;
+  assert.equal(pending.request.turnWallClockMs, 400);
+  let cancelledAfter: number | undefined;
   const orchestrator = {
-    async handleTurn(input) {
+    async handleTurn(input: OrchestratorInput) {
+      const started = Date.now();
       await new Promise<void>((resolve) =>
         input.cancel!.addEventListener(
           "abort",
           () => {
-            cancelled = true;
+            cancelledAfter = Date.now() - started;
             resolve();
           },
           { once: true },
@@ -151,12 +152,24 @@ test("worker cancellation honors the persisted override instead of the backend d
       return { status: "silent" };
     },
   } as Orchestrator;
-  const work = processRun({ runs: f.runs, orchestrator, leaseTtlMs: 60_000 }, run);
-  context.mock.timers.tick(249);
-  assert.equal(cancelled, false);
-  context.mock.timers.tick(1);
-  await work;
-  assert.equal(cancelled, true);
+  const runner = createTurnRunner({
+    ledger: f.ledger,
+    end: f.end,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: 1,
+    pollMs: 20,
+  });
+  runner.start();
+  try {
+    for (let i = 0; i < 250 && (await f.runs.get(pending.id))!.status !== "done"; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    await runner.stopClaims();
+  }
+  assert.equal((await f.runs.get(pending.id))!.status, "done");
+  assert.ok(cancelledAfter !== undefined && cancelledAfter >= 390, `cancelled after ${cancelledAfter}ms`);
+  assert.ok(cancelledAfter < SWARM_DEFAULTS.turnMs);
 });
 
 test("failed initial persistence leaves no configuration and a complete pool can be retried", async () => {

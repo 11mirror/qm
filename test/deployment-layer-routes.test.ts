@@ -121,7 +121,7 @@ test("a correctly signed PUT replaces the layer and a signed GET reads it back",
     };
     assert.equal(putBody.ok, true);
     assert.equal(putBody.version, 1);
-    assert.equal(putBody.durable, false, "a memory-backed core reports the PUT as non-durable");
+    assert.equal(putBody.durable, true, "a Postgres-backed core reports the PUT as durable");
     assert.deepEqual(putBody.resolved.advertisedTools, ["acme CLI"]);
 
     const get = await fetch(`${srv.base}${PATH}`, { headers: signed("GET", "") });

@@ -15,7 +15,7 @@ import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SpawnMeta } from "../types.ts";
 import { isReply, proseText, type Item } from "./items.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import { isUnstarted, stopRun, type Run, type RunStore } from "../runs/run-store.ts";
+import { isUnstarted, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -247,7 +247,10 @@ export interface SessionSyscallDeps {
     | "visibleItems"
     | "getForParticipant"
   >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
+  runs: Pick<
+    RunStore,
+    "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw" | "cancelTree"
+  >;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
@@ -476,7 +479,7 @@ async function sessionRunCancelled(
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "childrenOf">;
-    runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get" | "cancelTurn" | "cancelTree">;
+    runs: Pick<RunStore, "inFlightForThread" | "cancelTree">;
     signals: Pick<RunSignalStore, "send">;
   },
   root: Session,
@@ -486,8 +489,7 @@ export async function stopSessionTree(
   const inFlight: Run[] = [];
   for (const session of tree) inFlight.push(...(await deps.runs.inFlightForThread(session.threadRef)));
   for (const run of inFlight) await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-  if (deps.runs.cancelTree) await deps.runs.cancelTree(tree.map((session) => session.threadRef));
-  for (const run of inFlight) if (run.engine !== "absurd" || !deps.runs.cancelTree) await stopRun(deps.runs, run);
+  await deps.runs.cancelTree(tree.map((session) => session.threadRef));
   return inFlight.length > 0;
 }
 
@@ -1199,21 +1201,19 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     }
     const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
     const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
-    const absurdParent = inFlight.every((turn) => turn.engine === "absurd");
     const sharedWake = inFlight.some(
       (turn) =>
         turn.status === "queued" &&
         turn.request.wakeCause === "child_done" &&
         turn.request.actor.id === prepared.actor.id,
     );
-    if (inFlight.length && !absurdParent) return false;
     if (sharedWake) {
       await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
       return false;
     }
     const wake =
       "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    const { run: woken } = await deps.runs.enqueue({
+    await deps.runs.enqueue({
       sessionId: parent.threadRef,
       dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
       request: {
@@ -1227,7 +1227,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       },
       maxAttempts: deps.maxAttempts,
     });
-    if (woken.engine === "absurd") await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
+    await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
     return false;
   }
   return true;

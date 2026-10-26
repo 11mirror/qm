@@ -156,7 +156,7 @@ test("waitRun signals replying only once the run has passed detection and begun 
   const client = createSlackCoreClient({
     turnStream,
     runs: {
-      onTerminal() {},
+      async untilEnded() {},
       get: async () => {
         polls++;
         if (polls === 2) turnStream.begin("r1");

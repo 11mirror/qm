@@ -16,14 +16,13 @@ export function createSlackRuntimeReconciler<Config>(opts: {
   load: () => Promise<ReloadableSlackConfig<Config> | null>;
   startPlugin: (config: Config) => Promise<{ stop(): Promise<void> }>;
   intervalMs?: number;
-  startPaused?: boolean;
   onError?: (error: unknown) => void;
 }) {
   let active: { plugin: { stop(): Promise<void> }; version: string; config: Config } | null = null;
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
-  let stopped = opts.startPaused ?? false;
+  let stopped = false;
   let pendingCleanup: (() => Promise<void>) | null = null;
 
   const reconcile = async (): Promise<void> => {

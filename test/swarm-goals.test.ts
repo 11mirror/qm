@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { assignedGoal, createGoalRecord } from "../src/harness/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
 
 const goal = { objective: "Survey every archive for the lane", floor: { minMs: 3_600_000 }, token_cap: 2_000_000 };
 
@@ -77,12 +78,12 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const turn = (await claimTurn(f.ledger, first.id))!;
   const input = {
-    ...claimed.request,
-    runId: claimed.id,
-    runLeaseToken: claimed.leaseToken!,
-    attempt: claimed.attempts,
+    ...turn.run.request,
+    runId: turn.run.id,
+    runLeaseToken: turn.token,
+    attempt: turn.run.attempts,
   };
   const send = (requestId: string, text: string, extra = {}) =>
     f.service.send(f.caller, { requestId, audience: [worker!.id], text, notify: true, ...extra });
@@ -119,8 +120,8 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   assert.deepEqual(await f.service.handOver(input, [replacement.id, note.id]), []);
   await f.service.sweep();
   assert.equal(await runFor(replacement.id), undefined, "a handed message is never delivered again");
-  await f.runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
-  const straggler = (await f.runs.claimById(noteRun.id, "late-worker", 60_000))!;
+  await finishTurn(turn, { status: "ok" });
+  const straggler = (await claimTurn(f.ledger, noteRun.id))!.run;
   await assert.rejects(
     f.service.binding({ ...straggler.request, runId: straggler.id }),
     /already handed/,
@@ -133,12 +134,12 @@ test("the goal inbox holds a blocked message and everything after it, and settle
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const turn = (await claimTurn(f.ledger, first.id))!;
   const input = {
-    ...claimed.request,
-    runId: claimed.id,
-    runLeaseToken: claimed.leaseToken!,
-    attempt: claimed.attempts,
+    ...turn.run.request,
+    runId: turn.run.id,
+    runLeaseToken: turn.token,
+    attempt: turn.run.attempts,
   };
   const send = (requestId: string, text: string) =>
     f.service.send(f.caller, { requestId, audience: [worker!.id], text, notify: true });
@@ -171,12 +172,12 @@ test("a goal message is still handed over when saving its adopted goal fails mid
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const turn = (await claimTurn(f.ledger, first.id))!;
   const input = {
-    ...claimed.request,
-    runId: claimed.id,
-    runLeaseToken: claimed.leaseToken!,
-    attempt: claimed.attempts,
+    ...turn.run.request,
+    runId: turn.run.id,
+    runLeaseToken: turn.token,
+    attempt: turn.run.attempts,
   };
   const replacement = await f.service.send(f.caller, {
     requestId: "replace",

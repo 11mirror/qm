@@ -33,11 +33,13 @@ function reply(): Response {
 
 for (const warm of [false, true]) {
   test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after harness reset`, async () => {
-    const built = buildApp(testConfig({ harness: "pi", anthropicApiKey: "sk-test", securityScreen: "off" }));
+    const config = testConfig({ harness: "pi", anthropicApiKey: "sk-test", securityScreen: "off" });
+    let built = buildApp(config);
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-      requests.push(String(init?.body));
+      const body = String(init?.body);
+      if ((JSON.parse(body) as { tools?: unknown[] }).tools?.length) requests.push(body);
       return reply();
     }) as typeof fetch;
     const base: TurnRequest = {
@@ -76,7 +78,7 @@ for (const warm of [false, true]) {
       assert.match(requestText, /The worker needs restarting/);
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
-      built.runtime.start();
+      built = buildApp(config);
       const second = await built.app.turn({ ...input, text: "yes, go ahead" });
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);

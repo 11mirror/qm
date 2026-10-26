@@ -1220,10 +1220,13 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
   }
 });
 
-test("admin errors paginate all retained records with scoped totals and bounded page sizes", async () => {
+test("admin errors paginate all retained records with scoped totals and bounded page sizes", async (t) => {
   const s = start();
   try {
-    for (let i = 0; i < 260; i++)
+    const now = Date.now();
+    const clock = t.mock.method(Date, "now", () => now);
+    for (let i = 0; i < 260; i++) {
+      clock.mock.mockImplementation(() => now + i);
       s.built.errors.record({
         category: "turn",
         code: String(i),
@@ -1231,7 +1234,9 @@ test("admin errors paginate all retained records with scoped totals and bounded 
         scopeLabel: "personal:U1",
         sessionId: "test-session",
       });
+    }
     s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    clock.mock.restore();
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");
     assert.equal(page.total, 260);

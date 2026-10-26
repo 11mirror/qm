@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { appTurns, claimTurn, finishTurn } from "./support/turns.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -73,9 +74,9 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
         text: "test request",
       },
     });
-    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
-    assert.ok(claimed?.leaseToken);
-    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+    const claimed = await claimTurn(appTurns(built), run.id);
+    assert.ok(claimed);
+    await finishTurn(claimed!, { status: "ok", reply: "owner-only result" });
     const strictServer = createServer(built.app, {
       signingSecret: SOURCE,
       capabilitySecret: CAP,

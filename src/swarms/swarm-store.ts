@@ -111,7 +111,7 @@ function decode(swarm: SwarmStorage): Swarm {
 
 export function createSwarmStore(
   backing: DurableMap<SwarmStorage>,
-  authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
+  authority?: { runs: Pick<RunStore, "get" | "leaseHeld">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
   if (!backing.update) throw new Error("swarm storage requires atomic updates");
   async function fencedWrite(
@@ -126,18 +126,12 @@ export function createSwarmStore(
       return withPgTransaction(await pg.pool(), async (client) => {
         await client.query("SET LOCAL lock_timeout = '10s'");
         await client.query("SET LOCAL statement_timeout = '15s'");
-        const result = await client.query<Run>(
-          `SELECT status, attempts, lease_token AS "leaseToken", lease_expires_at::double precision AS "leaseExpiresAt", session_id AS "sessionId", request::jsonb AS request, engine FROM runs WHERE id=$1 FOR UPDATE`,
+        const result = await client.query<Pick<Run, "attempts" | "sessionId" | "request">>(
+          `SELECT attempts, session_id AS "sessionId", request::jsonb AS request FROM turns WHERE id=$1 FOR UPDATE`,
           [fence.runId],
         );
         const row = result.rows[0] ?? null;
-        const run =
-          row?.engine === "absurd"
-            ? {
-                ...row,
-                turnFenceHeld: await turnFenceHeld(client, fence.runId, fence.leaseToken),
-              }
-            : row;
+        const run = row ? { ...row, turnFenceHeld: await turnFenceHeld(client, fence.runId, fence.leaseToken) } : null;
         assertSwarmRun(fence, run);
         const session = await client.query(
           "SELECT id FROM sessions WHERE id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
@@ -162,7 +156,8 @@ export function createSwarmStore(
     const session = await authority.sessions.get(fence.sessionId);
     if (!session || session.scopeId !== fence.scopeId || session.threadRef !== fence.threadRef)
       throw new Error("capability session mismatch");
-    const run = await authority.runs.get(fence.runId);
+    const found = await authority.runs.get(fence.runId);
+    const run = found ? { ...found, turnFenceHeld: await authority.runs.leaseHeld(found, fence.leaseToken) } : null;
     assertSwarmRun(fence, run);
     const updated = await backing.update!(id, (current) => {
       assertSwarmRun(fence, run);

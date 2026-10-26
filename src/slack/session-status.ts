@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
+import { isTerminal, type RunStore } from "../runs/run-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -91,7 +91,7 @@ export function createSlackSessionStatus(
                   (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
                 )
               : [];
-          const processing = active.some((run) => run.status === "running" && !leaseLapsed(run, now()));
+          const processing = active.some((run) => run.status === "running");
           const threadRef = anchor?.request.conversation.threadRef;
           const jobs =
             optedIn && threadRef

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { claimTurn, finishTurn, testRunStore } from "./support/turns.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 function setup() {
@@ -138,7 +138,8 @@ test("reconciliation retries a persisted move without another incoming message",
 for (const reply of ["owed", "posted-by-turn", "silent"] as const) {
   test(`restart clears a finished task's acknowledgement only once its reply is out, reply=${reply}`, async () => {
     const { client, manager, store, events } = setup();
-    const { runs } = createMemoryRunStore();
+    const { runs, ledger, close } = testRunStore();
+    after(close);
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({
       sessionId: "task-session",
@@ -156,13 +157,9 @@ for (const reply of ["owed", "posted-by-turn", "silent"] as const) {
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
-    const claimed = await runs.claimById(run.id, "test", 10000);
+    const claimed = await claimTurn(ledger, run.id);
     assert.ok(claimed);
-    await runs.complete(
-      run.id,
-      claimed.leaseToken!,
-      reply === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
-    );
+    await finishTurn(claimed, reply === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" });
     if (reply === "owed") {
       await restarted.reconcile(client);
       assert.equal((await store.get(run.id))?.finished, false, "the run's reply has not been posted yet");

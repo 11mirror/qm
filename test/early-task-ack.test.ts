@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
@@ -115,10 +116,12 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
         async: true,
       });
       await ready;
+      const expected = action === "post" || action === "delegated-read" ? [] : ["Building the website now."];
+      if (expected.length > 0) await settle(async () => (await built.posts.pending("slack")).length > 0);
       const outbound = await built.posts.pending("slack");
       assert.deepEqual(
         outbound.map((delivery) => delivery.text),
-        action === "post" || action === "delegated-read" ? [] : ["Building the website now."],
+        expected,
       );
       release();
       await built.runs.waitFor(queued.runId!, 5000);

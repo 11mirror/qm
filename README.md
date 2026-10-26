@@ -77,8 +77,8 @@ flowchart LR
   LOOP <--> SBX
 ```
 
-For durability, set `DATABASE_URL` and `SESSION_STORE=postgres` — without it, sessions
-live in process memory and vanish on restart. To exercise a branch against a real model and real Postgres, run
+Core needs Postgres: set `DATABASE_URL`. Sessions and turns live there, and turns run
+on the Absurd durable queue inside it. To exercise a branch against a real model and real Postgres, run
 `npm run dev-instance:web` for web/admin or `npm run dev-instance:slack` for Slack.
 Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface

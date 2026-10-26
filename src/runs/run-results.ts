@@ -138,15 +138,16 @@ const RUN_RESULT_SWEEP_GRACE_MS = 60_000;
 const RUN_RESULT_SWEEP_PAGE = 200;
 const RUN_RECOVERY_GRACE_MS = 15_000;
 
-export interface RunResultRecovery {
+export interface RunResultPosts {
+  deliver(run: Run): void;
   sweep(now?: number): Promise<number>;
 }
 
-export function wireRunResultPosts(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "get" | "setDeliveryState">,
+export function createRunResultPosts(
+  runs: Pick<RunStore, "terminalFinished" | "get" | "setDeliveryState">,
   outbound: Pick<Outbound, "send">,
   opts: { adminUrlFor?: AdminUrlFor; sessions?: TurnFailureSessions; graceMs?: number } = {},
-): RunResultRecovery {
+): RunResultPosts {
   const graceMs = opts.graceMs ?? RUN_RECOVERY_GRACE_MS;
   const owed = (run: Run): OutboundPost | null =>
     run.deliveryState?.postedAt === undefined ? runResultPost(run, opts.adminUrlFor) : null;
@@ -163,7 +164,7 @@ export function wireRunResultPosts(
     await runs.setDeliveryState(run.id, null, { postedAt: Date.now() });
     return true;
   };
-  runs.onTerminal((run) => {
+  const deliver = (run: Run): void => {
     if (opts.sessions)
       void recordRunFailureEntry(opts.sessions, run).catch(
         reportFailureAs("run results: record turn_failure entry", undefined, `run=${run.id}`),
@@ -175,8 +176,9 @@ export function wireRunResultPosts(
       const post = owed(latest);
       if (post) await postOwed(latest, post);
     })().catch(reportFailureAs("run results: post recovered result (the sweep retries)", undefined, `run=${run.id}`));
-  });
+  };
   return {
+    deliver,
     async sweep(now = Date.now()) {
       const before = now - RUN_RESULT_SWEEP_GRACE_MS;
       let cursor = { finishedAt: now - RUN_RESULT_SWEEP_LOOKBACK_MS, id: "" };

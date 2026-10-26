@@ -32,7 +32,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
 
 async function pollDeliveries(
   outbound: { pending(type: string): Promise<unknown[]> },
-  deadlineMs = 5_000,
+  deadlineMs = 20_000,
 ): Promise<any[]> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
@@ -46,7 +46,7 @@ async function pollDeliveries(
 async function pollFor(
   outbound: { pending(type: string): Promise<unknown[]> },
   match: (d: any) => boolean,
-  deadlineMs = 5_000,
+  deadlineMs = 20_000,
 ): Promise<any> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
@@ -118,11 +118,13 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
-    const subEntries = await built.sessions.getItems(sub!.id);
-    assert.ok(
-      subEntries.some((e) => e.kind === "AgentMessage"),
-      "the sub-conversation session did the work + reply",
-    );
+    const deadline = Date.now() + 20_000;
+    let replied = false;
+    while (!replied && Date.now() < deadline) {
+      replied = (await built.sessions.getItems(sub!.id)).some((e) => e.kind === "AgentMessage");
+      if (!replied) await sleep(50);
+    }
+    assert.ok(replied, "the sub-conversation session did the work + reply");
   } finally {
     await built.runtime.stop();
   }

@@ -1,5 +1,4 @@
 import "./instrument.ts";
-import { createBackgroundController } from "./runs/background-controller.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -15,8 +14,7 @@ import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
 const servesApi = config.roles.includes("api");
-const slackIngress =
-  config.roles.includes("surfaces") && config.backgroundWorkEnabled && !config.backgroundDeploymentId;
+const slackIngress = config.roles.includes("surfaces") && config.backgroundWorkEnabled;
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
@@ -36,7 +34,7 @@ const managedSlack =
         token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
         appId: process.env.QM_SLACK_APP_ID ?? "",
         store: built.slackInstallation,
-        reconcile: slackIngress || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
+        reconcile: slackIngress ? () => slackRuntime.reconcile() : undefined,
       })
     : undefined;
 const server = servesApi
@@ -55,8 +53,8 @@ built.runtime.start();
 
 server?.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (roles=${config.roles.join(",")}, org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    `[qm] listening on :${config.port} (roles=${config.roles.join(",")}, org=${config.orgId}, ` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
 if (!server)
@@ -90,14 +88,13 @@ if (config.deployProvider === "docker") {
   });
 }
 
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
+if (config.backgroundWorkEnabled) {
   built.scheduler.start(1000);
-} else if (!config.backgroundDeploymentId) {
+} else {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 
 const slackRuntime = createSlackRuntimeReconciler({
-  startPaused: Boolean(config.backgroundDeploymentId),
   load: async () => {
     const status = await built.slackInstallation.status();
     const stored = await built.slackInstallation.get();
@@ -126,62 +123,12 @@ if (slackIngress) slackRuntime.start();
 
 const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((account) =>
   createSlackRuntimeReconciler({
-    startPaused: Boolean(config.backgroundDeploymentId),
     load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
     startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
     onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
   }),
 );
 if (slackIngress) for (const runtime of slackAccountRuntimes) runtime.start();
-
-let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
-if (built.backgroundOwnership) {
-  let periodicStop: Promise<void> = Promise.resolve();
-  let activationEpoch = 0;
-  const stopPeriodic = () => {
-    activationEpoch++;
-    periodicStop = built.scheduler.stopClaims();
-    void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
-    void built.runtime
-      .stopBackgroundClaims()
-      .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
-    for (const runtime of [slackRuntime, ...slackAccountRuntimes])
-      void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
-  };
-  backgroundController = createBackgroundController({
-    store: built.backgroundOwnership.store,
-    deploymentId: built.backgroundOwnership.deploymentId,
-    async start(signal) {
-      const epoch = ++activationEpoch;
-      if (signal.aborted) return;
-      built.runtime.startBackground();
-      await periodicStop;
-      if (signal.aborted || epoch !== activationEpoch) return;
-      built.scheduler.start(1000);
-      await built.scheduler.ready();
-      if (signal.aborted || epoch !== activationEpoch) return;
-      for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
-        if (signal.aborted) return;
-        runtime.start();
-        await runtime.reconcile();
-      }
-    },
-    fence: stopPeriodic,
-    async relinquish() {
-      await Promise.all([
-        built.runtime.stopBackgroundClaims(),
-        built.scheduler.stopClaims(),
-        ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
-      ]);
-    },
-    async drained() {
-      await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
-    },
-    onError: reportFailureAs("background ownership", undefined),
-  });
-  built.runtime.setBackgroundAdmission(backgroundController.canClaim, backgroundController.active);
-  backgroundController.start();
-}
 
 let shuttingDown = false;
 function shutdown(signal: string): void {
@@ -195,18 +142,7 @@ function shutdown(signal: string): void {
   built.deploymentLayerRefresh.stop();
   server?.close();
   server?.closeIdleConnections();
-  stopWithBackstop(
-    {
-      async stop() {
-        await backgroundController?.stop();
-        await built.runtime.stop();
-      },
-      releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
-    },
-    config.shutdownDrainMs,
-    "qm",
-    () => server?.closeAllConnections(),
-  );
+  stopWithBackstop(built.runtime, config.shutdownDrainMs, "qm", () => server?.closeAllConnections());
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

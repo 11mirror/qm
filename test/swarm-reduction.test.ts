@@ -1,36 +1,35 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import type { Run } from "../src/runs/run-store.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
 
-const invalidRuns: Record<string, Partial<Run>> = {
-  completed: { status: "done" },
-  replaced: { attempts: 99 },
-  "wrong token": { leaseToken: "replacement" },
-  "missing token": { leaseToken: null },
-  "missing expiry": { leaseExpiresAt: null },
-  expired: { leaseExpiresAt: 1 },
+type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
+const endings: Record<string, (f: Fixture, turn: Parameters<typeof finishTurn>[0]) => Promise<unknown>> = {
+  completed: (_f, turn) => finishTurn(turn, { status: "ok", reply: "Done" }),
+  failed: (_f, turn) => finishTurn(turn, { status: "failed", reason: "Failed" }, "failed"),
+  "handed back": (f, turn) => f.ledger.handBack(turn.run, turn.token, { stop: { kind: "shutdown" } }),
+  replaced: async (f, turn) => {
+    await f.ledger.handBack(turn.run, turn.token, { stop: { kind: "shutdown" } });
+    await claimTurn(f.ledger, turn.run.id);
+  },
 };
-for (const [name, fields] of Object.entries(invalidRuns)) {
+for (const [name, end] of Object.entries(endings)) {
   for (const atCommit of [false, true]) {
     test(`${name} run is rejected at ${atCommit ? "commit" : "admission"}`, async () => {
       const f = await swarmFixture();
+      if (f.caller.kind !== "agent") throw new Error("wrong caller");
       await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
       const before = await f.store.get(f.root.id);
-      const get = f.runs.get.bind(f.runs);
-      const invalidate = () => {
-        f.runs.get = async (id) => {
-          const run = await get(id);
-          return run ? { ...run, ...fields } : null;
-        };
-      };
+      const run = (await f.runs.get(f.caller.claims.runId!))!;
+      let ended: Promise<unknown> | undefined;
+      const invalidate = () => (ended ??= end(f, { run, token: f.caller.claims.runLeaseToken!, ledger: f.ledger }));
       if (atCommit) {
         const update = f.store.update.bind(f.store);
-        f.store.update = (...args) => {
-          invalidate();
+        f.store.update = async (...args) => {
+          await invalidate();
           return update(...args);
         };
-      } else invalidate();
+      } else await invalidate();
       await assert.rejects(f.service.context(f.caller, { changed: true }), /active capability run required/);
       assert.deepEqual(await f.store.get(f.root.id), before);
     });

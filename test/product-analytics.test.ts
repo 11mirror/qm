@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { randomUUID } from "node:crypto";
 import type { Run } from "../src/runs/run-store.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
+import { claimTurn, finishTurn, testRunStore } from "./support/turns.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;
@@ -113,36 +114,41 @@ test("non-human, stopped and non-completion results do not produce response outc
   assert.equal(requests, 0);
 });
 
-test("terminal listener reports only exhausted failures and accepted completions, not retries or stale leases", async () => {
+test("turn end reports only exhausted failures and accepted completions, not retries or stale leases", async () => {
   const events: string[] = [];
   const analytics = createProductAnalytics("company", { apiKey: "token" }, async (_url, init) => {
     events.push(JSON.parse(String(init?.body)).event);
     return new Response("ok");
   });
-  const { runs } = createMemoryRunStore();
-  runs.onTerminal((run) => {
-    void analytics.responseFinished(run);
-  });
-  const request = (await humanRun()).request;
-  const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
-  let claimed = (await runs.claim("worker", 10_000))!;
-  await runs.fail(run.id, claimed.leaseToken!, "private first error");
-  assert.deepEqual(events, []);
-  claimed = (await runs.claim("worker", 10_000))!;
-  assert.equal(await runs.complete(run.id, "stale-lease", { status: "ok" }), false);
-  assert.deepEqual(events, []);
-  await runs.fail(run.id, claimed.leaseToken!, "private final error");
-  assert.deepEqual(events, ["response_failed"]);
-  await runs.enqueue({ sessionId: "thread", request });
-  claimed = (await runs.claim("worker", 10_000))!;
-  await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
-  assert.deepEqual(events, ["response_failed", "response_completed"]);
+  const { runs, ledger, onEnded, close } = testRunStore();
+  try {
+    onEnded((run) => {
+      void analytics.responseFinished(run);
+    });
+    const request = (await humanRun()).request;
+    await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
+    const first = (await claimTurn(ledger))!;
+    await ledger.handBack(first.run, first.token, { countsAsError: true, stop: { kind: "error" } });
+    assert.deepEqual(events, []);
+    const second = (await claimTurn(ledger))!;
+    assert.equal(await finishTurn({ ...second, token: "stale-lease" }, { status: "ok" }), false);
+    assert.deepEqual(events, []);
+    await finishTurn(second, { status: "failed", reason: "private final error" }, "failed");
+    assert.deepEqual(events, ["response_failed"]);
+    await runs.enqueue({ sessionId: "thread", request });
+    await finishTurn((await claimTurn(ledger))!, { status: "ok" });
+    assert.deepEqual(events, ["response_failed", "response_completed"]);
+  } finally {
+    await close();
+  }
 });
 
 async function humanRun(): Promise<Run> {
-  const { runs } = createMemoryRunStore();
-  const { run } = await runs.enqueue({
+  const now = Date.now();
+  return {
+    id: randomUUID(),
     sessionId: "thread",
+    status: "done",
     request: {
       actor: { id: "person", type: "internal" },
       conversation: { kind: "dm", threadRef: "thread", audience: [] },
@@ -150,6 +156,23 @@ async function humanRun(): Promise<Run> {
       surface: "web",
       text: "private prompt",
     },
-  });
-  return { ...run, status: "done", result: { status: "ok" }, finishedAt: Date.now() };
+    result: { status: "ok" },
+    deliveryState: null,
+    turnUserSeq: null,
+    dedupKey: null,
+    attempts: 1,
+    errorAttempts: 0,
+    maxAttempts: 3,
+    priority: 0,
+    preemptions: 0,
+    leaseToken: null,
+    leaseExpiresAt: null,
+    workerId: null,
+    createdAt: now,
+    startedAt: now,
+    finishedAt: now,
+    absurdQueue: "turns_people",
+    absurdTaskId: null,
+    absurdRunId: null,
+  };
 }

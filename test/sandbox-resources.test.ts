@@ -15,8 +15,8 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { claimTurn, finishTurn, testRunStore } from "./support/turns.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = createMemoryMap<SandboxResource>();
@@ -871,10 +871,14 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   parking.teardown = async (_handle, opts) => {
     teardowns.push(opts ?? {});
   };
-  const { runs } = createMemoryRunStore();
+  const store = testRunStore();
+  const { runs } = store;
   const start = async (sessionId: string) => {
-    await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
-    return (await runs.claim("worker", 60_000))!;
+    const { run } = await runs.enqueue({
+      sessionId,
+      request: { origin: { kind: "direct" }, actor: { id: "alice" }, text: "x" } as never,
+    });
+    return (await claimTurn(store.ledger, run.id))!;
   };
   const turn = (runId: string, sessionId: string) =>
     createTurnSandboxes({
@@ -897,15 +901,16 @@ test("two concurrent turns on one parking computer: only the last turn to finish
     } as unknown as TurnSandboxContext);
   const a = await start("sa");
   const b = await start("sb");
-  const first = turn(a.id, "sa");
-  const second = turn(b.id, "sb");
+  const first = turn(a.run.id, "sa");
+  const second = turn(b.run.id, "sb");
   await Promise.all([first.provision(), second.provision()]);
   await first.reclaimBox();
-  await runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" });
+  await finishTurn(a, { status: "ok", reply: "done" });
   assert.deepEqual(teardowns, [{ keepWarm: true }]);
   await second.reclaimBox();
   assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
   assert.deepEqual((await resources.get(record.id)).holders, []);
+  await store.close();
 });
 
 test("same-name skills from distinct sources keep their materialized assets separate", async () => {

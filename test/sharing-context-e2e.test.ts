@@ -160,7 +160,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     token = opts?.env?.AGENT_API_TOKEN;
     return provision(layers, opts);
   };
-  b.runtime.startBackground();
+  b.runtime.startTurns();
   const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
@@ -555,21 +555,29 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
         publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
       },
     });
+  const ownerBoxDenials = async () =>
+    (await b.errors.list({ limit: 5000 })).filter((event) => /owner-auth box is not available/.test(event.message))
+      .length;
+  const deniedOwnerBox = async (origin?: TurnRequest["origin"]) => {
+    const before = await ownerBoxDenials();
+    await assert.rejects(denied(origin), /"status":"failed"/);
+    assert.equal(await ownerBoxDenials(), before + 1);
+  };
   await b.config.setSharingPosture("personal:U1", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
+  await deniedOwnerBox();
+  await deniedOwnerBox({ kind: "ambient", live: true });
   await b.config.setSharingPosture("personal:U1", "open");
   await b.config.setSharingPosture("channel:C1", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
+  await deniedOwnerBox();
+  await deniedOwnerBox({ kind: "ambient", live: true });
   await b.config.setSharingPosture("channel:C1", "open");
   await b.config.setSharingPosture("org:default-org", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
+  await deniedOwnerBox();
+  await deniedOwnerBox({ kind: "ambient", live: true });
   await b.config.setSharingPosture("org:default-org", "open");
-  await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient" }), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: false }), /owner-auth box is not available/);
+  await deniedOwnerBox({ kind: "automation" });
+  await deniedOwnerBox({ kind: "ambient" });
+  await deniedOwnerBox({ kind: "ambient", live: false });
   const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
     b.turn(selected(), true, "U1", {
       origin,

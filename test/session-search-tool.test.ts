@@ -1,5 +1,6 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { testRunStore } from "./support/turns.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,6 @@ import { testConfig } from "./support/test-config.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 
@@ -36,7 +36,8 @@ test("session search reuses indexed search with participant intersection, tenure
     text: "memo shared",
   });
   await sessions.releaseLease(lease);
-  const { runs } = createMemoryRunStore();
+  const { runs, close } = testRunStore();
+  after(close);
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({
     sessions,

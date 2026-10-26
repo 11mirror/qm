@@ -1,9 +1,9 @@
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { testRunStore } from "./support/turns.ts";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
@@ -26,7 +26,8 @@ interface Rig {
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
+  const { runs, close } = testRunStore();
+  after(close);
   const signals = createMemoryRunSignalStore();
   const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
   const factory = createSessionSyscalls({

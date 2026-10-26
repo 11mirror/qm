@@ -307,10 +307,9 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
   }
 });
 
-test("a configured company subscription without a keychain cannot fall back to the metered key", async (t) => {
+test("a configured company subscription missing from the keychain cannot fall back to the metered key", async (t) => {
   buildApp(
     testConfig({
-      connectorSecretKey: undefined,
       codexAuthCredential: "unavailable",
       openaiApiKey: "metered",
       modelId: "gpt-5.6-sol",

@@ -11,7 +11,7 @@ import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
+import { isTerminal, isUnstarted } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
@@ -34,7 +34,6 @@ import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
@@ -97,7 +96,7 @@ export function createTurnMethods(
       const session = await deps.sessions.getByThread(run.sessionId);
       if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
       await signals.send(run.id, { kind: "abort", reason: USER_STOP });
-      await stopRun(deps.runs, run);
+      await deps.runs.cancelTurn(run.id);
       return true;
     };
     return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
@@ -491,8 +490,6 @@ export function createTurnMethods(
 
       if (replay) dedupKey = replay.signalDedupKey;
 
-      if (origin.kind === "human" && !isSessionTurn(input) && !req.approval) deps.reaperPoke?.();
-
       if (
         req.surface !== "web" &&
         deps.signals &&
@@ -659,7 +656,6 @@ export function createTurnMethods(
       });
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
       if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
       if (req.async) return { status: "queued", runId: run.id };
       return drive(run.id);
@@ -738,13 +734,12 @@ export function createTurnMethods(
       const runtime = deps.turnStream?.runtime(runId) ?? run.result?.runtime;
       const firstBlock = deps.turnStream?.firstBlock(runId);
       const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
-      const alive = run.status === "running" && !leaseLapsed(run, Date.now());
+      const alive = run.status === "running";
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
-      const stale =
-        run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+      const stale = run.status === "pending" && run.attempts > 0;
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
@@ -951,7 +946,7 @@ export function createTurnMethods(
         const drained = await replayOrphanedRunSignals(runId);
         if (signal.kind !== "steer") return { accepted: false, reason: "terminal" };
         // The steer was stored before the run went terminal, so its text is replayed as
-        // a fresh turn (by this drain, the onTerminal hook, or the orphan sweeper —
+        // a fresh turn (by this drain, the turn-end steps, or the orphan sweeper —
         // whoever drains first). Tell the caller so it attaches to the fresh run
         // instead of treating the message as lost.
         const own = drained.find((d) => d.signal.ts === outbound.ts);

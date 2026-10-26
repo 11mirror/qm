@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { testRunStore } from "./support/turns.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,6 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -59,7 +59,8 @@ let callSeq = 0;
 
 async function scenario() {
   const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
+  const { runs, close } = testRunStore();
+  after(close);
   const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(createMemoryMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");

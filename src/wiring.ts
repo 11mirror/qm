@@ -13,12 +13,6 @@ import { createKeychainApprovals, type KeychainApprovals } from "./credentials/k
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
-import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
-import {
-  createBackgroundOwnershipStore,
-  type BackgroundOwnershipControl,
-  type BackgroundOwnership,
-} from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
@@ -61,7 +55,7 @@ import type { SessionShare, SessionShareStore } from "./sessions/session-share.t
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
@@ -149,7 +143,7 @@ import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.t
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
 import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
-import { wireRunResultPosts } from "./runs/run-results.ts";
+import { createRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
@@ -294,7 +288,6 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
-import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
@@ -320,23 +313,20 @@ import {
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
-import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "./turns/absurd-schema.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
+import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
-import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
-import { repairStaleTurns, routeTurns } from "./turns/turn-engine.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
 import {
-  createNoopInstanceRegistry,
-  createPostgresInstanceRegistry,
-  type InstanceRegistry,
-} from "./runs/instance-registry.ts";
-import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
+  createTurnLedger,
+  TURN_CANCEL_CHANNEL,
+  TURN_READY_CHANNEL,
+  TURN_YIELD_CHANNEL,
+  type TurnLedger,
+} from "./turns/turn-ledger.ts";
+import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
+import { bindTurnLedger, repairStaleTurns, type TurnEndSteps } from "./turns/turn.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import {
   createMemoryProcessRegistry,
@@ -352,7 +342,7 @@ import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
-import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
+import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
@@ -360,8 +350,6 @@ import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
-import { createEngagedRegistry } from "./wake/engaged-registry.ts";
-import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
 import {
   createMemorySurfaceCache,
   createPostgresSurfaceCache,
@@ -421,11 +409,8 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 
 export interface Runtime {
   start(): void;
-  startBackground(): void;
-  stopBackgroundClaims(): Promise<void>;
-  setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
+  startTurns(): void;
   stopBackground(): Promise<void>;
-  backgroundDrained(): Promise<void>;
   stop(): Promise<void>;
   releaseInFlightRuns(): Promise<void>;
 }
@@ -464,7 +449,6 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
@@ -475,6 +459,8 @@ export interface BuiltApp {
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
+  turnLedger: TurnLedger;
+  turnEnd: TurnEndSteps;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;
@@ -568,11 +554,9 @@ export function buildApp(
     harnesses?: Partial<Record<HarnessId, Harness>>;
   } = {},
 ): BuiltApp {
-  let backgroundAdmission = () => !config.backgroundDeploymentId;
-  let backgroundActive = () => false;
-  const admittedWork = createAdmittedWork({
-    canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
-  });
+  if (!config.databaseUrl) throw new Error("DATABASE_URL is required: QM keeps sessions and turns in Postgres");
+  const databaseUrl = config.databaseUrl;
+  const admittedWork = createAdmittedWork();
   let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
@@ -1299,34 +1283,22 @@ export function buildApp(
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
   const modelGateway = createModelGateway();
 
-  const requireDbUrl = (kind: string): string => {
-    if (!config.databaseUrl) throw new Error(`${kind}=postgres requires DATABASE_URL`);
-    return config.databaseUrl;
-  };
-  const sessions: SessionStore =
-    config.sessionStore === "postgres"
-      ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"))
-      : createMemorySessionStore();
+  const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
-  const toolOutput =
-    config.sessionStore === "postgres" && pgArtifactMap
-      ? createPostgresToolOutputStore({
-          pool: pgArtifactMap.pool,
-          bytesFor: (prefix) =>
-            config.snapshotStore === "s3" && config.s3Bucket
-              ? createS3DurableByteStore({
-                  bucket: config.s3Bucket,
-                  ...(config.s3Region ? { region: config.s3Region } : {}),
-                  prefix: `${config.s3Prefix ?? ""}${prefix}`,
-                })
-              : createLocalDurableByteStore(join(config.dataDir, prefix)),
-        })
-      : createMemoryToolOutputStore({ sessions });
-  const runStoreKind = config.runStore;
-  const runSignals: RunSignalStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunSignalStore();
+  const toolOutput = pgArtifactMap
+    ? createPostgresToolOutputStore({
+        pool: pgArtifactMap.pool,
+        bytesFor: (prefix) =>
+          config.snapshotStore === "s3" && config.s3Bucket
+            ? createS3DurableByteStore({
+                bucket: config.s3Bucket,
+                ...(config.s3Region ? { region: config.s3Region } : {}),
+                prefix: `${config.s3Prefix ?? ""}${prefix}`,
+              })
+            : createLocalDurableByteStore(join(config.dataDir, prefix)),
+      })
+    : createMemoryToolOutputStore({ sessions });
+  const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1529,17 +1501,19 @@ export function buildApp(
     delete harness.models.screenSecurity;
   }
 
-  const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
-  const runStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
-  const turnLedger =
-    runStoreKind === "postgres" && config.sessionStore === "postgres"
-      ? createTurnLedger(requireDbUrl("RUN_STORE"), { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
-      : undefined;
-  const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
+  const runStore = createPostgresRunStore(databaseUrl);
+  const turnLedger = createTurnLedger(databaseUrl);
+  const turnEnd: TurnEndSteps = {
+    refreshLiveView: (run) => refreshRunStream(run.id),
+    deliverResult: (run) => runResults.deliver(run),
+    settleConversationState: (run) => settleConversationState(run),
+    wakeWaiters: (run) => runStore.runs.wakeWaiters(run),
+    replayLateSteers: (run) => app.replayOrphanedRunSignals(run.id),
+    returnToParent: (run) => returnSessionRun(run),
+    recordAnalytics: (run) => void productAnalytics.responseFinished(run),
+  };
+  const turnRouting = bindTurnLedger(runStore.runs, turnLedger, turnEnd);
 
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
     if (!sessionIds.length) return new Set();
@@ -1565,10 +1539,7 @@ export function buildApp(
   };
   const runs: RunStore = {
     ...runStore.runs,
-    cancelTurn: turnRouting.cancelTurn,
-    cancelTree: turnRouting.cancelTree,
-    withdraw: turnRouting.withdraw,
-    leaseHeld: turnRouting.leaseHeld,
+    ...turnRouting,
     async enqueue(input) {
       const enqueue = async () => {
         const known = await sessions.getByThread(input.sessionId);
@@ -1582,7 +1553,7 @@ export function buildApp(
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
         const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = (await turnRouting.admit(input)) ?? (await runStore.runs.enqueue(input));
+        const result = await turnRouting.enqueue(input);
         if (result.deduped) return result;
         sessionStateBus.emit({
           threadRef: input.sessionId,
@@ -1604,15 +1575,14 @@ export function buildApp(
       return advisoryLock.withLock("session-run-admission", enqueue);
     },
   };
-  const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
   const swarms =
-    config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
+    config.swarmsEnabled !== false
       ? createSwarmService({
           defaults: config.swarmDefaults,
           store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
             runs,
             sessions,
-            ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
+            ...(pgArtifactMap ? { pg: pgArtifactMap.pool } : {}),
           }),
           sessions,
           runs,
@@ -1632,7 +1602,6 @@ export function buildApp(
         })
       : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
-  runs.onTerminal((run) => void productAnalytics.responseFinished(run));
   const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
@@ -1668,17 +1637,13 @@ export function buildApp(
       if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
     }
   });
-  runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl
     ? createPostgresSessionStateBus(config.databaseUrl)
     : createMemorySessionStateBus();
   const ledgerEventBus: LedgerEventBus = config.databaseUrl
     ? createPostgresLedgerEventBus(config.databaseUrl)
     : createMemoryLedgerEventBus();
-  const activityStore: RunActivityStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunActivityStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunActivityStore();
+  const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {
@@ -2186,7 +2151,7 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultPosts(runs, outbound, {
+  const runResults = createRunResultPosts(runs, outbound, {
     ...(recoveryAdminUrlFor ? { adminUrlFor: recoveryAdminUrlFor } : {}),
     sessions,
   });
@@ -2211,27 +2176,6 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
-  const reaper: Reaper = createReaper(runs, sessions, {
-    intervalMs: config.reaperIntervalMs,
-    leaderLease,
-    maxAgeMs: config.runMaxAgeMs,
-    errors,
-  });
-  const engaged = createEngagedRegistry();
-  let reapInFlight = false;
-  let lastReapAt = 0;
-  const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },
@@ -2298,7 +2242,7 @@ export function buildApp(
     sessions,
     orchestrator,
     runs,
-    leaseTtlMs,
+    startTurns: () => runtime.startTurns(),
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -2349,8 +2293,6 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
-    engaged,
-    reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
     ...(harness.models.judge
@@ -2366,7 +2308,6 @@ export function buildApp(
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
-    inlineTurns: config.roles.includes("harness"),
   });
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
@@ -2409,44 +2350,31 @@ export function buildApp(
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
-  runs.onTerminal((run) => {
-    void runs
-      .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
-      .catch(swallowAs("wake: settle on terminal", undefined));
-  });
-  runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
-  });
-  runs.onTerminal((run) => {
-    void (async () => {
-      const session = await sessions.getByThread(run.sessionId);
-      const at = run.finishedAt ?? Date.now();
-      if (!session) {
-        if (!(await runs.activeForThread(run.sessionId)))
-          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
-        return;
-      }
-      const settle = async (target: Session): Promise<boolean> => {
-        if (await runs.activeForThread(target.threadRef)) return false;
-        const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
-        const participants = await sessions.participantsOf(target.id);
-        sessionStateBus.emit({
-          threadRef: target.threadRef,
-          sessionId: target.id,
-          state: waiting ? "awaiting_approval" : "idle",
-          at,
-          ...(participants.length ? { participants } : {}),
-        });
-        return true;
-      };
-      if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
-    })().catch(swallowAs("session-state: terminal emit", undefined));
-  });
+  const settleConversationState = async (run: Run): Promise<void> => {
+    const session = await sessions.getByThread(run.sessionId);
+    const at = run.finishedAt ?? Date.now();
+    if (!session) {
+      if (!(await runs.activeForThread(run.sessionId)))
+        sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
+      return;
+    }
+    const settle = async (target: Session): Promise<boolean> => {
+      if (await runs.activeForThread(target.threadRef)) return false;
+      const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
+      if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+      const participants = await sessions.participantsOf(target.id);
+      sessionStateBus.emit({
+        threadRef: target.threadRef,
+        sessionId: target.id,
+        state: waiting ? "awaiting_approval" : "idle",
+        at,
+        ...(participants.length ? { participants } : {}),
+      });
+      return true;
+    };
+    if (!(await settle(session))) return;
+    for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+  };
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock
@@ -2470,10 +2398,6 @@ export function buildApp(
         await runs.deferReturn(run.id, 60_000);
         throw error;
       });
-  runs.onTerminal((run) => {
-    if (run.sessionId.startsWith("agent:main:subagent:"))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
-  });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;
     for (;;) {
@@ -2510,8 +2434,8 @@ export function buildApp(
   const runResultSweeper = createSweeper(
     () =>
       advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
-        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
+        ? advisoryLock.tryWithLock("run-result-sweep", () => runResults.sweep())
+        : advisoryLock.withLock("run-result-sweep", () => runResults.sweep()),
     60_000,
     { label: "run-results" },
   );
@@ -2529,23 +2453,6 @@ export function buildApp(
     },
     config.reaperIntervalMs,
     { label: "orphaned-signals" },
-  );
-  const wakeSweep: WakeSweep = createWakeSweep(
-    {
-      async engagedSessions() {
-        return engaged.list();
-      },
-      async sweepSession(threadRef) {
-        const live = await runs.activeForThread(threadRef);
-        if (!live) {
-          pokeReaper();
-          engaged.settle(threadRef);
-          return 1;
-        }
-        return 0;
-      },
-    },
-    { intervalMs: config.reaperIntervalMs, leaderLease },
   );
   orchestratorDeps.surfaceContext = createSurfaceContextPuller(
     app,
@@ -2650,7 +2557,6 @@ export function buildApp(
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     outbound,
@@ -2756,77 +2662,32 @@ export function buildApp(
     currentScopeMembers,
     resolveRecipient,
   });
-  const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
-    ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
-        instanceId: randomUUID(),
-        deploymentId: config.backgroundDeploymentId,
-        active: () => backgroundActive(),
-      }
-    : undefined;
-  const instanceRegistry: InstanceRegistry =
-    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
-      ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
-          instanceId: randomUUID(),
-          buildSha: config.buildSha,
-          startedAt: Date.now(),
-        })
-      : createNoopInstanceRegistry();
-  const drain: DrainController = createDrainController({ registry: instanceRegistry });
-  const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
-  const turnReady = turnLedger
-    ? createPostgresNotifyBus<string>(requireDbUrl("RUN_STORE"), TURN_READY_CHANNEL, "turn readiness")
-    : undefined;
-  const turnCancels = turnLedger
-    ? createPostgresNotifyBus<string>(requireDbUrl("RUN_STORE"), TURN_CANCEL_CHANNEL, "turn cancels")
-    : undefined;
-  const turnYields = turnLedger
-    ? createPostgresNotifyBus<string>(requireDbUrl("RUN_STORE"), TURN_YIELD_CHANNEL, "turn yields")
-    : undefined;
-  const turnRunner: TurnRunner | undefined = turnLedger
-    ? createTurnRunner({
-        ledger: turnLedger,
-        orchestrator,
-        queues: TURN_QUEUES,
-        slots: Math.max(1, config.workers),
-        capacity: () => Math.max(1, config.workers) - workers.filter((worker) => worker.held()).length,
-        ...(turnReady ? { ready: turnReady } : {}),
-        ...(turnCancels ? { cancels: turnCancels } : {}),
-        ...(turnYields ? { yields: turnYields } : {}),
-        canClaim: canClaimRuns,
-        errors,
-        maxClaims: config.maxClaims,
-      })
-    : undefined;
-  const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
-  const canClaimRunSlot = () => canClaimRuns() && busyRuns() < Math.max(1, config.workers);
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      heartbeatIntervalMs: config.heartbeatIntervalMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRunSlot,
-    }),
+  const turnReady = createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness");
+  const turnCancels = createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels");
+  const turnYields = createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields");
+  const turnRunner: TurnRunner = createTurnRunner({
+    ledger: turnLedger,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: Math.max(1, config.workers),
+    ready: turnReady,
+    cancels: turnCancels,
+    yields: turnYields,
+    end: turnEnd,
+    errors,
+    maxClaims: config.maxClaims,
+  });
+  const turnPointerRepair = createSweeper(
+    () =>
+      leaderLease.hold("turns:pointer-repair", () =>
+        repairStaleTurns({ ledger: turnLedger, sessions, end: turnEnd, errors }),
+      ),
+    60_000,
+    { label: "turn-pointer-repair", immediate: true },
   );
-  const turnPointerRepair = turnLedger
-    ? createSweeper(
-        () =>
-          leaderLease.hold("turns:pointer-repair", () => repairStaleTurns({ ledger: turnLedger, sessions, errors })),
-        60_000,
-        { label: "turn-pointer-repair" },
-      )
-    : null;
-  const turnCleanup = turnLedger
-    ? createSweeper(() => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()), 60 * 60_000, {
-        label: "turn-cleanup",
-      })
-    : null;
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
-  const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
+  const turnCleanup = createSweeper(() => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()), 60 * 60_000, {
+    label: "turn-cleanup",
+  });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
@@ -2906,29 +2767,16 @@ export function buildApp(
     : null;
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
-  let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
     admittedWork.resume();
-    drain.start();
     const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
-    preemptionSweeper.start();
-    turnRunner?.start();
+    turnRunner.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      reaper.start();
       processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
@@ -2947,18 +2795,17 @@ export function buildApp(
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
       deepIdleSweeper?.start();
-      wakeSweep.start();
       swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
       runResultSweeper.start();
       queuedPostSweeper.start();
       approvalDeliverySweeper.start();
-      turnPointerRepair?.start();
-      turnCleanup?.start();
+      turnPointerRepair.start();
+      turnCleanup.start();
     };
     if (backgroundStopping)
-      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
+      void backgroundStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
@@ -2969,7 +2816,6 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
@@ -2982,21 +2828,17 @@ export function buildApp(
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
       fileUploads?.stop(),
-      wakeSweep.stop(),
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       queuedPostSweeper.stop(),
       approvalDeliverySweeper.stop(),
-      preemptionSweeper.stop(),
-      turnPointerRepair?.stop(),
-      turnCleanup?.stop(),
-      turnRunner?.stopClaims(),
-      ...workers.map((worker) => worker.stopClaims()),
+      turnPointerRepair.stop(),
+      turnCleanup.stop(),
+      turnRunner.stopClaims(),
     ];
-    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
+    const draining = Promise.all([previous, monitorStopping, ...stopping])
       .then(() => {})
       .finally(() => {
         if (backgroundStopping === draining) backgroundStopping = null;
@@ -3010,52 +2852,36 @@ export function buildApp(
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
-      turnRunner?.releaseInFlight(),
+      turnRunner.releaseInFlight(),
     ]);
   }
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
-      drain.start();
-      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
+      if (config.backgroundWorkEnabled) startBackground();
     },
-    startBackground,
-    setBackgroundAdmission(canClaim, active) {
-      backgroundAdmission = canClaim;
-      backgroundActive = active;
-    },
-    async stopBackgroundClaims() {
-      void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+    startTurns() {
+      if (config.roles.includes("harness") && !inlineShutdown.signal.aborted) turnRunner.start();
     },
     stopBackground,
-    async backgroundDrained() {
-      await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
-    },
     releaseInFlightRuns,
     async stop() {
-      await turnRunner?.releaseInFlight();
+      await turnRunner.releaseInFlight();
       await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+      await withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
+        swallowAs("wiring: admitted work drain failed", undefined),
+      );
       await releaseInFlightRuns();
-      await drain.stop();
       stopStreamSync();
       await Promise.all(
         [
           runs.close?.(),
           runSignals.close?.(),
-          turnLedger?.close(),
-          turnReady?.close?.(),
-          turnCancels?.close?.(),
-          turnYields?.close?.(),
+          turnLedger.close(),
+          turnReady.close?.(),
+          turnCancels.close?.(),
+          turnYields.close?.(),
           sessionStateBus.close?.(),
           ledgerEventBus.close?.(),
           runActivity.close?.(),
@@ -3082,6 +2908,8 @@ export function buildApp(
     deploymentLayerRefresh,
     sessions,
     runs,
+    turnLedger,
+    turnEnd,
     signals: runSignals,
     sessionStateBus,
     ledgerEventBus,
@@ -3155,10 +2983,7 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
-    ...(config.suggestedActivitiesEnabled && (config.backgroundWorkEnabled || config.backgroundDeploymentId)
-      ? { suggestedActivities }
-      : {}),
-    ...(backgroundOwnership ? { backgroundOwnership } : {}),
+    ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     uiState,
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:
@@ -3188,13 +3013,6 @@ export function serverDeps(
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
-    ...(built.backgroundOwnership
-      ? {
-          backgroundOwnership: built.backgroundOwnership,
-          deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
-        }
-      : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),

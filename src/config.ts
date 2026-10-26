@@ -68,7 +68,6 @@ export interface Config {
   port: number;
   dataDir: string;
   orgId: string;
-  sessionStore: "memory" | "postgres";
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
@@ -128,8 +127,6 @@ export interface Config {
   backgroundJobTtlMaxMs: number;
   roles: QmRole[];
   backgroundWorkEnabled: boolean;
-  backgroundDeploymentId?: string;
-  deploymentControlSecret?: string;
   spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
@@ -151,7 +148,6 @@ export interface Config {
   flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
-  runStore: "memory" | "postgres";
   skillSigningSecret?: string;
   seedSkills: boolean;
   skillsSeedDir: string;
@@ -180,8 +176,6 @@ export interface Config {
   memoryCaptureQuietMs: number;
   memoryCaptureMaxTurns?: number;
   workers: number;
-  leaseTtlMs: number;
-  heartbeatIntervalMs: number;
   reaperIntervalMs: number;
   shutdownDrainMs: number;
   maxAttempts: number;
@@ -968,8 +962,6 @@ export const CONFIG_DEFAULTS = {
   turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
   workers: 16,
-  leaseTtlMs: 120_000,
-  heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 30_000,
   maxAttempts: 3,
@@ -1213,48 +1205,24 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-function resolveStoreKinds(env: NodeJS.ProcessEnv): Pick<Config, "sessionStore" | "runStore"> {
+function rejectRemovedStores(env: NodeJS.ProcessEnv): void {
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
-    if (env[key] === "sqlite") {
+    if (env[key] === "sqlite" || (key !== "ARTIFACT_STORE" && env[key] === "memory")) {
       throw new Error(
-        `${key}=sqlite is no longer supported — SQLite was removed. ` +
-          `Set ${key === "ARTIFACT_STORE" ? "DATABASE_URL (Postgres)" : `${key}=postgres (with DATABASE_URL)`}.`,
+        `${key}=${env[key]} is no longer supported: QM keeps sessions and turns in Postgres. Set DATABASE_URL.`,
       );
     }
   }
-  const sessionStore = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
-  const runStore = env.RUN_STORE === "memory" || env.RUN_STORE === "postgres" ? env.RUN_STORE : sessionStore;
-  if (env.NODE_ENV === "production" && (sessionStore === "memory" || runStore === "memory")) {
-    throw new Error(
-      `production requires SESSION_STORE=postgres and a Postgres run store (got SESSION_STORE=${env.SESSION_STORE ?? "unset"}, RUN_STORE=${env.RUN_STORE ?? "unset"}): in-memory sessions and runs are lost on restart and invisible to other instances.`,
-    );
-  }
-  return { sessionStore, runStore };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const roles = rolesFromEnv(env.QM_ROLES);
-  if (roles.length < QM_ROLES.length && env.BACKGROUND_DEPLOYMENT_ID)
-    throw new Error("QM_ROLES cannot split roles while BACKGROUND_DEPLOYMENT_ID is set; unset one of them.");
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
     if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
       throw new Error(
         "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
-      );
-  }
-  if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
-    if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
-      throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
-    if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
-    if (
-      !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
-      !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
-      env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
-    )
-      throw new Error(
-        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
       );
   }
   const swarmDefaults = resolveSwarmSettings(
@@ -1286,7 +1254,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
   const modelProvider = modelProviderEnvStrict(env);
-  const { sessionStore, runStore } = resolveStoreKinds(env);
+  rejectRemovedStores(env);
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but there are no home snapshots, so a sandbox the provider loses comes back with an empty home; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
@@ -1522,7 +1490,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.POSTHOG_API_KEY?.trim()
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
-    sessionStore,
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
@@ -1621,9 +1588,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
     roles,
     backgroundWorkEnabled: backgroundWorkFor(roles, env),
-    ...(env.BACKGROUND_DEPLOYMENT_ID
-      ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
-      : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
@@ -1661,7 +1625,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
-    runStore,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),
     seedSkills: boolEnvStrict("SEED_SKILLS", env.SEED_SKILLS) ?? true,
     skillsSeedDir: resolve(env.SKILLS_SEED_DIR ?? "./skills-seed"),
@@ -1695,10 +1658,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cronFireConcurrency:
       numEnvStrict("CRON_FIRE_CONCURRENCY", env.CRON_FIRE_CONCURRENCY) ?? CONFIG_DEFAULTS.cronFireConcurrency,
     workers: numEnvStrict("WORKERS", env.WORKERS) ?? CONFIG_DEFAULTS.workers,
-    leaseTtlMs: numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs,
-    heartbeatIntervalMs:
-      numEnvStrict("HEARTBEAT_INTERVAL_MS", env.HEARTBEAT_INTERVAL_MS) ??
-      Math.max(1_000, Math.floor((numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs) / 3)),
     reaperIntervalMs: numEnvStrict("REAPER_INTERVAL_MS", env.REAPER_INTERVAL_MS) ?? CONFIG_DEFAULTS.reaperIntervalMs,
     shutdownDrainMs: numEnvStrict("SHUTDOWN_DRAIN_MS", env.SHUTDOWN_DRAIN_MS) ?? CONFIG_DEFAULTS.shutdownDrainMs,
     maxAttempts: numEnvStrict("MAX_ATTEMPTS", env.MAX_ATTEMPTS) ?? CONFIG_DEFAULTS.maxAttempts,

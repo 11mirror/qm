@@ -8,8 +8,7 @@ with a `Swarm worker` title. Worker transcripts remain read-only for ordinary me
 
 ## Deployment
 
-Use Postgres for production (`DATABASE_URL`, `SESSION_STORE=postgres`, and
-`RUN_STORE=postgres`) (sandbox resources are always on). Configure a sandbox backend with its required
+Swarms run on Postgres (`DATABASE_URL`), which core always requires (sandbox resources are always on). Configure a sandbox backend with its required
 credentials and deployment-specific settings. Workers use the provider of the scope's selected computer, or the deployment default when none is selected. An initial
 `backend` override chooses another configured provider that supports creation and
 retirement. That choice is stored once; later default changes never move workers

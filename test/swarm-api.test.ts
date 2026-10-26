@@ -7,6 +7,7 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();
@@ -57,7 +58,8 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
     assert.equal((await post({ action: "spawn", requestId: "valid", text: "Work", context })).status, 202);
     assert.deepEqual((await fixture.service.inspect(fixture.caller)).peers[1]!.context, context);
     const run = (await fixture.runs.get(fixture.caller.claims.runId!))!;
-    assert.equal(await fixture.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" }), true);
+    const turn = { run, token: fixture.caller.claims.runLeaseToken!, ledger: fixture.ledger };
+    assert.equal(await finishTurn(turn, { status: "ok", reply: "Done" }), true);
     for (const body of [
       { action: "spawn", requestId: "completed", text: "Work" },
       { action: "send", requestId: "completed", text: "Work", audience: "all" },
@@ -188,12 +190,12 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
     });
   try {
     assert.equal((await post(token, "initial")).status, 202);
-    await fixture.runs.releaseLease(first.id, first.leaseToken!);
-    const next = (await fixture.runs.claimById(first.id, "replacement", 60_000))!;
+    assert.equal(await fixture.ledger.handBack(first, first.leaseToken!, { stop: { kind: "shutdown" } }), true);
+    const next = (await claimTurn(fixture.ledger, first.id))!;
     assert.ok(next);
     assert.equal((await post(token, "stale")).status, 400);
     const current = await mintCapabilityToken(
-      { ...claims, runAttempt: next.attempts, runLeaseToken: next.leaseToken! },
+      { ...claims, runAttempt: next.run.attempts, runLeaseToken: next.token },
       secret,
     );
     assert.equal((await post(current, "current")).status, 202);

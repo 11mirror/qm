@@ -4,6 +4,7 @@ cd "$(dirname "$0")/../.."
 
 : "${ARGA_API_KEY:?}"
 : "${ANTHROPIC_API_KEY:?}"
+: "${DATABASE_URL:?}"
 export CORE_SIGNING_SECRET="${CORE_SIGNING_SECRET:-$(openssl rand -hex 24)}"
 export SLACK_EVENTS_PORT=8182
 export B_SLACK_EVENTS_PORT=8283

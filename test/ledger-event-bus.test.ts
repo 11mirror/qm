@@ -82,6 +82,29 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    const frames: string[] = [];
+    let buf = "";
+    const nextFrame = async (name: string): Promise<string | null> => {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        while (frames.length > 0) {
+          const lines = frames.shift()!.split("\n");
+          if (lines.includes(`event: ${name}`))
+            return lines.find((line) => line.startsWith("data: "))?.slice("data: ".length) ?? "";
+        }
+        const { value, done } = await reader.read();
+        if (done) return null;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+        frames.push(...parts);
+      }
+      return null;
+    };
+    assert.notEqual(await nextFrame("loop_item_resync"), null, "the stream is listening before the write");
+
     const { loop } = await built.loops.store.create({
       owner: "josh",
       createdBy: "josh",
@@ -92,23 +115,8 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
     });
     await built.loops.items.ingest([{ loopId: loop.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } }]);
 
-    const reader = res.body!.getReader();
-    let buf = "";
-    let frame: OwnedLedgerEvent | null = null;
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && !frame) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += new TextDecoder().decode(value);
-      for (const chunk of buf.split("\n\n")) {
-        if (!chunk.includes("event: loop_item")) continue;
-        const data = chunk
-          .split("\n")
-          .find((l) => l.startsWith("data: "))
-          ?.slice("data: ".length);
-        if (data) frame = JSON.parse(data) as OwnedLedgerEvent;
-      }
-    }
+    const data = await nextFrame("loop_item");
+    const frame = data ? (JSON.parse(data) as OwnedLedgerEvent) : null;
     await reader.cancel().catch(() => {});
     assert.ok(frame, "a ledger write reached the SSE stream");
     assert.equal(frame!.loopId, loop.id);

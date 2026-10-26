@@ -167,7 +167,6 @@ Only use escape hatches for deliberate wiring checks — this is how you ask for
 the full real stack when a test doesn't need it:
 
 ```bash
-DEV_INSTANCE_ALLOW_MEMORY=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_WATCH=0 bash scripts/dev-instance.sh up
 DEV_INSTANCE_RECLAIM_STALE=0 bash scripts/dev-instance.sh up
 ```

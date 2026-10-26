@@ -1038,6 +1038,14 @@ function buildWithCapture() {
   return { built, env: () => captured, executionEnv: () => executed };
 }
 
+async function assertTurnFails(built: BuiltApp, request: TurnRequest, reason: RegExp): Promise<void> {
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "failed");
+  await built.errors.flush();
+  const [failure] = await built.errors.list({ sessionId: result.sessionId! });
+  assert.match(failure?.message ?? "", reason);
+}
+
 test("orchestrator vends a capability for only the requested org credential", async () => {
   const { built, env, executionEnv } = buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
@@ -1120,8 +1128,9 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   });
   await selectDefaultSandbox(built, "U1", "personal:U1");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  await assertTurnFails(
+    built,
+    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`),
     /not available/,
   );
   const res = await built.app.turn(dm("!run echo hi"));
@@ -1172,19 +1181,21 @@ test("a channel grantee stamps the credential in that channel's conversations an
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
-  await assert.rejects(
-    built.app.turn({
+  await assertTurnFails(
+    built,
+    {
       ...channelTurn("C2"),
       text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
-    }),
+    },
     /not available/,
   );
   res = await built.app.turn(channelTurn("C2"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  await assertTurnFails(
+    built,
+    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`),
     /not available/,
   );
   res = await built.app.turn(dm("!run echo hi"));

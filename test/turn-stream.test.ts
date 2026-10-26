@@ -111,7 +111,6 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -139,7 +138,6 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -174,7 +172,6 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -256,7 +253,6 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -285,7 +281,6 @@ test("a harvested first block is stripped from the final reply (never shown twic
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -312,7 +307,6 @@ test("a long first block is harvested too (no length gate) and stripped from the
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );
@@ -343,7 +337,6 @@ test("a non-slack surface never strips the first block from the reply", async ()
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
-      leaseTtlMs: 5_000,
       reaperIntervalMs: 60_000,
     }),
   );

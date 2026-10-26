@@ -8,6 +8,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import type { Config } from "../src/config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
@@ -19,9 +20,13 @@ after(() => ff.cleanup());
 
 const actor = { externalId: "U1" };
 
-async function setup() {
+async function setup(overrides: Partial<Config> = {}) {
   const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")),
+      signingSecret: "own-cred-test",
+      ...overrides,
+    }),
   );
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
   const credential = await built.keychain!.save({
@@ -76,15 +81,16 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
 });
 
 test("a scheduled turn in a shared channel cannot use the owner's credential without a grant", async () => {
-  const { built, read } = await setup();
-  await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor,
-      conversation: { kind: "channel", threadRef: "ch:C1:cron", channelRef: "C1", audience: [actor] },
-      text: read,
-      triggered: true,
-    } as TurnRequest),
-    /credential handle is not available/,
-  );
+  const { built, read } = await setup({ maxAttempts: 1 });
+  const fired = await built.app.turn({
+    surface: "cron",
+    actor,
+    conversation: { kind: "channel", threadRef: "ch:C1:cron", channelRef: "C1", audience: [actor] },
+    text: read,
+    triggered: true,
+  } as TurnRequest);
+  assert.equal(fired.status, "failed");
+  await built.errors.flush();
+  const [failure] = await built.errors.list({ sessionId: fired.sessionId! });
+  assert.match(failure?.message ?? "", /credential handle is not available/);
 });

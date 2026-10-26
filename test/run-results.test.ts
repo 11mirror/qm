@@ -1,18 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createOutbound } from "../src/surfaces/outbound.ts";
-import {
-  runResultPost,
-  wireRunResultPosts,
-  recordRunFailureEntry,
-  type TurnFailureSessions,
-} from "../src/runs/run-results.ts";
+import { runResultPost, recordRunFailureEntry, type TurnFailureSessions } from "../src/runs/run-results.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
+import { claimTurn, deliverResultsOnEnd, finishTurn, testRunStore, type TestRunStore } from "./support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -46,6 +41,9 @@ function run(over: Partial<Run>): Run {
     createdAt: 1,
     startedAt: 1,
     finishedAt: 2,
+    absurdQueue: "turns_people",
+    absurdTaskId: null,
+    absurdRunId: null,
     ...over,
   };
 }
@@ -225,124 +223,155 @@ test("runResultPost skips terminal results that cannot be safely replayed", () =
   }
 });
 
-test("wired stores: a completed turn is posted unless the live path already posted it", async () => {
-  const { runs } = createMemoryRunStore();
-  const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { graceMs: 0 });
-
-  const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const c1 = await runs.claim("w1", 5_000);
-  await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
-  await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
-  await settle();
-  const pending = await outbound.pending("slack");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.text, "recovered reply");
-  assert.equal(pending[0]!.destination.editRef, "171.002");
-  assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
-  assert.equal(typeof (await runs.get(crashed.id))?.deliveryState?.postedAt, "number", "the run remembers the post");
-
-  const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-  const c2 = await runs.claim("w2", 5_000);
-  await runs.setDeliveryState(live.id, null, { postedAt: 99 });
-  await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
-  await settle();
-  assert.deepEqual(
-    (await outbound.pending("slack")).map((d) => d.idempotencyKey),
-    [`run:${crashed.id}`],
-    "the live post is not repeated",
-  );
-});
-
-test("a live turn handler that still owns the run defers the post, and the sweep posts it later", async () => {
-  const { runs } = createMemoryRunStore();
-  const outbound = createOutbound({});
-  const posted: string[] = [];
-  let live = true;
-  outbound.register(["slack"], async (post) => {
-    if (live) return { deferred: true };
-    posted.push(post.idempotencyKey);
-  });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
-  const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  await runs.complete(r.id, (await runs.claim("w1", 5_000))?.leaseToken ?? "", { status: "ok", reply: "x" });
-  await settle();
-  assert.deepEqual(posted, []);
-  assert.equal((await runs.get(r.id))?.deliveryState?.postedAt, undefined, "a deferred post is not marked posted");
-  live = false;
-  assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
-  assert.deepEqual(posted, [`run:${r.id}`]);
-});
-
-test("sweep posts the reply of a terminal run nobody posted", async () => {
-  const { runs } = createMemoryRunStore();
-  const outbound = recordingOutbound();
-  const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
-  assert.deepEqual(await outbound.pending("slack"), [], "wired after the fact: nothing posted");
-
-  assert.equal(await recovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");
-  assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
-  assert.deepEqual(
-    (await outbound.pending("slack")).map((d) => [d.idempotencyKey, d.text]),
-    [[`run:${bypassed.id}`, "lost on the way out"]],
-  );
-  assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "a second sweep sees the run was posted");
-});
-
-test("sweep marks a permanently undeliverable reply done instead of retrying it every minute", async () => {
-  const { runs } = createMemoryRunStore();
-  const outbound = createOutbound({});
-  let attempts = 0;
-  outbound.register(["slack"], async () => {
-    attempts += 1;
-    throw Object.assign(new Error("channel_not_found"), { permanent: true });
-  });
-  const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  await runs.complete(r.id, (await runs.claim("w1", 5_000))?.leaseToken ?? "", { status: "ok", reply: "x" });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
-  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
-  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
-  assert.equal(attempts, 1);
-});
-
-test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
-  const { runs } = createMemoryRunStore();
-  const finished = new Set<string>();
-  for (let i = 0; i < 205; i++) {
-    const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
-    await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
-    finished.add(`run:${run.id}`);
+async function withRuns(body: (store: TestRunStore) => Promise<void>): Promise<void> {
+  const store = testRunStore();
+  try {
+    await body(store);
+  } finally {
+    await store.close();
   }
-  const swept = recordingOutbound();
-  const sweptRecovery = wireRunResultPosts(runs, swept, { graceMs: 0 });
-  assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 205);
-  assert.deepEqual(new Set((await swept.pending("slack")).map((d) => d.idempotencyKey)), finished);
-  assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 0);
-});
+}
 
-test("wired stores: a parked run posts a failure note", async () => {
-  const { runs } = createMemoryRunStore();
-  const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { graceMs: 0 });
+async function runTurn(
+  { runs, ledger }: TestRunStore,
+  sessionId: string,
+  request: OrchestratorInput,
+  result: TurnResult,
+  status: "done" | "failed" = "done",
+  beforeFinish?: (run: Run) => Promise<unknown>,
+): Promise<Run> {
+  const { run } = await runs.enqueue({ sessionId, request });
+  const claimed = await claimTurn(ledger, run.id);
+  assert.ok(claimed);
+  await beforeFinish?.(claimed.run);
+  assert.equal(await finishTurn(claimed, result, status), true);
+  return run;
+}
 
-  const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
-  await settle();
+test("wired stores: a completed turn is posted unless the live path already posted it", () =>
+  withRuns(async (store) => {
+    const { runs } = store;
+    const outbound = recordingOutbound();
+    deliverResultsOnEnd(store, outbound, { graceMs: 0 });
 
-  const stored = await runs.get(parked.id);
-  assert.equal(stored?.status, "failed");
-  assert.equal(stored?.result?.status, "failed", "park stores a distinct terminal status, not refused");
+    const crashed = await runTurn(
+      store,
+      "sA",
+      turn("a", "C9:171.001"),
+      { status: "ok", reply: "recovered reply" },
+      "done",
+      (run) => runs.setDeliveryState(run.id, null, { editRef: "171.002" }),
+    );
+    await settle();
+    const pending = await outbound.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.text, "recovered reply");
+    assert.equal(pending[0]!.destination.editRef, "171.002");
+    assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
+    assert.equal(typeof (await runs.get(crashed.id))?.deliveryState?.postedAt, "number", "the run remembers the post");
 
-  const pending = await outbound.pending("slack");
-  assert.equal(pending.length, 1, "the park posts a failure note");
-  assert.equal(pending[0]!.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
-  assert.equal(pending[0]!.idempotencyKey, `run:${parked.id}`);
-});
+    await runTurn(store, "sB", turn("b", "C9"), { status: "ok", reply: "delivered live" }, "done", (run) =>
+      runs.setDeliveryState(run.id, null, { postedAt: 99 }),
+    );
+    await settle();
+    assert.deepEqual(
+      (await outbound.pending("slack")).map((d) => d.idempotencyKey),
+      [`run:${crashed.id}`],
+      "the live post is not repeated",
+    );
+  }));
+
+test("a live turn handler that still owns the run defers the post, and the sweep posts it later", () =>
+  withRuns(async (store) => {
+    const { runs } = store;
+    const outbound = createOutbound({});
+    const posted: string[] = [];
+    let live = true;
+    outbound.register(["slack"], async (post) => {
+      if (live) return { deferred: true };
+      posted.push(post.idempotencyKey);
+    });
+    const recovery = deliverResultsOnEnd(store, outbound, { graceMs: 0 });
+    const r = await runTurn(store, "sA", turn("a", "C9:171.001"), { status: "ok", reply: "x" });
+    await settle();
+    assert.deepEqual(posted, []);
+    assert.equal((await runs.get(r.id))?.deliveryState?.postedAt, undefined, "a deferred post is not marked posted");
+    live = false;
+    assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
+    assert.deepEqual(posted, [`run:${r.id}`]);
+  }));
+
+test("sweep posts the reply of a terminal run nobody posted", () =>
+  withRuns(async (store) => {
+    const outbound = recordingOutbound();
+    const bypassed = await runTurn(store, "sA", turn("a", "C9:171.001"), {
+      status: "ok",
+      reply: "lost on the way out",
+    });
+    const recovery = deliverResultsOnEnd(store, outbound, { graceMs: 0 });
+    assert.deepEqual(await outbound.pending("slack"), [], "wired after the fact: nothing posted");
+
+    assert.equal(await recovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");
+    assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
+    assert.deepEqual(
+      (await outbound.pending("slack")).map((d) => [d.idempotencyKey, d.text]),
+      [[`run:${bypassed.id}`, "lost on the way out"]],
+    );
+    assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "a second sweep sees the run was posted");
+  }));
+
+test("sweep marks a permanently undeliverable reply done instead of retrying it every minute", () =>
+  withRuns(async (store) => {
+    const outbound = createOutbound({});
+    let attempts = 0;
+    outbound.register(["slack"], async () => {
+      attempts += 1;
+      throw Object.assign(new Error("channel_not_found"), { permanent: true });
+    });
+    await runTurn(store, "sA", turn("a", "C9:171.001"), { status: "ok", reply: "x" });
+    const recovery = deliverResultsOnEnd(store, outbound, { graceMs: 0 });
+    assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
+    assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
+    assert.equal(attempts, 1);
+  }));
+
+test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", () =>
+  withRuns(async (store) => {
+    const finished = new Set<string>();
+    for (let i = 0; i < 205; i++) {
+      const run = await runTurn(store, `s${i}`, turn(`r${i}`, "C9:171.001"), { status: "ok", reply: `r${i}` });
+      finished.add(`run:${run.id}`);
+    }
+    const swept = recordingOutbound();
+    const sweptRecovery = deliverResultsOnEnd(store, swept, { graceMs: 0 });
+    assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 205);
+    assert.deepEqual(new Set((await swept.pending("slack")).map((d) => d.idempotencyKey)), finished);
+    assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 0);
+  }));
+
+test("wired stores: a failed run posts a failure note", () =>
+  withRuns(async (store) => {
+    const outbound = recordingOutbound();
+    deliverResultsOnEnd(store, outbound, { graceMs: 0 });
+
+    const parked = await runTurn(
+      store,
+      "sP",
+      turn("p", "C9:171.001"),
+      { status: "failed", sessionId: "sP", reason: "boom" },
+      "failed",
+    );
+    await settle();
+
+    const stored = await store.runs.get(parked.id);
+    assert.equal(stored?.status, "failed");
+    assert.equal(stored?.result?.status, "failed");
+
+    const pending = await outbound.pending("slack");
+    assert.equal(pending.length, 1, "the failure posts a note");
+    assert.equal(pending[0]!.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
+    assert.equal(pending[0]!.idempotencyKey, `run:${parked.id}`);
+  }));
 
 const failureSessions = async () => {
   const { createMemorySessionStore } = await import("../src/sessions/memory-session-store.ts");
@@ -375,7 +404,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
-test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
+test("an orchestrator-recorded in-turn failure suppresses the turn-end entry", async () => {
   const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
@@ -391,7 +420,7 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   assert.equal((await sessions.getItems(session.id)).length, 1, "no duplicate entry");
 });
 
-test("a legacy failure entry without a run id suppresses the onTerminal entry", async () => {
+test("a legacy failure entry without a run id suppresses the turn-end entry", async () => {
   const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
@@ -414,30 +443,34 @@ test("a done run records nothing", async () => {
   assert.equal((await sessions.getItems(session.id)).length, 0);
 });
 
-test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
-  const { sessions, session } = await failureSessions();
-  const { runs } = createMemoryRunStore();
-  const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+test("wired stores: a failed Slack run gets both the durable session entry and the recovery note", () =>
+  withRuns(async (store) => {
+    const { sessions, session } = await failureSessions();
+    const outbound = recordingOutbound();
+    deliverResultsOnEnd(store, outbound, { sessions, graceMs: 0 });
 
-  const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
+    const parked = await runTurn(
+      store,
+      "slack:D1",
+      turn("p", "D1:171.001"),
+      { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+      "failed",
+    );
 
-  for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  const entries = await sessions.getItems(session.id);
-  assert.equal(entries.length, 1, "the run's own session carries the failure durably");
-  assert.equal(entries[0]!.kind, "Error");
-  assert.equal(entries[0]!.text, "I couldn't finish that turn: something went wrong on my end");
-  assert.equal(entries[0]!.turnId, parked.id);
+    for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const entries = await sessions.getItems(session.id);
+    assert.equal(entries.length, 1, "the run's own session carries the failure durably");
+    assert.equal(entries[0]!.kind, "Error");
+    assert.equal(entries[0]!.text, "I couldn't finish that turn: something went wrong on my end");
+    assert.equal(entries[0]!.turnId, parked.id);
 
-  await settle();
-  const pending = await outbound.pending("slack");
-  assert.equal(pending.length, 1, "the Slack note still goes out alongside the entry");
-  assert.match(pending[0]!.text, /couldn't finish/);
-});
+    await settle();
+    const pending = await outbound.pending("slack");
+    assert.equal(pending.length, 1, "the Slack note still goes out alongside the entry");
+    assert.match(pending[0]!.text, /couldn't finish/);
+  }));
 
 test("a run result post identifies its source session and assistant entry", () => {
   const delivery = runResultPost(

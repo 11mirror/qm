@@ -142,7 +142,7 @@ test("the history gap note lands in the conversation's own scope memory", async 
       },
     },
     turnStream: createTurnStream(),
-    runs: { onTerminal() {} },
+    runs: {},
   } as any);
   await client.noteSurfaceHistoryGap!("C1", "gap");
   await client.noteSurfaceHistoryGap!("G1", "gap");

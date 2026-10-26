@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createMemoryMap } from "../../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { createMemorySessionStore } from "../../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
 import { createSandboxResources, type SandboxResource } from "../../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
@@ -12,19 +10,26 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { TurnLedger } from "../../src/turns/turn-ledger.ts";
+import { claimTurn, testRunStore, testTurnEnd } from "./turns.ts";
 
 export async function swarmFixture(
   options: {
     store?: SwarmStore;
     sessions?: SessionStore;
     runs?: RunStore;
+    ledger?: TurnLedger;
     lock?: AdvisoryLock;
     backend?: Sandbox;
     runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
-  const sessions = options.sessions ?? createMemorySessionStore();
-  const runs = options.runs ?? createMemoryRunStore().runs;
+  if (!options.runs !== !options.ledger) throw new Error("pass runs and ledger together");
+  const turns = options.ledger ? null : testRunStore();
+  const sessions = options.sessions ?? turns!.sessions;
+  const runs = options.runs ?? turns!.runs;
+  const ledger = options.ledger ?? turns!.ledger;
+  const end = turns?.end ?? testTurnEnd(runs);
   const lock = options.lock ?? createMemoryAdvisoryLock();
   const store = options.store ?? createSwarmStore(createMemoryMap(), { runs, sessions });
   const records = createMemoryMap<SandboxResource>();
@@ -94,7 +99,7 @@ export async function swarmFixture(
     ...options.runtime,
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
-  const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;
+  const claim = (await claimTurn(ledger, run.id))!;
   const caller: SwarmCaller = {
     kind: "agent",
     claims: {
@@ -102,8 +107,8 @@ export async function swarmFixture(
       scopeId: root.scopeId,
       runId: run.id,
       sessionId: root.id,
-      runAttempt: claim.attempts,
-      runLeaseToken: claim.leaseToken!,
+      runAttempt: claim.run.attempts,
+      runLeaseToken: claim.token,
       threadRef: root.threadRef,
       liveActor: true,
       exp: Date.now() + 60_000,
@@ -117,17 +122,18 @@ export async function swarmFixture(
     const notification = swarm.messages
       .flatMap((message) => Object.entries(message.notifications))
       .find(([recipient]) => recipient === id)![1];
-    let run = await runs.get(notification.runId!);
-    if (run?.status === "pending") run = await runs.claimById(run.id, "swarm-fixture-worker", 60_000);
+    const runId = notification.runId!;
+    if ((await runs.get(runId))?.status === "pending") await claimTurn(ledger, runId);
+    const run = (await runs.get(runId))!;
     return {
       kind: "agent",
       claims: {
         actorId: actor.id,
         scopeId: root.scopeId,
-        runId: notification.runId!,
+        runId,
         sessionId: member.sessionId!,
-        runAttempt: run!.attempts,
-        runLeaseToken: run!.leaseToken!,
+        runAttempt: run.attempts,
+        runLeaseToken: run.leaseToken!,
         threadRef: member.threadRef,
         exp: Date.now() + 60_000,
       },
@@ -139,6 +145,8 @@ export async function swarmFixture(
     store,
     sessions,
     runs,
+    ledger,
+    end,
     sandboxes,
     sandbox,
     backend,
@@ -150,5 +158,6 @@ export async function swarmFixture(
     caller,
     workerCaller,
     template,
+    close: async () => turns?.close(),
   };
 }

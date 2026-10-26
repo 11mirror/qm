@@ -11,24 +11,27 @@ import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const scopePath = "/v1/admin/scopes/org%3Adefault-org";
 
-function start(overrides: Partial<ServerDeps> = {}) {
+async function start(overrides: Partial<ServerDeps> = {}) {
   const config = testConfig();
   const built = buildApp(config);
   const deps = { ...serverDeps(config, built), ...overrides };
   const server = createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  await Promise.all([
+    built.refreshModels(),
+    fetch(base + scopePath + "?view=customize", { headers: ADMIN }).then((response) => response.arrayBuffer()),
+  ]);
   return { built, deps, base, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-const scopePath = "/v1/admin/scopes/org%3Adefault-org";
-
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
-  const srv = start();
+  const srv = await start();
   t.after(srv.close);
   await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
+  await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test", isPrivate: false }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
     "customize",
@@ -44,7 +47,10 @@ test("settings projections preserve values while excluding unrelated payloads", 
     const projected = (await response.json()) as Record<string, unknown> & { branding: { selfLabel: string } };
     for (const [key, value] of Object.entries(projected)) assert.deepEqual(value, full[key], view + ":" + key);
     if (view !== "credentials") assert.equal("serviceCredentials" in projected, false, view);
-    else assert.deepEqual(projected.directoryChannels, [{ channelId: "C-settings", name: "settings-test" }]);
+    else
+      assert.deepEqual(projected.directoryChannels, [
+        { channelId: "C-settings", name: "settings-test", isPrivate: false },
+      ]);
     assert.match(response.headers.get("server-timing") ?? "", /authorize;dur=/);
     if (["customize", "credentials", "connectors"].includes(view))
       assert.equal("modelsByHarness" in projected, false, view);
@@ -63,13 +69,12 @@ test("settings projections preserve values while excluding unrelated payloads", 
   }
 });
 
-test("Customize completes within 500 ms with unrelated model and credential services unavailable", async (t) => {
+test("Customize completes within 500 ms with unrelated model, connector and posture services unavailable", async (t) => {
   const fail = () => {
     throw new Error("Unrelated dependency must not be called");
   };
-  const srv = start({ refreshModels: fail, modelCredentialFetch: fail });
+  const srv = await start({ refreshModels: fail, modelCredentialFetch: fail });
   t.after(srv.close);
-  t.mock.method(srv.built.serviceCreds, "listServiceCredentials", fail);
   t.mock.method(srv.built.config, "listConnectorClients", fail);
   t.mock.method(srv.built.config, "getSecurityPostureDurable", fail);
   const started = performance.now();
@@ -80,7 +85,7 @@ test("Customize completes within 500 ms with unrelated model and credential serv
 });
 
 test("independent governance reads overlap rather than accumulating network round trips", async (t) => {
-  const srv = start();
+  const srv = await start();
   t.after(srv.close);
   const reads = [
     "getSecurityPostureDurable",
@@ -110,7 +115,7 @@ test("independent governance reads overlap rather than accumulating network roun
 
 test("each settings projection retains authorization before reading configuration", async (t) => {
   let reads = 0;
-  const srv = start({
+  const srv = await start({
     refreshModels: async () => {
       reads++;
     },
@@ -140,7 +145,7 @@ test("each settings projection retains authorization before reading configuratio
 test("Models settings do not wait for a cold external model catalog", async (t) => {
   const pending = Promise.withResolvers<Response>();
   const fetcher: typeof fetch = () => pending.promise;
-  const srv = start({ modelCredentialFetch: fetcher });
+  const srv = await start({ modelCredentialFetch: fetcher });
   t.after(srv.close);
   t.after(() => pending.resolve(Response.json({ data: [] })));
   t.mock.method(srv.built.modelCredentials, "availability", async () => ({
@@ -173,7 +178,7 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
 
 test("a configured base model the cold catalog cannot resolve stays listed without a guessed provider", async (t) => {
   const pending = Promise.withResolvers<Response>();
-  const srv = start({ modelCredentialFetch: () => pending.promise });
+  const srv = await start({ modelCredentialFetch: () => pending.promise });
   t.after(srv.close);
   t.after(() => pending.resolve(Response.json({ data: [] })));
   t.mock.method(srv.built.modelCredentials, "availability", async () => ({

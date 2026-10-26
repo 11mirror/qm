@@ -69,22 +69,12 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   );
 });
 
-test("store kinds default to memory and accept postgres", () => {
-  const def = loadConfig({});
-  assert.equal(def.sessionStore, "memory");
-  assert.equal(def.runStore, "memory");
-
-  const pg = loadConfig({ SESSION_STORE: "postgres", DATABASE_URL: "postgres://test" });
-  assert.equal(pg.sessionStore, "postgres");
-  assert.equal(pg.runStore, "postgres", "runStore mirrors sessionStore when unset");
-
+test("in-memory session and run stores are refused; postgres is accepted", () => {
+  assert.throws(() => loadConfig({ SESSION_STORE: "memory" }), /SESSION_STORE=memory is no longer supported/);
+  assert.throws(() => loadConfig({ RUN_STORE: "memory" }), /RUN_STORE=memory is no longer supported/);
   assert.equal(
-    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "memory", DATABASE_URL: "postgres://test" }).runStore,
-    "memory",
-  );
-  assert.throws(
-    () => loadConfig({ SESSION_STORE: "postgres" }),
-    /missing or insecure required core secrets: DATABASE_URL/,
+    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "postgres", DATABASE_URL: "postgres://test" }).databaseUrl,
+    "postgres://test",
   );
 });
 
@@ -285,12 +275,7 @@ test("production refuses to boot on in-memory sessions, runs, approvals, audit, 
     () => loadConfig(noDatabase),
     /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
   );
-  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
-  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
-    /production requires SESSION_STORE=postgres/,
-  );
+  assert.throws(() => loadConfig({ ...productionEnv, RUN_STORE: "memory" }), /RUN_STORE=memory is no longer supported/);
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
   assert.doesNotThrow(
     () => loadConfig({ SANDBOX_BACKEND: "local" }),
@@ -936,29 +921,6 @@ test("Fly shared application name is passed to the deployment provider", () => {
   assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
 
-test("background ownership requires durable storage and an independent deployment authority", () => {
-  const env = {
-    BACKGROUND_DEPLOYMENT_ID: "core:release-a",
-    DATABASE_URL: "postgres://localhost/test",
-    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
-    DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
-  };
-  const config = loadConfig(env);
-  assert.equal(config.backgroundDeploymentId, env.BACKGROUND_DEPLOYMENT_ID);
-  assert.equal(config.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
-  assert.equal(config.backgroundWorkEnabled, true);
-  assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
-  assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
-  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
-  assert.throws(
-    () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
-    /distinct DEPLOYMENT_CONTROL_SECRET/,
-  );
-  assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
-  assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
-  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
-});
-
 test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
   const env = {
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
@@ -1021,15 +983,4 @@ test("QM_ROLES defaults to every role and a split core runs no background work",
   assert.throws(() => loadConfig({ QM_ROLES: "api,workers" }), /QM_ROLES="api,workers" must list/);
   assert.throws(() => loadConfig({ QM_ROLES: "api", BACKGROUND_WORK_ENABLED: "1" }), /needs the harness role/);
   assert.throws(() => loadConfig({ QM_ROLES: "api,surfaces" }), /surfaces needs harness too/);
-  assert.throws(
-    () =>
-      loadConfig({
-        QM_ROLES: "harness,surfaces",
-        BACKGROUND_DEPLOYMENT_ID: "d1",
-        DEPLOYMENT_CONTROL_SECRET: "x",
-        DATABASE_URL: "postgres://x/y",
-        CONNECTOR_SECRET_KEY: "k".repeat(64),
-      }),
-    /cannot split roles while BACKGROUND_DEPLOYMENT_ID/,
-  );
 });

@@ -76,6 +76,19 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Reuse the exact successful PR tree
         if: needs.reuse.outputs.reusable == 'true'
@@ -103,6 +116,12 @@ jobs:
           sha256sum -c helm-v3.19.0-linux-amd64.tar.gz.sha256sum
           tar -xzf helm-v3.19.0-linux-amd64.tar.gz
           sudo install linux-amd64/helm /usr/local/bin/helm
+      - name: Size Postgres for per-app test databases
+        if: needs.reuse.outputs.reusable != 'true'
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_connections = 1500" -c "ALTER SYSTEM SET fsync = off" -c "ALTER SYSTEM SET synchronous_commit = off"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - name: Verify root test shard plan
         if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
         run: npm run test:root:shard:check
@@ -110,6 +129,7 @@ jobs:
         if: needs.reuse.outputs.reusable != 'true'
         env:
           CORE_TEST_SHARD: ${{ matrix.shard }}/5
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:root:shard
 
   core:

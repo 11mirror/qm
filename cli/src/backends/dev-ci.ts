@@ -41,6 +41,7 @@ function requireEnv(): void {
     );
   }
   if (!process.env.CORE_SIGNING_SECRET) die("CORE_SIGNING_SECRET required");
+  if (!process.env.DATABASE_URL) die("DATABASE_URL required (core keeps sessions and turns in Postgres)");
 }
 
 function requireDeps(root: string): void {
@@ -89,7 +90,7 @@ export async function devCiUp(): Promise<void> {
   const coreLog = join(dir, "core.log");
   const corePid = spawnBackground(process.execPath, [...serviceDef("core").dev!.entry], {
     cwd: root,
-    env: { ...baseEnv, ORG_ID: "acme", SESSION_STORE: "memory", PORT: String(port) },
+    env: { ...baseEnv, ORG_ID: "acme", PORT: String(port) },
     logFile: coreLog,
   });
   writePid(dir, "core", corePid);

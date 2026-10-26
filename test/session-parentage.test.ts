@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appTurns, claimTurn, finishTurn } from "./support/turns.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
@@ -74,8 +75,8 @@ test("a late child steer remains pending when admission fails, then replays once
     origin: { kind: "direct" as const },
   };
   const { run } = await built.runs.enqueue({ sessionId: child.threadRef, request });
-  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   const full = [];
   for (let i = 0; i < SUBAGENT_TREE_RUN_CAP; i++)
     full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
@@ -128,8 +129,8 @@ test("late human child messages retain their sender and revalidate access", asyn
     sessionId: child.threadRef,
     request: { actor, conversation, text: "original", origin: { kind: "direct" } },
   });
-  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   const send = async (text: string) => {
     await built.signals.send(run.id, {
       kind: "steer",

@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, type Config } from "../../src/config.ts";
+import { freshTestDatabase } from "./test-database.ts";
 
 export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress-auth";
 
@@ -18,7 +19,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     capabilitySecret: TEST_CAPABILITY_SECRET,
     sandboxBackend: "sprites" as const,
     spritesSandbox: { token: "test-token" },
+    adminGrants: "admin-alice:org_admin,admin-bob:org_admin",
     dataDir: overrides.dataDir ?? mkdtempSync(join(tmpdir(), "qm-test-")),
     ...overrides,
+    databaseUrl: overrides.databaseUrl ?? freshTestDatabase(),
   };
 }

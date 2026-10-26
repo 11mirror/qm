@@ -171,10 +171,6 @@ const RUN_STALL_BUDGET_MS = 300_000;
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
-  const terminalWaiters = new Map<string, Set<() => void>>();
-  deps.runs.onTerminal((run) => {
-    for (const wake of terminalWaiters.get(run.id) ?? []) wake();
-  });
 
   return {
     decideDeploymentAccess: (value, actor, approve) =>
@@ -305,8 +301,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         surfaceSignaled = true;
         hooks.onSurfacePosted?.();
       };
-      const waiters = terminalWaiters.get(runId) ?? new Set();
-      terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.turnStream.subscribe(runId, {
         onFirstBlock: signalFirstBlock,
         onSurfacePosted: signalSurface,
@@ -357,19 +351,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               );
             }
           }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(done, RUN_FALLBACK_POLL_MS);
-            function done(): void {
-              clearTimeout(timer);
-              waiters.delete(done);
-              resolve();
-            }
-            waiters.add(done);
-          });
+          await deps.runs.untilEnded(runId, RUN_FALLBACK_POLL_MS);
         }
       } finally {
         unsubscribe();
-        if (waiters.size === 0) terminalWaiters.delete(runId);
       }
     },
 

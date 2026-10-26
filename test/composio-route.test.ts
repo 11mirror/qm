@@ -41,9 +41,10 @@ function fixture() {
         sessionId: "cron:test-cron:fire:test-fire",
         attempts: 1,
         leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
         request: { actor: { id: "alice" } },
       }),
+      leaseHeld: async (run: { status: string; leaseToken: string }, token: string) =>
+        run.status === "running" && run.leaseToken === token,
     } as unknown as ServerDeps["runs"],
     composioFetch: (async (input, init) => {
       calls.push({ url: String(input), init });

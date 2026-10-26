@@ -16,6 +16,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appTurns, claimTurn, finishTurn } from "./support/turns.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -232,9 +233,9 @@ test("an orphaned steer with a request replays as the steerer, not the run's own
     ts: "1712.003",
     request: { ...steererRequest("web-eve", threadRef, "finish this instead"), attachments: [attachment] },
   });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  const claimed = await claimTurn(appTurns(built), run.id);
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
   let replayed = await built.runs.activeForThread(threadRef);
   for (let i = 0; !replayed && i < 50; i++) {
@@ -263,9 +264,9 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
       text: "still matters",
     },
   });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  const claimed = await claimTurn(appTurns(built), run.id);
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
   let replayed = await built.runs.activeForThread(threadRef);
   for (let i = 0; !replayed && i < 50; i++) {
@@ -303,9 +304,9 @@ test("core route: a bad kind is rejected 400, an unknown run 404", async () => {
 
 test("core route: a terminal run rejects signals with reason=terminal", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-terminal", request: request("hi") });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  const claimed = await claimTurn(appTurns(built), run.id);
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   const r = await coreSignal(run.id, { kind: "abort" });
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
@@ -588,7 +589,8 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(events.status, 404);
 });
 
-test("web proxy: a Project member can resolve their own approval in another member's thread", async () => {
+test("web proxy: a Project member can resolve their own approval in another member's thread", async (t) => {
+  t.after(() => built.runtime.releaseInFlightRuns());
   await built.app.upsertDirectory([
     { principalId: "approval-owner", displayName: "Approval Owner", type: "internal" },
     { principalId: "approval-member", displayName: "Approval Member", type: "internal" },
@@ -724,9 +726,9 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   ).json()) as { runId?: string | null };
   assert.equal(active1.runId, first, "the oldest live run is the active one");
 
-  const claimed = await built.runs.claimById(first, "test-worker", 5_000);
+  const claimed = await claimTurn(appTurns(built), first);
   assert.ok(claimed);
-  await built.runs.complete(first, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
 
   const active2 = (await (
     await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
@@ -929,8 +931,8 @@ test("core route: client_result for an unknown run is 404 and for a terminal run
   const body = { kind: "client_result", callId: "c1", result: { content: "x" } };
   assert.equal((await coreSignal("no-such-run", body)).status, 404);
   const { run } = await built.runs.enqueue({ sessionId: "t-client-done", request: withPageTools("t-client-done") });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   const r = await coreSignal(run.id, body);
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
@@ -952,8 +954,8 @@ test("orphan replay drops a late client_result instead of starting a turn", asyn
     text: "a late page answer",
     result: { content: "a late page answer" },
   });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
   await settleNoReplay(threadRef);
   assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is consumed");
@@ -963,8 +965,8 @@ test("orphan replays never carry client tools into the new run", async () => {
   const requestless = `t-client-replay-${crypto.randomUUID()}`;
   const { run: first } = await built.runs.enqueue({ sessionId: requestless, request: withPageTools(requestless) });
   await built.signals.send(first.id, { kind: "steer", text: "carry on", ts: "1712.101" });
-  const firstClaim = await built.runs.claimById(first.id, "test-worker", 5_000);
-  await built.runs.complete(first.id, firstClaim!.leaseToken!, { status: "ok", reply: "done" });
+  const firstClaim = await claimTurn(appTurns(built), first.id);
+  await finishTurn(firstClaim!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(first.id);
   let replayed = await built.runs.activeForThread(requestless);
   for (let i = 0; !replayed && i < 50; i++) {
@@ -986,8 +988,8 @@ test("orphan replays never carry client tools into the new run", async () => {
     ts: "1712.102",
     request: { ...steererRequest("web-eve", threadRef, "and this"), clientTools: [pageTool("ui__get_selection")] },
   });
-  const secondClaim = await built.runs.claimById(second.id, "test-worker", 5_000);
-  await built.runs.complete(second.id, secondClaim!.leaseToken!, { status: "ok", reply: "done" });
+  const secondClaim = await claimTurn(appTurns(built), second.id);
+  await finishTurn(secondClaim!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(second.id);
   let own = await built.runs.activeForThread(threadRef);
   for (let i = 0; !own && i < 50; i++) {
@@ -1003,8 +1005,8 @@ test("subagent orphan replay never carries client tools into the new run", async
   const threadRef = `agent:main:subagent:${crypto.randomUUID()}`;
   const { run } = await built.runs.enqueue({ sessionId: threadRef, request: withPageTools(threadRef) });
   await built.signals.send(run.id, { kind: "steer", text: "keep going" });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
   let replayed = await built.runs.activeForThread(threadRef);
   for (let i = 0; !replayed && i < 50; i++) {
@@ -1025,8 +1027,8 @@ test("subagent orphan replay drops a late client_result instead of starting a tu
     text: "a late page answer",
     result: { content: "a late page answer" },
   });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(appTurns(built), run.id);
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
   await settleNoReplay(threadRef);
   assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");

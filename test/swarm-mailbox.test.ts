@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/harness/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn } from "./support/turns.ts";
 
 test("an agent's messages wait in each recipient's mailbox whatever their lineage; notify:true wakes", async () => {
   const f = await swarmFixture();
@@ -72,12 +73,12 @@ test("a running goal turn shows a mailbox message once and hands it over when it
     text: "north gate is closed",
   });
   const run = (await f.runs.list()).find((item) => item.request.swarm?.recipientId === busy!.id)!;
-  const claimed = (await f.runs.claimById(run.id, "worker", 60_000))!;
+  const turn = (await claimTurn(f.ledger, run.id))!;
   const input = {
-    ...claimed.request,
-    runId: claimed.id,
-    runLeaseToken: claimed.leaseToken!,
-    attempt: claimed.attempts,
+    ...turn.run.request,
+    runId: turn.run.id,
+    runLeaseToken: turn.token,
+    attempt: turn.run.attempts,
   };
   const { inbox, settle } = createSwarmGoalInbox({
     swarms: f.service,

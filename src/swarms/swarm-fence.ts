@@ -1,4 +1,4 @@
-import { legacyLeaseHeld, type Run } from "../runs/run-store.ts";
+import type { Run } from "../runs/run-store.ts";
 
 export interface SwarmRunFence {
   runId: string;
@@ -13,8 +13,8 @@ export interface SwarmRunFence {
 export function assertSwarmRun(
   fence: SwarmRunFence,
   run:
-    | (Pick<Run, "status" | "attempts" | "leaseToken" | "leaseExpiresAt" | "sessionId" | "request" | "engine"> & {
-        turnFenceHeld?: boolean;
+    | (Pick<Run, "attempts" | "sessionId" | "request"> & {
+        turnFenceHeld: boolean;
       })
     | null,
 ): void {
@@ -22,7 +22,7 @@ export function assertSwarmRun(
     !run ||
     run.attempts !== fence.attempt ||
     !fence.leaseToken ||
-    !(run.engine === "absurd" ? run.turnFenceHeld === true : legacyLeaseHeld(run, fence.leaseToken)) ||
+    !run.turnFenceHeld ||
     run.sessionId !== fence.threadRef ||
     run.request.actor.id !== fence.actorId
   )

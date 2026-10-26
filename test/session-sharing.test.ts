@@ -1,9 +1,9 @@
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator/types.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { claimTurn, finishTurn, testRunStore } from "./support/turns.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -111,7 +111,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     },
   };
   const identity = createIdentityService();
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger, close } = testRunStore();
+  after(close);
   const original = [
     ...entries,
     entry({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
@@ -224,8 +225,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       })
     ).run;
   const finish = async (runId: string, over: { sessionId?: string; seq?: number; text?: string } = {}) => {
-    const claimed = await runs.claimById(runId, "w1", 5_000);
-    await runs.complete(runId, claimed!.leaseToken!, {
+    const claimed = await claimTurn(ledger, runId);
+    await finishTurn(claimed!, {
       status: "ok",
       reply: over.text ?? "Generated",
       sessionId: over.sessionId ?? "s1",

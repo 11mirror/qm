@@ -13,7 +13,7 @@ import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
-import type { TurnRequest } from "../src/types.ts";
+import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -137,7 +137,7 @@ test("empty-token guard — an adapter returning no access token fails the conne
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
-  built.connectorTokens.setConnectorToken(
+  await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
     { accessToken: "u1-personal", accountType: "personal" },
@@ -160,6 +160,15 @@ test("status/selector parity — a personal-only connection reports connected (m
   }
 });
 
+async function assertFailed(built: BuiltApp, result: TurnResult, reason: RegExp): Promise<void> {
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  const recorded = await built.errors.list({ sessionId: result.sessionId! });
+  assert.ok(
+    recorded.some((event) => event.category === "turn" && reason.test(event.message)),
+    JSON.stringify(recorded),
+  );
+}
+
 function turn(kind: "dm" | "channel", text: string): TurnRequest {
   const actor = { externalId: "U1" };
   return kind === "dm"
@@ -173,7 +182,7 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 }
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")), maxAttempts: 1 }));
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const key = envKey("gmail.googleapis.com");
@@ -184,7 +193,7 @@ test("F1/F3 — a live DM receives only its requested connector; a channel recei
   assert.equal((await built.app.turn({ ...turn("dm", selected), liveActor: true })).reply, "authenticated");
   assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
   assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
-  await assert.rejects(built.app.turn(turn("channel", selected)), /not available/);
+  await assertFailed(built, await built.app.turn(turn("channel", selected)), /not available/);
 });
 
 function wake(text: string, readOnly: boolean): TurnRequest {
@@ -200,7 +209,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 
 for (const surface of ["cron", "loop"]) {
   test(`personal ${surface} selects owner credentials without grants`, async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")), maxAttempts: 1 }));
     await selectDefaultSandbox(built, "U1", "personal:U1");
     await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
     const saved = await built.keychain!.save({
@@ -222,15 +231,17 @@ for (const surface of ["cron", "loop"]) {
     const selected = `!execute ${JSON.stringify({ command: `test "$${key}" = u1-gmail && test "$OWNER_TOKEN" = owner-secret && echo authenticated`, credentials: ["connector:gmail.googleapis.com:default", credentialHandle(saved)] })}`;
     assert.equal((await built.app.turn(request(selected))).reply, "authenticated");
     assert.equal((await built.app.turn(request(absent))).reply, "absent");
-    await assert.rejects(
-      built.app.turn({
+    await assertFailed(
+      built,
+      await built.app.turn({
         ...request(selected),
         conversation: { kind: "channel", channelRef: "C1", threadRef: "shared-automation" },
       }),
       /not available/,
     );
-    await assert.rejects(
-      built.app.turn(
+    await assertFailed(
+      built,
+      await built.app.turn(
         request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
       ),
       /not available/,
@@ -373,7 +384,12 @@ for (const mixedOAuth of [false, true, "expired-default"] as const)
       assert.equal(reads, 0);
       const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = operator-fallback-token && echo selected`, credentials: ["connector:gmail.googleapis.com:default"] })}`;
       if (value) assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
-      else await assert.rejects(built.app.turn({ ...turn("dm", text), liveActor: true }), /no longer available/);
+      else
+        await assertFailed(
+          built,
+          await built.app.turn({ ...turn("dm", text), liveActor: true }),
+          /no longer available/,
+        );
       assert.equal(reads, value ? 1 : 2);
     });
   }

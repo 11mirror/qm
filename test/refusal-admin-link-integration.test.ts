@@ -9,7 +9,6 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
@@ -21,13 +20,14 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { TURN_QUEUES } from "../src/turns/absurd-schema.ts";
+import { createTurnRunner } from "../src/turns/turn-runner.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { refusalNote } from "../src/slack/lib.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testRunStore } from "./support/turns.ts";
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
@@ -87,10 +87,9 @@ function buildOrchestrator(sessions: SessionStore) {
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createMemorySessionStore();
+  const store = testRunStore();
+  const { sessions, runs, ledger, end } = store;
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createMemoryRunStore();
-  const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
   const request = {
@@ -102,9 +101,11 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   };
   const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
 
-  const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
-  assert.ok(claimed, "claimed for processing");
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
+  const runner = createTurnRunner({ ledger, end, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 20 });
+  runner.start();
+  const finished = await runs.waitFor(run.id, 30_000);
+  await runner.stopClaims();
+  assert.equal(finished.status, "failed");
 
   const stored = await runs.get(run.id);
   assert.equal(stored?.result?.status, "failed");
@@ -124,4 +125,5 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   assert.equal(note.split("Full error: ")[1], `${ADMIN}/admin/history/s/${session!.id} Try again, or DM me.`);
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
+  await store.close();
 });

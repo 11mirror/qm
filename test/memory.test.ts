@@ -70,11 +70,10 @@ test("personal memory does NOT surface in a channel (boundary / differentiator)"
 });
 
 test("default memory policy recalls visible org memory without crossing into personal memory", async () => {
-  const { app, dataDir } = freshApp();
-  const ws = createLocalWorkspaceStore(dataDir);
+  const { app, workspace, memory } = freshApp();
   const org = scopeId("org", "default-org");
-  await ws.ensureScope(org);
-  await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
+  await workspace.ensureScope(org);
+  await memory.capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
     mode: "explicit",
     inheritedFacts: [],
     sensitivity: "ordinary",
@@ -90,11 +89,10 @@ test("default memory policy recalls visible org memory without crossing into per
 });
 
 test("memory recall policy can be tightened to writable scope only", async () => {
-  const { app, dataDir } = freshApp({ memoryRecall: "writable" });
-  const ws = createLocalWorkspaceStore(dataDir);
+  const { app, workspace, memory } = freshApp({ memoryRecall: "writable" });
   const org = scopeId("org", "default-org");
-  await ws.ensureScope(org);
-  await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
+  await workspace.ensureScope(org);
+  await memory.capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
     mode: "explicit",
     inheritedFacts: [],
     sensitivity: "ordinary",

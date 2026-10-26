@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { isUnstarted, runLeaseHeld, type RunStore } from "../runs/run-store.ts";
+import { isUnstarted, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -199,6 +199,8 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
   const execution = {
     runId: true,
     runLeaseToken: true,
+    turnFenceToken: true,
+    resumeCause: true,
     attempt: true,
     finalAttempt: true,
     background: true,
@@ -278,7 +280,7 @@ export function createSwarmService(deps: {
       };
       assertSwarmRun(fence, {
         ...run,
-        turnFenceHeld: run.engine === "absurd" && (await runLeaseHeld(runs, run, fence.leaseToken)),
+        turnFenceHeld: await runs.leaseHeld(run, fence.leaseToken),
       });
     }
     const identity = threadIdentity(session.threadRef, session.id);

@@ -129,10 +129,10 @@ test("SSE relays tool activity frames and folds them into the done frame", async
 
 test("active run lookup returns the latest tracked run for the caller's web thread", async (t) => {
   const completion = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  t.mock.method(built.runs, "complete", async (...args: Parameters<typeof complete>) => {
+  const finish = built.turnLedger.finish.bind(built.turnLedger);
+  t.mock.method(built.turnLedger, "finish", async (...args: Parameters<typeof finish>) => {
     await completion.promise;
-    return complete(...args);
+    return finish(...args);
   });
   t.after(() => completion.resolve());
   const threadRef = `web:alice:${randomUUID()}`;

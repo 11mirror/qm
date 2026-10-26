@@ -692,6 +692,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(reopened.every((window) => window.validTo === null && window.validFrom === 0));
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
+  const held = t.mock.method(built.turnLedger, "claim", async () => ({ claimed: false, run: null }));
   const queued = await built.app.turn({
     surface: "web",
     actor: { externalId: "member" },
@@ -702,6 +703,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(queued.status, "queued");
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
+  held.mock.restore();
   built.runtime.start();
   try {
     const finished = await built.runs.waitFor(queued.runId!, 5_000);

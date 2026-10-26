@@ -79,9 +79,14 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 0);
-  await assert.rejects(
-    run(`!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`),
-    /requires scope:scoped/,
+  const refused = await run(
+    `!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+  );
+  assert.equal(refused.status, "failed", JSON.stringify(refused));
+  const recorded = await built.errors.list({ sessionId: refused.sessionId! });
+  assert.ok(
+    recorded.some((event) => event.category === "turn" && /requires scope:scoped/.test(event.message)),
+    JSON.stringify(recorded),
   );
   assert.equal(assumes, 0);
   assert.equal(

@@ -71,7 +71,10 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--test", file], { detached: true, env: { ...process.env, ...env } });
+    const child = spawn(process.execPath, ["--test", "--test-force-exit", file], {
+      detached: true,
+      env: { ...process.env, ...env },
+    });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
     child.stderr?.on("data", (chunk) => (output += chunk));
