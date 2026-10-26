@@ -321,12 +321,14 @@ export function startAdmin(host, env) {
 
   function stateToUrl(st) {
     const p = new URLSearchParams();
+    const withQuery = (path) => {
+      const q = p.toString();
+      return q ? path + "?" + q : path;
+    };
     if ((st.view || DEFAULT_VIEW) === "history") {
       if (st.session) {
         if (st.turn != null) p.set("turn", String(st.turn));
-        const q = p.toString();
-        const path = PAGE_BASE + "/history/s/" + encodeURIComponent(st.session);
-        return q ? path + "?" + q : path;
+        return withQuery(PAGE_BASE + "/history/s/" + encodeURIComponent(st.session));
       }
       const scopeSegment = st.scope && scopeKind(st.scope) !== "org" ? encodeURIComponent(st.scope) : null;
       const scopeInPath = scopeSegment && !/%2F|%5C/i.test(scopeSegment);
@@ -335,13 +337,11 @@ export function startAdmin(host, env) {
       if (st.cron) p.set("cron", st.cron);
       if (st.historyKind && st.historyKind !== "conversation") p.set("kind", st.historyKind);
       if (st.cursor) p.set("cursor", st.cursor);
-      const q = p.toString();
-      const path = scopeInPath ? PAGE_BASE + "/history/scopes/" + scopeSegment : PAGE_BASE + "/history";
-      return q ? path + "?" + q : path;
+      return withQuery(scopeInPath ? PAGE_BASE + "/history/scopes/" + scopeSegment : PAGE_BASE + "/history");
     }
-    if (["connectors", "slack-settings"].includes(st.view) && st.setup === "slack") p.set("setup", "slack");
-    if (["connectors", "slack-settings"].includes(st.view) && ["setup", "install", "connected"].includes(st.slack))
-      p.set("slack", st.slack);
+    const slackSetup = ["connectors", "slack-settings"].includes(st.view);
+    if (slackSetup && st.setup === "slack") p.set("setup", "slack");
+    if (slackSetup && ["setup", "install", "connected"].includes(st.slack)) p.set("slack", st.slack);
     if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
     if (st.view === "errors" && st.page > 1) p.set("page", st.page);
     if (st.principal) p.set("principal", st.principal);
@@ -353,18 +353,10 @@ export function startAdmin(host, env) {
       p.set("from", spendWindow.from);
       p.set("to", spendWindow.to);
     } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
-    if (st.view === "slack" && st.container) p.set("container", st.container);
-    if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
-    if (st.view === "judgments" && st.container) p.set("container", st.container);
-    if (st.view === "judgments" && st.decision) p.set("decision", st.decision);
-    if (st.view === "judgments" && st.jid) p.set("jid", st.jid);
-    if (st.view === "ackemoji" && st.container) p.set("container", st.container);
-    if (st.view === "ackemoji" && st.decision) p.set("decision", st.decision);
-    if (st.view === "ackemoji" && st.jid) p.set("jid", st.jid);
-    const q = p.toString();
-
-    const path = st.view === "general" ? PAGE_BASE : PAGE_BASE + "/" + encodeURIComponent(st.view || DEFAULT_VIEW);
-    return q ? path + "?" + q : path;
+    const logKeys = ["container", "decision", "jid"];
+    const extra = { slack: st.container ? ["container", "ts"] : [], judgments: logKeys, ackemoji: logKeys }[st.view];
+    for (const key of extra || []) if (st[key]) p.set(key, st[key]);
+    return withQuery(st.view === "general" ? PAGE_BASE : PAGE_BASE + "/" + encodeURIComponent(st.view || DEFAULT_VIEW));
   }
   function decodePathSegment(seg) {
     if (!seg) return null;
@@ -409,20 +401,13 @@ export function startAdmin(host, env) {
         (resolvedView === "history" || resolvedView === "errors" ? "org:" + orgId : scope),
       session,
       turn: turnRaw == null || turnRaw === "" ? null : turnRaw,
-      principal: p.get("principal") || null,
-      cron: p.get("cron") || null,
-      own: p.get("own") || null,
-      mem: p.get("mem") || null,
-      range: p.get("range") || null,
-      from: p.get("from") || null,
-      to: p.get("to") || null,
       historyKind: normalizedHistoryKind,
       page: Math.max(1, parseInt(p.get("page"), 10) || 1),
-      cursor: p.get("cursor") || null,
-      container: p.get("container") || null,
-      ts: p.get("ts") || null,
-      decision: p.get("decision") || null,
-      jid: p.get("jid") || null,
+      ...Object.fromEntries(
+        ["principal", "cron", "own", "mem", "range", "from", "to", "cursor", "container", "ts", "decision", "jid"].map(
+          (key) => [key, p.get(key) || null],
+        ),
+      ),
     };
   }
 
@@ -641,118 +626,85 @@ export function startAdmin(host, env) {
     bar.textContent = "";
     const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "memory"].includes(view);
     bar.classList.toggle("logs-shell", logView);
-    const counts = document.createElement("div");
-    counts.className = "log-counts";
+    const counts = el("div.log-counts");
     const countText = (label, value) => {
-      const count = document.createElement("span");
-      count.className = "log-count";
       const number = Number(value);
       const noun = number === 1 ? label.replace(/s$/, "") : label;
-      count.textContent =
-        (Number.isFinite(number) ? number.toLocaleString() : String(value)) + " " + noun.toLowerCase();
-      return count;
+      const amount = Number.isFinite(number) ? number.toLocaleString() : String(value);
+      return el("span.log-count", amount + " " + noun.toLowerCase());
     };
     if (opts.back) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "back";
-      const label = document.createElement("span");
-      label.textContent = opts.back.label.replace(/^←\s*/, "");
-      b.append(backArrow(), label);
-      b.onclick = opts.back.onClick;
-      const row = document.createElement("div");
-      row.className = "shell-back-row";
-      row.appendChild(b);
-      bar.appendChild(row);
+      const back = el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
+      back.append(el("span", opts.back.label.replace(/^←\s*/, "")));
+      bar.appendChild(el("div.shell-back-row", {}, back));
     }
-    if (opts.title) {
-      const h = document.createElement("h2");
-      h.className = "shell-title";
-      h.textContent = opts.title;
-      bar.appendChild(h);
-    }
+    if (opts.title) bar.appendChild(el("h2.shell-title", opts.title));
     if (logView) bar.appendChild(counts);
     if (opts.context) {
-      const c = opts.contextGo ? navLink(opts.context, opts.contextGo) : document.createElement("span");
+      const c = opts.contextGo ? navLink(opts.context, opts.contextGo) : el("span", opts.context);
       c.classList.add("shell-context");
-      if (!opts.contextGo) c.textContent = opts.context;
       bar.appendChild(c);
     }
     if (opts.tabs && opts.tabs.length) {
-      const wrap = document.createElement("div");
-      wrap.className = "shell-tabs" + (view === "judgments" ? " judgment-filters" : "");
-      opts.tabs.forEach((tab) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "shell-tab" + (tab.active ? " active" : "");
-        b.setAttribute("aria-pressed", String(!!tab.active));
-        if (logView) b.textContent = tab.label;
-        else b.textContent = tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString() : tab.label;
-        b.onclick = tab.onClick;
-        wrap.appendChild(b);
-      });
-      if (logView) {
-        const active = opts.tabs.find((tab) => tab.active);
-        if (active?.count != null) {
-          let noun = active.label;
-          if (view === "judgments") noun = "judgments";
-          else if (active.label === "Background") noun = "background runs";
-          counts.appendChild(countText(noun, active.count));
-        }
+      const wrap = el("div.shell-tabs" + (view === "judgments" ? " judgment-filters" : ""));
+      for (const tab of opts.tabs)
+        wrap.appendChild(
+          el("button.shell-tab" + (tab.active ? " active" : ""), {
+            type: "button",
+            "aria-pressed": String(!!tab.active),
+            textContent:
+              logView || tab.count == null ? tab.label : tab.label + " " + Number(tab.count).toLocaleString(),
+            onclick: tab.onClick,
+          }),
+        );
+      const active = opts.tabs.find((tab) => tab.active);
+      if (logView && active?.count != null) {
+        let noun = active.label;
+        if (view === "judgments") noun = "judgments";
+        else if (active.label === "Background") noun = "background runs";
+        counts.appendChild(countText(noun, active.count));
       }
       bar.appendChild(wrap);
     } else if (opts.count != null && opts.count !== "") {
-      const c = document.createElement("span");
-      c.className = "shell-count";
-      c.textContent = String(opts.count);
-      if (logView) {
-        const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
-        counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
-      } else bar.appendChild(c);
+      const c = el("span.shell-count", String(opts.count));
+      const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
+      if (!logView) bar.appendChild(c);
+      else counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
     }
-    if (logView && opts.stats?.length) {
-      opts.stats.forEach(([value, label]) => counts.appendChild(countText(label, value)));
-    }
-    const spacer = document.createElement("span");
-    spacer.className = "shell-spacer";
-    bar.appendChild(spacer);
+    if (logView) (opts.stats || []).forEach(([value, label]) => counts.appendChild(countText(label, value)));
+    bar.appendChild(el("span.shell-spacer"));
     if (!logView && opts.stats && opts.stats.length) bar.appendChild(kpis(opts.stats, "shell-stats"));
-    if (opts.search) {
-      bar.appendChild(searchField(opts.search));
-    }
+    if (opts.search) bar.appendChild(searchField(opts.search));
     (opts.actions || []).forEach((n) => bar.appendChild(n));
   }
   function searchField({ placeholder = "Search…", onInput = () => {}, value = "", disabled = false }) {
-    const wrap = document.createElement("div");
-    wrap.className = "shell-search admin-search";
-    const input = document.createElement("input");
-    input.type = "search";
-    input.placeholder = placeholder;
-    input.setAttribute("aria-label", placeholder.replace(/[…]+$/, ""));
+    const input = el("input", {
+      type: "search",
+      placeholder,
+      "aria-label": placeholder.replace(/[…]+$/, ""),
+      autocapitalize: "none",
+      value,
+      disabled,
+      oninput: () => onInput(input.value),
+    });
     input.spellcheck = false;
-    input.setAttribute("autocapitalize", "none");
-    input.value = value;
-    input.disabled = disabled;
-    input.oninput = () => onInput(input.value);
-    wrap.appendChild(input);
-    const icon = document.createElement("span");
-    icon.className = "admin-search-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "icon-button admin-search-clear";
-    clear.setAttribute("aria-label", "Clear search");
-    clear.textContent = "×";
-    clear.disabled = disabled;
-    clear.onclick = () => {
-      input.value = "";
-      onInput("");
-      input.focus();
-    };
-    wrap.append(icon, clear);
-    return wrap;
+    const icon = el("span.admin-search-icon", {
+      "aria-hidden": "true",
+      innerHTML:
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
+    });
+    const clear = el("button.icon-button admin-search-clear", {
+      type: "button",
+      "aria-label": "Clear search",
+      textContent: "×",
+      disabled,
+      onclick: () => {
+        input.value = "";
+        onInput("");
+        input.focus();
+      },
+    });
+    return el("div.shell-search admin-search", {}, input, icon, clear);
   }
   function transcriptEntryHidden(entryTypes, hasDelivery, visibility = transcriptVisibility) {
     return (
