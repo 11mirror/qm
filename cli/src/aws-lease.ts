@@ -17,6 +17,10 @@ export function awsText(aws: AwsConfig, args: string[]): string {
   return capture(process.env.AWS_BIN ?? "aws", [...args, "--region", aws.region, "--output", "text"]).trim();
 }
 
+export function awsErrorCode(error: unknown): string | undefined {
+  return /An error occurred \((\w+)\)/.exec(errMessage(error))?.[1];
+}
+
 export function deployLocksTable(aws: AwsConfig): string {
   return aws.deploymentState?.table ?? `${aws.cluster}-deploy-locks`;
 }
@@ -44,7 +48,7 @@ export function acquireAwsLease(aws: AwsConfig, key = "deploy"): AwsLease {
       JSON.stringify({ ":now": { N: String(now) } }),
     ]);
   } catch (error) {
-    if (/ConditionalCheckFailedException/.test(errMessage(error))) {
+    if (awsErrorCode(error) === "ConditionalCheckFailedException") {
       throw new CliError(
         `another QM operation holds the ${JSON.stringify(key)} lease in ${table}; it expires within ${LEASE_SECONDS / 60} minutes, or delete that item to release it manually`,
       );
@@ -88,7 +92,7 @@ function renewAwsLease(aws: AwsConfig, lease: AwsLease): void {
       JSON.stringify({ ":expiresAt": { N: String(now + LEASE_SECONDS) }, ":holder": { S: lease.holder } }),
     ]);
   } catch (error) {
-    if (/ConditionalCheckFailedException/.test(errMessage(error))) {
+    if (awsErrorCode(error) === "ConditionalCheckFailedException") {
       clearInterval(lease.renewTimer);
       lease.renewTimer = undefined;
       warn(
