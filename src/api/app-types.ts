@@ -3,7 +3,7 @@ import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { EventBus } from "../util/event-bus.ts";
+import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
 import type {
@@ -18,8 +18,16 @@ import type {
   TurnRequest,
   TurnResult,
   TurnRuntime,
+  OutgoingAttachment,
+  Cron,
+  CronFireLogEntry,
+  CronFireNote,
+  Destination,
+  SurfaceContextQuery,
+  SurfaceContextRequest,
+  SurfaceContextResult,
+  Webhook,
 } from "../types.ts";
-import type { OutgoingAttachment } from "../types.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
@@ -35,7 +43,6 @@ import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../inbox/events.ts";
-import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ModelGateway } from "../model/model-gateway.ts";
@@ -59,27 +66,14 @@ import type { CronFireRecord } from "../cron/fire-store.ts";
 import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import type {
-  ChannelMembership,
   ChannelResolution,
   DirectoryChannel,
   DirectoryMember,
   DirectoryMeta,
   DirectoryStore,
-  GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type {
-  Cron,
-  CronFireLogEntry,
-  CronFireNote,
-  Destination,
-  SurfaceContextQuery,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  Webhook,
-} from "../types.ts";
-import type {
-  ActiveThread,
   CachedMessage,
   ContainerSummary,
   IngestEvent,
@@ -239,7 +233,7 @@ interface SessionBackgroundOutput {
   exitCode?: number;
 }
 
-interface TranscriptWindow {
+export interface TranscriptWindow {
   tailTurns?: number;
   sinceSeq?: number;
   beforeSeq?: number;
@@ -268,6 +262,13 @@ export interface SessionSearchHit {
   snippet: string;
   createdAt: number;
   archived?: boolean;
+}
+
+interface SessionRead {
+  session: Session;
+  items: TranscriptItem[];
+  earlierItems?: number;
+  pins?: SessionPinView[];
 }
 
 export interface App {
@@ -328,22 +329,12 @@ export interface App {
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
-  getSession(
-    sessionId: string,
-    window?: TranscriptWindow,
-  ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
+  getSession(sessionId: string, window?: TranscriptWindow): Promise<SessionRead | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{
-    session: Session;
-    items: TranscriptItem[];
-    earlierItems?: number;
-    pins?: SessionPinView[];
-    goal?: GoalView;
-    runtime?: TurnRuntime;
-  } | null>;
+  ): Promise<(SessionRead & { goal?: GoalView; runtime?: TurnRuntime }) | null>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,
@@ -389,13 +380,7 @@ export interface App {
   updateSession(
     sessionId: string,
     principalId: string,
-    patch: {
-      title?: string | null;
-      archived?: boolean;
-      pinned?: boolean;
-      color?: string | null;
-      readAt?: number;
-    },
+    patch: Parameters<SessionStore["updateParticipantView"]>[2],
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
@@ -486,7 +471,6 @@ export interface App {
   ): Promise<{ upserted: number }>;
   searchSurface(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
   readSurfaceMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
-  activeSurfaceThreads(opts?: { container?: string; limit?: number }): Promise<ActiveThread[]>;
   listSurfaceContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
   getChannelPolicy(container: string): Promise<ChannelPolicy | null>;
   setChannelPolicy(
@@ -497,27 +481,11 @@ export interface App {
     sessionId?: string,
     ambientEnabled?: boolean | null,
   ): Promise<ChannelPolicy | null>;
-  judgeAmbientContainer(
-    surface: string,
-    container: string,
-    opts?: { reason?: "messages" | "scheduled" },
-  ): Promise<AmbientDecision>;
+  judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
-  upsertChannels(
-    channels: DirectoryChannel[],
-    channelMembers?: ChannelMembership[],
-    syncedAt?: number,
-    channelRosterIds?: string[],
-    revocations?: ChannelMembership[],
-    partial?: boolean,
-  ): Promise<boolean>;
-  upsertGroups(
-    groupMembers: GroupMembership[],
-    syncedAt?: number,
-    groupIds?: string[],
-    groupRosterIds?: string[],
-  ): Promise<boolean>;
+  upsertChannels: DirectoryStore["replaceChannels"];
+  upsertGroups: DirectoryStore["replaceGroups"];
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;

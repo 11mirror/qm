@@ -4,6 +4,7 @@ import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import type { Item } from "../../sessions/items.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import { SSE_HEADERS } from "./session-state.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
@@ -130,6 +131,11 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       sync();
     }
   };
+  const resync = (): void => {
+    syncing = false;
+    sync();
+    void refresh();
+  };
   const unsubscribe = app.subscribeRun(
     runId,
     (event) => {
@@ -170,26 +176,13 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       send({ type: "CUSTOM", name: "delta", value: { offset, delta, startOffset } }, `text:${offset + delta.length}`);
       offset += delta.length;
     },
-    () => {
-      syncing = false;
-      sync();
-      void refresh();
-    },
+    resync,
   );
-  const heartbeat = setInterval(() => {
-    syncing = false;
-    sync();
-    void refresh();
-  }, HEARTBEAT_MS);
+  const heartbeat = setInterval(resync, HEARTBEAT_MS);
   heartbeat.unref?.();
   res.on("close", cleanup);
   req.on("error", () => res.destroy());
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-cache, no-transform",
-    connection: "keep-alive",
-    "x-accel-buffering": "no",
-  });
+  res.writeHead(200, SSE_HEADERS);
   send({ type: "RUN_STARTED", threadId: runId, runId });
   await refresh(initial);
   if (!closed) await refresh();

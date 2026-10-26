@@ -1,13 +1,31 @@
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
-import { parseScopeId, type Destination } from "../../../types.ts";
+import { type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
-import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
-import { requireScopedResource } from "./common.ts";
+import { badRequest, pick, requireScopedResource, scopedAdmin } from "./common.ts";
+
+const CRON_FIELDS = [
+  "id",
+  "ownerScopeId",
+  "title",
+  "action",
+  "message",
+  "owner",
+  "createdBy",
+  "enabled",
+  "archived",
+  "schedule",
+  "runtime",
+  "inbox",
+  "unattendedGrants",
+  "destination",
+  "createdAt",
+  "lastFiredAt",
+] as const;
 
 function isAdminCronDestination(v: unknown): v is Destination {
   if (typeof v !== "object" || v === null) return false;
@@ -21,34 +39,15 @@ function isAdminCronDestination(v: unknown): v is Destination {
 }
 
 export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, pathname } = ctx;
+  const { res, app, pathname } = ctx;
   const resource = pathname.slice("/v1/admin/".length);
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, resource);
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   if (resource === "crons") {
     const crons = (await app.listCrons())
       .filter((c) => orgWide || c.ownerScopeId === scope)
-      .map((c) => ({
-        id: c.id,
-        ownerScopeId: c.ownerScopeId,
-        title: c.title,
-        action: c.action,
-        message: c.message,
-        owner: c.owner,
-        createdBy: c.createdBy,
-        enabled: c.enabled,
-        archived: c.archived,
-        schedule: c.schedule,
-        runtime: c.runtime,
-        inbox: c.inbox,
-        unattendedGrants: c.unattendedGrants,
-        destination: c.destination,
-        createdAt: c.createdAt,
-        lastFiredAt: c.lastFiredAt,
-      }));
+      .map((c) => pick(c, CRON_FIELDS));
     return sendJson(res, 200, { scopeId: scope, crons });
   }
   if (resource === "deployments") {
@@ -91,14 +90,9 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
 }
 
 export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, body } = ctx;
+  const { res, app, params, body } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => app.getCron(id),
-    (cron) => cron.ownerScopeId,
-    "cron",
-  );
+  const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
   if (!scoped) return;
   if (
     typeof body !== "object" ||
@@ -108,80 +102,50 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
     body.runtime === undefined ||
     !isCronRuntime(body.runtime)
   )
-    return sendJson(res, 400, { error: "bad_request", message: "runtime is required; use null to inherit" });
+    return badRequest(res, "runtime is required; use null to inherit");
   try {
     const updated = await app.setCronRuntime(id, body.runtime);
-    audit(deps, {
-      principalId: scoped.actor.id,
-      action: "cron.runtime.update",
-      resource: id,
-      scopeLabel: scoped.record.ownerScopeId,
-    });
+    scoped.audit("cron.runtime.update", id, scoped.record.ownerScopeId);
     return sendJson(res, 200, { cron: updated ? { id: updated.id, runtime: updated.runtime } : null });
   } catch (error) {
-    return sendJson(res, 400, { error: "bad_request", message: errMessage(error) });
+    return badRequest(res, errMessage(error));
   }
 }
 
 export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, body } = ctx;
+  const { res, app, params, body } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => app.getCron(id),
-    (c) => c.ownerScopeId,
-    "cron",
-  );
+  const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
   if (!scoped) return;
   const { actor, record: cron } = scoped;
-  if (typeof body !== "object" || body === null || !("destination" in body)) {
-    return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
-  }
+  if (typeof body !== "object" || body === null || !("destination" in body))
+    return badRequest(res, "destination is required; use null to clear");
   if ((cron.unattendedGrants?.length ?? 0) > 0)
     return sendJson(res, 409, {
       error: "conflict",
       message: "this cron carries unattended admin read grants, so only its owner can change where it delivers",
     });
   const destination = (body as { destination: unknown }).destination;
-  if (destination !== null && !isAdminCronDestination(destination)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "destination must be a principal or slack destination with a target",
-    });
-  }
+  if (destination !== null && !isAdminCronDestination(destination))
+    return badRequest(res, "destination must be a principal or slack destination with a target");
   const next = destination === null ? undefined : destination;
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
   const updated = await app.setCronDestination(id, next);
-  await notifyOwnerOfCronEdit(app, {
-    cron,
-    editorId: actor.id,
-    changeSummary: ["destination"],
-  });
-  audit(deps, {
-    principalId: actor.id,
-    action: "cron.destination.update",
-    resource: id,
-    scopeLabel: cron.ownerScopeId,
-  });
+  await notifyOwnerOfCronEdit(app, { cron, editorId: actor.id, changeSummary: ["destination"] });
+  scoped.audit("cron.destination.update", id, cron.ownerScopeId);
   return sendJson(res, 200, { cron: updated ? { id: updated.id, destination: updated.destination } : null });
 }
 
 export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params } = ctx;
+  const { res, app, params } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => app.getSkill(id),
-    (s) => s.scopeId,
-    "skill",
-    "fallback",
-  );
+  const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill", "fallback");
   if (!scoped) return;
-  const { actor, record: skill } = scoped;
+  const { record: skill } = scoped;
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
-  audit(deps, { principalId: actor.id, action: "skill.read", resource: id, scopeLabel: skill.scopeId });
+  scoped.audit("skill.read", id, skill.scopeId);
   return sendJson(res, 200, {
     id: skill.id,
     ownerScopeId: skill.scopeId,
@@ -200,17 +164,12 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
 }
 
 export async function archiveAdminSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params } = ctx;
+  const { res, app, params } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => app.getSkill(id),
-    (s) => s.scopeId,
-    "skill",
-  );
+  const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill");
   if (!scoped) return;
-  const { actor, record: skill } = scoped;
+  const { record: skill } = scoped;
   await app.archiveSkill(id);
-  audit(deps, { principalId: actor.id, action: "skill.archive", resource: id, scopeLabel: skill.scopeId });
+  scoped.audit("skill.archive", id, skill.scopeId);
   return sendJson(res, 200, { ok: true });
 }

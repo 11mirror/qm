@@ -13,33 +13,19 @@ import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
 
-type ReachBody = {
-  recipient?: unknown;
-  channel?: unknown;
-  participants?: unknown;
-  text?: unknown;
-  message?: unknown;
-  threadTs?: unknown;
-  unfurlLinks?: unknown;
-  react?: unknown;
-  delete?: unknown;
-  files?: unknown;
-  sandbox_id?: unknown;
-};
-
-function parseReact(v: unknown): { messageTs: string; emoji: string } | undefined {
-  if (!isObj(v)) return undefined;
-  const ts = (v as { ts?: unknown }).ts;
-  const emoji = (v as { emoji?: unknown }).emoji;
-  if (typeof ts !== "string" || !ts.trim() || typeof emoji !== "string" || !emoji.trim()) return undefined;
-  return { messageTs: ts, emoji };
+function messageTs(v: unknown): string | undefined {
+  return isObj(v) && typeof v.ts === "string" && v.ts.trim() ? v.ts : undefined;
 }
 
-function parseDelete(v: unknown): { messageTs: string } | undefined {
-  if (!isObj(v)) return undefined;
-  const ts = (v as { ts?: unknown }).ts;
-  if (typeof ts !== "string" || !ts.trim()) return undefined;
-  return { messageTs: ts };
+function sendReachError(
+  res: ApiCtx["res"],
+  failure: { status: number; error: string; message: string; candidates?: unknown },
+): void {
+  sendJson(res, failure.status, {
+    error: failure.error,
+    message: failure.message,
+    ...(failure.candidates ? { candidates: failure.candidates } : {}),
+  });
 }
 
 async function reachNow(ctx: ApiCtx): Promise<void> {
@@ -49,12 +35,15 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   const rate = await deps.rateLimiter?.check(`reach:${capability.actorId}`);
   if (rate && !rate.allowed)
     return sendJson(res, 429, { error: "rate_limited", message: "too many outbound actions; try again later" });
-  const b = (isObj(body) ? body : {}) as ReachBody;
+  const b = isObj(body) ? body : {};
   let text: string | undefined;
   if (typeof b.text === "string") text = b.text;
   else if (typeof b.message === "string") text = b.message;
-  const react = parseReact(b.react);
-  const del = parseDelete(b.delete);
+  const reactTs = messageTs(b.react);
+  const emoji = isObj(b.react) ? b.react.emoji : undefined;
+  const react = reactTs && typeof emoji === "string" && emoji.trim() ? { messageTs: reactTs, emoji } : undefined;
+  const deleteTs = messageTs(b.delete);
+  const del = deleteTs ? { messageTs: deleteTs } : undefined;
   let threadTs: string | undefined;
   if (b.threadTs !== undefined) {
     if (typeof b.threadTs !== "string" || !/^\d+\.\d+$/.test(b.threadTs.trim())) {
@@ -72,8 +61,14 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       });
     }
   }
-  const hasNamedTarget =
-    typeof b.recipient === "string" || typeof b.channel === "string" || Array.isArray(b.participants);
+  const target = {
+    ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
+    ...(typeof b.channel === "string" ? { channel: b.channel } : {}),
+    ...(Array.isArray(b.participants)
+      ? { participants: b.participants.filter((p): p is string => typeof p === "string") }
+      : {}),
+  };
+  const hasNamedTarget = Object.keys(target).length > 0;
   if (react && del) {
     return sendJson(res, 400, {
       error: "bad_request",
@@ -127,24 +122,8 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         message: "file attachments aren't available on this server — the sandbox/blob store isn't wired",
       });
     }
-    const pre = await app.resolveReachTarget(
-      {
-        ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
-        ...(typeof b.channel === "string" ? { channel: b.channel } : {}),
-        ...(Array.isArray(b.participants)
-          ? { participants: b.participants.filter((p): p is string => typeof p === "string") }
-          : {}),
-      },
-      capability.actorId,
-    );
-    const openedAtSend = !pre.ok && pre.error === "group_not_found" && Array.isArray(b.participants);
-    if (!pre.ok && !openedAtSend) {
-      return sendJson(res, pre.status, {
-        error: pre.error,
-        message: pre.message,
-        ...(pre.candidates ? { candidates: pre.candidates } : {}),
-      });
-    }
+    const pre = await app.resolveReachTarget(target, capability.actorId);
+    if (!pre.ok && !(pre.error === "group_not_found" && Array.isArray(b.participants))) return sendReachError(res, pre);
     const envScope = await resolveEnvironmentId(deps.environments, capability.scopeId);
     const register: ArtifactRegistration | undefined = deps.files
       ? {
@@ -220,22 +199,12 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     ...(threadTs !== undefined ? { threadTs } : {}),
     ...(react ? { react } : {}),
     ...(del ? { delete: del } : {}),
-    ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
-    ...(typeof b.channel === "string" ? { channel: b.channel } : {}),
-    ...(Array.isArray(b.participants)
-      ? { participants: b.participants.filter((p): p is string => typeof p === "string") }
-      : {}),
+    ...target,
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
     ...(capability.destination ? { currentDestination: capability.destination } : {}),
   });
-  if (!result.ok) {
-    return sendJson(res, result.status, {
-      error: result.error,
-      message: result.message,
-      ...(result.candidates ? { candidates: result.candidates } : {}),
-    });
-  }
+  if (!result.ok) return sendReachError(res, result);
   return sendJson(res, 200, {
     ok: true,
     ...(result.recipient ? { recipient: result.recipient } : {}),

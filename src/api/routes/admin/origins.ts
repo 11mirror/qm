@@ -2,40 +2,22 @@ import type { App } from "../../app.ts";
 import { parseScopeId, type Cron, type Session } from "../../../types.ts";
 import type { SessionSummary } from "../../../sessions/session-store.ts";
 import { parseWakeFireKey, wakeTriggerLabel } from "../../../triggers/provenance.ts";
+import { pick } from "./common.ts";
 
-function adminCron(
-  c: Cron | null,
-): Pick<
-  Cron,
-  | "id"
-  | "ownerScopeId"
-  | "title"
-  | "action"
-  | "message"
-  | "owner"
-  | "createdBy"
-  | "enabled"
-  | "archived"
-  | "schedule"
-  | "createdAt"
-  | "lastFiredAt"
-> | null {
-  if (!c) return null;
-  return {
-    id: c.id,
-    ownerScopeId: c.ownerScopeId,
-    title: c.title,
-    action: c.action,
-    message: c.message,
-    owner: c.owner,
-    createdBy: c.createdBy,
-    enabled: c.enabled,
-    archived: c.archived,
-    schedule: c.schedule,
-    createdAt: c.createdAt,
-    lastFiredAt: c.lastFiredAt,
-  };
-}
+const ADMIN_CRON_FIELDS = [
+  "id",
+  "ownerScopeId",
+  "title",
+  "action",
+  "message",
+  "owner",
+  "createdBy",
+  "enabled",
+  "archived",
+  "schedule",
+  "createdAt",
+  "lastFiredAt",
+] as const;
 
 type AdminCronOrigin = {
   kind: "cron";
@@ -44,7 +26,7 @@ type AdminCronOrigin = {
   fireKey: string;
   fireSlot: string | null;
   monologue?: boolean;
-  cron: ReturnType<typeof adminCron>;
+  cron: Pick<Cron, (typeof ADMIN_CRON_FIELDS)[number]> | null;
 };
 
 type AdminWakeOrigin = {
@@ -59,23 +41,18 @@ type AdminWakeOrigin = {
   monologue?: boolean;
 };
 
-export type AdminOrigin = AdminCronOrigin | AdminWakeOrigin;
+type AdminOrigin = AdminCronOrigin | AdminWakeOrigin;
 
 export type AdminSessionOrigin = "cron" | "other_background";
 
-export type AdminWakeRef = NonNullable<ReturnType<typeof parseWakeFireKey>> & {
-  monologue?: boolean;
-};
+type AdminWakeRef = NonNullable<ReturnType<typeof parseWakeFireKey>> & { monologue?: boolean };
 
 export function parseSessionWakeRef(threadRef: string | undefined | null): AdminWakeRef | null {
   const fire = parseWakeFireKey(threadRef);
   if (fire) return fire;
   const stable = /^agent:main:([a-z][a-z0-9_-]*):([^:]+)$/.exec(threadRef ?? "");
   if (!stable) return null;
-  const trigger = stable[1];
-  const sourceId = stable[2];
-  if (!trigger || !sourceId) return null;
-  const parsed = parseWakeFireKey(`${trigger}:${sourceId}`);
+  const parsed = parseWakeFireKey(`${stable[1]}:${stable[2]}`);
   return parsed ? { ...parsed, fireKey: threadRef!, monologue: true } : null;
 }
 
@@ -85,19 +62,14 @@ export function sessionKind(session: Pick<Session, "type" | "threadRef"> | Sessi
   return wake.monologue ? `${wake.trigger}_monologue` : `${wake.trigger}_wake`;
 }
 
-function wakeSessionLabel(trigger: string, monologue?: boolean): string {
-  if (!monologue) return wakeTriggerLabel(trigger);
-  switch (trigger) {
-    case "cron":
-      return "Cron monologue";
-    case "monitor":
-      return "Monitor monologue";
-    case "webhook":
-      return "Webhook monologue";
-    default:
-      return "Background monologue";
-  }
-}
+const MONOLOGUE_LABELS = new Map([
+  ["cron", "Cron monologue"],
+  ["monitor", "Monitor monologue"],
+  ["webhook", "Webhook monologue"],
+]);
+
+const wakeSessionLabel = (trigger: string, monologue?: boolean): string =>
+  monologue ? (MONOLOGUE_LABELS.get(trigger) ?? "Background monologue") : wakeTriggerLabel(trigger);
 
 async function cronWakeOrigin(
   app: App,
@@ -115,7 +87,7 @@ async function cronWakeOrigin(
     fireKey: parsed.fireKey,
     fireSlot: parsed.fireSlot,
     ...(parsed.monologue ? { monologue: true } : {}),
-    cron: orgWide || cron?.ownerScopeId === sourceScope ? adminCron(cron) : null,
+    cron: cron && (orgWide || cron.ownerScopeId === sourceScope) ? pick(cron, ADMIN_CRON_FIELDS) : null,
   };
 }
 
