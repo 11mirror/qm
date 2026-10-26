@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { once } from "node:events";
-import type WebSocket from "ws";
+import { pipeline } from "node:stream/promises";
+import { swallowAs } from "../util/errors.ts";
 
 export const SANDBOX_AGENT_PORT = 8443;
 
@@ -34,16 +35,14 @@ export function tunnelUrl(apiBaseUrl: string, sessionId: string, remotePort: num
   return url.toString();
 }
 
-type WebSocketCtor = typeof WebSocket;
-
-let wsModule: WebSocketCtor | null = null;
-async function loadWebSocket(): Promise<WebSocketCtor> {
-  wsModule ??= (await import("ws")).default;
+let wsModule: typeof import("ws") | null = null;
+async function loadWebSocket(): Promise<typeof import("ws")> {
+  wsModule ??= await import("ws");
   return wsModule;
 }
 
 export async function openManagedAgentsTunnel(opts: ManagedAgentsTunnelOptions): Promise<ManagedAgentsTunnel> {
-  const WebSocketImpl = await loadWebSocket();
+  const { default: WebSocketImpl, createWebSocketStream } = await loadWebSocket();
   const url = tunnelUrl(opts.apiBaseUrl, opts.sessionId, opts.remotePort);
   const sockets = new Set<Socket>();
   let failure: string | null = null;
@@ -88,19 +87,6 @@ export async function openManagedAgentsTunnel(opts: ManagedAgentsTunnelOptions):
           }, opts.pingIntervalMs ?? PING_INTERVAL_MS);
           heartbeat.unref();
           ws.once("close", () => clearInterval(heartbeat));
-          local.on("data", (chunk: Buffer) => {
-            local.pause();
-            ws.send(chunk, (err) => {
-              if (err) return;
-              local.resume();
-            });
-          });
-          ws.on("message", (data: Buffer) => {
-            if (!local.write(data)) {
-              ws.pause();
-              local.once("drain", () => ws.resume());
-            }
-          });
         });
 
         ws.on("close", (code: number, reason: Buffer) => {
@@ -110,18 +96,13 @@ export async function openManagedAgentsTunnel(opts: ManagedAgentsTunnelOptions):
             code === TUNNEL_CLOSE_UPSTREAM_ERROR
           )
             fail(`close ${code} ${reason.toString("utf8")}`.trim());
-          local.destroy();
         });
 
         ws.on("error", (err: Error) => {
           if (!rejected) fail(err.message);
-          local.destroy();
         });
 
-        local.on("close", () => {
-          if (ws.readyState === WebSocketImpl.OPEN || ws.readyState === WebSocketImpl.CONNECTING) ws.close();
-        });
-        local.on("error", () => ws.close());
+        pipeline(local, createWebSocketStream(ws), local).catch(swallowAs("managed-agents-tunnel: bridge", undefined));
       })
       .catch((err: unknown) => {
         fail(err instanceof Error ? err.message : String(err));
