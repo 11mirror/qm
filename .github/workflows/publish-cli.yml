@@ -59,7 +59,11 @@ jobs:
           out=$(jq -n '{sandboxBase: "", services: {}}')
           for service in core egress-proxy sandbox-base; do
             repo="ghcr.io/yc-software/qm/$service"
-            digest=$(docker buildx imagetools inspect "$repo:$IMAGES_REF" --format '{{json .Manifest}}' | jq -r .digest)
+            digest=$(docker buildx imagetools inspect "$repo:$IMAGES_REF" --format '{{json .Manifest}}' | jq -r '.digest // empty') || digest=""
+            if [ -z "$digest" ]; then
+              echo "no published image for $repo at $IMAGES_REF" >&2
+              exit 1
+            fi
             ref="$repo@$digest"
             if [ "$service" = sandbox-base ]; then
               out=$(printf '%s' "$out" | jq --arg r "$ref" '.sandboxBase = $r')
@@ -70,7 +74,8 @@ jobs:
           printf '%s\n' "$out" > cli/manifest.json
           cat cli/manifest.json
           jq -e '[.sandboxBase] + [.services[]]
-                 | all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))' cli/manifest.json > /dev/null
+                 | all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
+                 and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
           printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish
         working-directory: cli
