@@ -12,6 +12,11 @@ STYLE = (
     "texture. Bright saturated colours. Either no outline at all, or a thin outline in a darker shade of each fill colour; "
     "never a black outline. No text, no smoke, sparkles, motion lines, scenery or drop shadow. Transparent background."
 )
+DERIVE = (
+    "Redraw this exact character, keeping the hat, beard, face colour, eyes, outline treatment, proportions and flat "
+    "sticker style identical. Change only this: {change}. Same framing and size. Do not add a sticker border or glow. "
+    "Transparent background, no text, nothing else in frame."
+)
 REFS = [
     "1643514680/6827/blob_aww.png", "1643514688/6901/blob_rofl.png", "1643514693/6950/blob_wave.png",
     "1623519268/44552/rocket-pop.png", "1643514140/990/party_parrot.gif", "1622916972/43564/facepalm.png",
@@ -51,6 +56,29 @@ def generate(subject, model, out):
         "background": "transparent", "output_format": "png", "quality": "high"})
     Image.open(io.BytesIO(base64.b64decode(data["data"][0]["b64_json"]))).convert("RGBA").save(out)
     return out
+
+
+def derive(base, change, model, out):
+    data = broker("https://api.openai.com/v1/responses", {
+        "model": JUDGE, "reasoning": {"effort": "low"},
+        "tools": [{"type": "image_generation", "model": model, "background": "transparent", "quality": "high",
+                   "size": "1024x1024", "output_format": "png"}],
+        "tool_choice": {"type": "image_generation"},
+        "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": DERIVE.format(change=change)},
+            {"type": "input_image", "image_url": data_url(Image.open(base))}]}]})
+    call = next(o for o in data["output"] if o["type"] == "image_generation_call")
+    Image.open(io.BytesIO(base64.b64decode(call["result"]))).convert("RGBA").save(out)
+    return out
+
+
+def same_character(base, cand, change):
+    reply = ask("Image 1 is a character; image 2 should be the same character with only this change: "
+                f'"{change}". Rate 1-10 how faithfully image 2 keeps the hat, beard, face colour, eye style, '
+                "outline treatment and proportions, where 10 is identical apart from the change and 5 or below "
+                'means a noticeably different design. Reply JSON: {"consistency": <1-10>, "differences": "<under 15 words>"}',
+                [Image.open(base), Image.open(cand)])
+    return reply["consistency"] >= 7, reply["differences"]
 
 
 def strip_background(im):
@@ -285,29 +313,62 @@ def review_motion(gif, subject):
     return verdict
 
 
-def make(a):
-    os.makedirs(a.out, exist_ok=True)
+def pick(a, name, subject, draw, minimum=0, base=None, change=None):
     keys = [chr(65 + i) for i in range(a.n)]
     with ThreadPoolExecutor(a.n) as pool:
-        raws = dict(zip(keys, pool.map(lambda k: generate(a.subject, a.image_model, f"{a.out}/{a.name}-{k}.raw.png"), keys)))
-    cands = {k: process(raws[k], f"{a.out}/{a.name}-{k}.png", a.opaque) for k in keys}
-    scores, bar = judge(cands, a.subject)
+        raws = dict(zip(keys, pool.map(lambda k: draw(f"{a.out}/{name}-{k}.raw.png"), keys)))
+    cands = {k: process(raws[k], f"{a.out}/{name}-{k}.png", a.opaque) for k in keys}
+    scores, bar = judge(cands, subject)
     for k in keys:
         scores[k]["defects"] = defects(raws[k])
-        scores[k]["passes"] = scores[k]["on_subject"] and not scores[k]["defects"] and scores[k]["score"] >= bar
+        if base:
+            scores[k]["same_character"], scores[k]["differences"] = same_character(base, cands[k], change)
+        scores[k]["passes"] = (scores[k]["on_subject"] and not scores[k]["defects"] and scores[k]["score"] >= max(bar, minimum)
+                               and scores[k].get("same_character", True))
     best = max(keys, key=lambda k: (scores[k]["passes"], scores[k]["on_subject"], not scores[k]["defects"], scores[k]["score"]))
-    result = {"reference_median": bar, "candidates": scores, "best": best, "passes": scores[best]["passes"]}
-    final = f"{a.out}/{a.name}.png"
-    Image.open(cands[best]).save(final)
-    result["png"] = final
-    if a.motion:
-        result["gif"] = animate(f"{a.out}/{a.name}-{best}.src.png", f"{a.out}/{a.name}.gif", a.motion, a.frames, a.loop_ms, a.matte, a.opaque)
-        result["motion_review"] = review_motion(result["gif"], a.subject)
+    result = {"reference_median": bar, "candidates": scores, "best": best, "passes": scores[best]["passes"], "png": f"{a.out}/{name}.png",
+              "src": f"{a.out}/{name}-{best}.src.png"}
+    Image.open(cands[best]).save(result["png"])
+    return result
+
+
+def finish_result(a, result, name, subject, motion):
+    if motion:
+        result["gif"] = animate(result["src"], f"{a.out}/{name}.gif", motion, a.frames, a.loop_ms, a.matte, a.opaque)
+        result["motion_review"] = review_motion(result["gif"], subject)
     for k in ("png", "gif"):
         if k in result and os.path.getsize(result[k]) > 128 * 1024:
             result["warning"] = f"{k} is over Slack's 128KB limit"
+    return result
+
+
+def make(a):
+    os.makedirs(a.out, exist_ok=True)
+    result = pick(a, a.name, a.subject, lambda out: generate(a.subject, a.image_model, out))
+    finish_result(a, result, a.name, a.subject, a.motion)
     print(json.dumps(result, indent=2))
     if not result["passes"]:
+        sys.exit(2)
+
+
+def pack(a):
+    os.makedirs(a.out, exist_ok=True)
+    if a.base:
+        base = {"src": a.base, "passes": True}
+    else:
+        base = pick(a, a.name, a.subject, lambda out: generate(a.subject, a.image_model, out), a.min)
+        finish_result(a, base, a.name, a.subject, None)
+    result = {"base": base, "variants": {}}
+    if not base["passes"]:
+        print(json.dumps(result, indent=2))
+        sys.exit(2)
+    for name, change, *motion in a.variant:
+        subject = f"{a.subject}; {change}"
+        r = pick(a, name, subject, lambda out: derive(base["src"], change, a.image_model, out), base=base["src"], change=change)
+        result["variants"][name] = finish_result(a, r, name, subject, motion[0] if motion else None)
+        print(json.dumps({name: {k: r[k] for k in ("best", "passes", "png") if k in r}}), file=sys.stderr)
+    print(json.dumps(result, indent=2))
+    if not all(v["passes"] for v in result["variants"].values()):
         sys.exit(2)
 
 
@@ -329,6 +390,20 @@ def main():
     m.add_argument("--image-model", default="gpt-image-1.5")
     m.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
     m.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
+    pk = sub.add_parser("pack", help="one character in many poses: a judged base, then variants drawn from it as a reference")
+    pk.add_argument("subject", help="the base character, e.g. 'a blob head in a black tricorn with a dark beard, calm'")
+    pk.add_argument("--name", required=True)
+    pk.add_argument("--out", default="/tmp/emoji")
+    pk.add_argument("--n", type=int, default=3)
+    pk.add_argument("--min", type=float, default=7.5, help="minimum judge score for the base")
+    pk.add_argument("--base", help="a finished base .src.png to reuse instead of generating one")
+    pk.add_argument("--variant", nargs="+", action="append", default=[], metavar=("NAME CHANGE", "MOTION"),
+                    help="emoji name, the one change from the base, and an optional motion; repeatable")
+    pk.add_argument("--frames", type=int, default=10)
+    pk.add_argument("--loop-ms", type=int, default=700)
+    pk.add_argument("--image-model", default="gpt-image-1.5")
+    pk.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
+    pk.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
     pr = sub.add_parser("process")
     pr.add_argument("src")
     pr.add_argument("out")
@@ -348,6 +423,8 @@ def main():
     a = p.parse_args()
     if a.cmd == "make":
         make(a)
+    elif a.cmd == "pack":
+        pack(a)
     elif a.cmd == "process":
         print(process(a.src, a.out, a.opaque))
     elif a.cmd == "animate":

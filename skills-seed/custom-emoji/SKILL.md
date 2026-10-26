@@ -30,6 +30,20 @@ Adding an emoji is a visible change to the whole workspace: one per request, nev
    and exits 2 when nothing reaches the real emoji's median score; then reword the subject and
    run it again. Never ship a failing one.
 
+   For a family of one character in many poses (like the blob or parrot packs), use `pack`:
+
+   ```bash
+   python3 <skill dir>/scripts/emoji.py pack "<the character>" --name qm --out /tmp/emoji \
+     --variant qm_party "a paper party hat on top, confetti" bounce --variant qm-facepalm "one hand over the face"
+   ```
+
+   It judges a neutral base first (`--min 7.5` by default, or `--base <done>.src.png` to reuse
+   one), then draws every variant from that base as a reference image so hat, colours and
+   proportions carry over, and a vision model confirms each candidate is still the same
+   character. Each `--variant` takes the emoji name, the one change from the base, and an
+   optional motion. Exit 2 means at least one variant failed; reword that change and run it
+   alone with `--base`.
+
 3. **Animate (optional).** `--motion`, or `emoji.py animate <src.png> <out.gif> "<subject>" --motion …`,
    builds a 128px GIF of 8–12 frames in a 0.3–0.9s loop. Pick a motion that
    means something for the subject: `bounce` for happy, `nod` for yes, `shake` for no or
