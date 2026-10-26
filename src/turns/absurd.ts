@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { Pool, PoolClient } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
-import { TURN_QUEUES, tenantQueue, type TurnQueue } from "./absurd-schema.ts";
+import { ABSURD_QUEUES, tenantQueue, type AbsurdQueue } from "./absurd-schema.ts";
 
 export type AbsurdDb = Pool | PoolClient;
 
@@ -79,9 +79,14 @@ function json(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-function runsTable(queue: TurnQueue): string {
-  if (!TURN_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
+function runsTable(queue: AbsurdQueue): string {
+  if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
   return `absurd.${pg.escapeIdentifier(`r_${tenantQueue(queue)}`)}`;
+}
+
+function tasksTable(queue: AbsurdQueue): string {
+  if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
+  return `absurd.${pg.escapeIdentifier(`t_${tenantQueue(queue)}`)}`;
 }
 
 function retryStrategyJson(strategy: RetryStrategy): Record<string, unknown> {
@@ -97,7 +102,7 @@ function retryStrategyJson(strategy: RetryStrategy): Record<string, unknown> {
 
 export async function spawnTask(
   db: AbsurdDb,
-  queue: TurnQueue,
+  queue: AbsurdQueue,
   name: string,
   params: unknown,
   options: SpawnOptions,
@@ -123,7 +128,7 @@ export async function spawnTask(
 
 export async function claimTasks(
   db: AbsurdDb,
-  queue: TurnQueue,
+  queue: AbsurdQueue,
   workerToken: string,
   claimTimeoutSec: number,
   qty = 1,
@@ -146,15 +151,15 @@ export async function claimTasks(
   }));
 }
 
-export async function extendClaim(db: AbsurdDb, queue: TurnQueue, runId: string, extendBySec: number): Promise<void> {
+export async function extendClaim(db: AbsurdDb, queue: AbsurdQueue, runId: string, extendBySec: number): Promise<void> {
   await call(db, "SELECT absurd.extend_claim($1, $2, $3)", [tenantQueue(queue), runId, extendBySec]);
 }
 
-export async function scheduleRun(db: AbsurdDb, queue: TurnQueue, runId: string, wakeAt: Date): Promise<void> {
+export async function scheduleRun(db: AbsurdDb, queue: AbsurdQueue, runId: string, wakeAt: Date): Promise<void> {
   await call(db, "SELECT absurd.schedule_run($1, $2, $3)", [tenantQueue(queue), runId, wakeAt]);
 }
 
-export async function completeRun(db: AbsurdDb, queue: TurnQueue, runId: string, result?: unknown): Promise<void> {
+export async function completeRun(db: AbsurdDb, queue: AbsurdQueue, runId: string, result?: unknown): Promise<void> {
   await call(db, "SELECT absurd.complete_run($1, $2, $3::jsonb)", [
     tenantQueue(queue),
     runId,
@@ -162,9 +167,26 @@ export async function completeRun(db: AbsurdDb, queue: TurnQueue, runId: string,
   ]);
 }
 
+/** Re-arm a failed task with a fresh run; false when it is no longer failed. */
+export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<boolean> {
+  const [task] = await call(db, `SELECT state, attempts FROM ${tasksTable(queue)} WHERE task_id = $1`, [taskId]);
+  if (task?.state !== "failed") return false;
+  try {
+    await call(db, "SELECT 1 FROM absurd.retry_task($1, $2, $3::jsonb)", [
+      tenantQueue(queue),
+      taskId,
+      JSON.stringify({ max_attempts: Number(task.attempts) + 1 }),
+    ]);
+    return true;
+  } catch (error) {
+    if (/is not currently failed/.test(errMessage(error))) return false;
+    throw error;
+  }
+}
+
 export async function failRun(
   db: AbsurdDb,
-  queue: TurnQueue,
+  queue: AbsurdQueue,
   runId: string,
   reason: unknown,
   retryAt?: Date,
@@ -179,7 +201,7 @@ export async function failRun(
 
 export async function awaitEvent(
   db: AbsurdDb,
-  queue: TurnQueue,
+  queue: AbsurdQueue,
   taskId: string,
   runId: string,
   step: string,
@@ -195,17 +217,17 @@ export async function awaitEvent(
   return { suspended: Boolean(row.should_suspend), timedOut: Boolean(row.timed_out), payload: row.payload };
 }
 
-export async function emitEvent(db: AbsurdDb, queue: TurnQueue, event: string, payload?: unknown): Promise<void> {
+export async function emitEvent(db: AbsurdDb, queue: AbsurdQueue, event: string, payload?: unknown): Promise<void> {
   await call(db, "SELECT absurd.emit_event($1, $2, $3::jsonb)", [tenantQueue(queue), event, json(payload)]);
 }
 
-export async function cancelTask(db: AbsurdDb, queue: TurnQueue, taskId: string): Promise<void> {
+export async function cancelTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<void> {
   await call(db, "SELECT absurd.cancel_task($1, $2)", [tenantQueue(queue), taskId]);
 }
 
 export async function getCheckpoint(
   db: AbsurdDb,
-  queue: TurnQueue,
+  queue: AbsurdQueue,
   taskId: string,
   step: string,
 ): Promise<Checkpoint | undefined> {
@@ -223,7 +245,7 @@ export async function getCheckpoint(
   };
 }
 
-export async function cleanup(db: AbsurdDb, queue: TurnQueue, ttlSec: number, limit: number): Promise<CleanupResult> {
+export async function cleanup(db: AbsurdDb, queue: AbsurdQueue, ttlSec: number, limit: number): Promise<CleanupResult> {
   const [row] = await call(
     db,
     "SELECT absurd.cleanup_tasks($1, $2, $3) AS tasks, absurd.cleanup_events($1, $2, $3) AS events",
@@ -232,7 +254,7 @@ export async function cleanup(db: AbsurdDb, queue: TurnQueue, ttlSec: number, li
   return { tasks: Number(row?.tasks ?? 0), events: Number(row?.events ?? 0) };
 }
 
-export async function holdsClaim(db: PoolClient, queue: TurnQueue, runId: string, token: string): Promise<boolean> {
+export async function holdsClaim(db: PoolClient, queue: AbsurdQueue, runId: string, token: string): Promise<boolean> {
   const rows = await call(
     db,
     `SELECT 1 FROM ${runsTable(queue)} WHERE run_id = $1 AND state = 'running' AND claimed_by = $2 FOR SHARE`,

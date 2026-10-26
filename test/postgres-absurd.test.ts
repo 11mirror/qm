@@ -74,7 +74,7 @@ after(async () => {
 
 test("absurd/0.5.1 applies once and a rerun is a no-op", { skip }, async () => {
   const ledger = async () =>
-    (await admin.query("SELECT id, checksum, applied_at FROM qm_schema_migrations WHERE id LIKE 'absurd/%'")).rows;
+    (await admin.query("SELECT id, checksum, applied_at FROM qm_schema_migrations WHERE id = 'absurd/0.5.1'")).rows;
   const first = await ledger();
   assert.deepEqual(
     first.map((row) => [row.id, row.checksum]),

@@ -13,7 +13,7 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
+import type { CronFireDisposition, CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -416,34 +416,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (job) await deps.jobQueue!.enqueueFire(job);
   }
 
-  async function fireJob(job: CronFireJob): Promise<void> {
+  async function fireJob(job: CronFireJob): Promise<CronFireDisposition> {
     const observed = epoch;
     const cron = await deps.crons.get(job.cronId);
-    if (!cron || cron.archived || !cron.enabled) return;
+    if (!cron || cron.archived || !cron.enabled) return "release";
     const slot = nextSlot(cron);
-    if (slot !== job.scheduledAt) return;
+    if (slot !== job.scheduledAt) return "done";
     const t = now();
-    if (t < slot) {
-      await deps.jobQueue!.enqueueFire(job);
-      return;
-    }
-    if (isDeferred(cron, t)) {
-      await deps.jobQueue!.enqueueFire({ ...job, notBefore: cron.deferUntil! });
-      return;
-    }
-    if (stopped || observed !== epoch) return;
+    if (t < slot) return slot;
+    if (isDeferred(cron, t)) return cron.deferUntil!;
+    if (stopped || observed !== epoch) return t;
+    let disposition: CronFireDisposition = "release";
     const result = await withCronLifecycle(job.cronId, true, async () => {
-      if (stopped || observed !== epoch) return;
-      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
+      if (stopped || observed !== epoch) {
+        disposition = now();
+        return;
+      }
+      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) {
+        disposition = "done";
+        return;
+      }
       if (stopped || observed !== epoch) {
         await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        disposition = now();
         return;
       }
       try {
         const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
         if (authzFailed || deferred) {
           await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-          if (deferred) await enqueueNext(job.cronId);
+          if (deferred) disposition = (await deps.crons.get(job.cronId))?.deferUntil ?? now() + BUSY_DEFER_MS;
           return;
         }
       } catch (e) {
@@ -451,9 +453,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
         return;
       }
+      disposition = "done";
       await enqueueNext(job.cronId);
     });
-    if (result === null) await enqueueNext(job.cronId);
+    if (result === null) return now() + BUSY_DEFER_MS;
+    return disposition;
   }
 
   async function reconcile(): Promise<void> {
@@ -574,7 +578,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const observed = epoch;
       starting = deps.jobQueue
         .start({
-          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
+          onFire: async (job) => {
+            if (observed !== epoch || stopped) return now();
+            let disposition: CronFireDisposition = now();
+            await runQueueTask(async () => {
+              disposition = await fireJob(job);
+            });
+            return disposition;
+          },
         })
         .then(
           () => {
@@ -601,8 +612,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const guard = leaseGuard.stop();
       pausing = (async () => {
         await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
-        else await deps.jobQueue?.stop();
+        await deps.jobQueue?.stopClaims();
         await guard;
         stopFailed = false;
       })()
@@ -627,7 +637,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const sweeps = [sweeper.stop(), leaseGuard.stop()];
       stopping = (async () => {
         await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
+        await deps.jobQueue?.stopClaims();
         await pausing;
         await Promise.all(sweeps);
         await Promise.all(oldSweeps);

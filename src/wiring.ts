@@ -135,7 +135,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { createAbsurdCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
@@ -2268,7 +2268,7 @@ export function buildApp(
     crons,
     ...scopedTriggerDeps,
     leaderLease,
-    jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
+    jobQueue: createAbsurdCronQueue(databaseUrl, config.cronFireConcurrency),
     ...(sweepAsks ? { sweepAsks } : {}),
   });
   const suggestedActivities = createSuggestedActivityService({

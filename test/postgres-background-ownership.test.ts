@@ -57,12 +57,11 @@ test(
 );
 
 test(
-  "Postgres queue resumes polling without terminating a prior generation callback",
+  "cron job queue resumes polling without terminating a prior generation callback",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
-    const schema = `handover_${randomUUID().replaceAll("-", "")}`;
-    const queue = createPgBossCronQueue(databaseUrl!, schema);
+    const { createAbsurdCronQueue } = await import("../src/cron/job-queue.ts");
+    const queue = createAbsurdCronQueue(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
     const newEntered = Promise.withResolvers<void>();
@@ -73,6 +72,7 @@ test(
           oldEntered.resolve();
           await oldFinish.promise;
           oldFinished = true;
+          return "done";
         },
       });
       await queue.enqueueFire({ cronId: "old", scheduledAt: Date.now() });
@@ -82,6 +82,7 @@ test(
       await queue.start({
         onFire: async () => {
           newEntered.resolve();
+          return "done";
         },
       });
       await queue.enqueueFire({ cronId: "new", scheduledAt: Date.now() });
@@ -93,10 +94,6 @@ test(
     } finally {
       oldFinish.resolve();
       await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
     }
   },
 );
