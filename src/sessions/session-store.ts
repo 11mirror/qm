@@ -185,15 +185,13 @@ export function entriesNotYetImported(
   const latestAt = newestStored[0]?.createdAt;
   if (latestAt === undefined) return [...entries];
   const tied = entries.filter((entry) => entry.createdAt === latestAt);
-  const later = entries.filter((entry) => entry.createdAt > latestAt);
-  const continues = newestStored.every(
-    (stored, index) =>
-      tied[index] !== undefined && stored.type === tied[index].type && entryText(stored) === entryText(tied[index]),
-  );
-  if (continues) return [...tied.slice(newestStored.length), ...later];
-  if (tied.length || later.length)
-    throw new Error("importTranscript: the transcript does not continue the conversation's latest messages");
-  return [];
+  const overlap = Math.min(tied.length, newestStored.length);
+  for (let index = 0; index < overlap; index += 1) {
+    const stored = newestStored[index]!;
+    if (stored.type !== tied[index]!.type || entryText(stored) !== entryText(tied[index]!))
+      throw new Error("importTranscript: the transcript does not continue the conversation's latest messages");
+  }
+  return [...tied.slice(newestStored.length), ...entries.filter((entry) => entry.createdAt > latestAt)];
 }
 
 interface ParticipantViewPatch {

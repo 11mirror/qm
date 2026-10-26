@@ -1104,9 +1104,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const insertEntries = async (
     client: PoolClient,
     sessionId: string,
-    entries: readonly (NewEntry & { createdAt?: number })[],
+    entries: readonly NewEntry[],
     turnId?: string,
-    exactActivity = false,
+    importedTimes?: readonly number[],
   ): Promise<SessionEntry[]> => {
     if (!entries.length) return [];
     const max = await client.query(
@@ -1127,7 +1127,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...item,
         seq,
         scopeLabel: entry.scopeLabel as ScopeId,
-        createdAt: entry.createdAt ?? stampedAt,
+        createdAt: importedTimes?.[index] ?? stampedAt,
       };
     });
     const createdAt = items.reduce((latest, item) => Math.max(latest, item.createdAt), -Infinity);
@@ -1194,7 +1194,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
         items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
         userActivityAt,
-        exactActivity,
+        importedTimes !== undefined,
       ],
     );
     return full;
@@ -1738,7 +1738,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             WHERE id = $1`,
           [sessionId, spec.title?.trim() || null, empty ? (fresh[0]?.createdAt ?? null) : null],
         );
-        const appended = await insertEntries(client, sessionId, fresh, undefined, true);
+        const appended = await insertEntries(
+          client,
+          sessionId,
+          fresh,
+          undefined,
+          fresh.map((entry) => entry.createdAt),
+        );
         const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
         return { session: rowToSession(row.rows[0]!), appended: appended.length };
       });

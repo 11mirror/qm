@@ -129,8 +129,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   const record = (
     sessionId: string,
-    batch: readonly (NewEntry & { createdAt?: number })[],
+    batch: readonly NewEntry[],
     turnId?: string,
+    importedTimes?: readonly number[],
   ): SessionEntry[] => {
     const log = entries.get(sessionId);
     if (!log) throw new Error(`unknown session: ${sessionId}`);
@@ -158,7 +159,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         seq,
         ...item,
         scopeLabel,
-        createdAt: copied[position]!.createdAt ?? now(),
+        createdAt: importedTimes?.[position] ?? now(),
       });
       log.push(full);
       const searchType = searchEntryType(full);
@@ -331,7 +332,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       );
       if (!log.length && fresh.length) session.createdAt = fresh[0]!.createdAt;
       if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
-      const appended = record(session.id, fresh);
+      const appended = record(
+        session.id,
+        fresh,
+        undefined,
+        fresh.map((entry) => entry.createdAt),
+      );
       await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
       return { session, appended: appended.length };
     },

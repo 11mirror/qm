@@ -233,6 +233,41 @@ test("extending an imported conversation within a minute moves its activity to t
   });
 });
 
+test("an import may carry only newer messages, and an older file reruns as a no-op", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const a = { role: "user", text: "A", createdAt: T0 };
+    const b = { role: "assistant", text: "B", createdAt: T0 };
+    const c = { role: "user", text: "C", createdAt: T0 + 1_000 };
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, [a])]));
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, [a, b])]));
+    const [older] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, [a])]));
+    assert.equal(older!.appended, 0);
+    const [newer] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, [c])]));
+    assert.equal(newer!.appended, 1);
+    assert.deepEqual(
+      (await store.visibleEntries(older!.session.id, "ada@example.com")).map(
+        (entry) => (entry.payload as { text: string }).text,
+      ),
+      ["A", "B", "C"],
+    );
+  });
+});
+
+test("ordinary appends are stamped by the store even when handed an older entry", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const [imported] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
+    const [old] = await store.visibleEntries(imported!.session.id, "ada@example.com");
+    const { lease } = await store.acquireLease(imported!.session.id);
+    assert.ok(lease);
+    const before = Date.now();
+    const appended = await store.append(lease, old!);
+    await store.releaseLease(lease);
+    assert.ok(appended.createdAt >= before);
+  });
+});
+
 test("an import rejects messages that are not ordered user and assistant text", async () => {
   await withStores(async (store) => {
     const bad: [string, unknown[]][] = [
