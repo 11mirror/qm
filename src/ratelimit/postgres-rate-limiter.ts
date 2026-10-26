@@ -1,6 +1,9 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import type { RateLimiter } from "./rate-limiter.ts";
 
+/** Turns each principal may start per window. */
+export const RATE_LIMIT = { maxPerWindow: 60, windowMs: 60_000 } as const;
+
 export function createPostgresRateLimiter(
   connectionString: string,
   opts: { maxPerWindow: number; windowMs: number },

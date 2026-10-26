@@ -128,7 +128,6 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts };
     own.booted = await withTenant(t, () =>
       boot(tenantEnv, async (server, config) => {
-        if (!server) return;
         const target = tenantTarget(t, server);
         if (!t.id) {
           homeCore = target;

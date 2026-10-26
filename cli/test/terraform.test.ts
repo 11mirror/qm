@@ -602,7 +602,7 @@ test("terraform derives split core host routing from the deployment config", () 
       publicUrl: "https://agent.acme.example",
       apiUrl: "https://api.agent.acme.example",
       services: ["core", "portal"],
-      env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
+      env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
     },
     "",
     declared,
@@ -812,7 +812,7 @@ test("the deploy role lists tasks only within its cluster", () => {
 });
 
 test("terraform routes the app wildcard through portal when both services use the same app domain", () => {
-  for (const key of ["AWS_DEPLOY_APPS_DOMAIN", "DEPLOY_APPS_DOMAIN"]) {
+  for (const key of ["DEPLOY_APPS_DOMAIN"]) {
     const rendered = terraformVars(
       {
         ...config,

@@ -12,10 +12,7 @@ export function awsPortalAppsDomain(config: QmConfig): string | undefined {
   if (!config.aws || !hostsWebEdge(config.services)) return undefined;
   const domain = config.env.portal?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
   if (!domain) return undefined;
-  const coreDomain = (config.env.core?.DEPLOY_APPS_DOMAIN || config.env.core?.AWS_DEPLOY_APPS_DOMAIN)
-    ?.trim()
-    .toLowerCase()
-    .replace(/\.$/, "");
+  const coreDomain = config.env.core?.DEPLOY_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
   const company = new URL(config.publicUrl).hostname.toLowerCase();
   if (!validAlbHostname(domain) || domain !== coreDomain || !domain.endsWith(`.${company}`)) {
     throw new Error("portal apps domain must match core and remain beneath the company public hostname");
@@ -45,9 +42,9 @@ export function awsCoreHostnames(config: QmConfig): string[] {
     const apiHost = normalize(hostname, "apiUrl");
     if (apiHost !== new URL(config.publicUrl).hostname.toLowerCase().replace(/\.$/, "")) hosts.push(apiHost);
   }
-  const apps = config.env.core?.DEPLOY_APPS_DOMAIN?.trim() || config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim();
+  const apps = config.env.core?.DEPLOY_APPS_DOMAIN?.trim();
   const portalAppsDomain = awsPortalAppsDomain(config);
   if (apps && (!config.aws?.sharedAlb || apps.trim().toLowerCase().replace(/\.$/, "") !== portalAppsDomain))
-    hosts.push(`*.${normalize(apps, "the apps domain (env.core.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN)")}`);
+    hosts.push(`*.${normalize(apps, "the apps domain (env.core.DEPLOY_APPS_DOMAIN)")}`);
   return [...new Set(hosts)];
 }
