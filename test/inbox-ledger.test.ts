@@ -425,7 +425,7 @@ test("email classification projection is opt-in, scoped, and never changes store
   assert.deepEqual(await ledger.get(inboxItemId(CRON, "gmail:thread-1")), stored);
 });
 
-test("ingest batches writes while resolving legacy IDs and duplicate events", async () => {
+test("ingest batches writes and reuses the stored id of a known source key", async () => {
   const backing = testMap<InboxItem>();
   const seed = createInboxLedger(backing);
   await seed.ingest([entry()]);

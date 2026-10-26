@@ -282,19 +282,12 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
         where: { field: "cronId", anyOfFold: [...new Set(entries.map((entry) => entry.cronId))] },
         omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
       });
-      const ids = new Set(existing.map((item) => item.id));
-      const legacy = new Map<string, string>();
-      for (const item of existing) {
-        const key = JSON.stringify([item.cronId, item.sourceKey]);
-        if (!legacy.has(key)) legacy.set(key, item.id);
-      }
+      const idByKey = new Map(existing.map((item) => [JSON.stringify([item.cronId, item.sourceKey]), item.id]));
       const changed: InboxItem[] = [];
       await backing.mutateMany(
         entries.map((entry) => {
-          const canonical = inboxItemId(entry.cronId, entry.dedupeKey);
-          const id = ids.has(canonical)
-            ? canonical
-            : (legacy.get(JSON.stringify([entry.cronId, entry.dedupeKey])) ?? canonical);
+          const id =
+            idByKey.get(JSON.stringify([entry.cronId, entry.dedupeKey])) ?? inboxItemId(entry.cronId, entry.dedupeKey);
           return {
             id,
             apply: (item: InboxItem | null): InboxItem => {
