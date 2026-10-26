@@ -6,7 +6,7 @@ import { isResolved } from "./view.ts";
 
 export interface InboxRealtimeDeps {
   crons: Pick<CronStore, "list">;
-  items: Pick<InboxLedger, "byCrons">;
+  items: Pick<InboxLedger, "byConversation">;
   record: InboxEventSink;
 }
 
@@ -34,8 +34,9 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
       if (!Number.isFinite(event.at)) return;
       const adapter = sourceAdapter(event.source);
       if (!adapter) return;
+      const items = await deps.items.byConversation(event.conversationKey);
+      if (!items.length) return;
       const crons = await inboxCrons();
-      const items = await deps.items.byCrons(crons.map((cron) => cron.id));
       for (const cron of crons) {
         const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === cron.owner.toLowerCase());
         const matched = items.filter(

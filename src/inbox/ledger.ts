@@ -3,7 +3,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThreadMessage } from "../types.ts";
 import { isResolved } from "./view.ts";
-import { adapterForItem, inboxMetadataKeys } from "./sources/index.ts";
+import { adapterForItem, conversationKeyOf, inboxMetadataKeys, sourceAdapters } from "./sources/index.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
@@ -73,6 +73,7 @@ export interface InboxLedger {
   get(id: string): Promise<InboxItem | null>;
   byCron(cronId: string): Promise<InboxItem[]>;
   byCrons(cronIds: readonly string[]): Promise<InboxItem[]>;
+  byConversation(conversationKey: string): Promise<InboxItem[]>;
   summaries(
     cronIds: string[],
     options?: { includeInboxMetadata?: boolean },
@@ -97,11 +98,33 @@ export const INBOX_ITEM_SOURCE_MIGRATION = {
   ],
 };
 
+export function inboxConversationKeyMigration(): { id: string; statements: string[] } {
+  return {
+    id: "durable-map/crons/0005-inbox-conversation-key",
+    statements: [
+      `DO $$ BEGIN IF to_regclass('cron_items') IS NOT NULL THEN
+       ${sourceAdapters()
+         .map((adapter) => {
+           const path = `'{sourcePayload,${adapter.conversationKeyPath.join(",")}}'`;
+           return `UPDATE cron_items SET json = jsonb_set(json, '{conversationKey}', json #> ${path})
+         WHERE json ->> 'source' = '${adapter.id}' AND jsonb_typeof(json #> ${path}) = 'string';`;
+         })
+         .join("\n       ")}
+       UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'cron_items';
+     END IF; END $$`,
+    ],
+  };
+}
+
+function withConversationKey(item: InboxItem): InboxItem {
+  const conversationKey = conversationKeyOf(item);
+  return conversationKey === item.conversationKey ? item : { ...item, conversationKey };
+}
+
 export function inboxItemId(cronId: string, sourceKey: string): string {
   return hashId([contentPart(cronId), contentPart(sourceKey)]);
 }
 
-const LEDGER_THREAD_MAX = 200;
 const DECISION_LEASE_MS = 300_000;
 
 function nextIngestStatus(item: InboxItem, proposal: InboxProposal | undefined): InboxItemStatus {
@@ -293,12 +316,14 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
               };
               if (!item) {
                 outcome.created++;
-                changed.push(candidate);
-                return candidate;
+                const created = withConversationKey(candidate);
+                changed.push(created);
+                return created;
               }
-              const next = mergeIngest(item, entry, now);
-              if (next) {
+              const merged = mergeIngest(item, entry, now);
+              if (merged) {
                 outcome.updated++;
+                const next = withConversationKey(merged);
                 changed.push(next);
                 return next;
               }
@@ -347,12 +372,12 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
         )
           return item;
         applied = true;
-        return {
+        return withConversationKey({
           ...item,
           sourcePayload: { ...item.sourcePayload, ...patch },
           ...(opts?.summary !== undefined ? { sourceSummary: opts.summary } : {}),
           updatedAt: Date.now(),
-        };
+        });
       });
       if (applied) emit(after, "annotate");
       return applied ? after : null;
@@ -364,10 +389,9 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
         applied = true;
         const now = Date.now();
         const added = messages.map((message) => ({ ...message, id: randomUUID(), at: now }));
-        const thread = [...(item.thread ?? []), ...added];
         return {
           ...item,
-          thread: thread.length > LEDGER_THREAD_MAX ? thread.slice(thread.length - LEDGER_THREAD_MAX) : thread,
+          thread: [...(item.thread ?? []), ...added],
           updatedAt: now,
         };
       });
@@ -422,7 +446,10 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     },
     async prune(cronId, options) {
       const now = options.now ?? Date.now();
-      const items = await forCron(cronId);
+      const items = await backing.select({
+        where: { field: "cronId", anyOfFold: [cronId] },
+        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
+      });
       const expired = items.filter(
         (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
       );
@@ -434,12 +461,16 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
           .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
         for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
       }
-      for (const id of doomed.keys()) await backing.delete(id);
+      await backing.deleteMany([...doomed.keys()]);
       return doomed.size;
     },
     get: (id) => backing.get(id),
     byCron: forCron,
     byCrons: forCrons,
+    async byConversation(conversationKey) {
+      const items = await backing.select({ where: { field: "conversationKey", anyOfFold: [conversationKey] } });
+      return items.filter((item) => item.conversationKey === conversationKey);
+    },
     async acquireDecision(id, decisionAt = Date.now()) {
       let token: string | null = null;
       await update(id, (item) => {
@@ -460,7 +491,11 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       return released;
     },
     async deleteByCron(cronId) {
-      for (const item of await forCron(cronId)) await backing.delete(item.id);
+      const items = await backing.selectEntries({
+        where: { field: "cronId", anyOfFold: [cronId] },
+        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
+      });
+      await backing.deleteMany(items.flatMap(([id, item]) => (item.cronId === cronId ? [id] : [])));
     },
   };
   return ledger;

@@ -133,7 +133,7 @@ test("reopen brings a dismissed item back to held when it holds a proposal", asy
   assert.equal(ledgerState(reopened!), "held");
 });
 
-test("the thread accumulates chat turns and stays bounded", async () => {
+test("the thread keeps every chat turn", async () => {
   const ledger = createInboxLedger(testMap());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
@@ -148,9 +148,9 @@ test("the thread accumulates chat turns and stays bounded", async () => {
   );
   assert.ok(after?.thread?.every((m) => m.id && m.at));
   for (let i = 0; i < 210; i++) await ledger.appendThread(item!.id, [{ role: "agent", text: `turn ${i}` }]);
-  const bounded = await ledger.get(item!.id);
-  assert.equal(bounded?.thread?.length, 200);
-  assert.equal(bounded?.thread?.at(-1)?.text, "turn 209");
+  const kept = await ledger.get(item!.id);
+  assert.equal(kept?.thread?.length, 212);
+  assert.equal(kept?.thread?.at(-1)?.text, "turn 209");
 });
 
 test("setProposal promotes a pending item to held", async () => {

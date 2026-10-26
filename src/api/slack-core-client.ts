@@ -426,6 +426,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!Number.isFinite(at)) return;
       await deps.inboxEvent?.({
         source: "slack",
+        conversationKey: msg.channel,
         conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs, msg.isDirectMessage),
         at,
         ...(msg.text ? { text: msg.text } : {}),

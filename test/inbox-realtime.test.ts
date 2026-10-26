@@ -64,6 +64,7 @@ test("the owner's own reply is queued as an owner event for the card's conversat
   const rt = realtime(items);
   await rt.onConversationEvent({
     source: "slack",
+    conversationKey: "D123",
     conversationRef: "D123",
     at: 2_000_000,
     text: "on it!",
@@ -82,6 +83,7 @@ test("someone else's messages are queued as other events with their sender", asy
   const rt = realtime(items);
   await rt.onConversationEvent({
     source: "slack",
+    conversationKey: "D123",
     conversationRef: "D123",
     at: 3_000_000,
     text: "ping",
@@ -89,6 +91,7 @@ test("someone else's messages are queued as other events with their sender", asy
   });
   await rt.onConversationEvent({
     source: "gmail",
+    conversationKey: "t-1",
     conversationRef: "t-1",
     at: 3_001_000,
     text: "any word?",
@@ -147,6 +150,7 @@ test("events in unrelated conversations or other sources queue nothing", async (
   ])
     await rt.onConversationEvent({
       source: source!,
+      conversationKey: conversationRef!.split(":")[0]!,
       conversationRef: conversationRef!,
       at: 2_000_000,
       senderEmail: CRON.owner,
@@ -171,6 +175,7 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
   const rt = realtime(items);
   await rt.onConversationEvent({
     source: "slack",
+    conversationKey: "C9",
     conversationRef: "C9:100.1",
     at: 2_000_000,
     text: "done",
@@ -205,18 +210,25 @@ test("private-channel mentions stay anchored to their thread, not the channel ta
   assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
 });
 
-test("one conversation event reads every inbox cron's items in a single query", async () => {
+test("one conversation event reads only that conversation's items, across inbox crons", async () => {
   const other = { id: "cron-other", owner: "other@example.com", inbox: { source: "slack" } } as unknown as Cron;
   const items = createInboxLedger(testMap());
-  await items.ingest([slackEntry(), slackEntry({ cronId: other.id })]);
-  const reads: string[][] = [];
+  await items.ingest([
+    slackEntry(),
+    slackEntry({ cronId: other.id }),
+    slackEntry({
+      dedupeKey: "D777",
+      sourcePayload: { slack: { channelId: "D777", ts: "3.0", isDirectMessage: true } },
+    }),
+  ]);
+  const reads: string[] = [];
   const calls: Array<[string, LatestEvent["author"]]> = [];
   const rt = createInboxRealtime({
     crons: { list: async () => [CRON, other] },
     items: {
-      byCrons: async (cronIds) => {
-        reads.push([...cronIds]);
-        return items.byCrons(cronIds);
+      byConversation: async (conversationKey) => {
+        reads.push(conversationKey);
+        return items.byConversation(conversationKey);
       },
     },
     record: async (item, event) => {
@@ -225,13 +237,18 @@ test("one conversation event reads every inbox cron's items in a single query", 
   });
   await rt.onConversationEvent({
     source: "slack",
+    conversationKey: "D123",
     conversationRef: "D123",
     at: 2_000_000,
     senderEmail: "other@example.com",
   });
-  assert.deepEqual(reads, [[CRON.id, other.id]]);
+  assert.deepEqual(reads, ["D123"]);
   assert.deepEqual(calls, [
     [CRON.id, "other"],
     [other.id, "owner"],
   ]);
+  assert.deepEqual(
+    (await items.byConversation("D777")).map((item) => item.sourceKey),
+    ["D777"],
+  );
 });

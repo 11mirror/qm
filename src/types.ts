@@ -351,6 +351,7 @@ export interface InboxItem {
   sourceSummary?: string;
   source?: string;
   sourcePayload?: InboxPayload;
+  conversationKey?: string;
   sourceAt?: number;
   proposal?: InboxProposal;
   agentDrafts?: InboxProposal[];

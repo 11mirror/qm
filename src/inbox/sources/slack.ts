@@ -194,6 +194,7 @@ export const slackAdapter: SourceAdapter = {
     };
     return entry;
   },
+  conversationKeyPath: ["slack", "channelId"],
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
