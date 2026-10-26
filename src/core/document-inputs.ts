@@ -36,13 +36,15 @@ export function historicalDocumentMetas(history: readonly Item[]): AttachmentMet
   });
 }
 
+export const MAX_TURN_DOCUMENTS = 10;
+
 export async function loadDocumentInputs(
   files: FileArtifactStore,
   metas: readonly AttachmentMeta[],
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
-  maxDocuments = 10,
+  maxDocuments = MAX_TURN_DOCUMENTS,
   existingDocuments: readonly DocumentInput[] = [],
   maxTokens = Number.POSITIVE_INFINITY,
 ): Promise<{ documents: DocumentInput[]; notices: string[]; tokens: number }> {
