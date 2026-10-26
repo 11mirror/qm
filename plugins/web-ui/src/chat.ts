@@ -1545,6 +1545,11 @@ export function createChatSurface(
           ),
         })
       : nothing;
+    const dropOverlay = ctx.composer.state.dragging
+      ? html`<div class="drop-overlay">
+          <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
+        </div>`
+      : nothing;
     let content: TemplateResult;
     if (ctx.inbox) {
       content = assistantSidebar({
@@ -1563,11 +1568,7 @@ export function createChatSurface(
         onDragOver: (event) => ctx.composer.onDragOver(event),
         onDragLeave: (event) => ctx.composer.onDragLeave(event),
         onDrop: (event) => void ctx.composer.onDrop(event, agent),
-        overlay: ctx.composer.state.dragging
-          ? html`<div class="drop-overlay">
-              <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
-            </div>`
-          : nothing,
+        overlay: dropOverlay,
       });
     } else {
       content = html`
@@ -1580,14 +1581,7 @@ export function createChatSurface(
           @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
           @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
         >
-          ${
-            ctx.composer.state.dragging
-              ? html`<div class="drop-overlay">
-                  <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
-                </div>`
-              : nothing
-          }
-          ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+          ${dropOverlay} ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
@@ -1800,6 +1794,15 @@ export function createChatSurface(
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
+      const sendFailureTpl = (): TemplateResult | typeof nothing =>
+        sendFailure
+          ? html`<div class="send-failure">
+              <span>${sendFailure}</span>
+              <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
+                ${icon(RefreshCw, 12)} Retry
+              </button>
+            </div>`
+          : nothing;
       if (ctx.inbox)
         return assistantMessage({
           role: "human",
@@ -1807,14 +1810,7 @@ export function createChatSurface(
           index,
           entrySeqs: messageEntrySeqs(message).join(" "),
           before: html`${speakerLabelTpl(speaker, message)}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
-          after: sendFailure
-            ? html`<div class="send-failure">
-                <span>${sendFailure}</span
-                ><button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
-                  ${icon(RefreshCw, 12)} Retry
-                </button>
-              </div>`
-            : nothing,
+          after: sendFailureTpl(),
           meta: messageMeta(message, index),
         });
       return html`
@@ -1837,17 +1833,7 @@ export function createChatSurface(
               <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
             </button>
           </div>
-          ${
-            sendFailure
-              ? html`<div class="send-failure">
-                  <span>${sendFailure}</span>
-                  <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
-                    ${icon(RefreshCw, 12)} Retry
-                  </button>
-                </div>`
-              : nothing
-          }
-          ${messageMeta(message, index)}
+          ${sendFailureTpl()} ${messageMeta(message, index)}
         </article>
       `;
     }
