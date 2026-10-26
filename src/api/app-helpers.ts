@@ -748,42 +748,51 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         return drained;
       });
     }
-    for (const signal of await deps.signals.takePending(runId)) {
-      if (signal.kind === "abort" || signal.kind === "client_result") continue;
-      let replayRunId: string | undefined;
-      let replayOutcomeKnown = true;
-      if (signal.request) {
-        try {
-          const prior = (await deps.runs.get(runId))?.request;
-          const replayed = await app.turn({ ...replayableRequest(signal.request, prior), async: true });
-          replayRunId = replayed.runId;
-        } catch (err) {
-          replayOutcomeKnown = false;
-          swallow(`signals: orphaned-signal replay for run ${runId}`, err);
+    const signals = deps.signals;
+    return deps.advisoryLock.withLock(`run-signal-replay:${runId}`, async () => {
+      for (const { id, signal } of await signals.pending(runId)) {
+        if (signal.kind === "abort" || signal.kind === "client_result") {
+          await signals.acknowledge(runId, id);
+          continue;
         }
-      }
-      if (!replayRunId && replayOutcomeKnown && signal.text?.trim()) {
-        const orphanRun = await deps.runs.get(runId);
-        if (orphanRun) {
+        let replayRunId: string | undefined;
+        let replayOutcomeKnown = true;
+        if (signal.request) {
           try {
-            const { run: fresh } = await deps.runs.enqueue({
-              sessionId: orphanRun.sessionId,
-              request: { ...bareRequest(orphanRun.request), text: signal.text },
-            });
-            replayRunId = fresh.id;
+            const prior = (await deps.runs.get(runId))?.request;
+            const replayed = await app.turn({ ...replayableRequest(signal.request, prior), async: true });
+            replayRunId = replayed.runId;
           } catch (err) {
-            swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
+            replayOutcomeKnown = false;
+            swallow(`signals: orphaned-signal replay for run ${runId}`, err);
           }
         }
+        if (!replayRunId && replayOutcomeKnown && signal.text?.trim()) {
+          const orphanRun = await deps.runs.get(runId);
+          if (orphanRun) {
+            try {
+              const { run: fresh } = await deps.runs.enqueue({
+                sessionId: orphanRun.sessionId,
+                request: { ...bareRequest(orphanRun.request), text: signal.text },
+              });
+              replayRunId = fresh.id;
+            } catch (err) {
+              replayOutcomeKnown = false;
+              swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
+            }
+          }
+        }
+        if (!replayOutcomeKnown) continue;
+        if (!replayRunId) {
+          console.warn(
+            `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
+          );
+        }
+        await signals.acknowledge(runId, id);
+        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
       }
-      if (!replayRunId) {
-        console.warn(
-          `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
-        );
-      }
-      drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
-    }
-    return drained;
+      return drained;
+    });
   }
 
   return {
