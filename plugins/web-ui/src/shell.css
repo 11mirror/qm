@@ -1728,6 +1728,10 @@ a.chat-row-open {
   transition: box-shadow 120ms ease;
 }
 
+.message-stack .user-row.latest-prompt > .send-failure .btn {
+  pointer-events: auto;
+}
+
 .message-stack .user-row.stuck > .user-bubble {
   box-shadow: var(--chat-surface-shadow);
 }

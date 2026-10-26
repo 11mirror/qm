@@ -158,7 +158,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
 });
 
 test("tool results carry a provenance class and only external content reaches the classifier", () => {
-  for (const tool of ["finish_silently", "update_goal", "create_goal", "background", "cron", "write", "guidance"]) {
+  for (const tool of ["finish_silently", "update_goal", "create_goal", "background", "cron", "write", "instructions"]) {
     assert.equal(toolResultProvenance(tool), "internal", `${tool} echoes the agent's own state`);
   }
   assert.equal(toolResultProvenance("read"), "workspace", "read serves the agent's own workspace");

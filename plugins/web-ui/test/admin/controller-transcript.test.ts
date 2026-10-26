@@ -12,81 +12,64 @@ async function transcript(data: Record<string, unknown>) {
   return admin;
 }
 
-const surfaces: [string | undefined, string][] = [
-  ["web", "Web"],
-  ["slack", "Slack"],
-  ["principal", "Slack DM"],
-  ["telegram", "telegram"],
-  [undefined, "Unknown surface"],
-];
+const item = (seq: number, kind: string, extra: Record<string, unknown> = {}) => ({
+  sessionId: "sess-1",
+  seq,
+  kind,
+  createdAt: seq,
+  turnId: null,
+  author: null,
+  callId: null,
+  text: null,
+  tool: null,
+  variant: null,
+  isError: null,
+  body: {},
+  ...extra,
+});
 
-test("delivery events are labelled by destination, not by where the turn came from", async () => {
+test("admin transcript renders core items with the real controller helpers", async () => {
   const admin = await transcript({
     session: { scopeId: "org:acme" },
-    entries: [],
-    deliveryEvents: [
-      ...surfaces.map(([type], i) => ({
-        type: "outbound_delivery",
-        deliveryId: `d${i}`,
-        createdAt: i + 1,
-        destination: { type },
-        provenance: { surface: "slack" },
-      })),
-      { type: "outbound_delivery", deliveryId: "shadow", createdAt: 10, shadow: true, destination: { type: "web" } },
+    items: [
+      item(1, "UserMessage", { text: "hello", author: "u1", body: { name: "Ada" } }),
+      item(2, "ToolCall", { callId: "c", tool: "execute", body: { command: "ls -la" } }),
+      item(3, "ToolResult", { callId: "c", tool: "execute", text: "total 0", body: { code: 0 } }),
+      item(4, "AgentMessage", { text: "all done" }),
     ],
   });
-  const rows = [...admin.document.querySelectorAll(".delivery-event-entry")].map((row) => ({
-    label: row.querySelector(".entry-label.important")!.textContent!.trim(),
-    badge: row.querySelector(".badge")?.textContent?.trim(),
-  }));
-  assert.deepEqual(rows, [
-    ...surfaces.map(([, surface]) => ({ label: `${surface} delivery`, badge: surface })),
-    { label: "Shadow delivery", badge: "Web" },
-  ]);
+  const doc = admin.document;
+  assert.equal(doc.querySelector("#view-data .empty"), null);
+  assert.equal(doc.querySelector(".user-entry .entry-label")!.textContent!.trim(), "Ada");
+  assert.match(doc.querySelector(".user-entry")!.textContent!, /hello/);
+  assert.match(doc.querySelector(".assistant-entry")!.textContent!, /all done/);
+  const tool = doc.querySelector(".tool-line-entry")!;
+  assert.equal(tool.querySelector(".tool-label")!.textContent, "execute");
+  assert.equal(tool.querySelector(".tool-line-preview")!.textContent, "ls -la");
+  assert.match(tool.querySelector(".meta-row")!.textContent!, /exit 0/);
   admin.close();
 });
 
-test("a delivery folded into its tool call carries the same surface label", async () => {
+test("transcript filters hide thinking and tool items but keep messages", async () => {
   const admin = await transcript({
     session: { scopeId: "org:acme" },
-    entries: [
-      { seq: 1, type: "tool_call", payload: { callId: "a", name: "post" }, createdAt: 1 },
-      { seq: 2, type: "tool_result", payload: { callId: "a", deliveryId: "d" }, createdAt: 2 },
+    items: [
+      item(1, "UserMessage", { text: "hello" }),
+      item(2, "Reasoning", { text: "private thought" }),
+      item(3, "ToolCall", { callId: "plain", tool: "read" }),
+      item(4, "ToolResult", { callId: "plain", tool: "read" }),
+      item(5, "AgentMessage", { text: "reply" }),
     ],
-    deliveryEvents: [{ type: "outbound_delivery", deliveryId: "d", createdAt: 2, destination: { type: "principal" } }],
-  });
-  const view = admin.document.getElementById("view-data")!.textContent!;
-  assert.match(view, /Slack DM delivery/);
-  assert.equal(admin.document.querySelectorAll(".delivery-event-entry").length, 0);
-  admin.close();
-});
-
-test("transcript filters hide thinking and tool results but keep tool calls that carried a delivery", async () => {
-  const admin = await transcript({
-    session: { scopeId: "org:acme" },
-    entries: [
-      { seq: 1, type: "user", payload: "hello", createdAt: 1 },
-      { seq: 2, type: "thinking", payload: "private thought", createdAt: 2 },
-      { seq: 3, type: "tool_call", payload: { callId: "plain", name: "read" }, createdAt: 3 },
-      { seq: 4, type: "tool_result", payload: { callId: "plain" }, createdAt: 4 },
-      { seq: 5, type: "tool_call", payload: { callId: "sent", name: "post" }, createdAt: 5 },
-      { seq: 6, type: "tool_result", payload: { callId: "sent", deliveryId: "d" }, createdAt: 6 },
-      { seq: 7, type: "assistant", payload: "reply", createdAt: 7 },
-    ],
-    deliveryEvents: [{ type: "outbound_delivery", deliveryId: "d", createdAt: 6, destination: { type: "web" } }],
   });
   const doc = admin.document;
   const hidden = (selector: string) =>
     [...doc.querySelectorAll(`#view-data ${selector}`)].map((entry) => entry.classList.contains("filtered"));
-  const plainTool = ".tool-entry:not(:has(.tool-delivery))";
-  const deliveredTool = ".tool-entry:has(.tool-delivery)";
   assert.deepEqual(hidden(".thinking-entry"), [false]);
   doc.querySelector<HTMLInputElement>('[aria-label="Show thinking"]')!.click();
   assert.deepEqual(hidden(".thinking-entry"), [true]);
-  assert.deepEqual(hidden(plainTool), [false, false]);
+  assert.deepEqual(hidden(".tool-entry"), [false, false]);
   doc.querySelector<HTMLInputElement>('[aria-label="Show tool results"]')!.click();
-  assert.deepEqual(hidden(plainTool), [true, true]);
-  assert.deepEqual(hidden(deliveredTool), [false]);
+  assert.deepEqual(hidden(".tool-entry"), [true, true]);
   assert.deepEqual(hidden(".user-entry, .assistant-entry"), [false, false]);
   doc.querySelector<HTMLInputElement>('[aria-label="Show thinking"]')!.click();
   assert.deepEqual(hidden(".thinking-entry"), [false]);

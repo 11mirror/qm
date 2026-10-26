@@ -1142,6 +1142,7 @@ const apiRoutes: readonly WebRoute[] = [
     return res.end();
   }),
 
+  relayRoute("GET", "/api/tool-manifest", { who: "principalId" }),
   relayRoute("GET", "/api/user-model-auth/status", { who: "principalId" }),
   relayRoute("POST", "/api/user-model-auth/account", { principal: true, pick: ["account", "provider"] }),
   relayRoute("POST", "/api/user-model-auth/api-key", { principal: true, pick: ["provider", "apiKey"] }),
