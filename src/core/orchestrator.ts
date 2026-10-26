@@ -3,7 +3,6 @@ import { createAdminCall } from "../tools/admin.ts";
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
-import { isBackendCredential } from "../credentials/keychain.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -43,15 +42,8 @@ import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { renderKeychainManifest } from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
-import { connectorStatusIsStale, refreshConnectorStatus } from "../credentials/connector-status.ts";
-import {
-  environmentDelta,
-  renderComputerBlock,
-  renderConnectedAppsBlock,
-  renderSandboxProfiles,
-} from "./environment-facts.ts";
+import { environmentDelta, renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { GapWork, HarnessDetectResult, HarnessTurnInput, RuntimeChoice } from "../harness/harness.ts";
@@ -106,7 +98,7 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import { NonRetryableTurnError } from "./turn-error.ts";
-import { personKey, samePerson } from "../directory/person.ts";
+import { personKey } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -117,6 +109,7 @@ import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
 import { mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
+import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
@@ -134,11 +127,6 @@ import {
   turnPostKeys,
   visibleTitleItemText,
 } from "./orchestrator/turn-helpers.ts";
-import {
-  renderConversationRoster,
-  renderReachRoster,
-  renderStandingObligations,
-} from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
@@ -150,11 +138,6 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
 
-const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
-const COMPOSIO_MD = loadProtocolFile("turn-composio");
-const ORG_ADMIN_MD = loadProtocolFile("turn-org-admin");
-const SCHEDULED_DESTINATION_MD = loadProtocolFile("turn-scheduled-destination");
-const POLL_SILENCE_MD = loadProtocolFile("turn-poll-silence");
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
@@ -681,124 +664,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           systemPrompt += decided.promptNote;
         }
 
-        if (
-          serviceCredRecords.some(
-            (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
-          )
-        )
-          systemPrompt += `\n\n${COMPOSIO_MD}`;
-        if (actorIsOrgAdmin) {
-          systemPrompt += `\n\n${ORG_ADMIN_MD}`;
-        }
-        if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
-          const nowMs = Date.now();
-          const obligations = await Promise.all([
-            deps.crons?.list() ?? [],
-            deps.webhooks?.list() ?? [],
-            deps.monitors?.enabled() ?? [],
-          ])
-            .then(([crons, hooks, mons]) =>
-              renderStandingObligations(
-                crons.filter(
-                  (c) =>
-                    c.enabled &&
-                    !c.archived &&
-                    c.ownerScopeId === scopeId &&
-                    (c.schedule.cron != null ||
-                      c.schedule.everyMs != null ||
-                      (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
-                ),
-                hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
-                mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
-                turnTimezone,
-              ),
-            )
-            .catch(swallowAs("orchestrator: standing-obligations read", null));
-          turnContextBlocks["Already scheduled here"] =
-            obligations ??
-            "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
-        }
-        if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
-          systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
-        }
-        if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          systemPrompt += `\n\n${POLL_SILENCE_MD}`;
-        }
-        if (reachAvailable) {
-          const roster = renderReachRoster(
-            await reachableChannelsFor(deps.directory!, actor.id),
-            actor.displayName ?? "this person",
-          );
-          if (roster) turnContextBlocks["Other computers you can reach"] = roster;
-        }
-        if (!external && deps.directory) {
-          const rosterBlock = await (async () => {
-            const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-            const participants = [
-              ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-              ...audienceMembers,
-            ];
-            const index = await directoryIndexFor(deps.directory!);
-            const seen = new Set<string>();
-            const resolved: DirectoryMember[] = [];
-            for (const p of participants) {
-              if (seen.has(personKey(p.id))) continue;
-              seen.add(personKey(p.id));
-              const m = index.get(personKey(p.id));
-              if (m) resolved.push(m);
-              else if (p.displayName)
-                resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
-            }
-            return renderConversationRoster(resolved);
-          })().catch(swallowAs("orchestrator: conversation roster", null));
-          if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
-        }
-        if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
-          const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-          const members = [
-            ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-            ...audienceMembers,
-          ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-          const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-            !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
-            !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
-          ]);
-          const keychainBlock = renderKeychainManifest({
-            scopeId,
-            conversationKind: conversation.kind,
-            openSpeakerKeychain,
-            actorId: actor.id,
-            members,
-            entriesByOwner,
-            connectorsByOwner,
-            scopeGrants,
-            execution: credentialDescriptions,
-            scopeAsks,
-          });
-          if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
-        }
-        if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
-          let status = null;
-          try {
-            status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-            if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-              status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-              await deps.connectorStatusCache.put(status);
-            }
-          } catch (e) {
-            swallow("orchestrator: connected-app status", e);
-          }
-          const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
-        }
-        systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
-        const stableSystemBytes = systemPrompt.length;
-        if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
-        if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
-        const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
-        systemPrompt = systemPrompt.slice(0, stableSystemBytes);
+        const finished = await finishSystemPrompt(ctx, {
+          systemPrompt,
+          strictReadOnly,
+          turnContextBlocks,
+          configuredProviders,
+          timeBlock,
+          onboardingBlock,
+          openSpeakerKeychain,
+          credentialDescriptions,
+          serviceCredRecords,
+          grantedCredSlugs,
+          actorIsOrgAdmin,
+          reachAvailable,
+          reachableChannelsFor,
+          directoryIndexFor,
+        });
+        systemPrompt = finished.systemPrompt;
+        const volatileContext = finished.volatileContext;
 
         if (
           ambientTurn &&

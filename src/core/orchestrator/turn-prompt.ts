@@ -1,17 +1,30 @@
-import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
+import { isBackendCredential } from "../../credentials/keychain.ts";
 import { requiresDelegation } from "../../sessions/session-syscalls.ts";
 import { type Destination, type ScopeId, turnSource } from "../../types.ts";
 import { renderGatewayContext } from "../gateway-context.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../../resolution/branding.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
+import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import { supportsScopeProfile } from "../../sandbox/sandbox.ts";
-import { configuredConnectorProviders } from "../../credentials/connector-status.ts";
+import { isPollSurface } from "../../triggers/run-trigger.ts";
+import {
+  renderKeychainManifest,
+  type PublicServiceCredential,
+  type KeychainManifestInput,
+} from "../../credentials/keychain.ts";
+import {
+  configuredConnectorProviders,
+  connectorStatusIsStale,
+  refreshConnectorStatus,
+} from "../../credentials/connector-status.ts";
+import { renderConnectedAppsBlock } from "../environment-facts.ts";
 import { securityScreenChunks } from "../../security/security-posture.ts";
 import { isIdeasConversation } from "../../onboarding/onboarding.ts";
 import { INBOX_DIR, TURN_FILES_DIR, sharedFilesSystemSection, turnFileId } from "../attachments.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { swallow, swallowAs } from "../../util/errors.ts";
+import { personKey, samePerson } from "../../directory/person.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import {
@@ -20,12 +33,19 @@ import {
   filterConnectorSkills,
   loadActiveBundles,
 } from "./turn-helpers.ts";
-import { currentTimeBlock, deliveryMenu, renderProjectHomeChannel } from "./prompt-blocks.ts";
+import {
+  currentTimeBlock,
+  deliveryMenu,
+  renderConversationRoster,
+  renderProjectHomeChannel,
+  renderReachRoster,
+  renderStandingObligations,
+} from "./prompt-blocks.ts";
 
+import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { InboundScreen } from "./inbound-screen.ts";
 import type { SecurityClassifier } from "./security-screen.ts";
-
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
@@ -298,4 +318,166 @@ export async function frameTurnPrompt(
     memoryHeading,
     onboardingBlock,
   };
+}
+
+const COMPOSIO_MD = loadProtocolFile("turn-composio");
+const ORG_ADMIN_MD = loadProtocolFile("turn-org-admin");
+const SCHEDULED_DESTINATION_MD = loadProtocolFile("turn-scheduled-destination");
+const POLL_SILENCE_MD = loadProtocolFile("turn-poll-silence");
+const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
+
+export async function finishSystemPrompt(
+  ctx: TurnCtx,
+  turn: {
+    systemPrompt: string;
+    strictReadOnly: boolean;
+    turnContextBlocks: Record<string, string>;
+    configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>;
+    timeBlock: string;
+    onboardingBlock: string;
+    openSpeakerKeychain: boolean;
+    credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>;
+    serviceCredRecords: PublicServiceCredential[];
+    grantedCredSlugs: Set<string>;
+    actorIsOrgAdmin: boolean;
+    reachAvailable: boolean;
+    reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
+    directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
+  },
+): Promise<{ systemPrompt: string; volatileContext: string }> {
+  const { deps, input, actor, conversation, external, automatedTurn, turnTimezone, scopeId } = ctx;
+  const {
+    strictReadOnly,
+    turnContextBlocks,
+    configuredProviders,
+    timeBlock,
+    onboardingBlock,
+    openSpeakerKeychain,
+    credentialDescriptions,
+    serviceCredRecords,
+    grantedCredSlugs,
+    actorIsOrgAdmin,
+    reachAvailable,
+    reachableChannelsFor,
+    directoryIndexFor,
+  } = turn;
+  let systemPrompt = turn.systemPrompt;
+  if (
+    serviceCredRecords.some(
+      (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
+    )
+  )
+    systemPrompt += `\n\n${COMPOSIO_MD}`;
+  if (actorIsOrgAdmin) {
+    systemPrompt += `\n\n${ORG_ADMIN_MD}`;
+  }
+  if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
+    const nowMs = Date.now();
+    const obligations = await Promise.all([
+      deps.crons?.list() ?? [],
+      deps.webhooks?.list() ?? [],
+      deps.monitors?.enabled() ?? [],
+    ])
+      .then(([crons, hooks, mons]) =>
+        renderStandingObligations(
+          crons.filter(
+            (c) =>
+              c.enabled &&
+              !c.archived &&
+              c.ownerScopeId === scopeId &&
+              (c.schedule.cron != null ||
+                c.schedule.everyMs != null ||
+                (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
+          ),
+          hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
+          mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+          turnTimezone,
+        ),
+      )
+      .catch(swallowAs("orchestrator: standing-obligations read", null));
+    turnContextBlocks["Already scheduled here"] =
+      obligations ??
+      "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
+  }
+  if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
+    systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
+  }
+  if (automatedTurn && input.surface && isPollSurface(input.surface)) {
+    systemPrompt += `\n\n${POLL_SILENCE_MD}`;
+  }
+  if (reachAvailable) {
+    const roster = renderReachRoster(
+      await reachableChannelsFor(deps.directory!, actor.id),
+      actor.displayName ?? "this person",
+    );
+    if (roster) turnContextBlocks["Other computers you can reach"] = roster;
+  }
+  if (!external && deps.directory) {
+    const rosterBlock = await (async () => {
+      const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+      const participants = [
+        ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
+        ...audienceMembers,
+      ];
+      const index = await directoryIndexFor(deps.directory!);
+      const seen = new Set<string>();
+      const resolved: DirectoryMember[] = [];
+      for (const p of participants) {
+        if (seen.has(personKey(p.id))) continue;
+        seen.add(personKey(p.id));
+        const m = index.get(personKey(p.id));
+        if (m) resolved.push(m);
+        else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
+      }
+      return renderConversationRoster(resolved);
+    })().catch(swallowAs("orchestrator: conversation roster", null));
+    if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
+  }
+  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
+    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+    const members = [
+      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
+      ...audienceMembers,
+    ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
+    const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
+      !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+      !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+      !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+      !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
+    ]);
+    const keychainBlock = renderKeychainManifest({
+      scopeId,
+      conversationKind: conversation.kind,
+      openSpeakerKeychain,
+      actorId: actor.id,
+      members,
+      entriesByOwner,
+      connectorsByOwner,
+      scopeGrants,
+      execution: credentialDescriptions,
+      scopeAsks,
+    });
+    if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
+  }
+  if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
+    let status = null;
+    try {
+      status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
+      if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
+        status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+        await deps.connectorStatusCache.put(status);
+      }
+    } catch (e) {
+      swallow("orchestrator: connected-app status", e);
+    }
+    const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
+    turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
+  }
+  systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
+  const stableSystemBytes = systemPrompt.length;
+  if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
+  if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
+  const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
+  systemPrompt = systemPrompt.slice(0, stableSystemBytes);
+  return { systemPrompt, volatileContext };
 }
