@@ -2,6 +2,7 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { base64ToBytes } from "./paste-text.ts";
 import { ApiError, webFetch, withBase } from "./core-bridge.ts";
+import { fileSha256 } from "./file-hash.ts";
 
 export type PiAttachment = Omit<Attachment, "id" | "preview"> & { id?: string };
 
@@ -63,8 +64,7 @@ export async function uploadAttachments(attachments: readonly PiAttachment[]): P
 
 async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
   const bytes = base64ToBytes(a.content);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as unknown as ArrayBuffer));
-  const sha256 = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  const sha256 = await fileSha256(new Blob([bytes as unknown as ArrayBuffer]));
   const r = await webFetch(withBase(`/api/blobs?sha=${sha256}`), {
     method: "POST",
     headers: { "content-type": "application/octet-stream" },
