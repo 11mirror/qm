@@ -20,7 +20,6 @@ import { browserRenderableImage, formatBytes, relTime } from "./ui";
 import { icon } from "./icons";
 import { ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
-import { fileListNeedsAllPages } from "./file-list";
 import { artifactPage, groupBy, listPageTpl, listSelect } from "./list-page";
 import { isTouch } from "./viewport";
 
@@ -90,12 +89,10 @@ function fileVisual(f: FileItem): { glyph: IconNode; kind: FileVisualKind } {
 }
 
 function visibleFiles(): FileRow[] {
-  const q = page.query.trim().toLowerCase();
   return fileRows
-    .filter((f) => !page.scope || fileScope(f) === page.scope)
+    .filter((f) => page.inScope(fileScope(f)) && page.matches(`${f.name} ${f.mimetype}`))
     .filter((f) => filesOwnership === "all" || (filesOwnership === "shared") === (f.kind === "Shared"))
     .filter((f) => filesType === "all" || typeOf(f) === filesType)
-    .filter((f) => !q || `${f.name} ${f.mimetype}`.toLowerCase().includes(q))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -108,7 +105,7 @@ function drawFiles(loading = false): void {
   const refilter = (apply: () => void) => {
     apply();
     drawFiles();
-    void loadAllFiles();
+    void loadMoreFiles(true);
   };
   page.paint(
     listPageTpl({
@@ -306,59 +303,36 @@ async function fetchFilePage(
   return { rows: rowsFromPage(r), nextCursor: r.nextCursor ?? null };
 }
 
-async function loadMoreFiles(): Promise<void> {
-  if (!filesNextCursor || filesLoadingMore) return;
-  const requestSeq = filesRequestSeq;
-  const scope = page.scope;
-  filesLoadingMore = true;
-  drawFiles();
-  try {
-    const page = await fetchFilePage(filesNextCursor, scope);
-    if (requestSeq !== filesRequestSeq) return;
-    const byId = new Map(fileRows.map((f) => [f.id, f]));
-    for (const row of page.rows) byId.set(row.id, row);
-    fileRows = [...byId.values()];
-    filesNextCursor = page.nextCursor;
-  } catch (e) {
-    if (requestSeq !== filesRequestSeq) return;
-    filesNotice = errMessage(e, "Failed to load more files.");
-  }
-  if (requestSeq !== filesRequestSeq) return;
-  filesLoadingMore = false;
-  drawFiles();
-  if (filesLoadAllQueued) {
-    filesLoadAllQueued = false;
-    void loadAllFiles();
-  }
-}
-
-async function loadAllFiles(): Promise<void> {
-  if (!fileListNeedsAllPages({ query: page.query, type: filesType, ownership: filesOwnership, sort: "newest" })) return;
+async function loadMoreFiles(all = false): Promise<void> {
+  if (all && !page.query.trim() && filesType === "all" && filesOwnership !== "owned") return;
   if (filesLoadingMore) {
-    filesLoadAllQueued = true;
+    filesLoadAllQueued ||= all;
     return;
   }
+  if (!filesNextCursor) return;
   const requestSeq = filesRequestSeq;
   const scope = page.scope;
   filesLoadingMore = true;
   drawFiles();
   try {
-    while (filesNextCursor && requestSeq === filesRequestSeq) {
-      const page = await fetchFilePage(filesNextCursor, scope);
+    do {
+      const next = await fetchFilePage(filesNextCursor, scope);
       if (requestSeq !== filesRequestSeq) return;
-      const byId = new Map(fileRows.map((file) => [file.id, file]));
-      for (const row of page.rows) byId.set(row.id, row);
+      const byId = new Map(fileRows.map((f) => [f.id, f]));
+      for (const row of next.rows) byId.set(row.id, row);
       fileRows = [...byId.values()];
-      filesNextCursor = page.nextCursor;
-    }
+      filesNextCursor = next.nextCursor;
+    } while (all && filesNextCursor);
   } catch (e) {
     if (requestSeq !== filesRequestSeq) return;
-    filesNotice = errMessage(e, "Failed to load all matching files.");
+    filesNotice = errMessage(e, all ? "Failed to load all matching files." : "Failed to load more files.");
   }
   if (requestSeq !== filesRequestSeq) return;
+  const queued = filesLoadAllQueued && !all;
   filesLoadAllQueued = false;
   filesLoadingMore = false;
   drawFiles();
+  if (queued) void loadMoreFiles(true);
 }
 
 async function loadFiles(seq: number): Promise<void> {
@@ -372,7 +346,7 @@ async function loadFiles(seq: number): Promise<void> {
     if (requestSeq !== filesRequestSeq || seq !== appState.viewRenderSeq || appState.currentView !== "files") return;
     fileRows = page.rows;
     filesNextCursor = page.nextCursor;
-    void loadAllFiles();
+    void loadMoreFiles(true);
   } catch (e) {
     if (requestSeq !== filesRequestSeq || seq !== appState.viewRenderSeq || appState.currentView !== "files") return;
     filesNotice = errMessage(e, "Failed to load files.");
