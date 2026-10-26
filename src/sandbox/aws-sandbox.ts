@@ -3,7 +3,6 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
 import {
   createProviderSandbox,
-  scopeOfName,
   type ProviderSandbox,
   type SandboxShared,
   type StoredSandboxRecord,
@@ -76,7 +75,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   async function bodyFor(name: string): Promise<{ scope?: string; body: Body | null }> {
     const cached = bodies.get(name);
     if (cached || scratch.has(name) || name.startsWith(scratchPrefix)) return { body: cached ?? null };
-    const scope = await scopeOfName(sandbox, store, name);
+    const scope = await sandbox.scopeOf(name);
     const rec = scope ? await store.get(scope) : null;
     if (!rec?.microvmId || !rec.endpoint) return { ...(scope ? { scope } : {}), body: null };
     const body = { id: rec.microvmId, endpoint: rec.endpoint, createdAtMs: rec.createdAtMs ?? 0 };
@@ -117,8 +116,10 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     scratch.delete(name);
   }
 
-  async function create(name: string, { scratch: isScratch }: { scratch: boolean }): Promise<void> {
-    const scope = isScratch ? undefined : await scopeOfName(sandbox, store, name);
+  async function create(
+    name: string,
+    { scratch: isScratch, scope }: { scratch: boolean; scope?: string },
+  ): Promise<void> {
     const run = await api.runMicrovm({
       imageIdentifier: await imageArn(),
       ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
