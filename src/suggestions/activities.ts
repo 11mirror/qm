@@ -141,8 +141,8 @@ export function createSuggestedActivityService(deps: {
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
       if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
-        let won = !deps.store.update;
-        await deps.store.update?.(principalId, (value) => {
+        let won = false;
+        await deps.store.update(principalId, (value) => {
           won = (value.dismissalRefreshAt ?? 0) < dismissedAt;
           return won ? { ...value, dismissalRefreshAt: dismissedAt } : value;
         });
@@ -151,7 +151,7 @@ export function createSuggestedActivityService(deps: {
           const result = await deps.scheduler.runNow(cron.id);
           pending = result.started || result.reason === "already_running";
           if (!pending)
-            await deps.store.update?.(principalId, (value) =>
+            await deps.store.update(principalId, (value) =>
               value.dismissalRefreshAt === dismissedAt ? { ...value, dismissalRefreshAt: 0 } : value,
             );
         }
@@ -162,7 +162,7 @@ export function createSuggestedActivityService(deps: {
         (profile.lastBootstrapAt ?? 0) <= now() - REFRESH_AFTER_MS
       ) {
         const timestamp = now();
-        const claimed = await deps.store.update?.(principalId, (value) =>
+        const claimed = await deps.store.update(principalId, (value) =>
           (value.lastBootstrapAt ?? 0) > timestamp - REFRESH_AFTER_MS
             ? value
             : { ...value, lastBootstrapAt: timestamp },
@@ -190,7 +190,7 @@ export function createSuggestedActivityService(deps: {
           { id, title: activity.title, at: now() },
         ].slice(-MAX_DISMISSED),
       });
-      const updated = await deps.store.update?.(principalId, dismiss);
+      const updated = await deps.store.update(principalId, dismiss);
       if (!updated) return false;
       if (owned(cron, principalId)) await syncAction(cron, updated);
       return true;

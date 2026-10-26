@@ -29,7 +29,6 @@ export function createTaskAcknowledgements(
   lease: LeaderLease,
   recovery?: { runs: Pick<RunStore, "get"> },
 ) {
-  if (!store.update) throw new Error("Task acknowledgements require atomic updates");
   const update = store.update.bind(store);
   const queue = createKeyedQueue<string>();
   const change = (client: ReactionClient, runId: string, next?: Next) => queue(runId, () => apply(client, runId, next));

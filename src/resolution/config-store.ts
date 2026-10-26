@@ -392,8 +392,6 @@ export function createConfigStore(
     id: ScopeId,
     fn: (row: PersistedBaseModel | null) => PersistedBaseModel,
   ): Promise<PersistedBaseModel | null> => {
-    if (!baseModelStore.update || !baseModelStore.insertIfAbsent || !baseModelStore.deleteIf)
-      throw new Error("base model store does not support atomic updates");
     for (;;) {
       let saved = await baseModelStore.update(id, fn);
       if (!saved) {
@@ -529,7 +527,6 @@ export function createConfigStore(
     getSoul: (id) => souls.get(id)?.content ?? null,
     setSoul(id, content, updatedBy) {
       return writeQueue(`soul:${id}`, async () => {
-        if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
           const revision: PersistedSoulRevision = {
@@ -587,7 +584,6 @@ export function createConfigStore(
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
         } else {
-          if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
           let accepted = false;
           const updated = await soulStore.update(id, (current) => {
             if (current.version !== expectedVersion) return current;
@@ -877,13 +873,11 @@ export function createConfigStore(
       if (soul && soul.history === undefined && legacyHistory.length) {
         const mergedHistory = mergeSoulHistory(soul.history, legacyHistory);
         if (!isDeepStrictEqual(mergedHistory, soul.history ?? [])) {
-          refreshedSoul = soulStore.update
-            ? await soulStore.update(id, (current) =>
-                current.history !== undefined
-                  ? current
-                  : { ...current, history: mergeSoulHistory(current.history, legacyHistory) },
-              )
-            : { ...soul, history: mergedHistory };
+          refreshedSoul = await soulStore.update(id, (current) =>
+            current.history !== undefined
+              ? current
+              : { ...current, history: mergeSoulHistory(current.history, legacyHistory) },
+          );
         }
         legacySoulHistory.delete(id);
       } else if (soul?.history !== undefined) {
