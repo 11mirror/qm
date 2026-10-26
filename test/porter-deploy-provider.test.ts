@@ -9,7 +9,8 @@ import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import { NotFoundError } from "porter-sandbox";
+import { NotFoundError, SandboxError } from "porter-sandbox";
+import { createPorterClient } from "../src/sandbox/porter-client.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -463,5 +464,21 @@ test("a refused sandbox create surfaces the cluster's own error unchanged", asyn
   await assert.rejects(
     provider.apply(deployment("refused"), version({ "server.js": SERVER }, "node server.js")),
     (error) => error === refused,
+  );
+});
+
+test("porter API errors surface the response body detail, not just the status", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ code: "INVALID_INPUT", message: "the cluster could not pull the sandbox image" }, { status: 400 }),
+  );
+  const client = createPorterClient({ baseUrl: "http://porter.invalid" });
+  await assert.rejects(
+    () => client.sandboxes.create({ image: "x" }),
+    (e: Error) => {
+      assert.equal(e.message, "HTTP 400: the cluster could not pull the sandbox image");
+      assert.ok(e instanceof SandboxError);
+      assert.equal((e as SandboxError).statusCode, 400);
+      return true;
+    },
   );
 });
