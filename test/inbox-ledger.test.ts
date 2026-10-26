@@ -550,3 +550,26 @@ test("ordinary ledger annotations leave previews unchanged and do not project av
   assert.equal(projected.inboxPreview?.slackAvatarsRefreshAt, 12345);
   assert.equal("sourcePayload" in projected, false);
 });
+
+test("per-cron reads, prune and delete query only that cron's items instead of scanning the table", async () => {
+  const backing = testMap<InboxItem>(["cronId"]);
+  const seed = createInboxLedger(backing);
+  await seed.ingest([entry(), entry({ dedupeKey: "gmail:thread-2" }), entry({ cronId: "cron-2" })]);
+  const ledger = createInboxLedger({
+    ...backing,
+    all: async () => assert.fail("full table scan"),
+    entries: async () => assert.fail("full table scan"),
+  });
+  assert.equal((await ledger.byCron(CRON)).length, 2);
+  assert.deepEqual((await ledger.byCrons([CRON, "cron-2", "cron-missing"])).map((item) => item.cronId).sort(), [
+    CRON,
+    CRON,
+    "cron-2",
+  ]);
+  assert.equal(await ledger.prune(CRON, { maxItems: 10, retentionMs: 0 }), 0);
+  await ledger.deleteByCron(CRON);
+  assert.deepEqual(
+    (await backing.all()).map((item) => item.cronId),
+    ["cron-2"],
+  );
+});

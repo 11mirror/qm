@@ -71,6 +71,7 @@ export interface InboxLedger {
   prune(cronId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<InboxItem | null>;
   byCron(cronId: string): Promise<InboxItem[]>;
+  byCrons(cronIds: readonly string[]): Promise<InboxItem[]>;
   summaries(
     cronIds: string[],
     options?: { includeInboxMetadata?: boolean },
@@ -211,8 +212,13 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     if (item && onEvent) onEvent({ cronId: item.cronId, itemId: item.id, op, at: Date.now() });
   };
 
-  const forCron = async (cronId: string): Promise<InboxItem[]> =>
-    (await backing.all()).filter((item) => item.cronId === cronId);
+  const forCrons = async (cronIds: readonly string[]): Promise<InboxItem[]> => {
+    const wanted = new Set(cronIds);
+    if (!wanted.size) return [];
+    const items = await backing.select({ where: { field: "cronId", anyOfFold: [...wanted] } });
+    return items.filter((item) => wanted.has(item.cronId));
+  };
+  const forCron = (cronId: string): Promise<InboxItem[]> => forCrons([cronId]);
 
   const ledger: InboxLedger = {
     async summaries(cronIds, options) {
@@ -433,6 +439,7 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     },
     get: (id) => backing.get(id),
     byCron: forCron,
+    byCrons: forCrons,
     async acquireDecision(id, decisionAt = Date.now()) {
       let token: string | null = null;
       await update(id, (item) => {
