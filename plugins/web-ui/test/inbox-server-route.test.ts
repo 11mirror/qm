@@ -37,7 +37,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "inbox-web-route-test";
 process.env.WEB_UI_PRINCIPALS = "alice,mallory";
-process.env.INBOX_USERS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -159,17 +158,12 @@ test("the ledger opens to inbox users", async () => {
   assert.equal(ledger.status, 200);
 });
 
-test("a signed-in user who is not an inbox user cannot read the ledger", async () => {
-  const r = await fetch(`${base}/api/crons/l-2/items`, { headers: headersFor("mallory") });
-  assert.equal(r.status, 403);
-});
-
 test("inbox routes refuse anonymous callers", async () => {
   const r = await fetch(`${base}/api/inbox`);
   assert.equal(r.status, 401);
 });
 
-test("feature flag denial blocks Inbox and inbox item API access despite the environment allowlist", async () => {
+test("feature flag denial blocks Inbox and inbox item API access", async () => {
   previewEnabled = false;
   try {
     for (const path of ["/api/inbox", "/api/inbox/selection", "/api/crons/cron-1/items"]) {

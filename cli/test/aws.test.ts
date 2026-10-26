@@ -2711,10 +2711,9 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     "egress-proxy": state.services["acme-egress-proxy"].taskDefinition,
   };
   const arns = Object.fromEntries(
-    [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
-      name,
-      "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
-    ]),
+    required
+      .map((secret) => secret.name)
+      .map((name) => [name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
   );
   for (const workload of ["core", "egress-proxy"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
