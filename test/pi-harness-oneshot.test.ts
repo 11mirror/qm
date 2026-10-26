@@ -150,7 +150,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     },
     captureRequests: false,
     sandboxResources: true,
-    ownerAuthExec: true,
     reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,

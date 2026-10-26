@@ -343,6 +343,7 @@ import {
   type ProcessRegistry,
 } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
+import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
@@ -2737,7 +2738,25 @@ export function buildApp(
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
         ...(supportsProcessSessions(sandbox)
-          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          ? {
+              kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              afterSweep: createJobComputerSweep({
+                resources: sandboxResources,
+                sandbox,
+                processes: processes!,
+                finish: finishCredentials,
+                onError: (error, scopeId) =>
+                  errors.record(
+                    {
+                      category: "process_session",
+                      code: "job_computer_retire_failed",
+                      message: errMessage(error),
+                      scopeLabel: scopeId,
+                    },
+                    error,
+                  ),
+              }),
+            }
           : {}),
         leaderLease,
       })

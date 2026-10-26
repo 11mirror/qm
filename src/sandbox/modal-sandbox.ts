@@ -30,7 +30,13 @@ import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  isJobComputerScope,
+  snapshotDue,
+  type HomeSnapshotStore,
+} from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -158,6 +164,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   }
 
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
+    if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
     if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
     const requested = await store.update(scope, (current) => {

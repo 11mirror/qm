@@ -1720,17 +1720,6 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
-test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
-  const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
-  const execute = createAgentTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;
-  await call(execute, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
-  assert.deepEqual(sink.lastExecOpts, { ownerAuth: true });
-
-  const unavailable = createAgentTools({ current: fakeToolContext() })[0]!;
-  const result = await call(unavailable, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
-  assert.match((result as { content: Array<{ text: string }> }).content[0]?.text ?? "", /invalid execute arguments/);
-});
-
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const withAudience = (audience: unknown): ToolContext => ({
@@ -2742,7 +2731,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       throw new Error("must not start");
     },
   };
-  for (const options of [{}, { ownerAuthExec: true }, { reachExec: true }]) {
+  for (const options of [{}, { reachExec: true }]) {
     const tools = createAgentTools({ current }, { ...options, sandboxResources: true });
     const execute = tools.find((t) => t.name === "execute")!;
     const sandbox = tools.find((t) => t.name === "sandbox")!;
@@ -2767,13 +2756,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
         );
       }
     }
-    for (const input of [
-      { scope: "scratch" },
-      { scope: "owner" },
-      { scope: "#room" },
-      { durable: false },
-      { sandbox_id: null },
-    ])
+    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { durable: false }, { sandbox_id: null }])
       assert.match(
         textOut(
           await call(execute, { command: "forbidden", purpose: "Test invalid routing", background: true, ...input }),
@@ -2799,7 +2782,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     },
     {
       sandboxResources: true,
-      ownerAuthExec: true,
       reachExec: true,
       commandCredentialHandles: ["git"],
     },
@@ -2807,7 +2789,6 @@ test("execute preserves routing, credentials, abort and external output provenan
   for (const [scope, route] of [
     ["scoped", {}],
     ["scratch", { scratch: true }],
-    ["owner", { ownerAuth: true }],
     ["#room", { reachTarget: "#room" }],
   ] as const) {
     await call(tool, {
@@ -2821,7 +2802,7 @@ test("execute preserves routing, credentials, abort and external output provenan
   }
   assert.deepEqual(
     screens,
-    Array.from({ length: 4 }, () => ["execute", "external"]),
+    Array.from({ length: 3 }, () => ["execute", "external"]),
   );
 });
 

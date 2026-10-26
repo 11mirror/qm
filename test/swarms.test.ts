@@ -919,7 +919,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
     turnFilesDir: "/tmp/files",
     connectorEnv: {},
     isolateOwnerKeychain: false,
-    ownerAuthAvailable: false,
     credentialServices: [],
     quarantinedServices: [],
     visibleSkills: [],
