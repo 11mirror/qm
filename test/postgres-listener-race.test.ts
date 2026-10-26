@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
+import { settle } from "./support/settle.ts";
 
 class FakeClient extends EventEmitter {
   queries: string[] = [];
@@ -40,14 +41,6 @@ mock.module("../src/persistence/pg-pool.ts", {
 });
 const { subscribePostgresChannel } = await import("../src/persistence/postgres-listener.ts");
 
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 3_000;
-  while (!check()) {
-    assert.ok(Date.now() < deadline, "condition timed out");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 test("reconnect repeats LISTEN when the old client disconnects before its query continuation", async () => {
   const clients = [new FakeClient(), new FakeClient()];
   clients[0]!.afterQuery = () => clients[0]!.emit("error", new Error("connection lost"));
@@ -63,7 +56,7 @@ test("reconnect repeats LISTEN when the old client disconnects before its query 
     () => resyncs++,
   );
   try {
-    await until(() => resyncs === 1);
+    await settle(() => resyncs === 1);
     assert.equal(attempts, 2);
     assert.deepEqual(
       clients.map((client) => client.queries),
@@ -100,7 +93,7 @@ test("failed acquisition retries and closes the recovered connection", async () 
     () => resyncs++,
   );
   try {
-    await until(() => resyncs === 1);
+    await settle(() => resyncs === 1);
     assert.equal(attempts, 2);
     assert.deepEqual(client.queries, ["LISTEN events"]);
   } finally {
@@ -131,7 +124,7 @@ for (const fails of [false, true]) {
       () => {},
       () => resyncs++,
     );
-    await until(() => attempts === 1);
+    await settle(() => attempts === 1);
     const closing = stop();
     if (fails) acquired.reject(new Error("database unavailable"));
     else acquired.resolve(client);

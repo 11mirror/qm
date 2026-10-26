@@ -5,17 +5,26 @@ export async function runNowSettled(scheduler: Scheduler, cronId: string): Promi
   if (r.started) await r.settled;
 }
 
-export const settle = async (check: () => Promise<boolean>, timeoutMs = 15_000): Promise<void> => {
+export async function eventually<T>(
+  read: () => T | Promise<T>,
+  opts: { until?: (value: T) => unknown; timeoutMs?: number; label?: string } = {},
+): Promise<T> {
+  const { until = Boolean, timeoutMs = 15_000, label = "condition" } = opts;
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  for (;;) {
     try {
-      if (await check()) return;
+      const value = await read();
+      if (until(value)) return value;
       lastError = undefined;
     } catch (err) {
       lastError = err;
     }
-    await new Promise((r) => setTimeout(r, 25));
+    if (Date.now() >= deadline) throw new Error(`${label} did not hold within ${timeoutMs}ms`, { cause: lastError });
+    await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(`condition did not hold within ${timeoutMs}ms`, { cause: lastError });
+}
+
+export const settle = async (check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> => {
+  await eventually(check, { timeoutMs });
 };

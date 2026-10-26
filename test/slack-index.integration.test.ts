@@ -4,6 +4,7 @@ import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 import type { SurfaceSender } from "../src/surfaces/outbound.ts";
 import type { SlackNative } from "../src/chat-surface/slack.ts";
+import { settle } from "./support/settle.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -369,14 +370,6 @@ const internalUser = (id: string, name: string) => ({
   profile: { display_name: name, real_name: name, email: `${name.toLowerCase()}@example.com` },
 });
 
-async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 async function fixture(
   options: {
     externalParticipants?: boolean;
@@ -536,7 +529,7 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
     // that started R1 owns its reply; the one that joined must not deliver it a second time.
     f.core.holdRun("R1");
     const first = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "first ask", ts: "300.1" });
-    await waitFor(() => f.core.polled.length === 1);
+    await settle(() => f.core.polled.length === 1);
     const steer = f.app.emitMessage({
       channel: "D1",
       channel_type: "im",
@@ -544,7 +537,7 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
       text: "and also this",
       ts: "300.2",
     });
-    await waitFor(() => f.core.turns.length === 2);
+    await settle(() => f.core.turns.length === 2);
     assert.deepEqual(f.core.polled, ["R1"], "only the handler that started the run waits on it");
 
     f.core.finishRun({ status: "ok", reply: "agent reply" });
@@ -565,7 +558,7 @@ test("a queued run's ok reply carries the recovery delivery's marker, so a repla
   try {
     f.core.holdRun("R7");
     const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "600.1" });
-    await waitFor(() => f.core.polled.length === 1);
+    await settle(() => f.core.polled.length === 1);
     f.core.finishRun({ status: "ok", reply: "agent reply" });
     await turn;
 
@@ -712,7 +705,7 @@ test("public channel rosters stay current in the core directory", async () => {
     f.client.membersByChannel.set("C1", ["U1", "UBOT"]);
     const pushes = f.core.directories.length;
     await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.2" }, "Ev-u2-left");
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.deepEqual(
       f.core.directories
         .at(-1)
@@ -745,7 +738,7 @@ test("large public channels publish their complete roster and accept internal tu
     f.client.membersByChannel.set("C1", [...members, "UBOT"]);
     const pushes = f.core.directories.length;
     await f.app.emitEvent("member_joined_channel", { user: members[0], channel: "C1", event_ts: "100.3" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.equal(
       f.core.directories.at(-1).channelMembers.filter((m: any) => m.channelId === "C1").length,
       members.length,
@@ -771,7 +764,7 @@ test("failed background roster reads are marked unknown instead of clearing know
     f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
     await f.app.emitEvent("channel_rename", { channel: { id: "CPX" }, event_ts: "100.5" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.ok(!f.core.directories.at(-1).channelRosterIds.includes("CPX"));
   } finally {
     await f.stop();
@@ -784,7 +777,7 @@ test("a failed refresh after a leave event revokes only the departing member", a
     f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
     await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.6" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     const pushed = f.core.directories.at(-1);
     assert.ok(!pushed.channelRosterIds.includes("CPX"));
     assert.deepEqual(pushed.channelRevocations, [{ channelId: "CPX", principalId: "U1" }]);
@@ -799,7 +792,7 @@ test("a failed email-mode refresh revokes the departing canonical principal", as
     f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
     await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.7" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.deepEqual(f.core.directories.at(-1).channelRevocations, [
       { channelId: "CPX", principalId: "alice@example.com" },
     ]);
@@ -828,7 +821,7 @@ test("Slack Connect directory rosters contain only internal principals", async (
     f.client.membershipListings.set("C1", 0);
     const pushes = f.core.directories.length;
     await f.app.emitEvent("channel_rename", { channel: { id: "CPX" }, event_ts: "100.7" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.equal(f.client.membershipListings.get("CPX"), 1);
     assert.equal(f.client.membershipListings.get("C1"), 0);
   } finally {
@@ -1318,8 +1311,8 @@ test("a message from an unseen group DM resyncs the directory so it becomes addr
     f.client.membersByChannel.set("G9", ["U1", "U2", "UBOT"]);
     const listedBefore = f.client.groupListings;
     await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "hi", ts: "400.1" });
-    await waitFor(() => f.client.groupListings > listedBefore);
-    await waitFor(() => (f.core.directories.at(-1)?.groupMembers ?? []).some((g: any) => g.groupId === "G9"));
+    await settle(() => f.client.groupListings > listedBefore);
+    await settle(() => (f.core.directories.at(-1)?.groupMembers ?? []).some((g: any) => g.groupId === "G9"));
     assert.deepEqual(
       f.core.directories
         .at(-1)
@@ -1345,7 +1338,7 @@ test("a failed group listing pushes its fallback rows under the OLD stamp, never
     f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
     f.client.membersByChannel.set("G7", ["U1", "U2", "UBOT"]);
     await f.app.emitMessage({ channel: "G7", channel_type: "mpim", user: "U1", text: "hi", ts: "402.1" });
-    await waitFor(() =>
+    await settle(() =>
       f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G7")),
     );
     const goodStamp = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined).groupsSyncedAt;
@@ -1354,7 +1347,7 @@ test("a failed group listing pushes its fallback rows under the OLD stamp, never
     f.client.failGroupListing = true;
     f.client.channelsById.set("G6", { id: "G6", name: "", is_member: true, is_private: true, is_mpim: true });
     await f.app.emitMessage({ channel: "G6", channel_type: "mpim", user: "U1", text: "hi", ts: "402.2" });
-    await waitFor(() => f.core.directories.findLast((d: any) => d.channels)?.channelsSyncedAt > goodStamp);
+    await settle(() => f.core.directories.findLast((d: any) => d.channels)?.channelsSyncedAt > goodStamp);
     const last = f.core.directories.findLast((d: any) => d.channels);
     assert.equal(
       last.groupMembers,
@@ -1372,14 +1365,14 @@ test("a failed group member read marks only that roster unknown", async () => {
     f.client.channelsById.set("G5", { id: "G5", name: "", is_member: true, is_private: true, is_mpim: true });
     f.client.membersByChannel.set("G5", ["U1", "U2", "UBOT"]);
     await f.app.emitMessage({ channel: "G5", channel_type: "mpim", user: "U1", text: "hi", ts: "403.1" });
-    await waitFor(() =>
+    await settle(() =>
       f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G5")),
     );
     const good = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined);
     f.client.membershipFailures.add("G5");
     const pushes = f.core.directories.length;
     await f.app.emitMessage({ channel: "G5", channel_type: "mpim", subtype: "group_join", ts: "403.2" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     const last = f.core.directories.at(-1);
     assert.ok(last.groupsSyncedAt > good.groupsSyncedAt);
     assert.ok(last.groupIds.includes("G5"));
@@ -1400,7 +1393,7 @@ test("all listed group DMs reach the directory past the legacy private-channel c
     }
     const pushes = f.core.directories.length;
     await f.app.emitMessage({ channel: "G0", channel_type: "mpim", subtype: "group_join", ts: "403.3" });
-    await waitFor(() => f.core.directories.length > pushes);
+    await settle(() => f.core.directories.length > pushes);
     assert.equal(new Set(f.core.directories.at(-1).groupMembers.map((member: any) => member.groupId)).size, 51);
   } finally {
     await f.stop();
@@ -1622,7 +1615,7 @@ test("the default account keeps every core-singleton subsystem", async () => {
     assert.equal(f.core.contextSubscriptions, 1);
     assert.equal(f.core.modelChangeListeners.length, 1);
     assert.equal(f.core.headerPinChangeListeners.length, 1);
-    await waitFor(() => f.core.publishedEmojiCatalogs.length === 1);
+    await settle(() => f.core.publishedEmojiCatalogs.length === 1);
   } finally {
     await f.stop();
   }
@@ -1668,7 +1661,7 @@ test("a gated account joining a channel stays silent — no welcome, no header",
 test("the default account still pushes the core directory", async () => {
   const f = await fixture();
   try {
-    await waitFor(() => f.core.directories.length >= 1);
+    await settle(() => f.core.directories.length >= 1);
   } finally {
     await f.stop();
   }
@@ -1734,7 +1727,7 @@ test("thread status is detached from reply delivery and steering cannot take own
   f.core.holdRun("r1");
   try {
     const original = f.app.emitEvent("app_mention", { channel: "C1", user: "U1", text: "<@UBOT> work", ts: "700.1" });
-    await waitFor(() => starts.length === 1);
+    await settle(() => starts.length === 1);
     await f.app.emitEvent("app_mention", {
       channel: "C1",
       thread_ts: "700.1",
@@ -1766,7 +1759,7 @@ test("top-level DM replies remain top-level and never start native thread status
   f.core.holdRun("r1");
   try {
     const incoming = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "701.1" });
-    await waitFor(() => f.core.polled.length === 1);
+    await settle(() => f.core.polled.length === 1);
     f.core.finishRun({ status: "ok", reply: "hello back" });
     await incoming;
     assert.equal(starts, 0);

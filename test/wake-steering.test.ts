@@ -10,6 +10,7 @@ import { jsonbStringify } from "../src/persistence/durable-map.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { eventually } from "./support/settle.ts";
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
@@ -675,17 +676,6 @@ test("a queued web turn runs on its own — the sender's client need never come 
 
 // ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<T> {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    const v = await get();
-    if (v !== undefined) return v;
-    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
-    await sleep(20);
-  }
-}
-
 test("orphan replay: a steer unconsumed at run completion replays as a fresh turn (prod 93a5c5ba)", async () => {
   const built = freshApp();
   const channel = "C9";
@@ -699,9 +689,10 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
   assert.equal(claimed?.id, liveRunId);
   await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "silent" });
 
-  const replayed = await until(async () =>
-    (await built.runs.list()).find((r) => r.sessionId === threadRef && r.id !== liveRunId),
-  );
+  const replayed = (await eventually(
+    async () => (await built.runs.list()).find((r) => r.sessionId === threadRef && r.id !== liveRunId),
+    { until: (value) => value !== undefined },
+  ))!;
   assert.equal(replayed.status, "pending");
   const text = `${replayed.request.text ?? ""} ${replayed.request.displayText ?? ""}`;
   assert.ok(
@@ -741,9 +732,10 @@ test("signalRun: a web steer that races the run's end is replayed and reports th
   assert.equal(raced.accepted, false);
   assert.equal(raced.reason, "terminal");
   assert.equal(raced.replayed, true, "the caller is told the text now rides a fresh run");
-  const fresh = await until(async () =>
-    (await built.runs.list()).find((r) => r.sessionId === `ch:${channel}:${root}` && r.id !== liveRunId),
-  );
+  const fresh = (await eventually(
+    async () => (await built.runs.list()).find((r) => r.sessionId === `ch:${channel}:${root}` && r.id !== liveRunId),
+    { until: (value) => value !== undefined },
+  ))!;
   assert.equal(fresh.request.text, "did this make it?");
 });
 

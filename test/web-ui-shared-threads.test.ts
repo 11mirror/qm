@@ -10,6 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { eventually } from "./support/settle.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -61,13 +62,10 @@ async function sessionsOf(user: string): Promise<SessionRow[]> {
 }
 
 async function waitForSession(user: string, threadRef: string): Promise<SessionRow> {
-  const deadline = Date.now() + 15_000;
-  for (;;) {
-    const match = (await sessionsOf(user)).find((s) => s.threadRef === threadRef);
-    if (match) return match;
-    assert.ok(Date.now() < deadline, `timed out waiting for ${user} to see session ${threadRef}`);
-    await new Promise((r) => setTimeout(r, 100));
-  }
+  const session = await eventually(async () => (await sessionsOf(user)).find((s) => s.threadRef === threadRef), {
+    label: `${user} seeing session ${threadRef}`,
+  });
+  return session!;
 }
 
 test("/me carries the Slack workspace URL once the directory has one", async () => {

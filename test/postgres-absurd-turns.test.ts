@@ -13,6 +13,7 @@ import { createTurnLedger, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL, type TurnLedg
 import { createTurnRunner } from "../src/turns/turn-runner.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
+import { eventually } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Absurd turn tests";
@@ -381,15 +382,6 @@ function gate() {
   return { started, releases, orchestrator };
 }
 
-async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, label: string): Promise<T> {
-  for (let i = 0; i < 250; i++) {
-    const value = await read();
-    if (done(value)) return value;
-    await sleep(20);
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
 test("admission routes each tier to its own queue and the runner prefers people", { skip }, async () => {
   const background = await admit(`web:cron:${randomUUID()}`, "background", undefined, 2);
   const delegated = await admit(`web:child:${randomUUID()}`, "delegated", undefined, 1);
@@ -401,18 +393,16 @@ test("admission routes each tier to its own queue and the runner prefers people"
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
   runner.start();
   for (const expected of ["person", "delegated", "background"]) {
-    await until(
-      async () => started.length,
-      (n) => n > 0 && started.at(-1)?.text === expected,
-      expected,
-    );
+    await eventually(async () => started.length, {
+      until: (n) => n > 0 && started.at(-1)?.text === expected,
+      label: expected,
+    });
     releases.get(started.at(-1)!.runId!)!();
   }
-  await until(
-    async () => (await runStore.runs.get(background.run.id))?.status,
-    (s) => s === "done",
-    "background done",
-  );
+  await eventually(async () => (await runStore.runs.get(background.run.id))?.status, {
+    until: (s) => s === "done",
+    label: "background done",
+  });
   await runner.stopClaims();
 });
 
@@ -423,40 +413,35 @@ test("a person's turn over capacity parks the newest background turn, which resu
   const ready = createPostgresNotifyBus<string>(URL!, TURN_READY_CHANNEL, "test turn readiness");
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 4, pollMs: 50, ready });
   runner.start();
-  await until(
-    async () => started.length,
-    (n) => n === 4,
-    "four background turns",
-  );
+  await eventually(async () => started.length, { until: (n) => n === 4, label: "four background turns" });
   const newest = started.at(-1)!.runId!;
   const person = await admit(`web:alice:${randomUUID()}`, "person", undefined, 0);
-  const parked = await until(
-    () => runStore.runs.get(newest),
-    (run) => run?.status === "pending",
-    "newest background turn parked",
-  );
+  const parked = await eventually(() => runStore.runs.get(newest), {
+    until: (run) => run?.status === "pending",
+    label: "newest background turn parked",
+  });
   assert.deepEqual(parked?.lastStop, { kind: "parked" });
   assert.equal(parked?.preemptions, 1);
-  await until(async () => started.some((input) => input.runId === person.run.id), Boolean, "person started");
+  await eventually(async () => started.some((input) => input.runId === person.run.id), {
+    until: Boolean,
+    label: "person started",
+  });
   releases.get(person.run.id)!();
-  await until(
-    async () => (await runStore.runs.get(person.run.id))?.status,
-    (s) => s === "done",
-    "person done",
-  );
+  await eventually(async () => (await runStore.runs.get(person.run.id))?.status, {
+    until: (s) => s === "done",
+    label: "person done",
+  });
   for (const input of started.slice(0, 3)) releases.get(input.runId!)!();
-  const resumed = await until(
-    async () => started.filter((input) => input.runId === newest),
-    (inputs) => inputs.length === 2,
-    "parked turn resumed",
-  );
+  const resumed = await eventually(async () => started.filter((input) => input.runId === newest), {
+    until: (inputs) => inputs.length === 2,
+    label: "parked turn resumed",
+  });
   assert.deepEqual(resumed[1]?.resumeCause, { kind: "parked" });
   releases.get(newest)!();
-  await until(
-    async () => (await runStore.runs.get(newest))?.status,
-    (s) => s === "done",
-    "parked turn done",
-  );
+  await eventually(async () => (await runStore.runs.get(newest))?.status, {
+    until: (s) => s === "done",
+    label: "parked turn done",
+  });
   await runner.stopClaims();
   await ready.close?.();
 });
@@ -469,19 +454,11 @@ test("a person writing into a running cron turn parks it until the person's turn
   const ready = createPostgresNotifyBus<string>(URL!, TURN_READY_CHANNEL, "test turn readiness");
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 2, pollMs: 50, yields, ready });
   runner.start();
-  await until(
-    async () => started.length,
-    (n) => n === 1,
-    "cron started",
-  );
+  await eventually(async () => started.length, { until: (n) => n === 1, label: "cron started" });
   await sleep(100);
   const person = await admit(thread, "person", undefined, 0);
   assert.equal(person.run.status, "queued");
-  await until(
-    async () => started.length,
-    (n) => n === 2,
-    "person started",
-  );
+  await eventually(async () => started.length, { until: (n) => n === 2, label: "person started" });
   assert.equal(started[1]?.runId, person.run.id);
   const parked = await runStore.runs.get(cron.run.id);
   assert.equal(parked?.status, "pending");
@@ -491,20 +468,15 @@ test("a person writing into a running cron turn parks it until the person's turn
   ]);
   assert.equal(rows[0]?.state, "sleeping");
   releases.get(person.run.id)!();
-  await until(
-    async () => started.length,
-    (n) => n === 3,
-    "cron resumed",
-  );
+  await eventually(async () => started.length, { until: (n) => n === 3, label: "cron resumed" });
   assert.equal(started[2]?.runId, cron.run.id);
   assert.deepEqual(started[2]?.resumeCause, { kind: "parked" });
   assert.equal(await pointer(thread), cron.run.id);
   releases.get(cron.run.id)!();
-  await until(
-    async () => (await runStore.runs.get(cron.run.id))?.status,
-    (s) => s === "done",
-    "cron done",
-  );
+  await eventually(async () => (await runStore.runs.get(cron.run.id))?.status, {
+    until: (s) => s === "done",
+    label: "cron done",
+  });
   assert.equal(await pointer(thread), null);
   await runner.stopClaims();
   await yields.close?.();
@@ -518,23 +490,21 @@ test("a person writing after a cron was stopped ends the cron as stopped and sta
   const yields = createPostgresNotifyBus<string>(URL!, TURN_YIELD_CHANNEL, "test turn yields");
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 2, pollMs: 50, yields });
   runner.start();
-  await until(
-    async () => started.length,
-    (n) => n === 1,
-    "cron started",
-  );
+  await eventually(async () => started.length, { until: (n) => n === 1, label: "cron started" });
   assert.equal(await ledger.cancel(cron.run.id), "signalled");
   const person = await admit(thread, "person", undefined, 0);
-  await until(async () => started.some((input) => input.runId === person.run.id), Boolean, "person started");
+  await eventually(async () => started.some((input) => input.runId === person.run.id), {
+    until: Boolean,
+    label: "person started",
+  });
   const stopped = await runStore.runs.get(cron.run.id);
   assert.equal(stopped?.status, "done");
   assert.equal(stopped?.result?.stopped, true);
   releases.get(person.run.id)!();
-  await until(
-    async () => (await runStore.runs.get(person.run.id))?.status,
-    (s) => s === "done",
-    "person done",
-  );
+  await eventually(async () => (await runStore.runs.get(person.run.id))?.status, {
+    until: (s) => s === "done",
+    label: "person done",
+  });
   await runner.stopClaims();
   await yields.close?.();
 });
@@ -555,7 +525,10 @@ test("a person's message parks a background turn that is not running and starts 
   const ready = createPostgresNotifyBus<string>(URL!, TURN_READY_CHANNEL, "test turn readiness");
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 2, pollMs: 50, ready });
   runner.start();
-  await until(async () => started.some((input) => input.runId === person.run.id), Boolean, "person started");
+  await eventually(async () => started.some((input) => input.runId === person.run.id), {
+    until: Boolean,
+    label: "person started",
+  });
   await sleep(2_000);
   assert.equal(
     started.some((input) => input.runId === cron.run.id),
@@ -563,18 +536,16 @@ test("a person's message parks a background turn that is not running and starts 
     "the cron waits while the person's turn runs",
   );
   releases.get(person.run.id)!();
-  const resumed = await until(
-    async () => started.filter((input) => input.runId === cron.run.id),
-    (inputs) => inputs.length === 1,
-    "cron resumed after the person",
-  );
+  const resumed = await eventually(async () => started.filter((input) => input.runId === cron.run.id), {
+    until: (inputs) => inputs.length === 1,
+    label: "cron resumed after the person",
+  });
   assert.deepEqual(resumed[0]?.resumeCause, { kind: "parked" });
   releases.get(cron.run.id)!();
-  await until(
-    async () => (await runStore.runs.get(cron.run.id))?.status,
-    (s) => s === "done",
-    "cron done",
-  );
+  await eventually(async () => (await runStore.runs.get(cron.run.id))?.status, {
+    until: (s) => s === "done",
+    label: "cron done",
+  });
   assert.equal(await pointer(thread), null);
   await runner.stopClaims();
   await ready.close?.();

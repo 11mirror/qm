@@ -3,23 +3,9 @@ import assert from "node:assert/strict";
 import { startLeaseKeepalive } from "../src/core/orchestrator/lease-keepalive.ts";
 import { wallClockTurnFailure } from "../src/harness/pi-harness.ts";
 import type { Lease } from "../src/sessions/session-store.ts";
+import { settle } from "./support/settle.ts";
 
 const lease: Lease = { sessionId: "s1", token: "t1" };
-
-function until(cond: () => boolean, ms = 500): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (cond()) {
-        clearInterval(timer);
-        resolve();
-      } else if (Date.now() - started > ms) {
-        clearInterval(timer);
-        reject(new Error("condition never held"));
-      }
-    }, 5);
-  });
-}
 
 test("a transient renew failure does not kill the keepalive", async () => {
   let calls = 0;
@@ -35,7 +21,7 @@ test("a transient renew failure does not kill the keepalive", async () => {
     10,
     () => false,
   );
-  await until(() => calls >= 3);
+  await settle(() => calls >= 3);
   stop();
 });
 
@@ -52,7 +38,7 @@ test("a genuinely lost lease stops the keepalive", async () => {
     10,
     () => false,
   );
-  await until(() => calls === 1);
+  await settle(() => calls === 1);
   const after = calls;
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(calls, after, "no further renewals after the lease is lost");
@@ -74,7 +60,7 @@ test("a turn making no progress trips the liveness bound and aborts instead of r
     () => false,
     { progress: () => 0, stalledRenewals: 3, onStalled: () => stalled++ },
   );
-  await until(() => stalled === 1);
+  await settle(() => stalled === 1);
   const after = renewals;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(renewals, after, "renewal stops once the stall bound trips");
@@ -100,7 +86,7 @@ test("turn progress resets the stall counter and keeps the lease renewing", asyn
     { progress: () => progress, stalledRenewals: 3, onStalled: () => stalled++ },
   );
   const feeder = setInterval(() => progress++, 5);
-  await until(() => renewals >= 10);
+  await settle(() => renewals >= 10);
   clearInterval(feeder);
   assert.equal(stalled, 0, "a progressing turn is never aborted");
   stop();
