@@ -407,7 +407,7 @@ test("email classification projection is opt-in, scoped, and never changes store
     assert.ok(query.omit?.includes("thread"));
     if (!query.omit?.includes("sourcePayload"))
       assert.deepEqual(query.pickNested, {
-        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
+        sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"],
       });
     const rows = await originalSelect(query);
     for (const row of rows) assert.equal((row as InboxItem).sourcePayload?.privateDetail, undefined);
@@ -423,17 +423,6 @@ test("email classification projection is opt-in, scoped, and never changes store
   for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
   assert.deepEqual(await ledger.summaries([CRON]), before);
   assert.deepEqual(await ledger.get(inboxItemId(CRON, "gmail:thread-1")), stored);
-});
-
-test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
-  const ledger = createInboxLedger(testMap());
-  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
-  const before = await ledger.summaries([CRON]);
-  const [classified] = await ledger.summaries([CRON], { includeInboxMetadata: true });
-  assert.equal(classified!.source, "gmail");
-  assert.equal(classified!.inboxPreview!.automated, true);
-  assert.deepEqual(await ledger.summaries([CRON]), before);
-  assert.equal((await ledger.byCron(CRON))[0]!.source, undefined);
 });
 
 test("ingest batches writes while resolving legacy IDs and duplicate events", async () => {

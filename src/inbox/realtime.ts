@@ -41,7 +41,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
         const matched = items.filter(
           (item) =>
             item.cronId === cron.id &&
-            (item.source ?? item.sourcePayload?.source) === event.source &&
+            item.source === event.source &&
             adapter.matchesEvent(item, event.conversationRef) &&
             !(owner && isResolved(item)),
         );

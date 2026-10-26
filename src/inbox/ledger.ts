@@ -83,6 +83,19 @@ export interface InboxLedger {
 
 export type InboxEventSink = (item: InboxItem, event: LatestEvent) => Promise<void>;
 
+export const INBOX_ITEM_SOURCE_MIGRATION = {
+  id: "durable-map/crons/0004-inbox-item-source",
+  statements: [
+    `DO $$ BEGIN IF to_regclass('cron_items') IS NOT NULL THEN
+       UPDATE cron_items SET json = jsonb_set(json, '{source}', json -> 'sourcePayload' -> 'source')
+         WHERE NOT json ? 'source' AND jsonb_typeof(json -> 'sourcePayload' -> 'source') = 'string';
+       UPDATE cron_items SET json = json #- '{sourcePayload,source}'
+         WHERE json -> 'sourcePayload' ? 'source' AND json ->> 'source' = json -> 'sourcePayload' ->> 'source';
+       UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'cron_items';
+     END IF; END $$`,
+  ],
+};
+
 export function inboxItemId(cronId: string, sourceKey: string): string {
   return hashId([contentPart(cronId), contentPart(sourceKey)]);
 }
@@ -230,13 +243,12 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       const items = await backing.select({
         where: { field: "cronId", anyOfFold: cronIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
+        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
       });
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
+        const source = item.source;
         return {
           ...item,
-          ...(source !== undefined ? { source } : {}),
           ...(source === "slack"
             ? {
                 inboxPreview: {

@@ -164,7 +164,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   }
 
   async function refreshAvatars(owner: string, item: InboxItem): Promise<void> {
-    if ((item.source ?? item.sourcePayload?.source) !== "slack") return;
+    if (item.source !== "slack") return;
     const payload = item.sourcePayload ?? {};
     if (typeof payload.slackAvatarsRefreshAt === "number" && now() < payload.slackAvatarsRefreshAt) return;
     const meta = isObj(payload.slack) ? payload.slack : {};
@@ -191,7 +191,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   }
 
   async function refresh(owner: string, item: InboxItem): Promise<void> {
-    const source = item.source ?? item.sourcePayload?.source;
+    const source = item.source;
     if (source !== "gmail" && source !== "slack") return;
     if (source === "gmail" && isResolved(item)) return;
     const payload = item.sourcePayload ?? {};

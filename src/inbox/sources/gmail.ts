@@ -133,7 +133,7 @@ export const gmailAdapter: SourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "gmail", ...common, gmail } as InboxPayload,
+      sourcePayload: { ...common, gmail } as InboxPayload,
       ...(draft ? { proposal: { data: draft as unknown as InboxPayload } } : {}),
     };
     return entry;

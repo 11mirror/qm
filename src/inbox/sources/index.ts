@@ -10,7 +10,7 @@ export function sourceAdapter(id: unknown): SourceAdapter | undefined {
 }
 
 export function adapterForItem(item: InboxItem): SourceAdapter | undefined {
-  return sourceAdapter(item.source ?? item.sourcePayload?.source);
+  return sourceAdapter(item.source);
 }
 
 export type { SourceAdapter } from "./adapter.ts";

@@ -189,7 +189,7 @@ export const slackAdapter: SourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "slack", ...common, slack } as InboxPayload,
+      sourcePayload: { ...common, slack } as InboxPayload,
       ...(draft ? { proposal: { data: draft as unknown as InboxPayload } } : {}),
     };
     return entry;

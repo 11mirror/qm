@@ -60,7 +60,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
     const mailCrons = selected.filter((cron) => cron.owner === actorId && cron.inbox?.source === "gmail");
     const mail = (await deps.items.byCrons(mailCrons.map((cron) => cron.id))).filter(
-      (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
+      (item) => !isResolved(item) && item.source === "gmail",
     );
     await ctx.deps.inboxSourceRefresh(actorId, mail);
   }

@@ -172,7 +172,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   }
   if (cron.inbox?.source === "gmail" && cron.owner === loaded.actorId) {
     const openMail = (await deps.items.byCron(cron.id)).filter(
-      (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
+      (item) => !isResolved(item) && item.source === "gmail",
     );
     await ctx.deps.inboxSourceRefresh?.(cron.owner, openMail);
   }
@@ -223,7 +223,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
       const adapter = sourceAdapter("slack")!;
       const existing = existingItems.find(
         (item) =>
-          (item.source ?? item.sourcePayload?.source) === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
+          item.source === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
       );
       if (existing) parsed.dedupeKey = existing.sourceKey;
     }
