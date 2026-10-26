@@ -2,22 +2,7 @@ import type { App } from "../../app.ts";
 import { parseScopeId, type Cron, type Session } from "../../../types.ts";
 import type { SessionSummary } from "../../../sessions/session-store.ts";
 import { parseWakeFireKey, wakeTriggerLabel } from "../../../triggers/provenance.ts";
-import { pick } from "./common.ts";
-
-const ADMIN_CRON_FIELDS = [
-  "id",
-  "ownerScopeId",
-  "title",
-  "action",
-  "message",
-  "owner",
-  "createdBy",
-  "enabled",
-  "archived",
-  "schedule",
-  "createdAt",
-  "lastFiredAt",
-] as const;
+import { ADMIN_CRON_FIELDS, pick } from "./common.ts";
 
 type AdminCronOrigin = {
   kind: "cron";

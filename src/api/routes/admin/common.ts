@@ -50,6 +50,20 @@ export const notFound = (res: ServerResponse): void => sendJson(res, 404, { erro
 export const limitParam = (url: URL, fallback: number, max: number): number =>
   Math.min(max, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || fallback));
 
+export const CRON_SUMMARY_FIELDS = [
+  "id",
+  "ownerScopeId",
+  "title",
+  "action",
+  "message",
+  "owner",
+  "enabled",
+  "archived",
+  "schedule",
+] as const;
+
+export const ADMIN_CRON_FIELDS = [...CRON_SUMMARY_FIELDS, "createdBy", "createdAt", "lastFiredAt"] as const;
+
 export const pick = <T, K extends keyof T>(record: T, keys: readonly K[]): Pick<T, K> =>
   Object.fromEntries(keys.map((key) => [key, record[key]])) as Pick<T, K>;
 

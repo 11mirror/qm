@@ -4,7 +4,7 @@ import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";
-import { badRequest, discoverScopes, orgAdmin, pick } from "./common.ts";
+import { CRON_SUMMARY_FIELDS, badRequest, discoverScopes, orgAdmin, pick } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
 
@@ -49,19 +49,8 @@ type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
 
 const EXPORT_CRON_FIELDS = ["id", "title", "owner", "ownerScopeId", "schedule", "enabled", "archived"] as const;
-const CRON_INFO_FIELDS = [
-  "id",
-  "title",
-  "message",
-  "action",
-  "owner",
-  "ownerScopeId",
-  "schedule",
-  "enabled",
-  "archived",
-] as const;
 type SpendExportCron = Pick<Cron, (typeof EXPORT_CRON_FIELDS)[number]>;
-type SpendCronInfo = Pick<Cron, (typeof CRON_INFO_FIELDS)[number]>;
+type SpendCronInfo = Pick<Cron, (typeof CRON_SUMMARY_FIELDS)[number]>;
 
 export type SpendReport = ReturnType<typeof summarizeSpend>;
 type SpendTotals = ReturnType<typeof totalsOf>;
@@ -426,7 +415,7 @@ async function cronInfoLookup(
   const crons = new Map<string, SpendCronInfo>();
   for (let start = 0; start < ids.length; start += CRON_LOOKUP_CONCURRENCY) {
     const batch = await Promise.all(ids.slice(start, start + CRON_LOOKUP_CONCURRENCY).map((id) => app.getCron(id)));
-    for (const cron of batch) if (cron) crons.set(cron.id, pick(cron, CRON_INFO_FIELDS));
+    for (const cron of batch) if (cron) crons.set(cron.id, pick(cron, CRON_SUMMARY_FIELDS));
   }
   return crons;
 }
