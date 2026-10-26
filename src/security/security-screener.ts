@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import { readCappedText } from "../util/response-body.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
@@ -106,30 +106,12 @@ async function cancelResponseBody(response: Response): Promise<void> {
 }
 
 async function responseText(response: Response): Promise<string> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_SECURITY_SCREEN_RESPONSE_BYTES) {
-    await cancelResponseBody(response);
-    throw new Error("Security screen proxy response exceeds the supported limit");
-  }
-  if (!response.body) return "";
-  const chunks: Buffer[] = [];
-  let total = 0;
-  const reader = response.body.getReader();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_SECURITY_SCREEN_RESPONSE_BYTES) {
-        await reader.cancel().catch((error) => swallow("security screen response cancel", error));
-        throw new Error("Security screen proxy response exceeds the supported limit");
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
+  const text = await readCappedText(
+    response,
+    MAX_SECURITY_SCREEN_RESPONSE_BYTES,
+    () => new Error("Security screen proxy response exceeds the supported limit"),
+  );
+  return text ?? "";
 }
 
 function classification(body: string, provider: string): SecurityScreenClassification {
