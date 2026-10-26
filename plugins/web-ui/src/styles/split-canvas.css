@@ -1,0 +1,744 @@
+.split-canvas {
+  container: pane-canvas / inline-size;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--background);
+}
+
+.split-dock {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.split-canvas.single-pane .split-dock {
+  padding: 0;
+}
+
+.split-canvas.single-pane .dockview-theme-qm {
+  --dv-tabs-and-actions-container-height: var(--topbar-h);
+}
+
+.split-canvas.single-pane .dv-groupview {
+  border: 0;
+  border-radius: 0;
+}
+
+.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container {
+  --split-strip-line: var(--topbar-line);
+  --split-strip-bg: var(--topbar-bg);
+  padding: 0 16px;
+}
+
+.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container:not(.dv-single-tab) {
+  --split-strip-pad: 11px;
+  padding-top: var(--split-strip-pad);
+}
+
+.split-canvas.single-pane .dv-render-overlay {
+  border-radius: 0;
+}
+
+.split-canvas.single-pane .dv-tab .split-pane-title {
+  font-size: var(--font-14);
+  font-weight: 400;
+}
+
+.split-single-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@container pane-canvas (max-width: 700px) {
+  .split-single-tools {
+    display: none;
+  }
+}
+
+.split-dock > .dv-dockview {
+  width: 100%;
+  height: 100%;
+}
+
+.dockview-theme-qm {
+  --dv-tabs-and-actions-container-height: 35px;
+  --dv-separator-border: var(--border);
+  --dv-floating-box-shadow: none;
+  --dv-tabs-and-actions-container-font-size: var(--font-12-5);
+  --dv-drag-over-background-color: color-mix(in srgb, var(--primary) 20%, transparent);
+  --dv-drag-over-border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  --dv-group-view-background-color: var(--background);
+  --dv-activegroup-visiblepanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-tab-divider-color: transparent;
+}
+
+.dockview-theme-qm .dv-groupview {
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+  overflow: hidden;
+  container: pane-group / inline-size;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container {
+  --split-strip-line: var(--border);
+  --split-strip-bg: var(--secondary);
+  --split-strip-pad: 4px;
+  position: relative;
+  box-sizing: border-box;
+  padding: var(--split-strip-pad) 6px var(--split-strip-pad) 10px;
+  gap: 8px;
+  border-bottom: 1px solid var(--split-strip-line);
+  background: var(--split-strip-bg);
+  user-select: none;
+  font-family: var(--app-font);
+}
+.dockview-theme-qm .dv-pre-actions-container:empty,
+.dockview-theme-qm .dv-left-actions-container:empty {
+  display: none;
+}
+
+.dockview-theme-qm .dv-tabs-container {
+  align-items: center;
+}
+
+.dockview-theme-qm .dv-content-container {
+  background: var(--background);
+}
+
+.dockview-theme-qm .dv-render-overlay {
+  border-radius: 0;
+}
+
+.dockview-theme-qm .dv-void-container {
+  cursor: default;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) {
+  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
+  padding-bottom: 0;
+  border-bottom: 0;
+  background: linear-gradient(var(--split-strip-line), var(--split-strip-line)) bottom / 100% 1px no-repeat
+    var(--split-strip-bg);
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tabs-container,
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-right-actions-container {
+  align-items: flex-start;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-session-action {
+  display: none;
+}
+.dockview-theme-qm .dv-tab {
+  padding: 0;
+  background: transparent;
+  min-width: 0;
+  flex-shrink: 1;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+}
+
+.dockview-theme-qm .dv-single-tab .split-tab-actions {
+  display: none;
+}
+
+.split-group-session-action {
+  display: inline-flex;
+}
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
+  --split-tab-h: 34px;
+  height: var(--split-tab-h);
+  flex: 0 1 auto;
+  min-width: 72px;
+  max-width: 320px;
+  padding: 0 8px 0 10px;
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  margin-right: 2px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
+  flex: 0 1 auto;
+  min-width: 150px;
+  max-width: 320px;
+  align-self: stretch;
+  height: auto;
+  padding-bottom: var(--split-strip-pad);
+  border-color: var(--border);
+  border-bottom-color: transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.dockview-theme-qm
+  .dv-groupview
+  > .dv-tabs-and-actions-container:not(.dv-single-tab)
+  .dv-tabs-container
+  > .dv-tab:not(.dv-active-tab):hover {
+  background-color: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab:not(.dv-active-tab) .split-pane-title {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-close {
+  display: none;
+}
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default {
+  height: 26px;
+  padding: 0 6px;
+  margin: 0 2px 0 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: var(--font-12);
+  font-weight: 600;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+}
+.dockview-theme-qm .dv-popover-anchor {
+  z-index: 1000;
+}
+
+.dv-tabs-overflow-container {
+  min-width: 200px;
+  max-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.dv-tabs-overflow-container .dv-tab {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.dv-tabs-overflow-container .dv-tab:hover,
+.dv-tabs-overflow-container .dv-tab.dv-active-tab {
+  background: var(--secondary);
+}
+.split-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.dv-tab.dv-active-tab .split-tab-actions,
+.dv-tab:hover .split-tab-actions,
+.dv-tab:focus-within .split-tab-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.split-tab-actions .icon-btn {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  border-radius: 5px;
+  opacity: 0.55;
+}
+
+.dv-tab:hover .split-tab-actions .icon-btn,
+.dv-tab:focus-within .split-tab-actions .icon-btn {
+  opacity: 0.8;
+}
+
+.split-tab-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.split-tab-more,
+.dv-tab:not(.dv-active-tab) .split-tab-session {
+  display: none;
+}
+
+@container pane-group (max-width: 400px) {
+  .dv-tab .split-tab-session {
+    display: none;
+  }
+
+  .dv-tab.dv-active-tab .split-tab-more {
+    display: inline-flex;
+  }
+}
+
+.split-pane-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: var(--font-12-5);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.dv-tab .split-pane-title {
+  position: relative;
+  flex: 1 1 auto;
+}
+
+.dv-tab .split-pane-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.split-pane-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 6px;
+}
+
+.split-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.split-pane-actions-wide {
+  display: contents;
+}
+@container pane-group (max-width: 560px) {
+  .split-pane-actions-wide {
+    display: none;
+  }
+}
+.split-pane-crumb {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.split-pane-crumb-sep {
+  flex: 0 0 auto;
+  margin-right: 5px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
+}
+
+.split-tools {
+  position: relative;
+  display: inline-flex;
+}
+
+.split-tools-btn.active {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  color: var(--foreground);
+}
+
+.split-tools-menu {
+  z-index: 60;
+}
+
+.split-tools-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+.dockview-theme-qm .dv-tabs-and-actions-container .icon-btn:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+}
+
+.split-pane-content {
+  container: split-pane / size;
+  contain: layout style;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.split-pane-chat {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat {
+  --chat-pad: 13px;
+  --composer-inset: 10px;
+  --meta-lane: 19px;
+  font-size: var(--font-12);
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell {
+  --chat-font-size: 12px;
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat .chat-cta {
+  font-size: var(--font-21);
+}
+
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container .split-pane-actions .icon-btn {
+  width: 27px;
+  height: 27px;
+  min-width: 27px;
+  border-radius: 0;
+}
+
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
+  --split-tab-h: 27px;
+  border-radius: 0;
+}
+
+.split-canvas.resizing .split-pane-chat {
+  pointer-events: none;
+}
+
+.split-canvas.resizing {
+  user-select: none;
+}
+.dockview-theme-qm .dv-sash {
+  position: relative;
+}
+
+.dockview-theme-qm .dv-sash::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.dockview-theme-qm .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after {
+  width: 3px;
+  height: calc(100% - 16px);
+}
+
+.dockview-theme-qm .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash::after {
+  width: calc(100% - 16px);
+  height: 3px;
+}
+
+.dockview-theme-qm .dv-sash:hover::after,
+.split-canvas.resizing .dv-sash::after {
+  background: color-mix(in srgb, var(--primary) 60%, var(--border));
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:has(.dv-drop-target-dropzone) {
+  background: color-mix(in srgb, var(--primary) 12%, var(--secondary));
+}
+
+.dockview-theme-qm .dv-drop-target-dropzone .dv-drop-target-selection {
+  border: 2px dashed color-mix(in srgb, var(--primary) 55%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  transition: opacity 0.12s ease;
+}
+
+.split-canvas:not(.resizing) .dv-groupview {
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    width 0.16s ease,
+    height 0.16s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-canvas .dv-groupview {
+    transition: none;
+  }
+}
+
+.split-zones {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.split-zone {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 2px dashed color-mix(in srgb, var(--primary) 55%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  font-weight: 600;
+  pointer-events: auto;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.split-zone span {
+  pointer-events: none;
+}
+
+.split-zone.over {
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  color: var(--foreground);
+}
+
+.split-canvas.session-dragging .dv-tabs-and-actions-container {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.strip-zones {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+
+.strip-zones .split-zone {
+  inset: 0;
+  margin: 2px;
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--font-11-5);
+}
+
+.strip-zones .split-zone.over {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.zone-top {
+  left: 25%;
+  right: 25%;
+  top: 0;
+  height: 25%;
+}
+
+.zone-bottom {
+  left: 25%;
+  right: 25%;
+  bottom: 0;
+  height: 25%;
+}
+
+.zone-left {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 25%;
+}
+
+.zone-right {
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 25%;
+}
+.zone-center {
+  left: 25%;
+  right: 25%;
+  top: 25%;
+  bottom: 25%;
+}
+
+.split-zones > .split-zone:only-child {
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+
+.split-toast {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: var(--font-12-5);
+}
+
+[data-density="compact"] .chat-scroll {
+  --chat-scroll-pad-top: 8px;
+  --chat-edge-space: 14px;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
+}
+[data-density="compact"] .message-row {
+  --meta-lane: 20px;
+}
+[data-density="compact"] .message-stack {
+  gap: 0;
+  font-size: var(--font-13-5);
+}
+[data-density="compact"] .live-work-detail {
+  display: none;
+}
+@container chat (max-width: 860px) {
+  .custom-chat-shell {
+    --content-w: 100%;
+  }
+  .composer-wrap {
+    width: auto;
+    margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
+    margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
+  }
+  .queued-strip,
+  .chat-bottom-dock > .bg-activity {
+    width: auto;
+    margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
+    margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
+  }
+}
+@container chat (max-width: 470px) {
+  .custom-chat-shell {
+    --chat-pad: 10px;
+  }
+  .composer-wrap {
+    margin-right: calc(10px + env(safe-area-inset-right));
+    margin-bottom: calc(10px + env(safe-area-inset-bottom));
+    margin-left: calc(10px + env(safe-area-inset-left));
+    border-radius: 18px;
+  }
+  .queued-strip,
+  .chat-bottom-dock > .bg-activity {
+    margin-right: calc(22px + env(safe-area-inset-right));
+    margin-left: calc(22px + env(safe-area-inset-left));
+  }
+}
+[data-density="card"] .live-work-status,
+[data-density="strip"] .live-work-status,
+[data-density="card"] .goal-strip,
+[data-density="strip"] .goal-strip {
+  display: none;
+}
+[data-density="strip"] .chat-bottom-dock {
+  display: none;
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
+  --composer-font-size: 12px;
+  --composer-pad-block: 10px;
+  --composer-pad-inline: 10px;
+  width: 100%;
+  margin: 0;
+  padding-bottom: max(var(--composer-pad-block), env(safe-area-inset-bottom));
+  border-width: 1px 0 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+[data-density] .composer-toolbar .icon-btn,
+[data-density] .composer-toolbar .menu-button,
+[data-density] .composer-toolbar .send-btn {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+[data-density] .runtime-upgrade,
+[data-density] .attachment-strip,
+[data-density] .queued-strip,
+[data-density] .composer-approval-panel,
+[data-density] .composer-note,
+[data-density] .composer-error {
+  flex-basis: 100%;
+
+  min-width: 0;
+}
+.pane-card {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+}
+.pane-card-now {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: var(--font-12-5);
+  color: var(--foreground);
+}
+.pane-card-now-label {
+  flex: 0 0 auto;
+  font-size: var(--font-11);
+  font-weight: 400;
+  color: var(--primary);
+}
+.pane-card-now-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-card-last {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pane-strip {
+  appearance: none;
+  border: 0;
+  background: none;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: var(--font-12-5);
+  color: var(--muted-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.pane-strip:hover {
+  color: var(--foreground);
+}
+.pane-strip-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.section-label.recents-label > span:first-child {
+  flex: 1;
+}
