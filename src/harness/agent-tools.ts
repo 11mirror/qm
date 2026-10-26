@@ -232,7 +232,7 @@ const SURFACE_ACTIONS = [
   "read_file",
 ] as const;
 const LIST_PAGE_SIZE = 25;
-const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note", "retarget"]);
+const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note"]);
 const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
@@ -304,12 +304,10 @@ function fmtCronCreated(r: {
   cron: CronLike;
   recipient?: { displayName: string };
   channel?: { name: string };
-  group?: { groupId: string };
 }): string {
   let to = "";
   if (r.recipient) to = `\nAddressed to ${r.recipient.displayName} (DM).`;
   else if (r.channel) to = `\nAddressed to #${r.channel.name}.`;
-  else if (r.group) to = `\nAddressed to a group DM.`;
   return `Created cron ${fmtCronLine(r.cron)}${to}`;
 }
 
@@ -2163,16 +2161,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
       "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
       "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
-      "To deliver elsewhere, set `recipient` " +
-      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched), `channel` " +
-      "(a channel name → that channel), `participants` (a list of member ids → a group DM, which has no name; " +
-      "you're added automatically; the group must already exist — post to it once with the slack tool's " +
-      "reach action, which opens it, then schedule into it), or `destinationKey` " +
-      '(a key from the "Where scheduled tasks post" ' +
-      'menu when one is shown). To schedule something privately for whoever asked instead, set scope="personal" ' +
-      '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
-      "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
-      "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
+      "The only other destination is a named Slack target: set `recipient` " +
+      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched) or `channel` " +
+      "(a channel name → that channel). Don't bury \"send this to Slack\" inside `task`. A cron's destination is fixed at create; " +
+      "to move one, create the new cron and delete the old. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
       "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
       "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
       "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
@@ -2205,15 +2197,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           Type.Literal("delete"),
           Type.Literal("run"),
           Type.Literal("disable"),
-          Type.Literal("retarget"),
           Type.Literal("note"),
         ],
         {
           description:
-            "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, retarget where it delivers, or note — leave a short shift-change note for its next fire.",
+            "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, or note — leave a short shift-change note for its next fire.",
         },
       ),
-      id: optionalString("get/runs/patch/delete/run/disable/retarget/note only: the cron id."),
+      id: optionalString("get/runs/patch/delete/run/disable/note only: the cron id."),
       title: optionalString(
         'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
       ),
@@ -2236,19 +2227,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
       recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
       channel: optionalString("create: a channel name to post to (core resolves it)."),
-      scope: Type.Optional(
-        Type.Literal("personal", {
-          description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
-        }),
-      ),
-      participants: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            "create: a group DM's other member ids (you're added automatically); a group DM has no name, so core matches it by exact membership, and the group must already exist — reach it once first, which opens it.",
-        }),
-      ),
-      destinationKey: optionalString('create/retarget: a key from the "Where scheduled tasks post" menu.'),
       session: optionalBoolean(
         "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
       ),
@@ -2331,9 +2309,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.text !== undefined ? { text: params.text } : {}),
             ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
             ...(params.channel !== undefined ? { channel: params.channel } : {}),
-            ...(params.scope !== undefined ? { scope: params.scope } : {}),
-            ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
-            ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
@@ -2354,7 +2329,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               created: true,
               ...(r.recipient ? { recipient: r.recipient } : {}),
               ...(r.channel ? { channel: r.channel } : {}),
-              ...(r.group ? { group: r.group } : {}),
             },
             fmtCronCreated(r),
           );
@@ -2467,17 +2441,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
           );
         }
-        case "retarget": {
-          if (typeof params.destinationKey !== "string" || !params.destinationKey) {
-            return fail(
-              "destinationKey required",
-              "cron retarget requires `destinationKey` (a key from the delivery menu).",
-            );
-          }
-          const r = await tc.cronRetarget(id, params.destinationKey);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(callId, { tool: "cron", id }, `Retargeted cron ${fmtCronLine(r.cron)}`);
-        }
       }
     },
   });
@@ -2491,7 +2454,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=create takes `action` (what to do on each event; the event payload is appended " +
       "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
       'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      `\`destinationKey\` (same delivery menu as crons). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
+      `\`destinationKey\` (a key from the "Where scheduled tasks post" menu). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
       `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
       "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
       "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +

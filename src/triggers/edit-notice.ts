@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 
 export interface CronEditDetail {
   schedule?: CronSchedule;
-  destinationLabel?: string;
 }
 
 function scheduleClause(s: CronSchedule | undefined): string {
@@ -55,10 +54,7 @@ export function composeCronEditNotice(args: {
     else if (key === "note") verbs.push("left a shift-change note on");
     else if (key === "task") toClauses.push("to do something different");
     else if (key === "schedule") toClauses.push(scheduleClause(args.detail?.schedule));
-    else if (key === "destination")
-      toClauses.push(
-        args.detail?.destinationLabel ? `to post to ${args.detail.destinationLabel}` : "to post somewhere new",
-      );
+    else if (key === "destination") toClauses.push("to post somewhere new");
     else if (key === "unfurlLinks") toClauses.push("to change its link previews");
     else if (key === "mode") toClauses.push("to run in a different mode");
   }

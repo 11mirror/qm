@@ -305,12 +305,6 @@ export interface ToolContext extends SurfaceToolDeps {
     | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
     | ControlUnavailable
   >;
-  cronRetarget(
-    id: string,
-    destinationKey: string,
-  ): Promise<
-    ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "unknown_destination"> | ControlUnavailable
-  >;
   webhookCreate(req: WebhookCreateRequest): Promise<WebhookCreateResult | ControlUnavailable>;
   webhookList(): Promise<Webhook[] | ControlUnavailable>;
   webhookDisable(
@@ -1392,11 +1386,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronRun: (id) =>
       controlOp(
         (c, cl) => c.runCron(id, cl),
-        (r) => r.ok,
-      ),
-    cronRetarget: (id, destinationKey) =>
-      controlOp(
-        (c, cl) => c.retargetCron(id, destinationKey, cl),
         (r) => r.ok,
       ),
     webhookCreate: (req) =>

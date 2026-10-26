@@ -1,18 +1,7 @@
 import { adminOperations } from "../tools/admin.ts";
 import { SWARM_ACTIONS } from "../swarms/swarm.ts";
 
-export const CRON_ACTIONS = [
-  "create",
-  "list",
-  "get",
-  "runs",
-  "patch",
-  "delete",
-  "run",
-  "disable",
-  "retarget",
-  "note",
-] as const;
+export const CRON_ACTIONS = ["create", "list", "get", "runs", "patch", "delete", "run", "disable", "note"] as const;
 
 const READ_ONLY_TOOLS = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents", "swarm"]);
 

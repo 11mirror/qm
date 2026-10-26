@@ -193,15 +193,10 @@ describe("composeCronEditNotice: a heads-up with enough context to skip clicking
     );
   });
 
-  it("describes a retarget with the destination label", () => {
+  it("describes a destination change", () => {
     assert.equal(
-      composeCronEditNotice({
-        editorName: "Casey",
-        ref: link,
-        changes: ["destination"],
-        detail: { destinationLabel: "#eng" },
-      }),
-      `Heads up: Casey changed your ${link} cron to post to #eng.`,
+      composeCronEditNotice({ editorName: "Casey", ref: link, changes: ["destination"] }),
+      `Heads up: Casey changed your ${link} cron to post somewhere new.`,
     );
   });
 

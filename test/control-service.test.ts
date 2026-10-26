@@ -141,7 +141,7 @@ test("every unattended read grant type is accepted on create", async () => {
   assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
 });
 
-test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create and retarget", async () => {
+test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create", async () => {
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "admin-alice", displayName: "Alice", type: "internal" },
@@ -158,7 +158,7 @@ test("a grant-carrying cron delivers only to its owner: shared or third-party de
     unattendedGrants: ["admin.spend.read"],
   };
 
-  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }, { destinationKey: ROOM.key }]) {
+  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }]) {
     const refused = await control.createCron({ ...request, ...elsewhere }, live);
     assert.equal(refused.ok, false, JSON.stringify(elsewhere));
     assert.match(refused.ok ? "" : refused.message, /delivers only to them/);
@@ -168,15 +168,9 @@ test("a grant-carrying cron delivers only to its owner: shared or third-party de
   assert.ok(own.ok, JSON.stringify(own));
   assert.equal(own.cron.ownerScopeId, scopeId("personal", "admin-alice"));
 
-  const retarget = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.equal(retarget.ok, false);
-  assert.match(retarget.ok ? "" : retarget.message, /delivers only to them/);
-
   const cleared = await control.patchCron(own.cron.id, { unattendedGrants: [] }, claims("admin-alice"));
   assert.ok(cleared.ok, "removing grants only narrows access, so it needs no live admin turn");
   assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
-  const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.ok(moved.ok, "once grants are gone the cron can deliver anywhere");
 });
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {
@@ -205,14 +199,13 @@ test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch
   assert.deepEqual(tampered?.unattendedGrants, [], "a raw patch that does not reaffirm grants drops the cron to floor");
 });
 
-test("cron create with a destinationKey resolves to that menu destination, and returns the created cron", async () => {
+test("cron create with no named target delivers to this conversation, and returns the created cron", async () => {
   const { control } = setup();
   const r = await control.createCron(
     {
       title: "Gmail digest",
       schedule: { everyMs: 3_600_000 },
       action: "check gmail",
-      destinationKey: ROOM.key,
       unfurlLinks: false,
     },
     claims("U1"),
@@ -222,7 +215,7 @@ test("cron create with a destinationKey resolves to that menu destination, and r
   assert.equal(r.cron.action, "check gmail");
   assert.equal(r.cron.owner, "U1");
   assert.equal(r.cron.ownerScopeId, scopeId("personal", "U1"));
-  assert.equal(r.cron.destination?.target, "C9");
+  assert.equal(r.cron.destination?.target, "D1");
   assert.equal(r.cron.destination?.unfurlLinks, false);
 });
 
@@ -274,16 +267,6 @@ test("a calendar cron without an explicit timezone inherits the turn's timezone 
   const noTz = await control.createCron({ schedule: { cron: "0 9 * * *" }, action: "x" }, claims("U1"));
   assert.ok(noTz.ok);
   assert.equal((await built.app.getCron(noTz.cron.id))?.schedule.timezone, "America/Los_Angeles");
-});
-
-test("an unknown destinationKey is rejected (only menu keys are allowed)", async () => {
-  const { control } = setup();
-  const r = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", destinationKey: "not-a-real-key" },
-    claims("U1"),
-  );
-  assert.equal(r.ok, false);
-  assert.equal(r.ok ? "" : r.code, "unknown_destination");
 });
 
 test("cron create rejects unfurlLinks when there is no delivery destination", async () => {
@@ -380,11 +363,6 @@ test("a teammate-addressed cron runs in the OWNER's scope; the recipient is deli
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.cron.ownerScopeId, scopeId("channel", "C9"));
   assert.notEqual(r.cron.ownerScopeId, scopeId("personal", "U2"));
-  const personal = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal" },
-    claims("U1", scopeId("channel", "C9")),
-  );
-  assert.ok(personal.ok, JSON.stringify(personal));
 });
 
 test("an ambiguous recipient name returns candidates, not a created cron", async () => {
@@ -453,57 +431,6 @@ test("cron create with `channel` resolves a public channel; a private channel ne
   );
   assert.equal(ghost.ok, false);
   assert.equal(ghost.ok ? "" : ghost.code, "identity_unverified");
-});
-
-test('scope:"personal" runs at the invoking user\'s personal scope and DMs them, even from a channel', async () => {
-  const { control } = setup();
-  const chanScope = scopeId("channel", "C9");
-  const r = await control.createCron(
-    { title: "my private reminder", schedule: { everyMs: 3_600_000 }, action: "remind me", scope: "personal" },
-    claims("U1", chanScope),
-  );
-  assert.ok(r.ok, JSON.stringify(r));
-  assert.equal(r.cron.ownerScopeId, scopeId("personal", "U1"));
-  assert.equal(r.cron.destination?.type, "principal");
-  assert.equal(r.cron.destination?.target, "U1");
-  assert.equal(r.cron.destination?.audienceScopeId, scopeId("personal", "U1"));
-  assert.equal(r.recipient, undefined);
-  assert.equal(r.channel, undefined);
-});
-
-test('scope:"personal" can\'t be combined with an addressed target or a destinationKey', async () => {
-  const { control } = setup();
-  const withChannel = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", channel: "eng" },
-    claims("U1"),
-  );
-  assert.equal(withChannel.ok, false);
-  assert.equal(withChannel.ok ? "" : withChannel.code, "bad_request");
-
-  const withKey = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", destinationKey: ROOM.key },
-    claims("U1"),
-  );
-  assert.equal(withKey.ok, false);
-  assert.equal(withKey.ok ? "" : withKey.code, "bad_request");
-});
-
-test('scope:"personal" ignores an empty participants array (tool callers often send []), but a non-empty one conflicts', async () => {
-  const { control } = setup();
-  const ok = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", participants: [] },
-    claims("U1", scopeId("channel", "C9")),
-  );
-  assert.ok(ok.ok, JSON.stringify(ok));
-  assert.equal(ok.cron.ownerScopeId, scopeId("personal", "U1"));
-  assert.equal(ok.cron.destination?.type, "principal");
-  assert.equal(ok.cron.destination?.target, "U1");
-  const bad = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", participants: ["U2"] },
-    claims("U1", scopeId("channel", "C9")),
-  );
-  assert.equal(bad.ok, false);
-  assert.equal(bad.ok ? "" : bad.code, "bad_request");
 });
 
 test("recipient AND channel together is rejected", async () => {
@@ -725,10 +652,6 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   assert.ok(reenabled.ok);
   const ran = await control.runCron(id, claims("U1"));
   assert.ok(ran.ok, JSON.stringify(ran));
-
-  const retargeted = await control.retargetCron(id, ROOM.key, claims("U1"));
-  assert.ok(retargeted.ok, JSON.stringify(retargeted));
-  assert.equal(retargeted.cron.destination?.target, "C9");
 
   const del = await control.deleteCron(id, claims("U1"));
   assert.ok(del.ok);
@@ -1084,26 +1007,4 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     }),
     /runtime is no longer available/,
   );
-});
-
-test("retarget moves a cron to another menu destination, is owner-gated, and refuses keys outside the turn's menu", async () => {
-  const { control } = setup();
-  const created = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "move me" }, claims("U1"));
-  assert.ok(created.ok);
-  assert.equal(created.cron.destination?.target, "D1");
-
-  const moved = await control.retargetCron(created.cron.id, ROOM.key, claims("U1"));
-  assert.ok(moved.ok);
-  assert.equal(moved.cron.destination?.target, "C9");
-  assert.equal(moved.cron.destination?.audienceScopeId, scopeId("channel", "C9"));
-
-  const foreign = await control.retargetCron(created.cron.id, D1.key, claims("U2"));
-  assert.equal(foreign.ok ? "" : foreign.code, "forbidden");
-
-  const unknown = await control.retargetCron(created.cron.id, "nope", claims("U1"));
-  assert.equal(unknown.ok ? "" : unknown.code, "unknown_destination");
-
-  const { destinations: _destinations, defaultDestinationKey: _key, ...menuless } = claims("U1");
-  const contained = await control.retargetCron(created.cron.id, ROOM.key, menuless);
-  assert.equal(contained.ok, false);
 });

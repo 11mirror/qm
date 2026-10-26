@@ -12,7 +12,7 @@ import {
 } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
-import { withSlackUnfurlOption, principalDestination, type ReachResolution } from "../reach/reach.ts";
+import { withSlackUnfurlOption, type ReachResolution } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
@@ -38,9 +38,6 @@ export interface CronCreateRequest {
   text?: string;
   recipient?: string;
   channel?: string;
-  participants?: string[];
-  scope?: "personal";
-  destinationKey?: string;
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
@@ -52,17 +49,16 @@ type ReachFailureCode =
   | "ambiguous_recipient"
   | "channel_not_found"
   | "ambiguous_channel"
-  | "group_not_found"
   | "not_a_member"
   | "identity_unverified";
 
-type ReachedTarget = Pick<Extract<ReachResolution, { ok: true }>, "recipient" | "channel" | "group">;
+type ReachedTarget = Pick<Extract<ReachResolution, { ok: true }>, "recipient" | "channel">;
 
 export type CronCreateResult =
   | ({ ok: true; cron: Cron } & ReachedTarget)
   | {
       ok: false;
-      code: "bad_request" | ReachFailureCode | "unknown_destination" | "forbidden" | "cron_create_failed";
+      code: "bad_request" | ReachFailureCode | "forbidden" | "cron_create_failed";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };
@@ -140,11 +136,6 @@ export interface ControlService {
     id: string,
     claims: CapabilityClaims,
   ): ControlOp<{ fireKey: string }, "unavailable" | "bad_request" | "already_running">;
-  retargetCron(
-    id: string,
-    destinationKey: string,
-    claims: CapabilityClaims,
-  ): ControlOp<{ cron: Cron }, "unknown_destination">;
   createWebhook(
     req: WebhookCreateRequest,
     claims: CapabilityClaims,
@@ -301,12 +292,9 @@ function invalidUnattendedGrants(grants: string[] | undefined): ControlErr<"bad_
 function reachFailureCode(
   r: Extract<ReachResolution, { ok: false }>,
   req: CronCreateRequest,
-  wantsGroup: boolean,
 ): "bad_request" | ReachFailureCode {
-  if (r.error === "recipient_not_found" || r.error === "ambiguous_recipient" || r.error === "group_not_found")
-    return r.error;
-  if (r.status === 404 && req.recipient !== undefined) return "recipient_not_found";
-  if (r.status === 404) return wantsGroup ? "group_not_found" : "channel_not_found";
+  if (r.error === "recipient_not_found" || r.error === "ambiguous_recipient") return r.error;
+  if (r.status === 404) return req.recipient !== undefined ? "recipient_not_found" : "channel_not_found";
   if (r.status === 409) return req.recipient !== undefined ? "ambiguous_recipient" : "ambiguous_channel";
   if (r.status === 403) return r.error === "identity_unverified" ? "identity_unverified" : "not_a_member";
   return "bad_request";
@@ -343,39 +331,25 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return fail("bad_request", "task (what to do) or text (exact text to send) required");
       if (req.inbox && req.action === undefined)
         return fail("bad_request", "an inbox cron needs a task, not exact text");
-      const hasParticipants = Array.isArray(req.participants);
-      const wantsGroup = hasParticipants && req.participants!.length > 0;
-      const wantsPersonal = req.scope === "personal";
-      if (
-        [req.recipient !== undefined, req.channel !== undefined, wantsGroup, wantsPersonal].filter(Boolean).length > 1
-      )
-        return fail(
-          "bad_request",
-          'specify at most one of scope:"personal", recipient (a teammate), channel, or participants (a group DM)',
-        );
-      if (wantsPersonal && req.destinationKey !== undefined)
-        return fail("bad_request", 'scope:"personal" runs at your own scope — it can\'t also take a destinationKey');
+      if (req.recipient !== undefined && req.channel !== undefined)
+        return fail("bad_request", "specify at most one of recipient (a teammate) or channel");
 
       let destination: Destination | undefined;
       let ownerScopeId = capability.scopeId;
       let reached: ReachedTarget = {};
 
-      if (wantsPersonal) {
-        destination = principalDestination(capability.actorId, capability.actorId);
-        ownerScopeId = destination.audienceScopeId ?? ownerScopeId;
-      } else if (req.recipient !== undefined || req.channel !== undefined || hasParticipants) {
+      if (req.recipient !== undefined || req.channel !== undefined) {
         const r = await app.resolveReachTarget(
           {
             ...(req.recipient !== undefined ? { recipient: req.recipient } : {}),
             ...(req.channel !== undefined ? { channel: req.channel } : {}),
-            ...(hasParticipants ? { participants: req.participants } : {}),
           },
           capability.actorId,
         );
         if (!r.ok)
           return {
             ...fail(
-              reachFailureCode(r, req, wantsGroup),
+              reachFailureCode(r, req),
               r.error === "not_a_member" && req.channel !== undefined
                 ? "I can only schedule posts to a private channel you're in"
                 : r.message,
@@ -393,13 +367,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         reached = {
           ...(r.recipient ? { recipient: r.recipient } : {}),
           ...(r.channel ? { channel: r.channel } : {}),
-          ...(r.group ? { group: r.group } : {}),
         };
-        if (r.channel || r.group) ownerScopeId = r.destination.audienceScopeId ?? ownerScopeId;
+        if (r.channel) ownerScopeId = r.destination.audienceScopeId ?? ownerScopeId;
       } else {
-        const resolved = resolveCapabilityDestination(capability, req.destinationKey);
-        if (!resolved.ok) return unknownDestination();
-        destination = resolved.destination;
+        const resolved = resolveCapabilityDestination(capability, undefined);
+        if (resolved.ok) destination = resolved.destination;
       }
 
       if (req.unattendedGrants?.length) {
@@ -569,21 +541,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return fail(refusal.error, refusal.message);
       }
       return { ok: true, fireKey: result.fireKey };
-    },
-
-    async retargetCron(id, destinationKey, capability) {
-      const found = await administeredCron(id, capability);
-      if (!found.ok) return found;
-      const { cron } = found;
-      const resolved = resolveCapabilityDestination(capability, destinationKey);
-      if (!resolved.ok) return unknownDestination();
-      const refusal = await unattendedRefusal({ ...cron, destination: resolved.destination }, capability);
-      if (refusal) return refusal;
-      if (isDeepStrictEqual(cron.destination, resolved.destination)) return found;
-      const updated = await app.setCronDestination(id, resolved.destination);
-      const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
-      await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
-      return { ok: true, cron: updated ?? cron };
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
