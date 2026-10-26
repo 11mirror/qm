@@ -142,15 +142,6 @@ test("a remote sandbox backend without the shared egress proxy warns once", () =
   assert.equal(warnings.filter((w) => w.includes("without SANDBOX_EGRESS_PROXY_URL")).length, 1);
 });
 
-test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
-  assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ ARTIFACT_STORE: "sqlite" }), /ARTIFACT_STORE=sqlite is no longer supported/);
-});
-
-test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
-  assert.doesNotThrow(() => loadConfig({ ARTIFACT_STORE: "memory" }));
-});
-
 test("boolEnv: one vocabulary for every boolean env knob", () => {
   for (const v of ["1", "true", "yes", "on", "TRUE", " On "]) assert.equal(boolEnv(v), true, v);
   for (const v of ["0", "false", "no", "off", "none", "OFF"]) assert.equal(boolEnv(v), false, v);

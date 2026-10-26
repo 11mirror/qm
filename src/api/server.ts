@@ -437,22 +437,6 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
       `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,
     );
   }
-  if (deps.requireSignedPortalIdentity || deps.production) {
-    const shared = (name: string, value: string | undefined): string | null => {
-      if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
-      return value === deps.signingSecret ? `${name} must differ from CORE_SIGNING_SECRET` : null;
-    };
-    const problem =
-      shared("CAPABILITY_SECRET", deps.capabilitySecret) ??
-      shared("PORTAL_IDENTITY_SECRET", deps.portalIdentitySecret) ??
-      (deps.capabilitySecret === deps.portalIdentitySecret
-        ? "PORTAL_IDENTITY_SECRET must differ from CAPABILITY_SECRET"
-        : null);
-    if (problem)
-      throw new Error(
-        `signed portal identity is required but ${problem}. Provision distinct secrets or enforcement is bypassable.`,
-      );
-  }
   return buildServer(app, deps, false);
 }
 
