@@ -45,7 +45,7 @@ import {
   slackReplyArgs,
 } from "./delivery.ts";
 import {
-  createDeduper,
+  type Deduper,
   createThreadTracker,
   dedupeKey,
   dedupedRun,
@@ -124,7 +124,7 @@ export function createTurnHandler(deps: {
   ackEmojiCandidates?: () => readonly string[] | null;
   ids: BotIdentity;
   threads: ReturnType<typeof createThreadTracker>;
-  deduper: ReturnType<typeof createDeduper>;
+  deduper: Deduper;
   externalParticipantsEnabled(): Promise<boolean>;
   allowActor?: (actor: ActorAssertion) => boolean;
   markEvent?: () => void;

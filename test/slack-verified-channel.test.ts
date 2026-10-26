@@ -241,7 +241,7 @@ for (const mode of ["socket", "http"] as const)
       await completed;
       assert.equal(admitted, 0);
       assert.equal(externalRefusals, 0);
-      assert.equal(deduper.seen("message-key"), false);
+      assert.equal(await deduper.seen("message-key"), false);
       deduper.forget("message-key");
       options.failWrite = false;
       if (afterCap) {

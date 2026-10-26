@@ -54,6 +54,7 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
+import type { HandledEvent } from "./slack/message-gating.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
@@ -2087,6 +2088,7 @@ export function buildApp(
     app,
     leaderLease,
     stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
+    handledEvents: artifactMap<HandledEvent>("slack_handled_events"),
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,

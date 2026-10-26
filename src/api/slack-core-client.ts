@@ -13,6 +13,7 @@ import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
+import type { HandledEvent } from "../slack/message-gating.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
@@ -108,6 +109,7 @@ export interface SlackCoreClient {
   slack: SlackNative;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  handledEvents?: DurableMap<HandledEvent>;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
@@ -158,6 +160,7 @@ export interface SlackCoreClientDeps {
   brandingDefault?: OrgBranding;
   leaderLease: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  handledEvents?: DurableMap<HandledEvent>;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;
@@ -410,6 +413,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     holdDirectorySync: (fn) => lease.hold("slack:directory-sync", fn),
     holdEnvelopeReplay: (account, fn) => lease.hold(`slack:envelope-replay:${account}`, fn),
     stagedEnvelopes: deps.stagedEnvelopes,
+    handledEvents: deps.handledEvents,
 
     pendingContextRequests: () => deps.app.pendingContextRequests("slack"),
 

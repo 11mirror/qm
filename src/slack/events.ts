@@ -1,6 +1,6 @@
 import {
   channelPrivacyChange,
-  createDeduper,
+  type Deduper,
   dedupeKey,
   dedupedRun,
   isGroupMembershipMessage,
@@ -48,7 +48,7 @@ export function registerSlackEvents(
     mirror: Mirror;
     directory: Directory;
     ids: BotIdentity;
-    deduper: ReturnType<typeof createDeduper>;
+    deduper: Deduper;
     allowActor?: (actor: ActorAssertion) => boolean;
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
@@ -157,13 +157,15 @@ export function registerSlackEvents(
       if (!shouldProcessMessage(e, ids.botUserId, ids.ownBotId)) return;
       const identity = await eventIdentity(client, e);
       if (allowActor && !(await actorAllowed(client, identity.userId))) {
-        if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.ts }))) return;
+        const key = dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.ts });
+        if (await deduper.seen(key)) return;
         await denyDirectApproach(client, {
           channel: e.channel,
           userId: identity.userId,
           kind: "channel",
           isBot: Boolean(e.bot_id || identity.actor?.isBot),
         });
+        await deduper.done(key);
         return;
       }
       await dispatchMessage(client, e, {

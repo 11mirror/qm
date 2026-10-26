@@ -1,5 +1,7 @@
 import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
 
@@ -160,29 +162,45 @@ export function dedupeKey(e: { event_id?: string; client_msg_id?: string; channe
   return e.event_id || e.client_msg_id || `${e.channel ?? ""}:${e.ts ?? ""}`;
 }
 
-export function createDeduper(max = 500): { seen(key: string): boolean; forget(key: string): void } {
+export interface HandledEvent {
+  at: number;
+}
+
+export interface Deduper {
+  seen(key: string): Promise<boolean>;
+  done(key: string): Promise<void>;
+  forget(key: string): void;
+}
+
+export function createDeduper(max = 500, handled?: DurableMap<HandledEvent>, now = Date.now): Deduper {
   const cache = new LRUCache<string, true>({ max });
   return {
-    seen(key: string): boolean {
+    async seen(key) {
       if (cache.has(key)) return true;
       cache.set(key, true);
-      return false;
+      if (!handled) return false;
+      return (await handled.get(key).catch(swallowAs("slack: handled-event lookup", null))) !== null;
     },
-    forget(key: string): void {
+    async done(key) {
+      await handled?.put(key, { at: now() }).catch(swallowAs("slack: handled-event record", undefined));
+    },
+    forget(key) {
       cache.delete(key);
+      void handled?.delete(key).catch(swallowAs("slack: handled-event forget", undefined));
     },
   };
 }
 
 export async function dedupedRun(
-  deduper: { seen(key: string): boolean; forget(key: string): void },
+  deduper: Deduper,
   key: string,
   run: () => Promise<void>,
   onError: (err: unknown) => void,
 ): Promise<boolean> {
-  if (deduper.seen(key)) return false;
+  if (await deduper.seen(key)) return false;
   try {
     await run();
+    await deduper.done(key);
   } catch (err) {
     deduper.forget(key);
     onError(err);

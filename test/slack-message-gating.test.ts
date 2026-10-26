@@ -1,3 +1,4 @@
+import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -13,6 +14,7 @@ import {
   isThreadReply,
   createThreadTracker,
   createDeduper,
+  type HandledEvent,
   dedupedRun,
   dedupeKey,
   isBareStop,
@@ -139,29 +141,29 @@ test("createThreadTracker: marking a stake true overrides a cached negative (del
   assert.equal(t.get("C", "1"), true);
 });
 
-test("createDeduper drops a repeated event_id once seen (scenario 28)", () => {
+test("createDeduper drops a repeated event_id once seen (scenario 28)", async () => {
   const d = createDeduper(10);
   const ev = { event_id: "Ev123", channel: "C", ts: "1.2" };
-  assert.equal(d.seen(dedupeKey(ev)), false);
-  assert.equal(d.seen(dedupeKey(ev)), true);
+  assert.equal(await d.seen(dedupeKey(ev)), false);
+  assert.equal(await d.seen(dedupeKey(ev)), true);
 });
 
-test("createDeduper evicts the oldest key past its max", () => {
+test("createDeduper evicts the oldest key past its max", async () => {
   const d = createDeduper(2);
-  assert.equal(d.seen("a"), false);
-  assert.equal(d.seen("b"), false);
-  assert.equal(d.seen("c"), false);
-  assert.equal(d.seen("a"), false);
-  assert.equal(d.seen("c"), true);
+  assert.equal(await d.seen("a"), false);
+  assert.equal(await d.seen("b"), false);
+  assert.equal(await d.seen("c"), false);
+  assert.equal(await d.seen("a"), false);
+  assert.equal(await d.seen("c"), true);
 });
 
-test("createDeduper.forget re-admits a failed event so a withheld-ack redelivery reprocesses", () => {
+test("createDeduper.forget re-admits a failed event so a withheld-ack redelivery reprocesses", async () => {
   const d = createDeduper(10);
   const key = dedupeKey({ event_id: "Ev9", channel: "C", ts: "5.5" });
-  assert.equal(d.seen(key), false);
+  assert.equal(await d.seen(key), false);
   d.forget(key);
-  assert.equal(d.seen(key), false);
-  assert.equal(d.seen(key), true);
+  assert.equal(await d.seen(key), false);
+  assert.equal(await d.seen(key), true);
 });
 
 test("dedupedRun (the dispatch flow): handler failure un-marks the key so a same-process redelivery reprocesses", async () => {
@@ -194,10 +196,10 @@ test("dedupeKey keys on the stable channel:ts identity, not the delivery envelop
   assert.equal(dedupeKey({ client_msg_id: "C" }), "C");
 });
 
-test("createDeduper suppresses a redelivery of the same message with a different envelope (incident regression)", () => {
+test("createDeduper suppresses a redelivery of the same message with a different envelope (incident regression)", async () => {
   const d = createDeduper(10);
-  assert.equal(d.seen(dedupeKey({ event_id: "Ev1", client_msg_id: "CM", channel: "D0", ts: "111.222" })), false);
-  assert.equal(d.seen(dedupeKey({ event_id: "Ev2", channel: "D0", ts: "111.222" })), true);
+  assert.equal(await d.seen(dedupeKey({ event_id: "Ev1", client_msg_id: "CM", channel: "D0", ts: "111.222" })), false);
+  assert.equal(await d.seen(dedupeKey({ event_id: "Ev2", channel: "D0", ts: "111.222" })), true);
 });
 
 test("isBareStop accepts case-insensitive stop with optional trailing . or !", () => {
@@ -205,4 +207,59 @@ test("isBareStop accepts case-insensitive stop with optional trailing . or !", (
   for (const t of ["please stop the job", "stop it", "stop?", "stopping", ""]) assert.equal(isBareStop(t), false, t);
   for (const t of ["@qm stop", "@qm Stop!"]) assert.equal(isBareStop(t, "qm"), true, t);
   for (const t of ["@qm stop it", "@qmstop", "@alice stop", "@here stop"]) assert.equal(isBareStop(t, "qm"), false, t);
+});
+
+const handledStore = () => {
+  const rows = new Map<string, HandledEvent>();
+  const map = {
+    get: async (id: string) => rows.get(id) ?? null,
+    put: async (id: string, value: HandledEvent) => {
+      rows.set(id, value);
+    },
+    delete: async (id: string) => {
+      rows.delete(id);
+    },
+  } as unknown as DurableMap<HandledEvent>;
+  return { rows, map };
+};
+
+test("an event handled by one process is skipped by another process sharing the handled store", async () => {
+  const { map } = handledStore();
+  const key = dedupeKey({ event_id: "Ev7", channel: "C", ts: "7.7" });
+  let runs = 0;
+  const run = async () => {
+    runs++;
+  };
+  const fail = (err: unknown) => {
+    throw err;
+  };
+  assert.equal(await dedupedRun(createDeduper(10, map), key, run, fail), true);
+  assert.equal(await dedupedRun(createDeduper(10, map), key, run, fail), false);
+  assert.equal(runs, 1);
+});
+
+test("a failed handler leaves no handled record, so a redelivery to another process reprocesses", async () => {
+  const { map, rows } = handledStore();
+  const key = dedupeKey({ event_id: "Ev8", channel: "C", ts: "8.8" });
+  let runs = 0;
+  await dedupedRun(
+    createDeduper(10, map),
+    key,
+    async () => {
+      runs++;
+      throw new Error("core unavailable");
+    },
+    () => undefined,
+  );
+  assert.equal(rows.has(key), false);
+  await dedupedRun(
+    createDeduper(10, map),
+    key,
+    async () => {
+      runs++;
+    },
+    () => undefined,
+  );
+  assert.equal(runs, 2);
+  assert.equal(rows.has(key), true);
 });
