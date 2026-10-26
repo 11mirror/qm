@@ -635,13 +635,12 @@ const sourceBuildInfoByRoot = new Map<string, { gitCommit?: string; dirty?: bool
 function sourceBuildInfo(root: string): { gitCommit?: string; dirty?: boolean } {
   const cached = sourceBuildInfoByRoot.get(root);
   if (cached) return cached;
-  const info: { gitCommit?: string; dirty?: boolean } = {};
-  try {
-    info.gitCommit = capture("git", ["-C", root, "rev-parse", "HEAD"]).trim();
-    info.dirty = capture("git", ["-C", root, "status", "--porcelain"]).trim().length > 0;
-  } catch {
-    void 0;
-  }
+  const info: { gitCommit?: string; dirty?: boolean } = existsSync(join(root, ".git"))
+    ? {
+        gitCommit: capture("git", ["-C", root, "rev-parse", "HEAD"]).trim(),
+        dirty: capture("git", ["-C", root, "status", "--porcelain"]).trim().length > 0,
+      }
+    : {};
   sourceBuildInfoByRoot.set(root, info);
   return info;
 }
@@ -649,9 +648,10 @@ function sourceBuildInfo(root: string): { gitCommit?: string; dirty?: boolean } 
 function sourceImageDigest(source: string): string {
   const pinned = source.match(/@(?<digest>sha256:[0-9a-f]{64})$/)?.groups?.digest;
   if (pinned) return pinned;
-  const output = capture("docker", ["buildx", "imagetools", "inspect", source]);
-  const digest = output.match(/^Digest:\s*(sha256:[0-9a-f]{64})\s*$/m)?.[1];
-  if (!digest) throw new CliError(`registry did not return an immutable digest for AWS source image ${source}`);
+  const output = capture("docker", ["buildx", "imagetools", "inspect", "--format", "{{json .Manifest}}", source]);
+  const digest = (JSON.parse(output) as { digest?: string }).digest;
+  if (!digest?.startsWith("sha256:"))
+    throw new CliError(`registry did not return an immutable digest for AWS source image ${source}`);
   return digest;
 }
 
