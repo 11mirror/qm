@@ -634,6 +634,30 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
   };
 
+  /**
+   * The computer a command runs on: an explicit sandbox, authorized against its owner (credentials
+   * never cross scopes), or the default from `otherwise` after authorizing here.
+   */
+  const provisionForCommand = async (
+    command: string,
+    sandboxId: string | undefined,
+    withCredentials: boolean,
+    otherwise: () => Promise<SandboxHandle>,
+  ): Promise<SandboxHandle> => {
+    const policy = deps.commandPolicy;
+    if (sandboxId === undefined) {
+      authorizeExecution(command, undefined, policy());
+      return otherwise();
+    }
+    if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
+    const access = await accessSandbox(sandboxId);
+    return deps.provisionResource(access, (current) => {
+      if (current.crossScope && withCredentials)
+        throw new Error("command credentials cannot be copied to another scope's computer");
+      authorizeExecution(command, current, policy());
+    });
+  };
+
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
   const attempt = deps.attempt ?? 1;
@@ -890,23 +914,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           if (target.kind === "error") throw new Error(target.message);
           reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
         }
-        const executionPolicy = deps.commandPolicy;
-        let handle;
-        if (execOpts?.sandboxId !== undefined) {
-          if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-          const access = await accessSandbox(execOpts.sandboxId);
-          handle = await deps.provisionResource(access, (current) => {
-            if (current.crossScope && requestedCredentials.length)
-              throw new Error("command credentials cannot be copied to another scope's computer");
-            authorizeExecution(command, current, executionPolicy());
-          });
-        } else {
-          authorizeExecution(command, undefined, executionPolicy());
-          if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
-          else if (scratch) handle = await deps.provisionScratch!();
-          else if (ownerAuth) handle = await deps.provisionOwnerAuth!();
-          else handle = await deps.provision();
-        }
+        const handle = await provisionForCommand(command, execOpts?.sandboxId, requestedCredentials.length > 0, () => {
+          if (reached) return deps.reach!.provisionFor(reached.scopeId);
+          if (scratch) return deps.provisionScratch!();
+          if (ownerAuth) return deps.provisionOwnerAuth!();
+          return deps.provision();
+        });
         const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
         const timeoutMs =
           resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -1254,20 +1267,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (requestedCredentials.length && !writableScopeId)
         throw new Error("command credentials are available only on scoped computers");
       const requested = await selectCredentials(requestedCredentials, false);
-      const policy = deps.commandPolicy;
-      let handle: SandboxHandle;
-      if (opts?.sandboxId !== undefined) {
-        if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-        const access = await accessSandbox(opts.sandboxId);
-        handle = await deps.provisionResource(access, (current) => {
-          if (current.crossScope && requestedCredentials.length)
-            throw new Error("command credentials cannot be copied to another scope's computer");
-          authorizeExecution(command, current, policy());
-        });
-      } else {
-        authorizeExecution(command, undefined, policy());
-        handle = await deps.provision();
-      }
+      const handle = await provisionForCommand(command, opts?.sandboxId, requestedCredentials.length > 0, () =>
+        deps.provision(),
+      );
       return once(
         async () => {
           const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
