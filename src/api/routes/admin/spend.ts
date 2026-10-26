@@ -1,6 +1,6 @@
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
-import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
+import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";
@@ -418,13 +418,6 @@ function parseBound(raw: string): number | null {
   return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
 }
 
-async function loadSpendRows(
-  sessions: SessionStore,
-  range: { from: number; to: number },
-): Promise<{ rows: SpendRow[]; asOf?: number }> {
-  return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
-}
-
 async function cronInfoLookup(
   app: BaseCtx["app"],
   rows: readonly { cronId: string | null }[],
@@ -455,7 +448,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
       error: "bad_request",
       message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
     });
-  const { rows, asOf } = await loadSpendRows(deps.sessions, { from, to });
+  const { rows, asOf } = await deps.sessions.spendReport({ from, to });
   const labels = await discoverScopes(
     app,
     deps,
@@ -499,9 +492,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   if (to <= from) return bad("to must be later than from");
 
-  const { rows, asOf } = deps.sessions
-    ? await loadSpendRows(deps.sessions, { from, to })
-    : { rows: [], asOf: undefined };
+  const { rows, asOf } = deps.sessions ? await deps.sessions.spendReport({ from, to }) : { rows: [], asOf: undefined };
   const labels = await discoverScopes(
     app,
     deps,

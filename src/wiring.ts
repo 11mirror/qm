@@ -2082,7 +2082,6 @@ export function buildApp(
     judgeModelId,
     runtimeFallback: fallback,
     providerKeys,
-    modelProviders: providerKeys,
     runWaitMs: config.runWaitMs,
     inlineTurns: config.roles.includes("harness"),
   });
@@ -2868,7 +2867,6 @@ export function serverDeps(
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
-    modelProviders: providerKeysPresent(config),
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
