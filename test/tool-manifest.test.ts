@@ -100,7 +100,7 @@ test("the manifest explains absent tools", () => {
   assert.equal(reason("acme_search"), "Served by the acme connector.");
   assert.deepEqual(
     entries.filter((entry) => entry.present).map((entry) => entry.name),
-    ["memory", "history", "subagents", "sessions", "finish_silently", "runtime", "acme_search"],
+    ["memory", "history", "subagents", "swarm", "sessions", "finish_silently", "runtime", "acme_search"],
   );
 });
 
@@ -149,6 +149,7 @@ test("GET /v1/tool-manifest lists the signed-in person's web tools with their co
       "history",
       "background",
       "subagents",
+      "swarm",
       "sessions",
       "sandbox",
       "cron",

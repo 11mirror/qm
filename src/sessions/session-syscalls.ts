@@ -19,6 +19,8 @@ import { isUnstarted, stopRun, type Run, type RunStore } from "../runs/run-store
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import type { SwarmBoard } from "../swarms/swarm-board.ts";
+import { swarmCall, type SwarmInput, type SwarmResult } from "../swarms/swarm.ts";
 
 const CHILD_DONE_RECHECK_MS = 60_000;
 
@@ -218,6 +220,7 @@ export interface SessionSyscalls {
   search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
   list?(): Promise<SessionListResult>;
   start?(input: SessionStartInput): Promise<SessionStartResult>;
+  swarm?(input: SwarmInput): Promise<SwarmResult>;
 }
 
 export interface SessionSyscallsFactory {
@@ -227,6 +230,7 @@ export interface SessionSyscallsFactory {
 
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
+  board?: SwarmBoard;
   enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
@@ -576,7 +580,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return deps.prepareRequest ? deps.prepareRequest(request) : request;
       }
 
-      return {
+      const syscalls: SessionSyscalls = {
         async receive(timeoutMs = 0) {
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
@@ -1002,6 +1006,29 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           };
         },
       };
+      const board = deps.board;
+      if (board)
+        syscalls.swarm = async (input) => {
+          try {
+            const caller = await currentCaller();
+            const session = (await deps.sessions.get(binding.session.id)) ?? binding.session;
+            return await swarmCall(
+              {
+                board,
+                sessions: deps.sessions,
+                mailbox: deps.mailbox,
+                session,
+                actor: caller.actor,
+                audience: caller.conversation.audience,
+                open: (member) => syscalls.open(member),
+              },
+              input,
+            );
+          } catch (error) {
+            return { ok: false, message: errMessage(error) };
+          }
+        };
+      return syscalls;
     },
   };
 }
