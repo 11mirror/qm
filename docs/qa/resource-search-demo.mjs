@@ -42,7 +42,7 @@ const stubs = {
   "./browse": `export const destinations=()=>[{label:'Skills',blurb:'Browse reusable skills',href:'#skills'},{label:'Crons',blurb:'Browse scheduled work',href:'#crons'},{label:'Apps',blurb:'Browse deployed apps',href:'#apps'},{label:'Projects',blurb:'Browse shared projects',href:'#projects'}];`,
   "./ui": `import {createElement} from 'lucide'; export const icon=(node,size=18)=>createElement(node,{class:'icon',width:size,height:size,'aria-hidden':'true',focusable:'false','stroke-width':1.9});`,
 };
-const css = readFileSync(`${sourceDir}/shell.css`, "utf8");
+const css = ["foundation", "search"].map((name) => readFileSync(`${sourceDir}/styles/${name}.css`, "utf8")).join("\n");
 const paletteCss = css.slice(css.indexOf(".chat-search-overlay {"), css.indexOf(".nav-badge {"));
 const variables = css.slice(css.indexOf(":root {"), css.indexOf(".layout {"));
 const reset = `:root{--background:white;--foreground:#171717;--border:#e5e5e5;--muted-foreground:#737373;--primary:#171717;--primary-foreground:white}*{box-sizing:border-box}button,input{font:inherit}h1{font-size:22px}main{padding:30px;max-width:900px;margin:auto}a{color:#4338ca}#demo-status{position:fixed;bottom:20px;left:24px}nav{display:flex;gap:16px;margin:15px 0}.chat-search-cancel{display:none}`;

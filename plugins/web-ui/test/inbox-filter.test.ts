@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { readFileSync } from "node:fs";
 import { VirtualConsole } from "jsdom";
 import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
+import { shellCss } from "./shell-css.ts";
 
 const filterNames: Record<string, string> = {
   all: "All emails",
@@ -18,7 +18,7 @@ async function inboxUi(t: TestContext) {
     dom: { url: "http://localhost/web-ui/", virtualConsole },
   });
   const stylesheet = document.createElement("style");
-  stylesheet.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  stylesheet.textContent = shellCss();
   document.head.append(stylesheet);
   t.mock.method(globalThis, "fetch", async () => Response.json({}));
   let pane: { dispose(): void } | undefined;
