@@ -233,7 +233,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                   ${
                     d.status === "archived"
                       ? html`<button class="btn" type="button" @click=${() => void restoreDeploy(d)}>
-                          ${icon(RotateCcw, 14)}<span>Restore deployment</span>
+                          ${icon(RotateCcw, 14)}<span>Restore app</span>
                         </button>`
                       : html`<button
                           class="btn danger deploy-archive-trigger"
@@ -241,7 +241,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                           type="button"
                           @click=${() => requestArchive(d)}
                         >
-                          ${icon(Archive, 14)}<span>Archive deployment</span>
+                          ${icon(Archive, 14)}<span>Archive app</span>
                         </button>`
                   }
                 </div>
@@ -550,8 +550,8 @@ function archiveDialog(d: DeploymentView): TemplateResult {
 async function archiveDeploy(d: DeploymentView): Promise<void> {
   if (deploySaving) return;
   deploySaving = true;
-  if (activeDeploy?.id === d.id) detailNotice = { id: d.id, text: "Archiving deployment…" };
-  else page.notice = "Archiving deployment…";
+  if (activeDeploy?.id === d.id) detailNotice = { id: d.id, text: "Archiving app…" };
+  else page.notice = "Archiving app…";
   setDeployBackgroundInert(false);
   archiveCandidate = null;
   drawCurrentDeployView();
@@ -571,7 +571,7 @@ async function archiveDeploy(d: DeploymentView): Promise<void> {
     }
     drawCurrentDeployView();
   } catch (error) {
-    deployFailed(d, errMessage(error, "Could not archive deployment."));
+    deployFailed(d, errMessage(error, "Could not archive app."));
   }
 }
 
@@ -579,8 +579,8 @@ async function restoreDeploy(d: DeploymentView): Promise<void> {
   if (deploySaving) return;
   const restoringActive = activeDeploy?.id === d.id;
   deploySaving = true;
-  if (restoringActive) detailNotice = { id: d.id, text: "Restoring deployment…" };
-  else if (!activeDeploy) page.notice = "Restoring deployment…";
+  if (restoringActive) detailNotice = { id: d.id, text: "Restoring app…" };
+  else if (!activeDeploy) page.notice = "Restoring app…";
   if (restoringActive || !activeDeploy) drawCurrentDeployView();
   try {
     const response = await api<{ deployment?: DeploymentView }>(
@@ -598,7 +598,7 @@ async function restoreDeploy(d: DeploymentView): Promise<void> {
     if (destination === "target") await openDeploy(restored);
     else drawCurrentDeployView();
   } catch (error) {
-    deployFailed(d, errMessage(error, "Could not restore deployment."));
+    deployFailed(d, errMessage(error, "Could not restore app."));
   }
 }
 

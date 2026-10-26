@@ -41,3 +41,41 @@ test("embedded chat takes annotations only from its own app shell and acks once"
     g.File = prev.File;
   }
 });
+
+test("oversized annotations tell the agent what was left out", async () => {
+  const dom = new JSDOM("<!doctype html><body></body>", {
+    url: "https://portal.example.com/app-edit?slug=demo&embed=1",
+  });
+  const g = globalThis as Record<string, unknown>;
+  const prev = { window: g.window, File: g.File };
+  g.window = dom.window;
+  g.File = dom.window.File;
+  try {
+    const { watchAppAnnotations } = await import("../src/app-annotations.ts");
+    const parent = { postMessage: () => {} };
+    Object.defineProperty(dom.window, "parent", { value: parent });
+    const added: [string, number][] = [];
+    const stop = watchAppAnnotations("demo", (text, files) => (added.push([text, files.length]), true));
+    const png = () => new dom.window.File(["x"], "a.png", { type: "image/png" });
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        origin: "https://demo.apps.example.com",
+        source: parent as unknown as Window,
+        data: { type: "qm:annotations", id: "big", text: "a".repeat(20_005), files: [png(), png(), png()] },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const [text, count] = added[0]!;
+    assert.equal(count, 2);
+    assert.ok(text.startsWith("a".repeat(20_000)));
+    assert.ok(
+      text.endsWith(
+        "\n\n[Annotation text cut at 20000 characters.]\n\n[1 more screenshot(s) left out; only 2 are attached.]",
+      ),
+    );
+    stop();
+  } finally {
+    g.window = prev.window;
+    g.File = prev.File;
+  }
+});
