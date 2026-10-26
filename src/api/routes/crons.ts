@@ -47,9 +47,9 @@ function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
 }
 
 async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cron | null> {
-  const { res, app, url } = ctx;
+  const { res, app } = ctx;
   const cron = await app.getCron(id);
-  const principalId = url.searchParams.get("principalId");
+  const principalId = ctx.caller ?? null;
   if (cron && (!principalId || (await canAdministerCron(app, cron, principalId)))) return cron;
   if (cron && read && (await app.listCronsForViewer(principalId!)).visible.some((candidate) => candidate.id === id))
     return cron;
@@ -123,7 +123,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, method } = ctx;
+  const { res, app, method } = ctx;
   const body = ctx.body as z.infer<typeof cronPatchBody>;
   const id = ctx.params.id!;
   if (method === "GET") {
@@ -135,7 +135,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!cron) return;
   if (method === "DELETE") {
     await app.deleteCron(id);
-    const editor = url.searchParams.get("principalId");
+    const editor = ctx.caller;
     if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
@@ -161,7 +161,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       ...(text !== undefined ? { action: text } : {}),
       ...(schedule !== undefined ? { schedule: userScheduleFromBody(schedule)! } : {}),
     },
-    { actorId: url.searchParams.get("principalId") ?? cron.owner },
+    { actorId: ctx.caller ?? cron.owner },
   );
   if (result.ok) return sendJson(res, 200, { cron: withoutFireLog(result.cron) });
   if (result.code === "not_found") return sendJson(res, 200, { cron: null });

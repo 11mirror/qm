@@ -82,6 +82,7 @@ interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
   actor: PortalIdentity | null;
+  caller: string | null;
 }
 
 interface Wiring {
@@ -248,7 +249,10 @@ async function gate(
       }
     }
   }
-  return { body, capability, actor };
+  const field = route?.actor?.includes(".") ? route.actor : undefined;
+  const named = field ? assertedActorField(field, url, body) : null;
+  const caller = capability?.actorId ?? (typeof named === "string" && named ? named : (actor?.p ?? null));
+  return { body, capability, actor, caller };
 }
 
 function assertedActorField(field: string, url: URL, body: unknown): unknown {
