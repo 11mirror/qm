@@ -12,7 +12,6 @@ import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
-import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
@@ -146,7 +145,6 @@ interface DeploymentConfig {
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
   memoryCaptureQuietMs: number;
-  memoryProviderConfig?: MemoryProviderConfig;
   workers: number;
   leaseTtlMs: number;
   heartbeatIntervalMs: number;
@@ -960,7 +958,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
   ) {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
-  const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   const publicPort = numEnvStrict("PUBLIC_PORT", env.PUBLIC_PORT);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
@@ -1055,7 +1052,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     memoryRecall: DEFAULT_MEMORY_POLICY.recall,
     memoryCapture: DEFAULT_MEMORY_POLICY.capture,
     memoryCaptureQuietMs: DEFAULT_CAPTURE_QUIET_MS,
-    ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
     filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
