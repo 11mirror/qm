@@ -21,6 +21,7 @@ import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./admin/sections";
 import type { AdminController } from "./admin/controller.js";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { loadToolManifest, toolsSection } from "./settings-tools";
 
 type ThemeChoice = "light" | "dark" | "system";
 
@@ -415,6 +416,7 @@ function generalPane(): TemplateResult {
         <qm-connect-apps .me=${appState.me} .base=${withBase("")}></qm-connect-apps>
       </div>
     </div>
+    ${toolsSection()}
   `;
 }
 
@@ -450,4 +452,5 @@ export function renderSettings(): void {
   if (admin) admin.route();
   else if (section !== "general") void loadAdmin();
   void loadAiStatus();
+  void loadToolManifest(drawSettings);
 }
