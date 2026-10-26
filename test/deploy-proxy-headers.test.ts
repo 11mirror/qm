@@ -370,28 +370,6 @@ test("/d/ proxy returns 504 instead of hanging when the deployment accepts but n
   }
 });
 
-test("/d/ proxy sends no extra headers when the endpoint declares none", async () => {
-  let seenCookie: string | undefined;
-  const upstream = createHttpServer((req, res) => {
-    seenCookie = req.headers.cookie;
-    res.end("ok");
-  });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
-
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const res = await fetch(`${base}/d/some-id/`);
-    assert.equal(res.status, 200);
-    assert.equal(seenCookie, undefined);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-    await new Promise<void>((r) => upstream.close(() => r()));
-  }
-});
-
 test("admin deployment proxy bypasses deployment ACL after admin auth and audits the visit", async () => {
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {

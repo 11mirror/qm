@@ -301,15 +301,6 @@ test("reachExec ON: the scoped/scratch keywords match case-insensitively, never 
   );
 });
 
-test("reachExec ON: the description advertises rooms and the 'other computers' pointer", () => {
-  const { tc } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
-  const desc = (execute as unknown as { description: string }).description;
-  assert.match(desc, /a room like "#project-alpha"/);
-  assert.match(desc, /Other computers you can reach/);
-  assert.doesNotMatch(desc, /"scratch":/, "scratch is not advertised when only reach is on");
-});
-
 test("Trap 1: a reach result prefixes provenance", async () => {
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {

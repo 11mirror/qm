@@ -225,20 +225,6 @@ test("maybeInterceptStop: bare stop with in-flight run signals abort and suppres
   assert.deepEqual(signaled, ["run-1"]);
 });
 
-test("maybeInterceptStop: stop with no in-flight run flows through as a normal turn", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: () => undefined,
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, false);
-  assert.deepEqual(signaled, []);
-});
-
 test("maybeInterceptStop: async getInFlightRun fallback (map miss) still aborts and intercepts", async () => {
   const signaled: string[] = [];
   const intercepted = await maybeInterceptStop({

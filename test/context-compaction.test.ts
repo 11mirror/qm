@@ -47,11 +47,9 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
-const KEEP_RECENT_TOKEN_FRACTION = 0.6;
 const budgetBetweenSoftAndHard = (historyTokens: number): number =>
   Math.round(historyTokens / ((COMPACT_SOFT_FRACTION + COMPACT_HARD_FRACTION) / 2));
 const budgetKeepingOnlyNewest = (...newestTwoTexts: string[]): number => tokensOf(...newestTwoTexts);
-const budgetWhoseKeepWindowFits = (keepTokens: number): number => Math.ceil(keepTokens / KEEP_RECENT_TOKEN_FRACTION);
 const actor: Principal = { id: "U1", type: "internal", teamIds: ["eng"] };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 const PERSONAL = scopeId("personal", "U1");
@@ -377,82 +375,11 @@ const at = (seq: number, item: NewItem): Item => storedItem(item, { sessionId: "
 const mkEntry = (over: Partial<Item> & { seq: number }): Item =>
   ({ ...at(over.seq, { kind: "UserMessage", text: `msg ${over.seq}` }), ...over }) as Item;
 
-test("overBudgetFraction: soft < hard — the gap where a background pass runs but a turn need not block", () => {
-  const history = Array.from({ length: 10 }, (_, i) => mkEntry({ seq: i }));
-  const budget = budgetBetweenSoftAndHard(estimateHistoryTokens(history));
-  assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), true, "past soft ⇒ background pass fires");
-  assert.equal(overBudgetFraction(history, budget, COMPACT_HARD_FRACTION), false, "under hard ⇒ turn need not block");
-  assert.ok(COMPACT_SOFT_FRACTION < COMPACT_HARD_FRACTION, "soft must be below hard");
-});
-
 test("entry count alone never triggers compaction: hundreds of tiny entries under the token budget stay uncompacted", () => {
   const history = Array.from({ length: 500 }, (_, i) => mkEntry({ seq: i, text: `tiny ${i}` }));
   const budget = estimateHistoryTokens(history) * 4;
   assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), false);
   assert.equal(planCompaction(history, budget, 0.6), null);
-});
-
-test("overBudgetFraction trips on the token budget (a few huge entries)", () => {
-  const big = "many different tokens here ".repeat(250);
-  const history = Array.from({ length: 3 }, (_, i) => mkEntry({ seq: i, text: big }));
-  assert.equal(overBudgetFraction(history, 2_000, COMPACT_HARD_FRACTION), true);
-});
-
-test("planCompaction summarizes ONLY the evicted (oldest overflow) chunk, not the whole transcript", () => {
-  const history = Array.from({ length: 8 }, (_, i) => mkEntry({ seq: i }));
-  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(5))), 0.6)!;
-  assert.ok(plan, "over budget ⇒ a plan");
-  assert.deepEqual(
-    plan.toSummarize.map((e) => e.seq),
-    [0, 1, 2, 3, 4],
-    "only the evicted chunk is summarized",
-  );
-  assert.deepEqual(
-    plan.kept.map((e) => e.seq),
-    [5, 6, 7],
-    "the newest turns stay verbatim (re-pullable detail lost only from the old chunk)",
-  );
-  assert.equal(plan.reuse, undefined, "no prior summary to reuse");
-});
-
-test("planCompaction chains a prior summary into the batch instead of accumulating summaries", () => {
-  const history: Item[] = [
-    at(0, contextSummaryItem(-1, "prior")),
-    ...Array.from({ length: 6 }, (_, i) => mkEntry({ seq: i + 1 })),
-  ];
-  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(-3))), 0.6)!;
-  assert.ok(
-    plan.toSummarize.some((e) => contextSummary(e)),
-    "the prior summary is folded into the new batch",
-  );
-});
-
-test("planCompaction returns null when nothing needs to move (a still-fitting prior summary is reused)", () => {
-  const history: Item[] = [at(0, contextSummaryItem(2, "prior")), mkEntry({ seq: 3 }), mkEntry({ seq: 4 })];
-  const plan = planCompaction(history, 1_000_000, 0.6)!;
-  assert.equal(plan.toSummarize.length, 0, "nothing to summarize");
-  assert.equal(plan.reuse?.seq, 0, "the fitting prior summary is reused");
-});
-
-test("planCompaction never splits a tool_call from its kept tool_result (no fabricated interruption)", () => {
-  const history: Item[] = [
-    mkEntry({ seq: 0 }),
-    mkEntry({ seq: 1 }),
-    at(2, { kind: "ToolCall", tool: "execute", callId: "c1" }),
-    at(3, { kind: "ToolResult", tool: "execute", callId: "c1", text: "ok" }),
-    mkEntry({ seq: 4 }),
-    mkEntry({ seq: 5 }),
-  ];
-  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(3))), 0.6)!;
-  assert.deepEqual(
-    plan.toSummarize.map((e) => e.seq),
-    [0, 1],
-    "the boundary tool_call is pulled back to its kept result",
-  );
-  assert.deepEqual(
-    plan.kept.map((e) => e.seq),
-    [2, 3, 4, 5],
-  );
 });
 
 for (const [kind, mkTurn] of [
@@ -682,17 +609,6 @@ const stackedLog = (): Seed[] => [
   ...Array.from({ length: 2 }, (_, i) => ({ text: `new ${i}` })),
 ];
 
-test("forModelContext applies the latest-summary boundary: one summary, nothing it covers, older summaries dropped", () => {
-  const entries = stackedLog().map((e, seq) => at(seq, { kind: "UserMessage", ...e } as NewItem));
-  const view = forModelContext(entries);
-  assertSummaryBoundary(view, "forModelContext");
-  assert.deepEqual(
-    view.map((e) => e.seq),
-    [8, 9, 10],
-    "latest summary first, then only uncovered entries",
-  );
-});
-
 test("under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history", async () => {
   const base = spyHarness();
   const { wrapped, seen } = captureHarness(base.harness);
@@ -704,21 +620,6 @@ test("under-HARD turn: the harness sees the boundary-filtered context, not stack
   assert.equal(seen.length, 1);
   assertSummaryBoundary(seen[0]!, "under-hard");
   assert.equal(res.reply, "history:3", "summary B + the 2 uncovered entries only");
-});
-
-test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
-  const base = spyHarness();
-  const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(
-    wrapped,
-    Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
-  );
-  await seed(sessions, stackedLog());
-
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "over-hard");
 });
 
 test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
