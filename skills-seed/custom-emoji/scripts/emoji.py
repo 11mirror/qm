@@ -1,6 +1,6 @@
 import argparse, base64, io, json, math, os, random, statistics, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageSequence
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageSequence
 
 LIGHT, DARK = (255, 255, 255), (26, 29, 33)
 JUDGE = os.environ.get("EMOJI_JUDGE_MODEL", "gpt-5.5")
@@ -196,8 +196,11 @@ def frame(src, t, motion, size=128, matte=None):
     alpha = shot.getchannel("A")
     rgb = shot.convert("RGB")
     if matte:
-        rgb = Image.composite(rgb, Image.new("RGB", rgb.size, matte), alpha)
-        rgb.putalpha(alpha.point(lambda a: 255 if a >= 48 else 0))
+        hard = alpha.point(lambda a: 255 if a >= 96 else 0)
+        ring = ImageChops.subtract(hard, hard.filter(ImageFilter.MinFilter(3)))
+        fill = rgb.filter(ImageFilter.MaxFilter(9))
+        rgb.paste(Image.blend(fill, Image.new("RGB", rgb.size, matte), 0.5), mask=ring)
+        rgb.putalpha(hard)
         return rgb
     rgb.paste(rgb.filter(ImageFilter.MinFilter(3)), mask=alpha.point(lambda a: 255 if 0 < a < 255 else 0))
     rgb.putalpha(alpha.point(lambda a: 255 if a >= 128 else 0))
@@ -316,7 +319,7 @@ def main():
     an.add_argument("--motion", choices=sorted(MOTIONS), required=True)
     an.add_argument("--frames", type=int, default=10)
     an.add_argument("--loop-ms", type=int, default=700)
-    an.add_argument("--matte", help="hex colour to blend the edge ring against, e.g. 808080")
+    an.add_argument("--matte", help="hex mid-tone to blend the silhouette edge toward, e.g. 8c8c8c")
     jd = sub.add_parser("judge")
     jd.add_argument("subject")
     jd.add_argument("images", nargs="+")
