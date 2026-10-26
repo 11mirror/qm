@@ -83,7 +83,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
       fallbackRuntime: { modelId: "gpt-5.6-sol" },
     });
     assert.deepEqual(base["personal:a"], { scopeId: "personal:a", modelId: "x", orgRevision: 0 });
-    assert.deepEqual(base["personal:b"], { scopeId: "personal:b", modelId: "legacy-only" });
+    assert.deepEqual(base["personal:b"], { scopeId: "personal:b", modelId: "legacy-only", orgRevision: 0 });
     assert.equal((await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t, null);
     assert.deepEqual((await rows(admin, "auto_flagger_configs"))["org:o"], {
       scopeId: "org:o",

@@ -8,6 +8,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -71,12 +72,20 @@ const controlTok = async (actorId: string) =>
 const coreRedeemPath = (connectPath: string): string =>
   connectPath.replace(/^\/connect\/redeem\//, "/v1/connectors/oauth/consent/redeem/");
 
-function redeem(base: string, path: string, clicker?: string): Promise<Response> {
+async function redeem(
+  base: string,
+  path: string,
+  clicker?: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
   const ts = Math.floor(Date.now() / 1000);
   const headers: Record<string, string> = {
     "x-timestamp": String(ts),
     "x-signature": signRequest(SECRET, ts, `GET\n${path}\n`),
-    ...(clicker ? { "x-consent-clicker": clicker } : {}),
+    ...(clicker
+      ? { [PORTAL_IDENTITY_HEADER]: await mintPortalIdentity({ p: clicker, exp: Date.now() + 60_000 }, SECRET) }
+      : {}),
+    ...extraHeaders,
   };
   return fetch(`${base}${path}`, { headers });
 }
@@ -154,6 +163,22 @@ test("redeem refuses without a verified clicker (the portal's session gate)", as
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
     const res = await redeem(srv.base, coreRedeemPath(connectPath));
     assert.equal(res.status, 401);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("redeem ignores an unsigned clicker header: only the signed portal identity names the clicker", async () => {
+  const srv = await start(async () => {
+    throw new Error("must not exchange");
+  });
+  try {
+    const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
+    const { connectPath } = (await mintRes.json()) as { connectPath: string };
+    const forged = await redeem(srv.base, coreRedeemPath(connectPath), undefined, { "x-consent-clicker": "U1" });
+    assert.equal(forged.status, 401, "a source-signed caller can no longer name the clicker in a header");
+    const mixed = await redeem(srv.base, coreRedeemPath(connectPath), "U2", { "x-consent-clicker": "U1" });
+    assert.equal(((await mixed.json()) as { status: string }).status, "wrong_recipient");
   } finally {
     await srv.close();
   }

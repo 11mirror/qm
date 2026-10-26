@@ -369,6 +369,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import type { ContextRequestEvent } from "./api/app-types.ts";
 
 export interface Runtime {
   start(): void;
@@ -1213,8 +1214,7 @@ export function buildApp(
     return resolveModel(subscription) ? subscription : id;
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
-  const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+  const orgBaseModelId = (): string | undefined => configStore.getRuntimeSelection(runtimeOrgScope)?.modelId;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -1388,6 +1388,11 @@ export function buildApp(
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
   const egressAudit = createPostgresEgressAuditSink(databaseUrl);
   const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
+  const contextRequestEvents = createPostgresNotifyBus<ContextRequestEvent>(
+    databaseUrl,
+    "context_request_events",
+    "context requests",
+  );
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
@@ -1656,6 +1661,12 @@ export function buildApp(
       `DO $$ BEGIN IF to_regclass('auto_flagger_configs') IS NOT NULL THEN UPDATE auto_flagger_configs SET json = json - 'harnessId' WHERE json ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('crons') IS NOT NULL THEN UPDATE crons SET json = json #- '{runtime,harnessId}' WHERE (json -> 'runtime') ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "runtime/0003-promote-legacy-base-models",
+    statements: [
+      `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = json || '{"orgRevision":0}'::jsonb WHERE json ? 'modelId' AND NOT json ? 'orgRevision'; END IF; END $$`,
     ],
   });
   pgArtifactMap.pool.registerMigration({
@@ -2040,6 +2051,8 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequestEvents,
+    contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2603,6 +2616,7 @@ export function buildApp(
           runSignals.close?.(),
           turnLedger?.close(),
           turnReady?.close?.(),
+          contextRequestEvents.close?.(),
           turnCancels?.close?.(),
           turnYields?.close?.(),
           sessionStateBus.close?.(),

@@ -371,7 +371,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
         securityPosture: await deps.config.getSecurityPostureDurable(personal),
         commandPolicy: deps.config.setting("commandPolicy", personal),
         egress: deps.config.setting("egress", personal),
-        baseModel: deps.config.getBaseModel(personal),
+        baseModel: deps.config.getRuntimeSelection(personal)?.modelId ?? null,
         connectors: await deps.config.listConnectorClients(personal),
       }
     : null;

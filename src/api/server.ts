@@ -30,6 +30,8 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
+import { SoulTooLargeError } from "../resolution/config-store.ts";
+import { zodMessage } from "./routes/shared.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -80,6 +82,7 @@ interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
   actor: PortalIdentity | null;
+  caller: string | null;
 }
 
 interface Wiring {
@@ -246,7 +249,10 @@ async function gate(
       }
     }
   }
-  return { body, capability, actor };
+  const field = route?.actor?.includes(".") ? route.actor : undefined;
+  const named = field ? assertedActorField(field, url, body) : null;
+  const caller = capability?.actorId ?? (typeof named === "string" && named ? named : (actor?.p ?? null));
+  return { body, capability, actor, caller };
 }
 
 function assertedActorField(field: string, url: URL, body: unknown): unknown {
@@ -268,7 +274,7 @@ function typedFailure(err: unknown): HttpError | null {
   if (err instanceof MemoryDisclosureDenied) return as(403, "forbidden");
   if (err instanceof KeychainError) return as(err.status, "keychain");
   if (err instanceof BackgroundOwnershipConflict) return as(409, "background_ownership_conflict");
-  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError)
+  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError || err instanceof SoulTooLargeError)
     return as(413, "payload_too_large");
   return null;
 }
@@ -363,6 +369,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     );
     if (!gated) return;
     if (!matched) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+    const schema = matched.route.body;
+    if (schema) {
+      const parsed = schema.safeParse(gated.body);
+      if (!parsed.success)
+        return sendJson(res, 400, { error: "bad_request", message: zodMessage("body", parsed.error) });
+      gated.body = parsed.data;
+    }
     await run(matched.route, matched.params, { ...base, ...gated });
   }
   return server;

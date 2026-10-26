@@ -8,6 +8,7 @@ import type { ApiCtx } from "./route.ts";
 import type { ServerResponse } from "node:http";
 import { headerValue, sendJson } from "../http.ts";
 import { tenant } from "../../tenant.ts";
+import type { z } from "zod";
 
 export { isObj } from "../../util/objects.ts";
 
@@ -97,6 +98,11 @@ export async function verifiedConversationSpeaker(
     return { error: `${onBehalfOf} isn't an internal teammate` };
   }
   return { principalId: match };
+}
+
+export function zodMessage(field: string, error: z.ZodError): string {
+  const issue = error.issues[0]!;
+  return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
 export function refuse(res: ServerResponse, status: number, body: unknown): null {

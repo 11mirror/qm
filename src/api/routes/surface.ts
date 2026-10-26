@@ -27,6 +27,7 @@ import { isConfigured, withActor, type ApiCtx, type Route } from "./route.ts";
 import type { ItemKind } from "../../sessions/items.ts";
 import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 import { tenant } from "../../tenant.ts";
+import { SoulTooLargeError } from "../../resolution/config-store.ts";
 
 const SYSTEM_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "ContextCompaction",
@@ -761,7 +762,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
     deps.config.settingDurable("webuiModels", tenant().orgScope),
-    deps.config.getBaseModelDurable(tenant().orgScope),
+    deps.config.getRuntimeSelectionDurable(tenant().orgScope).then((selection) => selection?.modelId ?? null),
     deps.config.settingDurable("externalSlackParticipants", tenant().orgScope),
     resolveBranding(deps.config, tenant().orgScope, deps.brandingDefault),
   ]);
@@ -834,14 +835,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const config = ctx.deps.config;
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
-    const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
-    else {
-      const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
-        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
-      }
-    }
+    if (await config.getRuntimeSelectionDurable(target.scope)) await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))
@@ -934,6 +928,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)
       return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    if (e instanceof SoulTooLargeError) return sendJson(res, 413, { error: "payload_too_large", message: e.message });
     return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }
