@@ -40,7 +40,7 @@ import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
@@ -453,9 +453,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async fulfillContextRequest(id, outcome) {
-      await deps.app
-        .fulfillContextRequest(id, outcome)
-        .catch(swallowAs("slack-core-client: fulfill context request", undefined));
+      await deps.app.fulfillContextRequest(id, outcome).catch(async (error: unknown) => {
+        reportFailure("slack-core-client: fulfill context request", error);
+        await deps.app
+          .fulfillContextRequest(id, { error: "the conversation couldn't be read" })
+          .catch(swallowAs("slack-core-client: fail context request", undefined));
+      });
     },
   };
 }

@@ -230,7 +230,7 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
           query,
-        ).catch(() => ({ error: "the web conversation couldn't be read" }));
+        ).catch(reportFailureAs("context: web conversation read", { error: "the web conversation couldn't be read" }));
         await contextRequests.merge(request.id, settledContext(outcome));
         return request;
       }

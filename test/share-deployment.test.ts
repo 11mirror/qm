@@ -22,6 +22,7 @@ import {
   setDeploymentDisplayName,
 } from "../src/api/routes/deployments.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
+import { HttpError } from "../src/api/http.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -101,7 +102,13 @@ function callShare(
     body,
     capability,
   } as unknown as ApiCtx;
-  return shareDeployment(ctx).then(() => out);
+  return shareDeployment(ctx).then(
+    () => out,
+    (error: unknown) => {
+      if (error instanceof HttpError) return { status: error.status, body: error.body };
+      throw error;
+    },
+  );
 }
 
 const one = (principalId: string, displayName: string): RecipientResolution => ({

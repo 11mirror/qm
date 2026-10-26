@@ -12,9 +12,9 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
+import { errMessage, reportFailureAs, swallow, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { sendJson, verifySignedRoute } from "../http.ts";
+import { isTextualContentType, refusal, sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -959,7 +959,7 @@ function signInFailedHtml(signIn: string): string {
 }
 
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
-  (await app.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName)?.id;
+  (await app.getDeployment(idOrName))?.id;
 
 function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
   const prefix = "/v1/deployments/";
@@ -1189,7 +1189,7 @@ async function createDeployment(ctx: ApiCtx): Promise<void> {
   try {
     return sendJson(res, 200, { deployment: deploymentView(await app.deploy(body)) });
   } catch (e) {
-    return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
+    throw refusal(400, "deploy_failed", e);
   }
 }
 
@@ -1200,8 +1200,6 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const visible = await app.listDeploymentsForViewer(principalId);
   return sendJson(res, 200, { deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
 }
-
-const TEXT_CONTENT_TYPE = /^text\/|(?:^|\/)(?:json|xml|javascript)(?:;|$)|\+(?:json|xml)(?:;|$)/i;
 
 const LOGS_DEFAULT_TAIL_LINES = 200;
 const LOGS_MAX_TAIL_LINES = 2000;
@@ -1240,7 +1238,7 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
-    const text = TEXT_CONTENT_TYPE.test(contentType);
+    const text = isTextualContentType(contentType);
     return sendJson(res, 200, {
       status: response.status,
       contentType,
@@ -1248,7 +1246,8 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
       ...(text ? {} : { encoding: "base64" }),
       truncated: response.truncated,
     });
-  } catch {
+  } catch (error) {
+    swallow(`deployment fetch: ${params.id}`, error);
     return sendJson(res, 502, { error: "upstream_unreachable" });
   }
 }
@@ -1261,7 +1260,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   if (principalId) {
     deployment = (await app.listDeploymentsForViewer(principalId)).find((d) => d.id === id || d.name === id);
   } else {
-    const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
+    const stored = await app.getDeployment(id);
     deployment = stored ? deploymentView(stored) : undefined;
   }
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
@@ -1297,7 +1296,7 @@ function manageDeployment<T = undefined>(spec: {
     try {
       return sendJson(res, 200, await spec.run(ctx, id, input as T));
     } catch (e) {
-      return sendJson(res, 400, { error: spec.failure, message: errMessage(e) });
+      throw refusal(400, spec.failure, e);
     }
   };
 }
@@ -1490,7 +1489,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
   if (e instanceof DeployAccessError)
     return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
-  return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
+  throw refusal(400, "share_failed", e);
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
@@ -1501,7 +1500,7 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments", actor: "body.createdBy", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", actor: "query.principalId", auth: "either", handle: listDeployments },
-  { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
+  { method: "GET", path: "/v1/deployments/:id", actor: "query.principalId", auth: "either", handle: getDeployment },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },

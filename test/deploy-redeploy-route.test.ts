@@ -43,6 +43,8 @@ describe("deployment redeploy route", () => {
     };
     const app = {
       listDeployments: async () => [deployment],
+      getDeployment: async (idOrName: string) =>
+        idOrName === deployment.id || idOrName === deployment.name ? deployment : null,
       canManageDeployment: async () => true,
       redeploy: async (_id: string, input: RedeployInput) => {
         received = input;

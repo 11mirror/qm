@@ -61,14 +61,28 @@ import {
 } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
 
+function detached<T extends { clientTools?: unknown; desktopClientId?: unknown }>(
+  request: T,
+): Omit<T, "clientTools" | "desktopClientId"> {
+  const { clientTools: _clientTools, desktopClientId: _desktopClientId, ...rest } = request;
+  return rest;
+}
+
+function bareRequest<
+  T extends {
+    clientTools?: unknown;
+    desktopClientId?: unknown;
+    approval?: unknown;
+    attachments?: unknown;
+    displayText?: unknown;
+  },
+>(request: T) {
+  const { approval: _approval, attachments: _attachments, displayText: _displayText, ...rest } = detached(request);
+  return rest;
+}
+
 function replayableRequest(request: TurnRequest, prior: Run["request"] | undefined): TurnRequest {
-  const {
-    approval: _approval,
-    redeliveryKey: _redeliveryKey,
-    clientTools: _clientTools,
-    desktopClientId: _desktopClientId,
-    ...base
-  } = request;
+  const { approval: _approval, redeliveryKey: _redeliveryKey, ...base } = detached(request);
   return {
     ...base,
     ...(base.model === undefined && prior?.model !== undefined ? { model: prior.model } : {}),
@@ -546,7 +560,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const r = parseRef(ref);
     if (r.kind === "skill") return (await deps.skills.get(r.id))?.createdBy;
     if (r.kind === "cron") return (await deps.crons.get(r.id))?.createdBy;
-    if (r.kind === "deploy") return (await deps.deploy.listDeployments()).find((d) => d.id === r.id)?.createdBy;
+    if (r.kind === "deploy") {
+      const deployment = await deps.deploy.getDeployment(r.id);
+      return deployment?.id === r.id ? deployment.createdBy : undefined;
+    }
     if (r.kind === "file") return (await deps.files.resolveByIds([{ ownerScopeId, id: r.id }]))[0]?.createdBy;
     return undefined;
   }
@@ -680,14 +697,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           let replayRunId: string | undefined;
           const dedupKey = `session-signal:${runId}:${id}`;
           if (signal.sessionRequest) {
-            const {
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...sessionRequest
-            } = signal.sessionRequest;
             const { run } = await deps.runs.enqueue({
               sessionId: completed.sessionId,
-              request: sessionRequest,
+              request: detached(signal.sessionRequest),
               dedupKey,
               maxAttempts: deps.maxAttempts,
             });
@@ -700,17 +712,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             replayRunId = replayed.runId;
             if (!replayRunId && replayed.status !== "refused") continue;
           } else {
-            const {
-              approval: _approval,
-              attachments: _attachments,
-              displayText: _display,
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...request
-            } = completed.request;
             const { run } = await deps.runs.enqueue({
               sessionId: completed.sessionId,
-              request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
+              request: {
+                ...bareRequest(completed.request),
+                text: signal.text,
+                origin: { kind: "automation", screenData: signal.text },
+              },
               dedupKey,
               maxAttempts: deps.maxAttempts,
             });
@@ -740,17 +748,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         const orphanRun = await deps.runs.get(runId);
         if (orphanRun) {
           try {
-            const {
-              displayText: _d,
-              attachments: _a,
-              approval: _ap,
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...base
-            } = orphanRun.request;
             const { run: fresh } = await deps.runs.enqueue({
               sessionId: orphanRun.sessionId,
-              request: { ...base, text: signal.text },
+              request: { ...bareRequest(orphanRun.request), text: signal.text },
             });
             replayRunId = fresh.id;
           } catch (err) {

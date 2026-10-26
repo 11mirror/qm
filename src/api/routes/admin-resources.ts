@@ -30,11 +30,12 @@ import {
   type PublicServiceCredential,
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
-import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
+import { writeAmbientPolicy } from "./context-policy.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { isBackendFailure } from "../http.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -148,7 +149,6 @@ const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { o
 const trimmedList = (value: unknown): string[] | undefined =>
   Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : undefined;
 
-const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
 
 function channelContainer(scope: string): string | undefined {
@@ -266,6 +266,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           change = ["decision.rule.save", `${parsed.rule.id}:${parsed.rule.mode}`];
         } else return { error: "send provider, removeProvider, rule or removeRule" };
       } catch (error) {
+        if (isBackendFailure(error)) throw error;
         return { error: errMessage(error) };
       }
       auditAs(ctx.deps, actor.id, change[0], change[1], scope);
@@ -356,28 +357,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ambientEnabled?: unknown;
         baseUpdatedAt?: unknown;
       };
-      if (typeof b.orders !== "string") return { error: "ambient-policy requires { orders: string }" };
-      if (b.orders.length > MAX_ORDERS_CHARS)
-        return {
-          error: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
-        };
-      const parsed = parseBotLedger(b.bots);
-      if ("error" in parsed) return { error: parsed.error };
-      if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
-        return { error: "ambientEnabled must be a boolean or null (null = default rule)" };
-      const current = await deps.channelPolicy.get(ref);
-      if (typeof b.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== b.baseUpdatedAt) {
-        return {
-          error: "this channel's policy changed since you loaded it — reload and re-apply your edit",
-          code: "conflict",
-          status: 409,
-        };
-      }
-      await deps.channelPolicy.set(ref, b.orders, {
-        setBy: actor.id,
-        bots: parsed.bots,
-        ambientEnabled: b.ambientEnabled as boolean | null | undefined,
-      });
+      const written = await writeAmbientPolicy(
+        deps.channelPolicy,
+        ref,
+        b,
+        actor.id,
+        "ambient-policy requires { orders: string }",
+      );
+      if ("message" in written)
+        return written.status === 409
+          ? { error: written.message, code: "conflict", status: 409 }
+          : { error: written.message };
       auditAs(ctx.deps, actor.id, "surface.policy.set", ref, scope);
       return { ok: true };
     },

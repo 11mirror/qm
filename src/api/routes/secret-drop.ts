@@ -5,7 +5,6 @@ import {
   type CapabilityClaims,
 } from "../../auth/capability-token.ts";
 import type { GrantMode } from "../../credentials/keychain.ts";
-import { keychainErrors } from "./keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -317,53 +316,51 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
   const keychain = deps.keychain;
   const secretDrops = deps.secretDrops;
-  return keychainErrors(res, async () => {
-    const meta = await keychain.save({
-      ownerId: drop.ownerId,
-      service: drop.service,
-      ...(saveFields ? { fields: saveFields } : { secret: secret as string }),
-      ...(!saveFields && drop.envKey ? { envKey: drop.envKey } : {}),
-      ...(drop.host ? { host: drop.host } : {}),
-      origin: "secret-drop",
-    });
-    const mayShare = await dropScopeAuthorized(ctx, drop, attestation);
-    let grantId: string | undefined;
-    if (mayShare && drop.grantMode && drop.audienceScopeId) {
-      const grant = await keychain.createGrant({
-        credentialId: meta.id,
-        ownerId: drop.ownerId,
-        audienceScopeId: drop.audienceScopeId,
-        mode: drop.grantMode,
-        purpose: drop.purpose,
-      });
-      grantId = grant.id;
-    }
-    audit(deps, {
-      principalId: drop.ownerId,
-      action: "keychain.drop.redeem",
-      resource: `${meta.service}:${meta.id}`,
-      scopeLabel: drop.audienceScopeId ?? drop.ownerId,
-    });
-    if (mayShare && drop.audienceScopeId) {
-      void (async () => {
-        const pending = (await secretDrops.siblings(drop).catch(() => [])).map((s) => s.service);
-        await deps.fireDropResolution?.({
-          id: params.id!,
-          ownerId: drop.ownerId,
-          service: meta.service,
-          purpose: drop.purpose,
-          audienceScopeId: drop.audienceScopeId!,
-          ...(drop.destination ? { destination: drop.destination } : {}),
-          ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
-          ...(grantId ? { grantId } : {}),
-          ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
-          granted: !!grantId,
-          ...(pending.length ? { pendingSiblings: pending } : {}),
-        });
-      })().catch((e) => swallow("secret-drop: resolution fire failed", e));
-    }
-    return sendJson(res, 200, { ok: true, credential: meta });
+  const meta = await keychain.save({
+    ownerId: drop.ownerId,
+    service: drop.service,
+    ...(saveFields ? { fields: saveFields } : { secret: secret as string }),
+    ...(!saveFields && drop.envKey ? { envKey: drop.envKey } : {}),
+    ...(drop.host ? { host: drop.host } : {}),
+    origin: "secret-drop",
   });
+  const mayShare = await dropScopeAuthorized(ctx, drop, attestation);
+  let grantId: string | undefined;
+  if (mayShare && drop.grantMode && drop.audienceScopeId) {
+    const grant = await keychain.createGrant({
+      credentialId: meta.id,
+      ownerId: drop.ownerId,
+      audienceScopeId: drop.audienceScopeId,
+      mode: drop.grantMode,
+      purpose: drop.purpose,
+    });
+    grantId = grant.id;
+  }
+  audit(deps, {
+    principalId: drop.ownerId,
+    action: "keychain.drop.redeem",
+    resource: `${meta.service}:${meta.id}`,
+    scopeLabel: drop.audienceScopeId ?? drop.ownerId,
+  });
+  if (mayShare && drop.audienceScopeId) {
+    void (async () => {
+      const pending = (await secretDrops.siblings(drop).catch(() => [])).map((s) => s.service);
+      await deps.fireDropResolution?.({
+        id: params.id!,
+        ownerId: drop.ownerId,
+        service: meta.service,
+        purpose: drop.purpose,
+        audienceScopeId: drop.audienceScopeId!,
+        ...(drop.destination ? { destination: drop.destination } : {}),
+        ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
+        ...(grantId ? { grantId } : {}),
+        ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
+        granted: !!grantId,
+        ...(pending.length ? { pendingSiblings: pending } : {}),
+      });
+    })().catch((e) => swallow("secret-drop: resolution fire failed", e));
+  }
+  return sendJson(res, 200, { ok: true, credential: meta });
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [

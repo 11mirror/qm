@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import pg from "pg";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
@@ -46,6 +48,11 @@ const TEXTUAL_MIME_TYPES = new Set([
   "application/toml",
 ]);
 
+export function isTextualContentType(contentType: string): boolean {
+  const essence = contentType.split(";", 1)[0]!.trim().toLowerCase();
+  return essence.startsWith("text/") || TEXTUAL_MIME_TYPES.has(essence) || /\+(json|xml|yaml)$/.test(essence);
+}
+
 export function contentTypeWithUtf8Charset(contentType: string): string {
   let parameterStart = -1;
   let inQuotes = false;
@@ -64,9 +71,7 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
     }
   }
   if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart))) return contentType;
-  const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
-  const textual = mime.startsWith("text/") || TEXTUAL_MIME_TYPES.has(mime) || /\+(json|xml|yaml)$/.test(mime);
-  return textual ? `${contentType}; charset=utf-8` : contentType;
+  return isTextualContentType(contentType) ? `${contentType}; charset=utf-8` : contentType;
 }
 
 export function pipeToResponse(
@@ -74,7 +79,8 @@ export function pipeToResponse(
   stream: NodeJS.ReadableStream & { destroy?: () => void },
   errorMessage: string,
 ): void {
-  stream.on("error", () => {
+  stream.on("error", (error) => {
+    reportFailure(`stream: ${errorMessage}`, error);
     if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
     else res.destroy();
   });
@@ -90,6 +96,31 @@ export function sendRedirect(res: ServerResponse, location: string): void {
 export function headerValue(req: IncomingMessage, name: string): string | undefined {
   const v = req.headers[name];
   return typeof v === "string" ? v : undefined;
+}
+
+export class HttpError extends Error {
+  readonly status: number;
+  readonly body: { error: string; message?: string };
+  constructor(status: number, body: { error: string; message?: string }) {
+    super(body.message ?? body.error);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export function isBackendFailure(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    error instanceof ReferenceError ||
+    error instanceof pg.DatabaseError ||
+    (error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string")
+  );
+}
+
+export function refusal(status: number, error: string, cause: unknown): Error {
+  return cause instanceof HttpError || isBackendFailure(cause)
+    ? (cause as Error)
+    : new HttpError(status, { error, message: errMessage(cause) });
 }
 
 export class PayloadTooLargeError extends Error {

@@ -3,6 +3,7 @@ import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { sendJson } from "../http.ts";
+import { reportFailure } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const REQUEST_FIELDS = new Set([
@@ -100,6 +101,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     sendJson(res, 200, await response.json());
   } catch (error) {
     if (error instanceof BrowserCompletionError) return sendJson(res, error.status, { error: error.message });
+    reportFailure("browser model: completion", error);
     if (!res.destroyed) sendJson(res, 502, BROWSER_REQUEST_FAILED);
   } finally {
     res.off("close", abort);

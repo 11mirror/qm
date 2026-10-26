@@ -1,31 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
-import { errMessage } from "../../../util/errors.ts";
 import { type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
-import { sendJson } from "../../http.ts";
+import { refusal, sendJson } from "../../http.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
-import { badRequest, pick, requireScopedResource, scopedAdmin } from "./common.ts";
+import { ADMIN_CRON_FIELDS, badRequest, pick, requireScopedResource, scopedAdmin } from "./common.ts";
 
-const CRON_FIELDS = [
-  "id",
-  "ownerScopeId",
-  "title",
-  "action",
-  "message",
-  "owner",
-  "createdBy",
-  "enabled",
-  "archived",
-  "schedule",
-  "runtime",
-  "inbox",
-  "unattendedGrants",
-  "destination",
-  "createdAt",
-  "lastFiredAt",
-] as const;
+const CRON_FIELDS = [...ADMIN_CRON_FIELDS, "runtime", "inbox", "unattendedGrants", "destination"] as const;
 
 function isAdminCronDestination(v: unknown): v is Destination {
   if (typeof v !== "object" || v === null) return false;
@@ -108,7 +90,7 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
     scoped.audit("cron.runtime.update", id, scoped.record.ownerScopeId);
     return sendJson(res, 200, { cron: updated ? { id: updated.id, runtime: updated.runtime } : null });
   } catch (error) {
-    return badRequest(res, errMessage(error));
+    throw refusal(400, "bad_request", error);
   }
 }
 

@@ -1,6 +1,6 @@
 import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
-import { timingSafeEqual } from "node:crypto";
-import { BackgroundOwnershipConflict, type BackgroundOwnership } from "../../runs/background-ownership.ts";
+import { constantTimeEqual } from "../../util/crypto.ts";
+import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -35,9 +35,7 @@ export function requireDeploymentControl(ctx: ApiCtx): true | null {
   )
     return refuse(ctx.res, 503, { error: "background_control_unavailable" });
   const bearer = ctx.req.headers.authorization;
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+  if (!constantTimeEqual(typeof bearer === "string" ? bearer : "", `Bearer ${secret}`))
     return refuse(ctx.res, 401, { error: "unauthorized" });
   return true;
 }
@@ -59,23 +57,16 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
   ) {
     return sendJson(ctx.res, 400, { error: "invalid_background_request" });
   }
-  try {
-    return status(
-      ctx,
-      await control.store.set({
-        ownerDeploymentId: body.ownerDeploymentId,
-        setBy: control.deploymentId,
-        ...(body.expectedOwnerDeploymentId !== undefined
-          ? { expectedOwnerDeploymentId: body.expectedOwnerDeploymentId }
-          : {}),
-      }),
-    );
-  } catch (error) {
-    if (error instanceof BackgroundOwnershipConflict) {
-      return sendJson(ctx.res, 409, { error: "background_ownership_conflict", message: error.message });
-    }
-    throw error;
-  }
+  return status(
+    ctx,
+    await control.store.set({
+      ownerDeploymentId: body.ownerDeploymentId,
+      setBy: control.deploymentId,
+      ...(body.expectedOwnerDeploymentId !== undefined
+        ? { expectedOwnerDeploymentId: body.expectedOwnerDeploymentId }
+        : {}),
+    }),
+  );
 }
 
 export const backgroundWorkRoutes: ReadonlyArray<Route<ApiCtx>> = [

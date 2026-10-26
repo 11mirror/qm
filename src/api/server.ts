@@ -3,14 +3,7 @@ import { CREDENTIAL_HTTP_BROKER_PREFIXES } from "./credential-http-broker.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type RequestListener,
-  type ServerResponse,
-  type Server,
-} from "node:http";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
 import { createControlService } from "./control-service.ts";
@@ -26,8 +19,11 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import { armBodyDeadline, HttpError, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import { KeychainError } from "../credentials/keychain.ts";
+import { BackgroundOwnershipConflict } from "../runs/background-ownership.ts";
+import { ByteSourceTooLargeError } from "../files/durable-byte-store.ts";
+import { createRouter, run, type AdminAccess, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -94,8 +90,6 @@ interface Wiring {
   requirePortalIdentity: boolean;
   allowUnsignedSourceAuth: boolean;
 }
-
-const rawBodies = new WeakMap<IncomingMessage, string>();
 
 const REFUSAL_ERRORS = { 400: "bad_request", 401: "unauthorized", 403: "forbidden" } as const;
 
@@ -267,88 +261,33 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
   return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
 }
 
-function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
-  if (err instanceof MemoryDisclosureDenied || err instanceof MemoryFactsMissing) {
-    const status = err instanceof MemoryFactsMissing ? 404 : 403;
-    if (!res.headersSent)
-      sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
-    else res.destroy();
-    return;
-  }
-  if (err instanceof PayloadTooLargeError) {
-    if (!res.headersSent) sendJson(res, 413, { error: "payload_too_large", message: errMessage(err) });
-    else res.destroy();
-    return;
-  }
-  reportBackendError(err);
-  console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
-  if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
-  else res.destroy();
+function typedFailure(err: unknown): HttpError | null {
+  if (err instanceof HttpError) return err;
+  const as = (status: number, error: string) => new HttpError(status, { error, message: (err as Error).message });
+  if (err instanceof MemoryFactsMissing) return as(404, "not_found");
+  if (err instanceof MemoryDisclosureDenied) return as(403, "forbidden");
+  if (err instanceof KeychainError) return as(err.status, "keychain");
+  if (err instanceof BackgroundOwnershipConflict) return as(409, "background_ownership_conflict");
+  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError)
+    return as(413, "payload_too_large");
+  return null;
 }
 
-function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
-  const matchRoutes = apiRoutes.filter(
-    (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
-  );
-
-  const dispatch = async (request: FastifyRequest, reply: FastifyReply, route?: Route<ApiCtx>): Promise<void> => {
-    reply.hijack();
-    const req = request.raw;
-    const res = reply.raw;
-    try {
-      const base = baseCtx(req, res, wiring);
-      const found = route
-        ? { route, params: request.params as Record<string, string> }
-        : findRoute(matchRoutes, base.method, base.pathname);
-      const gated = await gate(base, wiring, rawBodies.get(req) ?? "", found?.route, found?.params ?? {});
-      if (!gated) return;
-      if (!found) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
-      await run(found.route, found.params, { ...base, ...gated });
-    } catch (err) {
-      respondError(req, res, err);
-    }
-  };
-
-  let routing!: RequestListener;
-  const fastify = Fastify({
-    serverFactory: (handler) => {
-      routing = handler as RequestListener;
-      return server;
-    },
-    logger: false,
-    exposeHeadRoutes: false,
-    routerOptions: { maxParamLength: 100_000 },
-    frameworkErrors: (_err, request, reply) => {
-      void dispatch(request, reply);
-    },
-  });
-
-  fastify.removeAllContentTypeParsers();
-  fastify.addContentTypeParser("*", (request, _payload, done) => {
-    done(null, rawBodies.get(request.raw) ?? "");
-  });
-
-  fastify.setErrorHandler((err, request, reply) => {
+function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  const typed = typedFailure(err);
+  if (!typed) {
     reportBackendError(err);
-    console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${loggablePath(request.raw.url)}:`, errMessage(err));
-    return reply.code(500).send({ error: "internal_error", message: "internal server error" });
-  });
-
-  for (const route of apiRoutes) {
-    if ("path" in route)
-      fastify.route({
-        method: route.method as HTTPMethods,
-        url: route.path,
-        handler: (request, reply) => dispatch(request, reply, route),
-      });
+    console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
   }
-
-  fastify.setNotFoundHandler((request, reply) => dispatch(request, reply));
-
-  return { fastify, routing };
+  if (res.headersSent) return void res.destroy();
+  if (typed) sendJson(res, typed.status, typed.body);
+  else sendJson(res, 500, { error: "internal_error", message: "internal server error" });
 }
 
 type ServerOptions = Omit<ServerDeps, "control">;
+
+const matchRaw = createRouter(rawRoutes);
+const matchApi = createRouter(apiRoutes);
 
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
@@ -370,9 +309,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
   });
-  const { fastify, routing } = buildFastify(wiring, server);
-  const ready = Promise.resolve(fastify.ready());
-  ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
@@ -389,7 +325,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
     }
-    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    const raw = matchRaw(base.method, base.pathname);
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
@@ -400,7 +336,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       await run(raw.route, raw.params, base);
       return;
     }
-    const matched = findRoute(apiRoutes, base.method, base.pathname);
+    const matched = matchApi(base.method, base.pathname);
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
@@ -418,9 +354,16 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
-    await ready;
-    routing(req, res);
+    const gated = await gate(
+      base,
+      wiring,
+      await readRawBody(req, matched?.route.maxBodyBytes),
+      matched?.route,
+      matched?.params ?? {},
+    );
+    if (!gated) return;
+    if (!matched) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+    await run(matched.route, matched.params, { ...base, ...gated });
   }
   return server;
 }

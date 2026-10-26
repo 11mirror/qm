@@ -1,10 +1,10 @@
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
-import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
+import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";
-import { badRequest, discoverScopes, orgAdmin, pick } from "./common.ts";
+import { CRON_SUMMARY_FIELDS, badRequest, discoverScopes, orgAdmin, pick } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
 
@@ -49,19 +49,8 @@ type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
 
 const EXPORT_CRON_FIELDS = ["id", "title", "owner", "ownerScopeId", "schedule", "enabled", "archived"] as const;
-const CRON_INFO_FIELDS = [
-  "id",
-  "title",
-  "message",
-  "action",
-  "owner",
-  "ownerScopeId",
-  "schedule",
-  "enabled",
-  "archived",
-] as const;
 type SpendExportCron = Pick<Cron, (typeof EXPORT_CRON_FIELDS)[number]>;
-type SpendCronInfo = Pick<Cron, (typeof CRON_INFO_FIELDS)[number]>;
+type SpendCronInfo = Pick<Cron, (typeof CRON_SUMMARY_FIELDS)[number]>;
 
 export type SpendReport = ReturnType<typeof summarizeSpend>;
 type SpendTotals = ReturnType<typeof totalsOf>;
@@ -418,13 +407,6 @@ function parseBound(raw: string): number | null {
   return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
 }
 
-async function loadSpendRows(
-  sessions: SessionStore,
-  range: { from: number; to: number },
-): Promise<{ rows: SpendRow[]; asOf?: number }> {
-  return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
-}
-
 async function cronInfoLookup(
   app: BaseCtx["app"],
   rows: readonly { cronId: string | null }[],
@@ -433,7 +415,7 @@ async function cronInfoLookup(
   const crons = new Map<string, SpendCronInfo>();
   for (let start = 0; start < ids.length; start += CRON_LOOKUP_CONCURRENCY) {
     const batch = await Promise.all(ids.slice(start, start + CRON_LOOKUP_CONCURRENCY).map((id) => app.getCron(id)));
-    for (const cron of batch) if (cron) crons.set(cron.id, pick(cron, CRON_INFO_FIELDS));
+    for (const cron of batch) if (cron) crons.set(cron.id, pick(cron, CRON_SUMMARY_FIELDS));
   }
   return crons;
 }
@@ -455,7 +437,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
       error: "bad_request",
       message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
     });
-  const { rows, asOf } = await loadSpendRows(deps.sessions, { from, to });
+  const { rows, asOf } = await deps.sessions.spendReport({ from, to });
   const labels = await discoverScopes(
     app,
     deps,
@@ -499,9 +481,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   if (to <= from) return bad("to must be later than from");
 
-  const { rows, asOf } = deps.sessions
-    ? await loadSpendRows(deps.sessions, { from, to })
-    : { rows: [], asOf: undefined };
+  const { rows, asOf } = deps.sessions ? await deps.sessions.spendReport({ from, to }) : { rows: [], asOf: undefined };
   const labels = await discoverScopes(
     app,
     deps,

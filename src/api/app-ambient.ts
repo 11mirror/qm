@@ -60,7 +60,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
         await deps.ambientCursors
           .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
-          .catch(() => undefined);
+          .catch(reportFailureAs("ambient: advance cursor", undefined));
     };
     if (!delta.length) {
       await advanceCursor();
@@ -125,7 +125,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length) {
-      const containerKind = (await deps.surfaceCache.containerState(container).catch(() => null))?.kind;
+      const containerKind = (
+        await deps.surfaceCache.containerState(container).catch(swallowAs("ambient: container state", null))
+      )?.kind;
       const judgeBatch: AmbientBatch = {
         container,
         surface,
@@ -139,9 +141,15 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
-      decision = await judgeAmbientBatch(
+      const judge = deps.ambientJudge;
+      let judgeDown = false;
+      const judged = await judgeAmbientBatch(
         {
-          judge: deps.ambientJudge,
+          judge: (system: string, prompt: string) =>
+            judge(system, prompt).catch((e: unknown) => {
+              judgeDown = true;
+              throw e;
+            }),
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
@@ -149,7 +157,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             ),
         },
         judgeBatch,
-      ).catch(() => ({ act: false }) as AmbientDecision);
+      ).catch(reportFailureAs("ambient: judge failed", null));
+      if (judgeDown) return { act: false };
+      decision = judged ?? { act: false };
       recordJudgment({
         decision: decision.act ? "act" : "ignore",
         ...(decision.reason ? { reason: decision.reason } : {}),
@@ -179,12 +189,21 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const member = roster.find((r) => samePerson(r.principalId, authorId) || samePerson(r.slackId, authorId));
     if (!member) return undefined;
     if (batch.kind === "group") {
-      const inGroup = await deps.directory.groupMember(batch.container, member.principalId).catch(() => false);
+      const inGroup = await deps.directory
+        .groupMember(batch.container, member.principalId)
+        .catch(swallowAs("ambient: group membership", false));
       return inGroup ? { message: asking, member } : undefined;
     }
-    const isPrivate = await deps.directory.channelPrivacy(batch.container).catch(() => undefined);
+    const isPrivate = await deps.directory
+      .channelPrivacy(batch.container)
+      .catch(swallowAs("ambient: channel privacy", undefined));
     if (isPrivate === undefined) return undefined;
-    if (isPrivate && !(await deps.directory.channelMember(batch.container, member.principalId).catch(() => false)))
+    if (
+      isPrivate &&
+      !(await deps.directory
+        .channelMember(batch.container, member.principalId)
+        .catch(swallowAs("ambient: channel membership", false)))
+    )
       return undefined;
     return { message: asking, member };
   }
@@ -205,7 +224,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
   async function conversationAudience(batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
     const members = await deps.directory
       .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
-      .catch(() => undefined);
+      .catch(swallowAs("ambient: conversation members", undefined));
     if (!members?.length) return undefined;
     return members.map((member) => ({
       externalId: member.principalId,
@@ -287,7 +306,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
-    const session = await deps.sessions.getByThread(liveRef).catch(() => null);
+    const session = await deps.sessions.getByThread(liveRef).catch(swallowAs("ambient: live session", null));
     const decision = await deps.orchestrator
       .screenSecuritySteer({
         payload: req.text,
@@ -298,7 +317,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
         ...(session ? { sessionId: session.id } : {}),
       })
-      .catch(() => "block" as const);
+      .catch(swallowAs("ambient: steer screening", "block" as const));
     if (decision === "block") return false;
     const steerText = decision === "unscreened" ? `${unscreenedNotice("mid-turn message")}\n${req.text}` : req.text;
     await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req });
@@ -309,7 +328,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
 
   async function addressedWakeText(input: OrchestratorInput): Promise<string> {
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
-    const policy = deps.channelPolicy ? await deps.channelPolicy.get(container).catch(() => undefined) : undefined;
+    const policy = deps.channelPolicy
+      ? await deps.channelPolicy.get(container).catch(swallowAs("ambient: channel policy", undefined))
+      : undefined;
     const orders = policy?.orders;
     const sender = input.actor.displayName?.trim() || input.actor.id;
     const surface = input.surface ?? "slack";

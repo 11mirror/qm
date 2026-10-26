@@ -6,14 +6,13 @@ import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
-import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
 import {
@@ -227,7 +226,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
   res.writeHead(200, {
     "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),
     "content-length": String(opened.sizeBytes),
-    "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
+    "content-disposition": contentDispositionAttachment(opened.name, "inline"),
   });
   pipeToResponse(res, opened.stream, "file read failed");
 }
@@ -276,10 +275,6 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 403, { error: "forbidden", message: "you can only upload to your own contexts" });
     }
     return sendJson(res, 200, { file });
-  } catch (e) {
-    if (e instanceof ByteSourceTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    throw e;
   } finally {
     await deps.blobTransfer.delete(blobId);
   }
@@ -560,7 +555,9 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
   const { res, deps, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
   const admin: { isAdmin: boolean; role?: string } = deps.admin
-    ? await deps.admin.adminStatusOf({ id: capability.actorId, type: "internal" }).catch(() => ({ isAdmin: false }))
+    ? await deps.admin
+        .adminStatusOf({ id: capability.actorId, type: "internal" })
+        .catch(swallowAs("apis: admin status", { isAdmin: false }))
     : { isAdmin: false };
   audit(deps, {
     principalId: capability.actorId,
@@ -945,14 +942,26 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
-  { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
-  { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
+  { method: "GET", path: "/v1/ui-state", actor: "query.principalId", auth: "source", handle: getUiState },
+  { method: "PUT", path: "/v1/ui-state", actor: "body.principalId", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
-  { method: "GET", path: "/v1/runtime-config", auth: "source", handle: getRuntimeConfig },
-  { method: "PUT", path: "/v1/runtime-config", auth: "source", handle: putRuntimeConfig },
-  { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
-  { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
+  { method: "GET", path: "/v1/runtime-config", actor: "query.principalId", auth: "source", handle: getRuntimeConfig },
+  { method: "PUT", path: "/v1/runtime-config", actor: "body.principalId", auth: "source", handle: putRuntimeConfig },
+  {
+    method: "GET",
+    path: "/v1/channel-header-pin",
+    actor: "query.principalId",
+    auth: "either",
+    handle: getChannelHeaderPin,
+  },
+  {
+    method: "PUT",
+    path: "/v1/channel-header-pin",
+    actor: "body.principalId",
+    auth: "either",
+    handle: putChannelHeaderPin,
+  },
   { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [

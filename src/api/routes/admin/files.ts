@@ -1,4 +1,3 @@
-import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId, type FileArtifact } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
@@ -139,10 +138,6 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
     });
     authz.audit("file.upload", path);
     return sendJson(res, 200, { file: fileRow(artifact) });
-  } catch (e) {
-    if (e instanceof ByteSourceTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    throw e;
   } finally {
     await deps.blobTransfer.delete(blobId);
   }

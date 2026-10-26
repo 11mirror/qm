@@ -1,9 +1,8 @@
 import type { Webhook } from "../../types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
-import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
-import { readRawBody, sendJson } from "../http.ts";
+import { readRawBody, refusal, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -79,7 +78,7 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
     const webhook = await app.createWebhook(body);
     return sendJson(res, 200, { webhook, url: inboundUrl(deps.publicUrl, webhook.id) });
   } catch (e) {
-    return sendJson(res, 400, { error: "webhook_create_failed", message: errMessage(e) });
+    throw refusal(400, "webhook_create_failed", e);
   }
 }
 
@@ -165,5 +164,11 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: setWebhookEnabled(false),
   },
-  { method: "POST", path: "/v1/webhooks/:id/enable", auth: "source", handle: setWebhookEnabled(true) },
+  {
+    method: "POST",
+    path: "/v1/webhooks/:id/enable",
+    actor: "query.principalId",
+    auth: "source",
+    handle: setWebhookEnabled(true),
+  },
 ];

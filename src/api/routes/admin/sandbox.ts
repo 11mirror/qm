@@ -1,5 +1,4 @@
-import { errMessage } from "../../../util/errors.ts";
-import { sendJson } from "../../http.ts";
+import { refusal, sendJson } from "../../http.ts";
 import { type ApiCtx } from "../route.ts";
 import { orgAdmin } from "./common.ts";
 
@@ -35,6 +34,6 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
     authz.audit("sandbox.create", record.id, scopeId);
     return sendJson(ctx.res, 201, record);
   } catch (error) {
-    return sendJson(ctx.res, 400, { error: "sandbox_request_failed", message: errMessage(error) });
+    throw refusal(400, "sandbox_request_failed", error);
   }
 }

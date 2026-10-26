@@ -1,6 +1,5 @@
-import { errMessage } from "../../util/errors.ts";
 import { samePerson } from "../../directory/person.ts";
-import { sendJson } from "../http.ts";
+import { refusal, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -29,7 +28,7 @@ async function createEnvironment(ctx: ApiCtx): Promise<void> {
     const env = await app.createEnvironment({ scopeId: capability.scopeId, name, actorId: capability.actorId });
     return sendJson(res, 200, { environment: { id: env.id, name: env.name, ownerActorId: env.ownerActorId } });
   } catch (e) {
-    return sendJson(res, 400, { error: "environment_create_failed", message: errMessage(e) });
+    throw refusal(400, "environment_create_failed", e);
   }
 }
 
@@ -52,7 +51,7 @@ async function attachEnvironment(ctx: ApiCtx): Promise<void> {
     await app.attachScope({ scopeId: capability.scopeId, environmentId: env.id, actorId: capability.actorId });
     return sendJson(res, 200, { ok: true, environment: { id: env.id, name: env.name } });
   } catch (e) {
-    return sendJson(res, 400, { error: "environment_attach_failed", message: errMessage(e) });
+    throw refusal(400, "environment_attach_failed", e);
   }
 }
 

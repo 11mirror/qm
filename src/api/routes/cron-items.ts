@@ -1,9 +1,10 @@
+import { collectBytes } from "../../util/bytes.ts";
 import { z } from "zod";
 import type { Cron, InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { refusal, sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { canAdministerCron } from "../control-service.ts";
@@ -294,8 +295,14 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
     return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
   }
-  const bytes = Buffer.from(await upstream.arrayBuffer());
-  if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
+  let bytes: Buffer;
+  try {
+    bytes = (
+      await collectBytes(upstream.body, { maxBytes: IMAGE_MAX_BYTES, tooLarge: () => new Error("image too large") })
+    ).data;
+  } catch (e) {
+    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+  }
   ctx.res.writeHead(200, {
     "content-type": type,
     "content-length": String(bytes.length),
@@ -606,7 +613,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     }
     sendJson(ctx.res, 200, { syncCron: crons[0], crons });
   } catch (err) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(err) });
+    throw refusal(400, "bad_request", err);
   }
 }
 
@@ -621,7 +628,13 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const cronItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/crons/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+  {
+    method: "GET",
+    path: "/v1/crons/:id/items/:itemId/image",
+    actor: "query.principalId",
+    auth: "source",
+    handle: serveItemImage,
+  },
   ...withActor("query.principalId", [
     { method: "POST", path: "/v1/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
     { method: "GET", path: "/v1/crons/:id/items", auth: "either", handle: listItems },

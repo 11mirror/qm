@@ -5,7 +5,7 @@ import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entr
 import type { Principal } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
@@ -43,6 +43,8 @@ function searchableFile(mimetype: string, name: string): boolean {
     /\.(?:txt|md|markdown|json|jsonl|csv|tsv|xml|ya?ml)$/i.test(name)
   );
 }
+const FILE_READ_CONCURRENCY = 8;
+
 function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBackend {
   return {
     name: "files",
@@ -68,28 +70,32 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
       const common = rest.map((files) => new Set(files.map((file) => file.id)));
       const files = first.filter((file) => common.every((ids) => ids.has(file.id)));
       const terms = searchTerms(request.query);
+      const searchableText = async (file: (typeof files)[number]): Promise<string> => {
+        if (!searchableFile(file.mimetype, file.name)) return file.name;
+        const opened = await app.openFileForViewer(file.id, request.principals[0]!.id);
+        if (!opened) return file.name;
+        const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
+          swallowAs("app search: read file contents", null),
+        );
+        return collected ? `${file.name}\n${collected.data.toString("utf8")}` : file.name;
+      };
       const hits: BackendSearchHit[] = [];
-      for (const file of files) {
-        let text = file.name;
-        if (searchableFile(file.mimetype, file.name)) {
-          const opened = await app.openFileForViewer(file.id, request.principals[0]!.id);
-          if (opened) {
-            const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
-              swallowAs("app search: read file contents", null),
-            );
-            if (collected) text += `\n${collected.data.toString("utf8")}`;
-          }
+      for (let start = 0; start < files.length && hits.length < request.limit; start += FILE_READ_CONCURRENCY) {
+        const batch = files.slice(start, start + FILE_READ_CONCURRENCY);
+        const texts = await Promise.all(batch.map(searchableText));
+        for (const [i, file] of batch.entries()) {
+          const text = texts[i]!;
+          if (!matchesSearchTerms(text, terms)) continue;
+          hits.push({
+            id: file.id,
+            type: "file",
+            title: file.name,
+            snippet: searchSnippet(text, terms),
+            createdAt: file.createdAt,
+            metadata: { ownerScopeId: file.ownerScopeId, sizeBytes: file.sizeBytes, direction: file.direction },
+          });
+          if (hits.length >= request.limit) break;
         }
-        if (!matchesSearchTerms(text, terms)) continue;
-        hits.push({
-          id: file.id,
-          type: "file",
-          title: file.name,
-          snippet: searchSnippet(text, terms),
-          createdAt: file.createdAt,
-          metadata: { ownerScopeId: file.ownerScopeId, sizeBytes: file.sizeBytes, direction: file.direction },
-        });
-        if (hits.length >= request.limit) break;
       }
       return hits;
     },
@@ -137,12 +143,7 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
 export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers) {
   const slack = slackBackend(deps, app);
   const options = {
-    onBackendError: (backend: string, error: unknown) =>
-      console.error(
-        "%s",
-        `[search] backend ${backend} failed:`,
-        error instanceof Error ? error.message : String(error),
-      ),
+    onBackendError: (backend: string, error: unknown) => reportFailure(`search: backend ${backend}`, error),
   };
   const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
   const core = createCoreSearch(

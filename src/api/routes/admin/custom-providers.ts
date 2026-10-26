@@ -3,7 +3,7 @@ import {
   type CustomProviderSpec,
   type CustomProviderProtocol,
 } from "../../../model/custom-providers.ts";
-import { sendJson } from "../../http.ts";
+import { refusal, sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { badRequest, notFound, orgAdmin } from "./common.ts";
 import { apiKeyAccepted } from "./model-providers.ts";
@@ -53,7 +53,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   try {
     await store.upsert(spec, apiKey, authz.actor.id);
   } catch (e) {
-    return badRequest(ctx.res, (e as Error).message);
+    throw refusal(400, "bad_request", e);
   }
   await ctx.deps.refreshCustomProviders?.();
   authz.audit("custom-providers.update", id);

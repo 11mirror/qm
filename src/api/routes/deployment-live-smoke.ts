@@ -1,3 +1,4 @@
+import { reportFailure } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { requireDeploymentControl } from "./background-work.ts";
@@ -49,7 +50,8 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
     try {
       await run();
       if (!valid(await control.store.get())) error = "deployment_smoke_ownership_changed";
-    } catch {
+    } catch (cause) {
+      reportFailure("deployment live smoke", cause);
       error = "deployment_smoke_failed";
     }
     if (!ctx.res.destroyed)

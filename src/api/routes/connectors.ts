@@ -22,8 +22,8 @@ import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "..
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
-import { sendJson, sendRedirect } from "../http.ts";
+import { swallowAs } from "../../util/errors.ts";
+import { refusal, sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { tenant } from "../../tenant.ts";
@@ -106,16 +106,6 @@ async function providerConfigured(deps: ServerDeps, provider: string): Promise<b
   }
 }
 
-function parseOAuthRoute(pathname: string): { provider: string; action: "start" | "callback" } | null {
-  const prefix = "/v1/connectors/oauth/";
-  if (!pathname.startsWith(prefix)) return null;
-  const parts = pathname.slice(prefix.length).split("/");
-  if (parts.length !== 2) return null;
-  const [provider, action] = parts;
-  if (!provider || (action !== "start" && action !== "callback")) return null;
-  return { provider: decodeURIComponent(provider), action };
-}
-
 function safeReturnTo(value: string | null): string | undefined {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return undefined;
   return value;
@@ -165,8 +155,8 @@ async function connectorProviderStatus(
 }
 
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { res, deps, secret, url } = ctx;
+  const oauthRoute = { provider: ctx.params.provider! };
   if (!deps.connectorTokens) return notWired(res);
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
@@ -215,7 +205,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     }
     return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
   } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+    throw refusal(400, "oauth_callback_failed", e);
   }
 }
 
@@ -280,7 +270,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { status: "authorize", authorizeUrl: consentUrl });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
 }
 
@@ -316,7 +306,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   try {
     client = await resolverFor(deps)(provider, { accountType });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
   if (base) {
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri))
@@ -353,8 +343,8 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
 }
 
 async function oauthStart(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { res, deps, secret, url } = ctx;
+  const oauthRoute = { provider: ctx.params.provider! };
   if (!deps.connectorTokens) return notWired(res);
   const provider = oauthProvider(oauthRoute.provider);
   if (!provider) return unknownProvider(res, oauthRoute.provider);
@@ -387,7 +377,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       authorizeUrl: consentUrl,
     });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
 }
 
@@ -455,7 +445,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
+  { method: "GET", path: "/v1/connectors/oauth/:provider/callback", auth: "public", handle: oauthCallback },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {
@@ -512,7 +502,8 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
   {
-    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
+    method: "GET",
+    path: "/v1/connectors/oauth/:provider/start",
     actor: "query.principalId",
     auth: "source",
     handle: oauthStart,

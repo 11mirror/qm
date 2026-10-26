@@ -7,7 +7,7 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { contentDispositionAttachment, pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -134,7 +134,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
     res.writeHead(200, {
       "content-type": inline ? file.mimetype : "application/octet-stream",
       "content-length": String(opened.sizeBytes),
-      "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "content-disposition": contentDispositionAttachment(file.name, inline ? "inline" : "attachment"),
       "content-security-policy": "default-src 'none'; sandbox",
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
