@@ -845,13 +845,11 @@ export function createConfigStore(
       if (soul && soul.history === undefined && legacyHistory.length) {
         const mergedHistory = mergeSoulHistory(soul.history, legacyHistory);
         if (!isDeepStrictEqual(mergedHistory, soul.history ?? [])) {
-          refreshedSoul = soulStore.update
-            ? await soulStore.update(id, (current) =>
-                current.history !== undefined
-                  ? current
-                  : { ...current, history: mergeSoulHistory(current.history, legacyHistory) },
-              )
-            : { ...soul, history: mergedHistory };
+          refreshedSoul = await soulStore.update(id, (current) =>
+            current.history !== undefined
+              ? current
+              : { ...current, history: mergeSoulHistory(current.history, legacyHistory) },
+          );
         }
         legacySoulHistory.delete(id);
       } else if (soul?.history !== undefined) {
