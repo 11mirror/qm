@@ -2,11 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 let whoamiProbes = 0;
 let lastWhoamiActor: string | null = null;
 let lastWhoamiSigned = false;
 let lastConsentClicker: string | null = null;
+let lastConsentClickerHeader: string | null = null;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
 const VALID_AGENT_CAPABILITY = "valid.agent.capability";
@@ -45,7 +47,12 @@ const upstream = createServer((req: IncomingMessage, res) => {
     });
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/connectors/oauth/consent/redeem/")) {
-    lastConsentClicker = (req.headers["x-consent-clicker"] as string | undefined) ?? null;
+    const identity = req.headers[PORTAL_IDENTITY_HEADER];
+    lastConsentClicker =
+      typeof identity === "string"
+        ? (verifyPortalIdentity(identity, "router-test-core-secret", Date.now())?.p ?? null)
+        : null;
+    lastConsentClickerHeader = (req.headers["x-consent-clicker"] as string | undefined) ?? null;
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
@@ -357,8 +364,9 @@ test("new human path /connect/redeem/:id: session-gated; with session forwards t
   assert.equal(
     lastConsentClicker,
     "eve@acme",
-    "the verified session sub is forwarded to core, never an identity from the link",
+    "the verified session sub is forwarded to core as a signed portal identity, never an identity from the link",
   );
+  assert.equal(lastConsentClickerHeader, null, "no unsigned clicker header is sent");
 });
 
 test("new human path /connect/:provider/self-connect: session-gated; with session it starts a personal flow via core", async () => {
