@@ -25,7 +25,8 @@ import {
   RefreshCw,
   X,
 } from "lucide";
-import { api } from "./core-bridge";
+import { api, ApiError } from "./core-bridge";
+import { errMessage } from "../../chassis/src/errors";
 import type { DensityTier } from "./density";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { appState, can } from "./shell-state";
@@ -59,6 +60,7 @@ import {
   toInboxItem,
   syncCrons,
   inboxPage,
+  notify,
   onInboxRedraw,
 } from "./inbox-model";
 import {
@@ -616,8 +618,10 @@ async function loadDeepLink(id: string): Promise<void> {
   try {
     const result = await api<{ item: LedgerItem }>(`/api/inbox?itemId=${encodeURIComponent(id)}`);
     upsertItem({ ...toInboxItem(result.item), detailLoaded: true });
-  } catch {
+  } catch (error) {
     if (inboxPage.surface?.selectedId === id) inboxPage.surface.selectedId = null;
+    if (!(error instanceof ApiError && error.status === 404))
+      return notify(`Couldn't open this item: ${errMessage(error)}`);
     inboxPage.viewId = "sent";
     await openSentEmailById(id, drawAll);
   } finally {

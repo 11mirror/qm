@@ -181,7 +181,11 @@ export async function loadDetail(itemId: string, cronId: string): Promise<void> 
     upsertItem(detail);
     redrawInbox();
   } catch (error) {
-    inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
+    if (!inboxState.items.find((item) => item.id === itemId)?.detailLoaded)
+      for (const surface of [...surfaces, inboxPage.surface])
+        if (surface?.selectedId === itemId) surface.selectedId = null;
+    if (error instanceof ApiError && error.status === 404)
+      inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
     notify(errMessage(error, "Could not load item"));
   }
 }
@@ -296,8 +300,10 @@ export async function refetchItem(item: InboxItem, refreshSource = false): Promi
   try {
     replaceItem(await fetchItem(item, refreshSource ? "?refreshSource=1" : ""));
     redrawInbox();
-  } catch {
-    void refreshInbox({ silent: true });
+  } catch (error) {
+    const current = inboxState.items.find((entry) => entry.id === item.id);
+    if (current) replaceItem({ ...current, sourceRefreshError: `Couldn't refresh this item: ${errMessage(error)}` });
+    redrawInbox();
   }
 }
 
