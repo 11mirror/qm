@@ -1,4 +1,4 @@
-import bolt, { type LogLevel } from "@slack/bolt";
+import type { LogLevel } from "@slack/bolt";
 import { isObj } from "../util/objects.ts";
 import type { SlackFile } from "./attachments.ts";
 
@@ -213,10 +213,10 @@ export function slackErrorCode(err: unknown): string | undefined {
   return str(rec(rec(err)?.data)?.error);
 }
 
+const LOG_LEVELS: readonly string[] = ["error", "warn", "info", "debug"];
+
 export function parseLogLevel(v: string | undefined): LogLevel {
-  if (v === undefined) return bolt.LogLevel.INFO;
-  const match = Object.values(bolt.LogLevel).find((l) => l === v);
-  if (match) return match;
+  if (v === undefined || LOG_LEVELS.includes(v)) return (v ?? LOG_LEVELS[2]) as LogLevel;
   console.error(`[slack] unknown log level "${v}" — using info`);
-  return bolt.LogLevel.INFO;
+  return LOG_LEVELS[2] as LogLevel;
 }
