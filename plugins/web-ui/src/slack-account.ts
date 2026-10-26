@@ -7,6 +7,7 @@ import "./slack-account.css";
 import { webFetch, withBase } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { SlackStatus } from "./slack-setup";
+import { reportHandledError } from "./browser-errors";
 
 interface SlackAttempt {
   user: string;
@@ -91,15 +92,26 @@ export class SlackAccount extends SlackStatus {
   }
 
   protected async refresh(): Promise<void> {
-    const response = await webFetch(withBase("/api/composio/slack"), {
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
-    }).catch(() => null);
-    const result = response?.ok ? await response.json().catch(() => null) : null;
-    if (!result) return;
-    this.nativeOAuth = result.nativeOAuth === true;
-    this.connected = result.connected === true;
-    this.label = accountLabel(result);
+    await this.loadStatus();
+  }
+
+  private async loadStatus(): Promise<boolean> {
+    try {
+      const response = await webFetch(withBase("/api/composio/slack"), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw Error(`Slack link status returned HTTP ${response.status}`);
+      const result = await response.json();
+      this.nativeOAuth = result.nativeOAuth === true;
+      this.connected = result.connected === true;
+      this.label = accountLabel(result);
+      return true;
+    } catch (error) {
+      reportHandledError("slack-account-status", error);
+      this.error = "Could not check whether your Slack account is linked. Try again.";
+      return false;
+    }
   }
 
   private async connect(): Promise<void> {
@@ -109,7 +121,7 @@ export class SlackAccount extends SlackStatus {
     const returnTo = `${location.pathname}${location.search}`;
     try {
       if (await openDesktopBrowser(withBase("/settings"))) return;
-      await this.refresh();
+      if (!(await this.loadStatus())) return;
       if (this.nativeOAuth) {
         const result = await postJson(
           "/api/connectors/slack/start",
@@ -200,6 +212,12 @@ if (!customElements.get("qm-slack-account")) customElements.define("qm-slack-acc
 
 const SLACK_SETTINGS = `${UI_BASE}/settings/slack-settings`;
 
+function installStartError(status: number | undefined): string {
+  if (status === 401 || status === 403) return "Only a QM administrator can add QM to Slack.";
+  if (status === 404) return "Slack installation isn't configured for this QM deployment.";
+  return "Could not start Slack installation. Please try again.";
+}
+
 export class OnboardingSlack extends SlackStatus {
   static properties = {
     installAvailable: { state: true },
@@ -221,7 +239,7 @@ export class OnboardingSlack extends SlackStatus {
   protected refresh(): Promise<void> {
     return this.installation(
       async (response) => {
-        if (!response.ok) throw new Error();
+        if (!response.ok) throw Error(`Slack installation status returned HTTP ${response.status}`);
         const status = await response.json();
         this.installAvailable = status.installAvailable === true;
         this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
@@ -268,6 +286,7 @@ export class OnboardingSlack extends SlackStatus {
     popup.document.body.textContent = "Opening Slack…";
     this.busy = true;
     this.error = "";
+    let status: number | undefined;
     try {
       const response = await fetch(`${UI_BASE}/api/admin/slack-installation/start`, {
         method: "POST",
@@ -277,19 +296,23 @@ export class OnboardingSlack extends SlackStatus {
         body: JSON.stringify({ step: "install" }),
         signal: AbortSignal.timeout(15000),
       });
-      const result = await response.json();
-      if (!response.ok || typeof result.url !== "string") throw new Error();
+      const result = await response.json().catch(() => ({}));
+      status = response.status;
+      if (!response.ok || typeof result.url !== "string")
+        throw Error(`Slack installation start returned HTTP ${status} ${result.error ?? ""}`.trim());
       const target = new URL(result.url);
-      if (target.protocol !== "https:" || target.username || target.password || popup.closed) throw new Error();
+      if (target.protocol !== "https:" || target.username || target.password || popup.closed)
+        throw Error("Slack installation start returned an unusable URL");
       const form = popup.document.createElement("form");
       form.method = "POST";
       form.action = target.href;
       popup.document.body.append(form);
       form.submit();
       this.poll();
-    } catch {
+    } catch (error) {
+      reportHandledError("slack-installation-start", error);
       popup.close();
-      this.error = "Could not start Slack installation. Please try again.";
+      this.error = installStartError(status);
     } finally {
       this.busy = false;
     }
