@@ -4,7 +4,8 @@ import pg from "pg";
 
 const { base, signal, port } = workerData as { base: string; signal: Int32Array; port: MessagePort };
 const baseUrl = new URL(base);
-const prefix = baseUrl.pathname.slice(1);
+const baseName = baseUrl.pathname.slice(1);
+const prefix = baseName.startsWith("qmt_") ? baseName : `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const prepared = new Map<string, Promise<string>>();
 let client: Promise<pg.Client> | undefined;
 
