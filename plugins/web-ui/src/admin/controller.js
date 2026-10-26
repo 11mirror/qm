@@ -66,13 +66,14 @@ export function startAdmin(host, env) {
     if (!dialog.open) dialog.showModal();
   }
 
+  const fire = (target) =>
+    ["input", "change"].forEach((type) => target.dispatchEvent(new Event(type, { bubbles: true })));
   document.querySelectorAll("[data-choice-for]").forEach((input) => {
     if (input.closest(".sv-governance, .sv-slack-settings, .sv-models, .sv-customize")) return;
     input.onchange = () => {
       const select = $(input.dataset.choiceFor);
       select.value = input.value;
-      select.dispatchEvent(new Event("input", { bubbles: true }));
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(select);
     };
   });
   document.querySelectorAll("[data-checkbox-for]").forEach((input) => {
@@ -80,39 +81,14 @@ export function startAdmin(host, env) {
     input.onchange = () => {
       const checkbox = $(input.dataset.checkboxFor);
       checkbox.checked = input.value === "on";
-      checkbox.dispatchEvent(new Event("input", { bubbles: true }));
-      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(checkbox);
     };
   });
-  const SCOPED = new Set([
-    "governance",
-    "egress",
-    "history",
-    "files",
-    "memory",
-    "audit",
-    "errors",
-    "skills",
-    "crons",
-    "deployments",
-  ]);
-  const ORG_WIDE = new Set([
-    "users",
-    "spend",
-    "keychain",
-    "connectors",
-    "judgments",
-    "ackemoji",
-    "models",
-    "credentials",
-    "customize",
-    "slack-settings",
-  ]);
-  const ENDPOINT = { history: "sessions" };
-  const HISTORY_PAGE_SIZE = 50;
+  const SCOPED = new Set("governance egress history files memory audit errors skills crons deployments".split(" "));
+  const ORG_WIDE = new Set(
+    "users spend keychain connectors judgments ackemoji models credentials customize slack-settings".split(" "),
+  );
   const ERRORS_PAGE_SIZE = 50;
-
-  const TRANSCRIPT_PAGE_SIZE = 500;
   const brandSelfLabel = () => env.productName;
   const DEFAULT_VIEW = "history";
   const orgId = env.org;
@@ -122,7 +98,6 @@ export function startAdmin(host, env) {
   let page = 1;
   let historyCursor = null;
 
-  const FOCUS_STALE_MS = 60000;
   const viewLoadedAt = {};
   let cronDestinationEditId = null;
   const transcriptVisibility = { thinking: true, toolResults: true };
@@ -172,13 +147,12 @@ export function startAdmin(host, env) {
     window.open("/web-ui/", "_blank", "noopener");
   }
   function webUiAsButton(target) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "link";
-    b.textContent = "Open web UI as this person ↗";
-    b.title = "View the assistant web UI as " + target + " (audited)";
-    b.onclick = () => openWebUiAs(target);
-    return b;
+    const title = "View the assistant web UI as " + target + " (audited)";
+    return el(
+      "button.link",
+      { type: "button", title, onclick: () => openWebUiAs(target) },
+      "Open web UI as this person ↗",
+    );
   }
   const fmtTime = (ts) => new Date(ts).toLocaleString();
   const sameLocalDate = (a, b) =>
@@ -205,18 +179,9 @@ export function startAdmin(host, env) {
       fmtClock(d)
     );
   }
-  const fmtHistoryTime = relTime;
-  function fmtHistoryCreated(createdAt, lastActivity) {
-    if (!createdAt) return "Never";
-    const created = new Date(createdAt);
-    return lastActivity && sameLocalDate(created, new Date(lastActivity))
-      ? fmtClock(created)
-      : fmtHistoryTime(createdAt);
-  }
   const fmtMs = (n) => {
     if (n == null) return "n/a";
-    if (n >= 1000) return (n / 1000).toFixed(2) + " s";
-    return Math.round(n) + " ms";
+    return n >= 1000 ? (n / 1000).toFixed(2) + " s" : Math.round(n) + " ms";
   };
   const fmtPct = (n) => ((n || 0) * 100).toFixed(1) + "%";
   const statusTimers = new Map();
@@ -262,15 +227,7 @@ export function startAdmin(host, env) {
     const dialog = $("governance-review");
     $("governance-review-title").textContent = title;
     $("governance-review-subtitle").textContent = subtitle;
-    const list = $("governance-review-facts");
-    list.textContent = "";
-    facts.forEach(([key, value]) => {
-      const term = document.createElement("dt");
-      term.textContent = key;
-      const detail = document.createElement("dd");
-      detail.textContent = value;
-      list.append(term, detail);
-    });
+    $("governance-review-facts").replaceChildren(...facts.flatMap(([key, value]) => [el("dt", key), el("dd", value)]));
     $("governance-review-warning").textContent = warning;
     const confirm = $("governance-review-confirm");
     confirm.textContent = confirmLabel || "";
@@ -288,52 +245,40 @@ export function startAdmin(host, env) {
     event.preventDefault();
     finishGovernanceReview(false);
   });
-  function badge(text, kind) {
-    const s = document.createElement("span");
-    s.className = "badge" + (kind ? " " + kind : "");
-    s.textContent = text;
-    return s;
+  function el(spec, props, ...kids) {
+    const [tag, className] = spec.split(".");
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (props === null || typeof props !== "object") node.textContent = props ?? "";
+    else
+      for (const [key, value] of Object.entries(props)) {
+        if (key === "style") node.style.cssText = value;
+        else if (key in node) node[key] = value;
+        else node.setAttribute(key, value);
+      }
+    node.append(...kids);
+    return node;
   }
+  const badge = (text, kind) => el("span", { className: "badge" + (kind ? " " + kind : ""), textContent: text });
   function deliveryFileBadges(filesPayload) {
     const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
     if (!filesWithNames.length) return null;
-    const files = document.createElement("div");
-    files.className = "badges";
-    for (const f of filesWithNames) {
-      const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
-      if (f.artifactId) {
-        const link = document.createElement("button");
-        link.className = "badge info";
-        link.textContent = label;
-        link.onclick = () =>
-          downloadFile({ id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true });
-        files.appendChild(link);
-      } else {
-        files.appendChild(badge(label, "muted"));
-      }
-    }
-    return files;
-  }
-  function nodeCell(node, cls) {
-    return { node, cls };
+    return el(
+      "div.badges",
+      {},
+      ...filesWithNames.map((f) => {
+        const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
+        if (!f.artifactId) return badge(label, "muted");
+        const file = { id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true };
+        return el("button.badge info", { textContent: label, onclick: () => downloadFile(file) });
+      }),
+    );
   }
   function stacked(primary, secondary, cls) {
-    const d = document.createElement("div");
+    const d = el("div", {}, el("div.primaryline", primary));
     if (cls) d.className = cls;
-    const p = document.createElement("div");
-    p.className = "primaryline";
-    p.textContent = primary;
-    d.appendChild(p);
-    if (secondary) {
-      const s = document.createElement("div");
-      s.className = "subline";
-      s.textContent = secondary;
-      d.appendChild(s);
-    }
+    if (secondary) d.appendChild(el("div.subline", secondary));
     return d;
-  }
-  function deploymentHref(dep) {
-    return dep.publicUrl || "";
   }
   const shortId = (id, len = 8) => String(id || "").slice(0, len) || "-";
   const titleCase = (s) =>
@@ -346,23 +291,12 @@ export function startAdmin(host, env) {
   function scopeKind(scopeId) {
     return String(scopeId || "").split(":")[0] || "scope";
   }
-  function statusKind(status) {
-    if (status === "done") return "ok";
-    if (status === "failed") return "err";
-    if (status === "running") return "info";
-    if (status === "pending") return "warn";
-    return "muted";
-  }
-  function statusBadge(status) {
-    return badge(titleCase(status || "unknown"), statusKind(status));
-  }
-  function entryIsNoise(e) {
-    return ["tool_call", "tool_result", "soul", "system"].includes(e.type);
-  }
+  const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
+  const statusBadge = (status) => badge(titleCase(status || "unknown"), STATUS_KIND[status] || "muted");
+  const entryIsNoise = (e) => ["tool_call", "tool_result", "soul", "system"].includes(e.type);
   function fileKind(path) {
     const name = String(path || "");
-    const ext = name.includes(".") ? name.split(".").pop() : "";
-    return ext ? "." + ext.toLowerCase() : "file";
+    return name.includes(".") ? "." + name.split(".").pop().toLowerCase() : "file";
   }
   function fileName(path) {
     return (
@@ -685,7 +619,7 @@ export function startAdmin(host, env) {
   }
   function scopeCell(id, extraCls) {
     const lbl = dirLabel(id);
-    return nodeCell(stacked(lbl || id, lbl ? id : ""), "mono" + (extraCls ? " " + extraCls : ""));
+    return { node: stacked(lbl || id, lbl ? id : ""), cls: "mono" + (extraCls ? " " + extraCls : "") };
   }
   const orgWideView = () => scopeKind(scope) === "org";
   function scopeRows() {
@@ -880,7 +814,7 @@ export function startAdmin(host, env) {
       return;
     }
     if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
-    if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
+    if (Date.now() - (viewLoadedAt[view] || 0) < 60000) return;
     if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
     if (view === "history" && urlToState().session) return;
     if (view === "onboarding") {
@@ -1892,12 +1826,12 @@ export function startAdmin(host, env) {
     const root = $("view-data");
     const reqId = ++dataReq;
     const q = "scope=" + encodeURIComponent(scope);
-    const ep = ENDPOINT[view] || view;
+    const ep = view === "history" ? "sessions" : view;
     let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
 
     if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
     if (view === "history") {
-      path += `&limit=${HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+      path += `&limit=50&category=${encodeURIComponent(historyCategory(historyKind))}`;
       if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
       if (historyKind === "cron") {
         path += `&origin=${encodeURIComponent(historyKind)}`;
@@ -2226,7 +2160,7 @@ export function startAdmin(host, env) {
       plural,
       relTime,
       fmtTime,
-      fmtHistoryTime,
+      fmtHistoryTime: relTime,
       fmtBytes,
       shortId,
       titleCase,
@@ -2236,7 +2170,7 @@ export function startAdmin(host, env) {
       fileSha256,
       uploadErrorMessage,
       downloadFile,
-      deploymentHref,
+      deploymentHref: (dep) => dep.publicUrl || "",
       cronName,
       shortSchedule,
       fmtSchedule,
@@ -2927,7 +2861,6 @@ export function startAdmin(host, env) {
       shortName,
       plural,
       selectScope,
-      fmtHistoryCreated,
       relTime,
       stateToUrl,
       titleCase,
@@ -3162,7 +3095,7 @@ export function startAdmin(host, env) {
       api,
       scope,
       historyKind,
-      pageSize: TRANSCRIPT_PAGE_SIZE,
+      pageSize: 500,
       visibility: transcriptVisibility,
       go,
       stateToUrl,
