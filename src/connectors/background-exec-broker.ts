@@ -4,7 +4,6 @@ import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess } from "../sandbox/process-poll.ts";
 import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
-import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
 
@@ -84,8 +83,8 @@ export interface BackgroundExecBroker {
   list(): Promise<BackgroundJobSummary[]>;
 }
 
-const DEFAULT_TTL_MS = CONFIG_DEFAULTS.backgroundJobTtlSec * 1000;
-const DEFAULT_TTL_MAX_MS = CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000;
+export const BACKGROUND_JOB_TTL_MS = 1_800_000;
+export const BACKGROUND_JOB_TTL_MAX_MS = 3_600_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
@@ -97,8 +96,8 @@ function stateFromRow(status: ProcessStatus): ProcessState {
 
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
   const POLL_MS = deps.pollMs ?? 5_000;
-  const defaultTtlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
-  const maxTtlMs = deps.ttlMaxMs ?? DEFAULT_TTL_MAX_MS;
+  const defaultTtlMs = deps.ttlMs ?? BACKGROUND_JOB_TTL_MS;
+  const maxTtlMs = deps.ttlMaxMs ?? BACKGROUND_JOB_TTL_MAX_MS;
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 

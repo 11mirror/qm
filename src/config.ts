@@ -12,6 +12,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { RUN_MAX_AGE_MS } from "./runs/reaper.ts";
 import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
 import { DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
@@ -102,28 +103,17 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   piSystemCacheSplit: boolean;
   resendApiKey?: string;
   emailFrom?: string;
-  rateLimitPerWindow: number;
-  rateLimitWindowMs: number;
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
-  budgetWindowMs: number;
   maxContextTokens?: number;
-  execTimeoutDefaultMs: number;
-  execTimeoutMaxMs: number;
   turnWallClockMs: number;
-  runMaxAgeMs: number;
   runWaitMs: number;
-  backgroundJobTtlMs: number;
-  backgroundJobTtlMaxMs: number;
   roles: QmRole[];
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
   spendExportToken?: string;
   buildSha?: string;
-  monitorPollMs: number;
-  skillSyncPollMs: number;
-  monitorHeartbeatMs: number;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
@@ -133,7 +123,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   slackEventsPort?: number;
   runStore: "memory" | "postgres";
   seedSkills: boolean;
-  skillsSeedDir: string;
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
@@ -141,9 +130,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   s3Bucket?: string;
   s3Region?: string;
   deployGitDir: string;
-  deployDialTimeoutMs: number;
-  deepIdleMachineMs: number;
-  devIdleMachineMs: number;
   cronFireConcurrency: number;
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
@@ -152,12 +138,9 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   memoryProviderConfig?: MemoryProviderConfig;
   workers: number;
   leaseTtlMs: number;
-  heartbeatIntervalMs: number;
   reaperIntervalMs: number;
   shutdownDrainMs: number;
   maxAttempts: number;
-  maxClaims: number;
-  processReaperIntervalMs: number;
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
@@ -547,34 +530,17 @@ export function processOrgId(): string {
 
 export const CONFIG_DEFAULTS = {
   port: 8080,
-  rateLimitPerWindow: 60,
-  rateLimitWindowMs: 60_000,
-  budgetWindowMs: 86_400_000,
-  execTimeoutDefaultSec: 120,
-  execTimeoutMaxSec: 300,
   turnWallClockSec: 0,
-  runMaxAgeMs: 24 * 60 * 60_000,
-  backgroundJobTtlSec: 1800,
-  backgroundJobTtlMaxSec: 3600,
   backgroundWorkEnabled: true,
-  monitorPollMs: 10_000,
-  skillSyncPollMs: 0,
-  deployDialTimeoutMs: 20_000,
-  deepIdleMachineMs: 3 * 24 * 60 * 60_000,
-  devIdleMachineMs: 2 * 60 * 60_000,
   cronFireConcurrency: 4,
-  monitorHeartbeatSec: 180,
   approvalSummaryTimeoutMs: 6_000,
   turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
   workers: 16,
   leaseTtlMs: 120_000,
-  heartbeatIntervalMs: 40_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 30_000,
   maxAttempts: 3,
-  maxClaims: 8,
-  processReaperIntervalMs: 30_000,
 } as const;
 
 export function boolEnv(value: string | undefined): boolean | undefined {
@@ -1002,35 +968,17 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     legacySandboxScopeDefaults,
     deployProvider,
     piSystemCacheSplit: e.PI_SYSTEM_CACHE_SPLIT ?? false,
-    rateLimitPerWindow: CONFIG_DEFAULTS.rateLimitPerWindow,
-    rateLimitWindowMs: CONFIG_DEFAULTS.rateLimitWindowMs,
-    budgetWindowMs: CONFIG_DEFAULTS.budgetWindowMs,
-    execTimeoutDefaultMs: CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000,
-    execTimeoutMaxMs: CONFIG_DEFAULTS.execTimeoutMaxSec * 1000,
     turnWallClockMs: CONFIG_DEFAULTS.turnWallClockSec * 1000,
-    runMaxAgeMs: CONFIG_DEFAULTS.runMaxAgeMs,
-    runWaitMs: CONFIG_DEFAULTS.runMaxAgeMs + 60_000,
-    backgroundJobTtlMs: CONFIG_DEFAULTS.backgroundJobTtlSec * 1000,
-    backgroundJobTtlMaxMs: CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000,
-    monitorPollMs: CONFIG_DEFAULTS.monitorPollMs,
-    skillSyncPollMs: CONFIG_DEFAULTS.skillSyncPollMs,
-    monitorHeartbeatMs: CONFIG_DEFAULTS.monitorHeartbeatSec * 1000,
+    runWaitMs: RUN_MAX_AGE_MS + 60_000,
     seedSkills: true,
-    skillsSeedDir: resolve("./skills-seed"),
     pluginSkillDirs: defaultPluginSkillDirs(),
     memoryRecall: DEFAULT_MEMORY_POLICY.recall,
     memoryCapture: DEFAULT_MEMORY_POLICY.capture,
     memoryStrategy: DEFAULT_MEMORY_STRATEGY,
     memoryCaptureQuietMs: DEFAULT_CAPTURE_QUIET_MS,
-    deployDialTimeoutMs: CONFIG_DEFAULTS.deployDialTimeoutMs,
-    deepIdleMachineMs: CONFIG_DEFAULTS.deepIdleMachineMs,
-    devIdleMachineMs: CONFIG_DEFAULTS.devIdleMachineMs,
     leaseTtlMs: CONFIG_DEFAULTS.leaseTtlMs,
-    heartbeatIntervalMs: CONFIG_DEFAULTS.heartbeatIntervalMs,
     reaperIntervalMs: CONFIG_DEFAULTS.reaperIntervalMs,
     maxAttempts: CONFIG_DEFAULTS.maxAttempts,
-    maxClaims: CONFIG_DEFAULTS.maxClaims,
-    processReaperIntervalMs: CONFIG_DEFAULTS.processReaperIntervalMs,
     approvalSummaryTimeoutMs: CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs: CONFIG_DEFAULTS.securityScreenTimeoutMs,
