@@ -205,7 +205,6 @@ function mergeIngest(item: InboxItem, entry: IngestEntryInput, now: number): Inb
 }
 
 export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (event: LedgerEvent) => void): InboxLedger {
-  if (!backing.update) throw new Error("inbox items need atomic durable updates");
   const update = backing.update.bind(backing);
   const emit = (item: InboxItem | null | undefined, op: LedgerEventOp): void => {
     if (item && onEvent) onEvent({ cronId: item.cronId, itemId: item.id, op, at: Date.now() });

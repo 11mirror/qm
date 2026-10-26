@@ -74,8 +74,7 @@ function upgradedStore(store: DurableMap<StoredModalSandbox>): DurableMap<Stored
   const upgrade = async (): Promise<void> => {
     for (const [scope, rec] of await store.entries()) {
       if (!upgradeLegacy(rec)) continue;
-      if (store.update) await store.update(scope, (current) => upgradeLegacy(current) ?? current);
-      else await store.put(scope, upgradeLegacy(rec)!);
+      await store.update(scope, (current) => upgradeLegacy(current) ?? current);
     }
   };
   const wait = (): Promise<void> =>
