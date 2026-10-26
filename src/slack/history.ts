@@ -1,7 +1,6 @@
 import { escapeSlackText } from "./mrkdwn.ts";
 import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
-import type { SlackContextSource } from "./config.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { CachedMessage } from "../surface-cache/types.ts";
@@ -32,7 +31,6 @@ const MIRROR_CONTEXT_NOTE =
 
 export function createSlackHistoryReader(deps: {
   core: SlackCoreClient;
-  source?: SlackContextSource;
   ids: BotIdentity;
   managed?: boolean;
   historyLimit?: number;
@@ -122,7 +120,6 @@ export function createSlackHistoryReader(deps: {
         throw new Error("Live Slack thread exceeds the history limit; its replies could not be read completely.");
       return page;
     }
-    if (deps.source !== "mirror") return liveHistory(client, channel, threadTs, before, expandThreads);
     const key = threadTs ? `${channel}:${threadTs}` : channel;
     let mirrored: SlackHistoryMessage[] = [];
     let mirrorResult: SlackHistoryPage | undefined;

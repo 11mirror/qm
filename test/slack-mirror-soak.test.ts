@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { parseSlackContextSource } from "../src/slack/config.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { ReadMessagesOpts } from "../src/surface-cache/types.ts";
@@ -11,85 +10,59 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
-test("context source defaults live and invalid modes fail closed", () => {
-  assert.equal(parseSlackContextSource(undefined), "live");
-  assert.equal(parseSlackContextSource(""), "live");
-  for (const source of ["live", "mirror"]) assert.equal(parseSlackContextSource(source), source);
-  assert.throws(() => parseSlackContextSource("miror"));
-  assert.throws(() => parseSlackContextSource("shadow"));
-});
-
-test("default live context never reads or writes mirror and expands recent channel threads", async () => {
+test("default context reads the stored mirror first and fills from Slack once per conversation", async () => {
   const calls: string[] = [];
   const core = {
-    readSurfaceMessages: async () => {
-      throw new Error("must not read mirror");
-    },
-    rememberSurfaceHistory: async () => {
-      throw new Error("must not backfill");
-    },
+    readSurfaceMessages: async () => [{ container: "C1", ts: "1", text: "stored" }],
+    rememberSurfaceHistory: async () => {},
   } as unknown as SlackCoreClient;
   const client = {
     conversations: {
       history: async () => {
         calls.push("history");
-        return {
-          messages: [
-            { ts: "2", text: "new" },
-            { ts: "1", text: "parent", reply_count: 1 },
-          ],
-        };
-      },
-      replies: async () => {
-        calls.push("replies");
-        return {
-          messages: [
-            { ts: "1", text: "parent" },
-            { ts: "1.5", thread_ts: "1", text: "live reply" },
-          ],
-        };
+        return { messages: [{ ts: "2", text: "live" }] };
       },
     },
   };
-  const result = await createSlackHistoryReader({ core, ids })(client, "C1", undefined, undefined, true);
-  assert.deepEqual(calls, ["history", "replies"]);
-  assert.ok(result.raw.some((message) => message.text === "live reply"));
-  assert.equal(result.note, undefined);
+  const read = createSlackHistoryReader({ core, ids });
+  const first = await read(client, "C1");
+  assert.deepEqual(
+    first.raw.map((m) => m.text),
+    ["stored", "live"],
+  );
+  const second = await read(client, "C1");
+  assert.deepEqual(
+    second.raw.map((m) => m.text),
+    ["stored"],
+  );
+  assert.deepEqual(calls, ["history"]);
 });
 
-test("live default search cannot source mirror data", async () => {
-  for (const source of [undefined, "live"] as const) {
-    let cacheReads = 0;
-    const tools = createSurfaceToolDeps({
-      deps: {
-        outbound: {},
-        slackContextSource: source,
-        surfaceCache: {
-          containerState: async () => null,
-          search: async () => {
-            cacheReads++;
-            return [{ text: "mirror secret" }];
-          },
-        },
-        surfaceContext: {
-          pull: async () => ({
-            messages: [{ ts: "1", text: "live match" }],
-            note: "Retry in 60 seconds; setup at https://qm.test/admin/?setup=slack",
-          }),
+test("default search reads stored Slack messages", async () => {
+  let pulls = 0;
+  const tools = createSurfaceToolDeps({
+    deps: {
+      outbound: {},
+      surfaceCache: {
+        containerState: async () => null,
+        search: async () => [{ ts: "1.000000", text: "stored match" }],
+      },
+      surfaceContext: {
+        pull: async () => {
+          pulls++;
+          return { messages: [{ ts: "1", text: "live match" }] };
         },
       },
-      input: { surface: "slack", surfaceTools: true },
-      actor: { id: "U1" },
-      conversation: { kind: "channel" },
-      defaultDestination: { type: "slack", target: "C1:1" },
-    } as unknown as SurfaceToolsContext)!;
-    const result = await tools.search("match");
-    assert.equal(result.source, "live");
-    assert.equal(result.hits?.[0]?.snippet, "live match");
-    assert.match(result.message!, /60 seconds.*setup=slack/);
-    assert.equal((await tools.search("match", { source: "mirror" })).ok, false);
-    assert.equal(cacheReads, 0);
-  }
+    },
+    input: { surface: "slack", surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel" },
+    defaultDestination: { type: "slack", target: "C1:1" },
+  } as unknown as SurfaceToolsContext)!;
+  const result = await tools.search("match");
+  assert.equal(result.source, "cache");
+  assert.equal(result.hits?.[0]?.snippet, "stored match");
+  assert.equal(pulls, 0);
 });
 
 test("mirror selects newest channel roots and the first thread page", async () => {
@@ -101,7 +74,6 @@ test("mirror selects newest channel roots and the first thread page", async () =
   );
   const read = createSlackHistoryReader({
     ids,
-    source: "mirror",
     core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
   });
   const roots = await read({}, "C1");
@@ -142,7 +114,7 @@ test("mirror uses the live first-page thread contract without fallback", async (
     },
   } as unknown as SlackCoreClient;
   const client = { conversations: { replies: async () => ({ messages: messages.slice(0, 200), has_more: true }) } };
-  const mirrored = await createSlackHistoryReader({ core, ids, source: "mirror" })(client, "C1", "1000.000000");
+  const mirrored = await createSlackHistoryReader({ core, ids })(client, "C1", "1000.000000");
   assert.deepEqual(
     mirrored.raw.map((message) => message.ts),
     messages.slice(0, 200).map((message) => message.ts),

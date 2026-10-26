@@ -281,13 +281,8 @@ Shared-app installations use 15 for both defaults regardless of this setting.
 An explicit tool count overrides the result count, but not the live page size.
 Stored mirror reads keep their existing window.
 
-## Mirror qualification
+## Message cache
 
-`SLACK_CONTEXT_SOURCE` controls conversation context and default Slack tool reads:
+Conversation context and default Slack tool reads come from the stored Slack message cache. The first read of a conversation in each process also pulls one page from Slack and stores it; later reads use the cache. Explicit live reads (`live: true`) always go to Slack and never write the cache.
 
-- `live` (default) keeps Slack history as the source, including automatic channel thread expansion.
-- `mirror` explicitly enables stored context and mirror search, with the documented partial coverage and bounded live fallback. It stays opt-in.
-
-Ingestion continues in every mode. Compare channel and thread samples, edits/deletes, and normal agent turns before enabling mirror reads. No automatic mode promotion occurs.
-
-Slack mirror records preserve provider subtypes so stored context uses the same system-message filtering as live context. A missing stored subtype means legacy or unobserved metadata; an empty subtype means a verified ordinary message. Partial event updates preserve omitted subtype and thread metadata. Mirror-mode history fallback shares event content normalization and prefers fresh Slack duplicates; live reads never backfill the mirror.
+Slack mirror records preserve provider subtypes so stored context uses the same system-message filtering as live context. A missing stored subtype means legacy or unobserved metadata; an empty subtype means a verified ordinary message. Partial event updates preserve omitted subtype and thread metadata. The Slack fill shares event content normalization and prefers fresh Slack duplicates.

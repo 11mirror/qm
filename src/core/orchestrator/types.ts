@@ -214,7 +214,6 @@ export interface OrchestratorDeps {
   surfaceContext?: SurfaceContextPuller;
   surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
-  slackContextSource?: "live" | "mirror";
   surfaceLabel?: (surface: string) => string | undefined;
   channelPolicy?: ChannelPolicyStore;
 }

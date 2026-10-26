@@ -1817,7 +1817,6 @@ export function buildApp(
   const orchestratorDeps: OrchestratorDeps = {
     channelPolicy,
     surfaceCache,
-    slackContextSource: config.slackContextSource ?? "live",
     surfaceLabel: chatSurfaces.label,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));

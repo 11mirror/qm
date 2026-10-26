@@ -457,7 +457,7 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
   assert.equal(f.events[1].broadcast, undefined);
 });
 
-test("real message handler checks prior stake before ingesting the current reply", async () => {
+test("real message handler reads prior stake from the cache before ingesting the current reply", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
@@ -469,20 +469,11 @@ test("real message handler checks prior stake before ingesting the current reply
     conversations: {
       replies: async (args: any) => {
         calls.push(args);
-        assert.deepEqual(args, { channel: "C1", ts: "1.000001", limit: 200, latest: currentTs, inclusive: false });
-        assert.equal((await cache.readMessages("C1", { at: currentTs })).length, 0);
-        return {
-          messages: [
-            { ts: "1.000001", user: "U1", text: "root" },
-            { ts: "2.000001", thread_ts: "1.000001", user: "UBOT", text: "prior reply" },
-          ],
-          has_more: false,
-        };
+        return { messages: [], has_more: false };
       },
     },
   };
   const reader = createSlackHistoryReader({
-    source: "live",
     ids,
     core: { readSurfaceMessages: (channel: string, opts: any) => cache.readMessages(channel, opts) } as any,
     historyClient: client as never,
@@ -506,9 +497,8 @@ test("real message handler checks prior stake before ingesting the current reply
   });
   for (let i = 0; i < 200 && f.dispatches.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(f.dispatches.length, 1);
-  assert.equal(calls.length, 1);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls, []);
 });
 
 test("reaction turns preserve the reacted message in the mirror", async () => {
