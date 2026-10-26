@@ -21,6 +21,7 @@ let coreStatus = 200;
 let nonce = "";
 const email = "guest@partner.test";
 const seen: Array<{ path: string; headers: Record<string, unknown> }> = [];
+const claimed = new Set<string>();
 const upstream = createServer((req, res) => {
   void (async () => {
     const path = new URL(req.url!, origin).pathname;
@@ -38,6 +39,14 @@ const upstream = createServer((req, res) => {
       return void res.end(JSON.stringify({ access_token: "test-access", id_token: idToken }));
     }
     if (path === "/userinfo") return void res.end(JSON.stringify({ sub: "idp-subject", email, email_verified: true }));
+    if (path === "/v1/auth/broker/claim") {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const [id] = (JSON.parse(raw) as { ids: string[] }).ids;
+      const fresh = !claimed.has(id!);
+      claimed.add(id!);
+      return void res.end(JSON.stringify({ claimed: fresh ? id : null }));
+    }
     if (path === "/v1/auth/broker/email-allowed") {
       res.statusCode = coreStatus;
       return void res.end(JSON.stringify(admission));
