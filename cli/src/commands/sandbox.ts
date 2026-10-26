@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CliError, bold, die, header, note, ok, warn } from "../log.ts";
+import { CliError, bold, die, errMessage, header, note, ok, warn } from "../log.ts";
 import { type QmConfig } from "../config.ts";
 import { sandboxBaseRef } from "../manifest.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
@@ -269,7 +269,7 @@ function runDocker(args: string[], failure: string): void {
     execFileSync("docker", args, { stdio: "inherit" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") die("docker not found — install Docker with Buildx.");
-    throw new CliError(failure);
+    throw new CliError(`${failure}\n${errMessage(error)}`, { cause: error });
   }
 }
 

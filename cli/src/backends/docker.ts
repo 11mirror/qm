@@ -163,8 +163,10 @@ function docker(args: string[], allow?: RegExp): string {
 function dockerInherit(args: string[], hint?: string): void {
   try {
     runInherit("docker", args);
-  } catch {
-    throw new CliError(`docker ${args.slice(0, 2).join(" ")} failed.${hint ? `\n${hint}` : ""}`);
+  } catch (error) {
+    throw new CliError(`docker ${args.slice(0, 2).join(" ")} failed: ${errMessage(error)}${hint ? `\n${hint}` : ""}`, {
+      cause: error,
+    });
   }
 }
 
@@ -800,7 +802,7 @@ export async function dockerDown(config: QmConfig, opts: { purge?: boolean } = {
   if (opts.purge) {
     warn("purging the network and Postgres volume (durable data will be lost)");
     docker(["network", "rm", prefix], /not found|No such/);
-    docker(["volume", "rm", `${prefix}-pgdata`, `${prefix}-coredata`], /No such volume|not found|in use/);
+    docker(["volume", "rm", `${prefix}-pgdata`, `${prefix}-coredata`], /No such volume|not found/);
   }
   ok("down.");
 }
