@@ -5,21 +5,24 @@ import { once } from "node:events";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import {
-  AbortMultipartUploadCommand,
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetBucketLifecycleConfigurationCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutBucketLifecycleConfigurationCommand,
   PutObjectCommand,
-  UploadPartCommand,
   type LifecycleRule,
 } from "@aws-sdk/client-s3";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
-import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
+import {
+  bodyToReadable,
+  isNoSuchKey,
+  isNoSuchLifecycleConfiguration,
+  s3Client,
+  s3MultipartUpload,
+  type S3Send,
+} from "./s3.ts";
 
 export const MAX_BLOB_BYTES = 1_000_000_000;
 export const MAX_STAGE_BLOB_BYTES = 12_000_000_000;
@@ -168,6 +171,27 @@ export interface S3BlobTransferOptions {
   _client?: S3Send;
 }
 
+/** Re-chunk a byte stream into parts of exactly `size` bytes plus a final remainder; `last` marks the final part,
+ * so a stream that fits in one part can go up as a single PutObject. */
+async function* exactParts(
+  chunks: AsyncIterable<Buffer>,
+  size: number,
+): AsyncGenerator<{ body: Buffer; last: boolean }> {
+  let pending: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of chunks) {
+    pending.push(chunk);
+    bytes += chunk.length;
+    while (bytes > size) {
+      const all = Buffer.concat(pending, bytes);
+      yield { body: all.subarray(0, size), last: false };
+      pending = [all.subarray(size)];
+      bytes -= size;
+    }
+  }
+  if (bytes > 0) yield { body: Buffer.concat(pending, bytes), last: true };
+}
+
 export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobTransferStore {
   const bucket = options.bucket;
   const prefix = (options.prefix ?? "") + "transfer/";
@@ -181,89 +205,31 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
       const Key = keyFor(blobId);
       const hash = createHash("sha256");
       let sizeBytes = 0;
-      let uploadId: string | undefined;
-      const parts: Array<{ ETag: string; PartNumber: number }> = [];
-      let pending: Buffer[] = [];
-      let pendingBytes = 0;
-
-      const takeExact = (n: number): Buffer => {
-        const out = Buffer.allocUnsafe(n);
-        let filled = 0;
-        while (filled < n) {
-          const head = pending[0]!;
-          const need = n - filled;
-          if (head.length <= need) {
-            head.copy(out, filled);
-            filled += head.length;
-            pending.shift();
-          } else {
-            head.copy(out, filled, 0, need);
-            pending[0] = head.subarray(need);
-            filled = n;
-          }
-        }
-        pendingBytes -= n;
-        return out;
-      };
-
-      const flush = async (last: boolean): Promise<void> => {
-        if (last && uploadId && pendingBytes === 0) return;
-        const body = last ? Buffer.concat(pending, pendingBytes) : takeExact(S3_PART_BYTES);
-        if (last) {
-          pending = [];
-          pendingBytes = 0;
-        }
-        if (!uploadId && last) {
-          await client.send(new PutObjectCommand({ Bucket: bucket, Key, Body: body }));
-          return;
-        }
-        if (!uploadId) {
-          const created = (await client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key }))) as {
-            UploadId?: string;
-          };
-          if (!created.UploadId) throw new Error("blob-transfer: S3 did not return an UploadId");
-          uploadId = created.UploadId;
-        }
-        const PartNumber = parts.length + 1;
-        const done = (await client.send(
-          new UploadPartCommand({ Bucket: bucket, Key, UploadId: uploadId, PartNumber, Body: body }),
-        )) as { ETag?: string };
-        if (!done.ETag) throw new Error("blob-transfer: S3 did not return an ETag for the part");
-        parts.push({ ETag: done.ETag, PartNumber });
-      };
-
-      try {
+      const chunks = (async function* (): AsyncIterable<Buffer> {
         for await (const chunk of asChunks(source)) {
           const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           sizeBytes += buf.length;
           if (opts?.maxBytes != null && sizeBytes > opts.maxBytes) throw new BlobTooLargeError();
           hash.update(buf);
-          pending.push(buf);
-          pendingBytes += buf.length;
-          while (pendingBytes > S3_PART_BYTES) await flush(false);
+          yield buf;
         }
-        await flush(true);
-        if (uploadId) {
-          await client.send(
-            new CompleteMultipartUploadCommand({
-              Bucket: bucket,
-              Key,
-              UploadId: uploadId,
-              MultipartUpload: { Parts: parts },
-            }),
-          );
-        }
-      } catch (err) {
-        if (uploadId) {
-          await client
-            .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key, UploadId: uploadId }))
-            .catch((abortErr: unknown) => {
-              console.warn(
-                `[blob-transfer] leaked S3 multipart parts for ${Key} (upload ${uploadId}) — abort failed: ${String(abortErr)}`,
-              );
-            });
-        }
-        throw err;
+      })();
+      const parts = exactParts(chunks, S3_PART_BYTES);
+      const first = await parts.next();
+      if (first.done || first.value.last) {
+        const Body = first.done ? Buffer.alloc(0) : first.value.body;
+        await client.send(new PutObjectCommand({ Bucket: bucket, Key, Body }));
+      } else {
+        const head = first.value;
+        await s3MultipartUpload(
+          client,
+          bucket,
+          Key,
+          (async function* () {
+            yield head;
+            yield* parts;
+          })(),
+        );
       }
 
       const sha256 = hash.digest("hex");

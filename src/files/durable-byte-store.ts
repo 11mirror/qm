@@ -5,18 +5,10 @@ import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { join } from "node:path";
-import {
-  AbortMultipartUploadCommand,
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-  UploadPartCommand,
-} from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
-import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { bodyToReadable, isNoSuchKey, s3Client, s3MultipartUpload, type S3Send } from "../persistence/s3.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
 
@@ -136,58 +128,27 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
     async put(source, opts) {
       const dir = await mkdtemp(join(tmpdir(), "qm-files-"));
       const path = join(dir, "upload");
-      let uploadId: string | undefined;
-      let Key: string | undefined;
       try {
         const { sha256, sizeBytes } = await spoolBytes(source, path, opts?.maxBytes);
         const blobKey = keyFor(sha256);
-        Key = s3Key(blobKey);
+        const Key = s3Key(blobKey);
         if (sizeBytes === 0) {
           await client.send(new PutObjectCommand({ Bucket: bucket, Key, Body: Buffer.alloc(0) }));
         } else {
-          const started = (await client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key }))) as {
-            UploadId?: string;
-          };
-          if (!started.UploadId) throw new Error("S3 did not return an upload ID");
-          uploadId = started.UploadId;
-          const parts: Array<{ ETag: string; PartNumber: number }> = [];
           const partSize = Math.max(16 * 1024 * 1024, Math.ceil(sizeBytes / 10000));
-          for (let offset = 0; offset < sizeBytes; offset += partSize) {
-            const length = Math.min(partSize, sizeBytes - offset);
-            const body = createReadStream(path, { start: offset, end: offset + length - 1 });
-            try {
-              const done = (await client.send(
-                new UploadPartCommand({
-                  Bucket: bucket,
-                  Key,
-                  UploadId: uploadId,
-                  PartNumber: parts.length + 1,
-                  Body: body,
-                  ContentLength: length,
-                }),
-              )) as { ETag?: string };
-              if (!done.ETag) throw new Error("S3 did not return a part ETag");
-              parts.push({ ETag: done.ETag, PartNumber: parts.length + 1 });
-            } finally {
-              body.destroy();
-            }
-          }
-          await client.send(
-            new CompleteMultipartUploadCommand({
-              Bucket: bucket,
-              Key,
-              UploadId: uploadId,
-              MultipartUpload: { Parts: parts },
-            }),
+          await s3MultipartUpload(
+            client,
+            bucket,
+            Key,
+            (function* () {
+              for (let offset = 0; offset < sizeBytes; offset += partSize) {
+                const length = Math.min(partSize, sizeBytes - offset);
+                yield { body: createReadStream(path, { start: offset, end: offset + length - 1 }), length };
+              }
+            })(),
           );
         }
         return { blobKey, sizeBytes, sha256 };
-      } catch (error) {
-        if (uploadId && Key)
-          await client
-            .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key, UploadId: uploadId }))
-            .catch(swallowAs("files: abort upload", undefined));
-        throw error;
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
