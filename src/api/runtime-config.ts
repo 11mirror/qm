@@ -20,14 +20,15 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { tenant } from "../tenant.ts";
 
-export type RuntimeDeps = Partial<
-  Pick<
-    AppDeps,
-    "config" | "providerKeys" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
-  >
-> & { baseModelDefault?: string };
+export type RuntimeDeps = Pick<AppDeps, "config"> &
+  Partial<
+    Pick<
+      AppDeps,
+      "providerKeys" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
+    >
+  > & { baseModelDefault?: string };
 
-export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
+export function runtimeFallback(ctx: { deps: Omit<RuntimeDeps, "config"> }): RuntimeChoice {
   const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
   const providers =
     gatewayIds.length && ctx.deps.providerKeys
@@ -81,7 +82,7 @@ export async function runtimeConfigBody(
 ) {
   if (authorizeChoice)
     ctx = { deps: { ...ctx.deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } };
-  const config = ctx.deps.config!;
+  const config = ctx.deps.config;
   const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
@@ -170,7 +171,7 @@ export async function webuiModelEnabled(
   purpose?: RuntimePurpose,
 ): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
-  const config = ctx.deps.config!;
+  const config = ctx.deps.config;
   const picker = await config.getWebuiModelsDurable(tenant().orgScope);
   if (picker == null || picker.includes(modelId)) return true;
   if (picker.length === 0) return false;
