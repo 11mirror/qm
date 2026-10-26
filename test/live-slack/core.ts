@@ -32,8 +32,7 @@ export class CoreClient {
 
   private async request(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
     const orgId = this.orgScope.split(":")[1] ?? "acme";
-    const portalSecret = process.env.PORTAL_IDENTITY_SECRET;
-    if (!portalSecret) throw new Error("PORTAL_IDENTITY_SECRET is required to act as the admin on the instance");
+    const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
     const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
     const raw = body === undefined ? "" : JSON.stringify(body);
     const salted = `${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}_nonce=${crypto.randomUUID()}`;
