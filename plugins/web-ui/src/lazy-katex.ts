@@ -1,4 +1,5 @@
 import { escapeHtml } from "./html-escape.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 
 type Katex = { renderToString: (text: string, opts?: object) => string };
 
@@ -18,7 +19,8 @@ function ensureLoading(): void {
       real = m.default;
       rerenderMountedBlocks();
     })
-    .catch(() => {
+    .catch((e: unknown) => {
+      swallow("web-ui: load KaTeX", e);
       loading = null;
     });
 }

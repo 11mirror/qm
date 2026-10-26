@@ -31,6 +31,7 @@ import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./a
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
+import { canvasToast } from "./split";
 
 const RESOURCE_KEYS = ["files", "webhooks", "crons", "deployments", "skills"] as const;
 type ScopeResourcesView = Record<(typeof RESOURCE_KEYS)[number], unknown[]>;
@@ -743,17 +744,16 @@ export function openProjectDetail(scopeId: string): void {
   selectContext(scopeId);
 }
 
-export async function renameProject(project: CoreProject, name: string): Promise<boolean> {
+export async function renameProject(project: CoreProject, name: string): Promise<void> {
   try {
     const updated = projectFromResponse(
       await api(`/api/projects/${encodeURIComponent(project.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     );
-    if (!updated) return false;
+    if (!updated) throw new Error("Couldn't rename that project.");
     upsertProject(updated);
     if (appState.currentView === "contexts") drawContexts();
-    return true;
-  } catch {
-    return false;
+  } catch (error) {
+    canvasToast(errMessage(error, "Couldn't rename that project."));
   }
 }
 

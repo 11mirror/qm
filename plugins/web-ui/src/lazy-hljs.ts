@@ -1,4 +1,5 @@
 import { escapeHtml } from "./html-escape.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 
 type HighlightResult = { value: string };
 type Hljs = {
@@ -46,7 +47,8 @@ function ensureLoading(): void {
       real = hljs;
       rerenderMountedBlocks();
     })
-    .catch(() => {
+    .catch((e: unknown) => {
+      swallow("web-ui: load highlighter", e);
       loading = null;
     });
 }

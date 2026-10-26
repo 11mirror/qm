@@ -1,5 +1,6 @@
 import type { Me } from "./shell-state";
 import type { PostHog, PostHogConfig } from "posthog-js";
+import { swallow } from "../../chassis/src/errors.ts";
 
 let client: PostHog | undefined;
 let initialized = false;
@@ -87,7 +88,8 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
     posthog.register({ company_id: me.org, surface: "web" });
     client = posthog;
     capturePageview(currentView);
-  } catch {
+  } catch (e) {
+    swallow("web-ui: start analytics", e);
     client = undefined;
   }
 }
@@ -98,8 +100,8 @@ export function capturePageview(view: string): void {
   try {
     client.capture("$pageview", { view });
     lastCapturedView = view;
-  } catch {
-    return;
+  } catch (e) {
+    swallow("web-ui: capture pageview", e);
   }
 }
 
@@ -110,7 +112,7 @@ export function captureMessage(runId: string, firstMessage: boolean): void {
   try {
     client.capture("message_sent", { $insert_id: `${runId}:message_sent` });
     if (firstMessage) client.capture("session_started", { $insert_id: `${runId}:session_started` });
-  } catch {
-    return;
+  } catch (e) {
+    swallow("web-ui: capture message", e);
   }
 }

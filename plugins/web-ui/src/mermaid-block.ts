@@ -1,4 +1,5 @@
 import { LitElement, css, html, type PropertyValues } from "lit";
+import { swallow } from "../../chassis/src/errors.ts";
 
 let sequence = 0;
 let renderQueue: Promise<unknown> = Promise.resolve();
@@ -196,7 +197,8 @@ export class MermaidBlock extends LitElement {
       this.height = viewBox?.[3] || 480;
       if (this.height > 12000 || this.width > 20000) throw new Error("Diagram dimensions are too large");
       this.image = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-    } catch {
+    } catch (e) {
+      swallow("web-ui: render mermaid diagram", e);
       if (revision === this.revision) this.error = true;
     } finally {
       staging.remove();

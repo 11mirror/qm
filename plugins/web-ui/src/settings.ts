@@ -302,8 +302,7 @@ function sectionFromUrl(): string {
   const slackStep = ["setup", "install", "connected"].includes(params.get("slack") ?? "");
   if (params.get("setup") === "slack" || slackStep) return "slack-settings";
   const first = decodeURIComponent(rel.replace(/^\/+/, "").split("/")[0] ?? "");
-  const view = first === "skill-packs" ? "skills" : first;
-  return ADMIN_VIEWS.has(view) ? view : "general";
+  return ADMIN_VIEWS.has(first) ? first : "general";
 }
 
 function loadAdmin(): Promise<AdminController> {

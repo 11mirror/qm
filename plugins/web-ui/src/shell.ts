@@ -53,11 +53,12 @@ import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
-import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
+import { clearAllDrafts, newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
   beginPaneKindDrag,
+  canvasToast,
   drawCanvas,
   endPaneDrag,
   exitSplitIfActive,
@@ -283,9 +284,13 @@ export async function signOut(): Promise<void> {
 }
 
 export async function exitImpersonation(): Promise<void> {
-  await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } }).catch(
-    () => undefined,
-  );
+  const stopped = await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } })
+    .then((r) => r.ok)
+    .catch(swallowAs("web-ui: exit impersonation", false));
+  if (!stopped) {
+    canvasToast("Couldn't exit impersonation. Try again.");
+    return;
+  }
   window.location.href = ADMIN_HOME_URL;
 }
 
@@ -902,7 +907,6 @@ function warmDeferredChunks(): void {
 async function openAppEditChat(slug: string): Promise<void> {
   const user = appState.me?.user ?? "anon";
   const threadRef = `web:${user}:app-edit:${slug}`;
-  if (storedDraft(threadRef) === `Update my deployed app "${slug}": `) saveDraft(threadRef, "");
   const existing =
     sessionsState.list.find((s) => s.threadRef === threadRef) ??
     (await fetchSessionRow({ threadRef }).catch(swallowAs("web-ui: find app edit chat", null)));

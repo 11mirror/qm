@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../chassis/src/errors";
 import { appState } from "./shell";
 import {
   filterSkillGroups,
@@ -616,14 +616,17 @@ export async function renderSkills(): Promise<void> {
   try {
     const [r, contexts] = await Promise.all([
       api<{ skills: SkillItem[] }>("/api/skills?includeShadowed=1"),
-      api<{ contexts?: CoreContext[] }>("/api/contexts").catch(() => ({ contexts: [] })),
+      api<{ contexts?: CoreContext[] }>("/api/contexts").catch((e: unknown) => {
+        swallow("web-ui: load skill scopes", e);
+        return null;
+      }),
     ]);
     if (request !== refreshSeq || seq !== appState.viewRenderSeq || appState.currentView !== "skills") return;
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
     const personal = appState.me ? `personal:${appState.me.user}` : "";
     createScopes = [
       { scopeId: personal, name: "Personal (only you)" },
-      ...(contexts.contexts ?? [])
+      ...(contexts?.contexts ?? [])
         .filter(
           (context) =>
             context.scopeId !== personal &&
@@ -631,6 +634,7 @@ export async function renderSkills(): Promise<void> {
         )
         .map((context) => ({ scopeId: context.scopeId, name: context.name || context.scopeId })),
     ].filter((scope) => scope.scopeId);
+    if (!contexts) skillsNotice = "Couldn't load your projects, so new skills can only be personal for now.";
   } catch (e) {
     if (request !== refreshSeq || seq !== appState.viewRenderSeq || appState.currentView !== "skills") return;
     skillsNotice = errMessage(e, "Failed to load skills.");
