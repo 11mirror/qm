@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
+import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts, type PendingCapture } from "../src/memory/strategies/per-turn.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const SCOPE = "user:U1";
 
@@ -86,7 +86,7 @@ test("debounced: an autonomous turn is skipped and never joins the live actor's 
     },
   };
   const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, captureMaxTurns: 10 });
+  const strategy = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, captureMaxTurns: 10, pending: testMap<PendingCapture>() });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
   await new Promise((r) => setTimeout(r, 120));

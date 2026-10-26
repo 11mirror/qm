@@ -271,7 +271,7 @@ import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { classifiedMemory } from "./memory/classification.ts";
-import { createPerTurnStrategy } from "./memory/strategies/per-turn.ts";
+import { createPerTurnStrategy, type PendingCapture } from "./memory/strategies/per-turn.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
   mintCapabilityToken,
@@ -1479,6 +1479,7 @@ export function buildApp(
     harness: harness.models,
     memory,
     captureQuietMs: config.memoryCaptureQuietMs,
+    pending: artifactMap<PendingCapture>("memory_capture_pending"),
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
@@ -2416,6 +2417,12 @@ export function buildApp(
         lock: "leader",
         immediate: true,
         run: () => monitors.deleteDefunct(Date.now()),
+      },
+      {
+        name: "memory:capture-sweep",
+        everyMs: 60_000,
+        lock: "leader",
+        run: () => memoryStrategy.sweep(),
       },
       {
         name: "spend:refresh",
