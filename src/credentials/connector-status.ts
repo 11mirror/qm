@@ -2,11 +2,13 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
   ACCOUNT_TYPES,
+  ConnectorNotConfiguredError,
   oauthProviderEntries,
   PROVIDERS,
   type OAuthClientResolver,
   type OAuthProviderConfig,
 } from "../connectors/oauth.ts";
+import { swallow } from "../util/errors.ts";
 
 interface ConnectorStatusEntry {
   connected: boolean;
@@ -122,7 +124,8 @@ export async function configuredConnectorProviders(resolveClient: OAuthClientRes
       try {
         await resolveClient(provider, {});
         return provider;
-      } catch {
+      } catch (e) {
+        if (!(e instanceof ConnectorNotConfiguredError)) swallow(`connectors: resolving the ${provider} client`, e);
         return null;
       }
     }),
