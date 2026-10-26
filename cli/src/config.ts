@@ -466,6 +466,24 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "aws",
 ]);
 
+function requireOriginUrl(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) throw new CliError(`${field} must be a non-empty http(s) origin URL`);
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
+      throw new Error("origin");
+    if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
+  } catch {
+    throw new CliError(
+      `${field} must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
+    );
+  }
+}
+
+/** An OCI/ECR image tag: 1-128 letters, digits, underscores, periods or hyphens, not starting with a period or hyphen. */
+export const IMAGE_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+
 function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
@@ -492,37 +510,11 @@ function validate(raw: unknown, path: string): QmConfig {
   }
 
   const publicUrl = o["publicUrl"];
-  if (typeof publicUrl !== "string" || !publicUrl.trim()) {
-    throw new CliError(`${path}: "publicUrl" must be a non-empty http(s) origin URL`);
-  }
-  try {
-    const parsed = new URL(publicUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-    if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
-      throw new Error("origin");
-    if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
-  } catch {
-    throw new CliError(
-      `${path}: "publicUrl" must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
-    );
-  }
+  requireOriginUrl(publicUrl, `${path}: "publicUrl"`);
 
   const apiUrl = o["apiUrl"];
   if (apiUrl !== undefined) {
-    if (typeof apiUrl !== "string" || !apiUrl.trim()) {
-      throw new CliError(`${path}: "apiUrl" must be a non-empty http(s) origin URL`);
-    }
-    try {
-      const parsed = new URL(apiUrl);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-      if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
-        throw new Error("origin");
-      if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
-    } catch {
-      throw new CliError(
-        `${path}: "apiUrl" must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
-      );
-    }
+    requireOriginUrl(apiUrl, `${path}: "apiUrl"`);
   }
 
   rejectRetiredAdminService(o, path);
@@ -861,9 +853,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
   const hasPortal = config.services.includes("portal");
   const publicUrl = new URL(config.publicUrl);
   const protocol = publicUrl.protocol;
-  if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash || publicUrl.username || publicUrl.password) {
-    throw new CliError(`${path}: AWS publicUrl must be an origin URL without credentials, a path, query, or fragment`);
-  }
   if (config.apiUrl && new URL(config.apiUrl).protocol !== protocol) {
     throw new CliError(`${path}: AWS apiUrl must use the same protocol as publicUrl`);
   }
@@ -992,7 +981,7 @@ function validateAws(
     );
   }
   const imageLabel = requiredString(raw["imageLabel"], "imageLabel");
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageLabel)) {
+  if (!IMAGE_TAG.test(imageLabel)) {
     throw new CliError(
       `${path}: "aws.imageLabel" must be a valid OCI/ECR tag (1-128 letters, digits, underscores, periods, or hyphens; the first character cannot be a period or hyphen)`,
     );
