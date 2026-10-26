@@ -119,9 +119,9 @@ function cronScopeLabel(c: CronView): string | undefined {
   return kind === "group" ? "group" : undefined;
 }
 
-function cronStatusLabel(c: CronView): "enabled" | "disabled" | "archived" {
-  if (c.archived) return "archived";
-  return c.enabled ? "enabled" : "disabled";
+function cronStatus(c: CronView): "Enabled" | "Disabled" | "Archived" {
+  if (c.archived) return "Archived";
+  return c.enabled ? "Enabled" : "Disabled";
 }
 
 export async function renderCronsPage(): Promise<void> {
@@ -210,10 +210,9 @@ function canManageCron(c: CronView, mine: boolean): boolean {
 }
 
 function cronPageRow({ c, mine }: { c: CronView; mine: boolean }): TemplateResult {
-  const status = cronStatusLabel(c);
   const run = cronRunSummary(c);
   return html`
-    <div class="list-row cron-row cron-${status}">
+    <div class="list-row cron-row cron-${cronStatus(c).toLowerCase()}">
       ${page.link(
         c.id,
         "cron-row-main",
@@ -227,8 +226,8 @@ function cronPageRow({ c, mine }: { c: CronView; mine: boolean }): TemplateResul
       ${
         canManageCron(c, mine)
           ? html`<div class="cron-row-actions" aria-label="Cron actions">
-              ${cronActions(c, true).map(([label, node, run]) =>
-                iconBtn(label, node, run, { aria: `${label} cron`, cls: "icon-btn subtle compact" }),
+              ${cronActions(c, true).map(([label, node, onClick]) =>
+                iconBtn(label, node, onClick, { aria: `${label} cron`, cls: "icon-btn subtle compact" }),
               )}
             </div>`
           : nothing
@@ -237,13 +236,15 @@ function cronPageRow({ c, mine }: { c: CronView; mine: boolean }): TemplateResul
   `;
 }
 
-function cronActions(c: CronView, row: boolean): Array<[string, IconNode, () => void]> {
-  const edit: [string, IconNode, () => void] = ["Edit", Pencil, () => showCronDialog("rename", c)];
-  const archive: [string, IconNode, () => void] = ["Archive", Archive, () => void archiveCron(c.id, true)];
+type CronAction = [string, IconNode, () => void];
+
+function cronActions(c: CronView, row: boolean): CronAction[] {
+  const edit: CronAction = ["Edit", Pencil, () => showCronDialog("rename", c)];
+  const archive: CronAction = ["Archive", Archive, () => void archiveCron(c.id, true)];
   if (c.archived) return [edit, ["Unarchive", RotateCcw, () => void archiveCron(c.id, false)]];
   if (!c.enabled) return [edit, ["Enable", Play, () => void setCronEnabled(c.id, true)], archive];
   const ok = "Run started. Refresh recent runs after it completes.";
-  const run: [string, IconNode, () => void] = [
+  const run: CronAction = [
     "Run now",
     Play,
     () => void cronCall(c.id, "/run", { method: "POST" }, "run failed", { ok }),
@@ -271,11 +272,7 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
         ${c.title ? fieldTpl("Title", c.title) : nothing}
         ${fieldTpl(c.message !== undefined ? "Message" : "Task", cronText(c), "pre")}
         ${fieldTpl("Schedule", cronScheduleDetail(c))} ${mine ? nothing : fieldTpl("Owner", c.owner)}
-        ${mine ? nothing : fieldTpl("Scope", cronScopeLabel(c) ?? c.owner)}
-        ${fieldTpl(
-          "Status",
-          cronStatusLabel(c).replace(/^./, (ch) => ch.toUpperCase()),
-        )}
+        ${mine ? nothing : fieldTpl("Scope", cronScopeLabel(c) ?? c.owner)} ${fieldTpl("Status", cronStatus(c))}
         ${c.destination ? fieldTpl("Destination", `${c.destination.type} → ${c.destination.target}`) : nothing}
         ${fieldTpl("Next run", next != null ? new Date(next).toLocaleString() : "Never")}
         ${fieldTpl("Last fired", c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never")}
@@ -292,7 +289,7 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
           manageable
             ? html`
                 <div class="actions">
-                  ${cronActions(c, false).map(([label, node, run]) => textBtn(label, node, run))}
+                  ${cronActions(c, false).map(([label, node, onClick]) => textBtn(label, node, onClick))}
                   ${textBtn("Delete", Trash2, () => showCronDialog("delete", c), "btn danger")}
                 </div>
               `
