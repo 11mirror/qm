@@ -1,4 +1,4 @@
-import type { Client } from "pg";
+import pg, { type Client } from "pg";
 import { swallowAs } from "../util/errors.ts";
 
 export interface TableRef {
@@ -6,9 +6,7 @@ export interface TableRef {
   name: string;
 }
 
-export function quoteIdent(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
+export const quoteIdent = (value: string): string => pg.escapeIdentifier(value);
 
 export function qualified(table: TableRef): string {
   return `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`;
