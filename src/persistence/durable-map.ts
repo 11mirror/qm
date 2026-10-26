@@ -19,11 +19,11 @@ export interface DurableMap<T> {
   get(id: string): Promise<T | null>;
   put(id: string, value: T): Promise<void>;
   putIfAbsent(id: string, value: T): Promise<T>;
-  insertIfAbsent?(id: string, value: T): Promise<boolean>;
+  insertIfAbsent(id: string, value: T): Promise<boolean>;
   merge(id: string, patch: Partial<T>): Promise<T | null>;
-  update?(id: string, fn: (value: T) => T): Promise<T | null>;
+  update(id: string, fn: (value: T) => T): Promise<T | null>;
   mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
-  deleteIf?(id: string, predicate: (value: T) => boolean): Promise<boolean>;
+  deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
 }
