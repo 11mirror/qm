@@ -18,23 +18,25 @@ export function createApp(deps: AppDeps): App {
   const app = {} as App;
   const helpers = createAppHelpers(deps, app);
   const ambient = createAmbientHelpers(deps, app);
-  const methods = {
+  const { turn, ...methods } = {
     ...createTurnMethods(deps, helpers, ambient),
     ...createSessionMethods(deps, helpers),
     ...createMessagingMethods(deps, helpers, ambient),
     ...createDeploymentMethods(deps, helpers),
     ...createSkillMethods(deps, helpers),
+    ...createSearchMethods(deps, app, helpers),
+    ...createResourceSearchMethods(deps, app, helpers),
   };
-  const turn = methods.turn;
-  methods.turn = async (req, replay) => {
-    if (!deps.admittedWork || req.async) return turn(req, replay);
-    try {
-      return await deps.admittedWork.run(() => turn(req, replay));
-    } catch (error) {
-      if (error instanceof WorkAdmissionClosed) return { status: "refused", reason: error.message };
-      throw error;
-    }
-  };
-  Object.assign(app, methods);
-  return Object.assign(app, createSearchMethods(deps, app, helpers), createResourceSearchMethods(deps, app, helpers));
+  return Object.assign(app, {
+    ...methods,
+    async turn(req, replay) {
+      if (!deps.admittedWork || req.async) return turn(req, replay);
+      try {
+        return await deps.admittedWork.run(() => turn(req, replay));
+      } catch (error) {
+        if (error instanceof WorkAdmissionClosed) return { status: "refused", reason: error.message };
+        throw error;
+      }
+    },
+  } satisfies App);
 }

@@ -1,7 +1,8 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
-import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
+import type { ClientToolDeclaration, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
+import type { ServerResponse } from "node:http";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -79,26 +80,6 @@ function zodMessage(field: string, error: z.ZodError): string {
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
-function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
-  if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
-  return safe;
-}
-
-function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: string } {
-  const typed = publicOrigin(body.origin);
-  if (
-    typed?.kind === "automation" &&
-    body.triggered === true &&
-    typed.screenData !== undefined &&
-    body.securityScreenData !== undefined &&
-    typed.screenData !== body.securityScreenData
-  ) {
-    return { error: "conflicting typed and legacy automation screen data" };
-  }
-  return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
-}
-
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
     source: _source,
@@ -108,14 +89,24 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
-    ...safeBody
+    clientTools: rawClientTools,
+    ...rest
   } = body;
-  if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
+  if (typeof rest.idempotencyKey === "string" && rest.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
-  const resolvedOrigin = publicTurnOrigin(safeBody);
-  if (resolvedOrigin.error) return { error: resolvedOrigin.error };
-  const origin = resolvedOrigin.origin;
-  const { clientTools: rawClientTools, ...rest } = safeBody;
+  let typed = rest.origin;
+  if (typed?.kind === "automation") {
+    const { useOwnerKeychain: _internalOnly, ...safe } = typed;
+    typed = safe;
+    if (
+      rest.triggered === true &&
+      typed.screenData !== undefined &&
+      rest.securityScreenData !== undefined &&
+      typed.screenData !== rest.securityScreenData
+    )
+      return { error: "conflicting typed and legacy automation screen data" };
+  }
+  const origin = resolveTurnOrigin({ ...rest, origin: typed });
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;
@@ -124,7 +115,13 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
-  return { request: { ...rest, ...(origin ? { origin } : {}), ...(clientTools?.length ? { clientTools } : {}) } };
+  return { request: { ...rest, origin, ...(clientTools?.length ? { clientTools } : {}) } };
+}
+
+function sendRunOutcome(res: ServerResponse, ok: boolean, outcome: { reason?: string }): void {
+  if (ok) return sendJson(res, 200, outcome);
+  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  sendJson(res, 409, outcome);
 }
 
 async function postTurn(ctx: ApiCtx): Promise<void> {
@@ -137,8 +134,7 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
   if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
-  const status = result.status === "refused" ? 403 : 200;
-  return sendJson(res, status, result);
+  return sendJson(res, result.status === "refused" ? 403 : 200, result);
 }
 
 async function getApproval(ctx: ApiCtx): Promise<void> {
@@ -167,29 +163,28 @@ async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
 }
 
 async function postRunSignal(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, actor } = ctx;
+  const { res, app, actor } = ctx;
   const id = ctx.params.id!;
-  const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const kind = typeof body.kind === "string" ? body.kind : "";
   if (kind !== "abort" && kind !== "steer" && kind !== "client_result") {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
   }
   if (kind === "client_result") {
     const run = await ctx.deps.runs?.get(id);
-    if (run?.request.desktopClientId && (!isObj(body) || body.desktopClientId !== run.request.desktopClientId))
+    if (run?.request.desktopClientId && body.desktopClientId !== run.request.desktopClientId)
       return sendJson(res, 403, { error: "wrong_desktop_client" });
     const parsed = clientResultSchema.safeParse(body);
     if (!parsed.success)
       return sendJson(res, 400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
     const outcome = await app.signalRun(id, { kind, ...parsed.data }, actor?.p);
-    if (outcome.accepted) return sendJson(res, 200, outcome);
-    if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
-    return sendJson(res, 409, outcome);
+    return sendRunOutcome(res, outcome.accepted, outcome);
   }
-  const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
-  const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
-  const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
+  const text = typeof body.text === "string" ? body.text : undefined;
+  const queuedRunId = typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
+  const ts = typeof body.ts === "string" && body.ts ? body.ts : undefined;
   let request: TurnRequest | undefined;
-  if (isObj(body) && body.request !== undefined) {
+  if (body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
       return sendJson(res, 400, { error: "bad_request", message: "request must be a TurnRequest" });
     }
@@ -211,8 +206,6 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     },
     actor?.p,
   );
-  if (outcome.accepted) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
   if (outcome.reason === "text_required")
     return sendJson(res, 400, { error: "bad_request", message: "text required", ...outcome });
   if (outcome.reason === "conversation_mismatch")
@@ -221,7 +214,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
       message: "request conversation does not match the run",
       ...outcome,
     });
-  return sendJson(res, 409, outcome);
+  return sendRunOutcome(res, outcome.accepted, outcome);
 }
 
 async function getRun(ctx: ApiCtx): Promise<void> {
@@ -245,17 +238,14 @@ async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
   if (!isObj(body) || typeof body.text !== "string" || typeof body.expectedText !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "text and expectedText required" });
   const outcome = await app.editQueuedRun(ctx.params.id!, body.text, body.expectedText, actor?.p);
-  if (outcome.edited) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, outcome.reason === "empty_text" ? 400 : 409, outcome);
+  if (outcome.reason === "empty_text") return sendJson(res, 400, outcome);
+  return sendRunOutcome(res, outcome.edited, outcome);
 }
 
 async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const outcome = await app.withdrawRun(ctx.params.id!, actor?.p);
-  if (outcome.withdrawn) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 409, outcome);
+  return sendRunOutcome(res, outcome.withdrawn, outcome);
 }
 
 export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [

@@ -28,32 +28,30 @@ async function resolveScopeNames(
     (await Promise.resolve(deps.sessions?.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
     [];
   const byScope = new Map(sessionScopes.filter((s) => s.channelName).map((s) => [s.scopeId, s.channelName!]));
+  const loadChannels = async () =>
+    new Map(
+      (await app.directoryChannels().catch(swallowAs("keychain scope names: channels", []))).map((c) => [
+        c.channelId,
+        c.name,
+      ]),
+    );
+  const loadMembers = async () =>
+    new Map(
+      (await app.directoryMembers().catch(swallowAs("keychain scope names: members", []))).map((m) => [
+        m.principalId,
+        m.displayName,
+      ]),
+    );
   let channelsById: Map<string, string> | null = null;
   let membersById: Map<string, string> | null = null;
   for (const id of wanted) {
     const { kind, ref } = parseScopeId(id);
     const fromSessions = byScope.get(id);
     if (kind === "channel" && ref) {
-      if (fromSessions) {
-        names[id] = `#${fromSessions.replace(/^#/, "")}`;
-        continue;
-      }
-      channelsById ??= new Map(
-        (await app.directoryChannels().catch(swallowAs("keychain scope names: channels", []))).map((c) => [
-          c.channelId,
-          c.name,
-        ]),
-      );
-      const name = channelsById.get(ref);
+      const name = fromSessions ?? (channelsById ??= await loadChannels()).get(ref);
       if (name) names[id] = `#${name.replace(/^#/, "")}`;
     } else if (kind === "personal" && ref) {
-      membersById ??= new Map(
-        (await app.directoryMembers().catch(swallowAs("keychain scope names: members", []))).map((m) => [
-          m.principalId,
-          m.displayName,
-        ]),
-      );
-      const name = membersById.get(ref);
+      const name = (membersById ??= await loadMembers()).get(ref);
       if (name) names[id] = name;
     } else if (fromSessions) {
       names[id] = fromSessions;
@@ -62,8 +60,19 @@ async function resolveScopeNames(
   return names;
 }
 
+type Keychain = NonNullable<ApiCtx["deps"]["keychain"]>;
+
+export async function keychainErrors(res: ApiCtx["res"], run: () => Promise<void>): Promise<void> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
+    throw e;
+  }
+}
+
 const keychainRoute =
-  (handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>) =>
+  (handle: (ctx: ApiCtx, kc: Keychain, capability: CapabilityClaims) => Promise<void>) =>
   async (ctx: ApiCtx): Promise<void> => {
     const { res, deps, capability } = ctx;
     if (!deps.keychain)
@@ -76,53 +85,28 @@ const keychainRoute =
         error: "unauthorized",
         message: "keychain routes require an agent capability token",
       });
-    try {
-      return await handle(ctx, deps.keychain, capability);
-    } catch (e) {
-      if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
-      throw e;
-    }
+    const kc = deps.keychain;
+    return keychainErrors(res, () => handle(ctx, kc, capability));
   };
 
 const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, scopeId }) => {
-  const b = body as {
-    service?: unknown;
-    secret?: unknown;
-    files?: unknown;
-    envKey?: unknown;
-    fields?: unknown;
-    target?: unknown;
-    host?: unknown;
-    accountLabel?: unknown;
-    origin?: unknown;
-    expiresAt?: unknown;
-  };
+  const b = body as Record<string, unknown>;
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
-  const files = Array.isArray(b.files)
-    ? (b.files as unknown[])
-        .filter(
-          (f): f is CredentialFile =>
-            typeof (f as CredentialFile)?.path === "string" && typeof (f as CredentialFile)?.contentBase64 === "string",
-        )
-        .map((f) => ({ path: f.path, contentBase64: f.contentBase64, rawMode: (f as { mode?: unknown }).mode }))
-    : undefined;
-  const badMode = files?.find(
-    (f) =>
-      f.rawMode !== undefined &&
-      (typeof f.rawMode !== "number" || !Number.isInteger(f.rawMode) || f.rawMode < 0 || f.rawMode > 0o777),
-  );
-  if (badMode) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(badMode.rawMode)} for ${badMode.path}`,
-    });
+  let files: CredentialFile[] | undefined;
+  if (Array.isArray(b.files)) {
+    files = [];
+    for (const f of b.files as Array<{ path?: unknown; contentBase64?: unknown; mode?: unknown } | null>) {
+      if (typeof f?.path !== "string" || typeof f.contentBase64 !== "string") continue;
+      const mode = f.mode;
+      if (mode !== undefined && (typeof mode !== "number" || !Number.isInteger(mode) || mode < 0 || mode > 0o777))
+        return sendJson(res, 400, {
+          error: "bad_request",
+          message: `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(mode)} for ${f.path}`,
+        });
+      files.push({ path: f.path, contentBase64: f.contentBase64, ...(typeof mode === "number" ? { mode } : {}) });
+    }
   }
-  const cleanFiles: CredentialFile[] | undefined = files?.map(({ path, contentBase64, rawMode }) => ({
-    path,
-    contentBase64,
-    ...(typeof rawMode === "number" ? { mode: rawMode } : {}),
-  }));
   let fields: CredentialFieldInput[] | undefined;
   if (b.fields !== undefined) {
     if (
@@ -148,7 +132,7 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
     ownerId: actorId,
     service: b.service,
     ...(typeof b.secret === "string" ? { secret: b.secret } : {}),
-    ...(cleanFiles?.length ? { files: cleanFiles } : {}),
+    ...(files?.length ? { files } : {}),
     ...(fields?.length ? { fields } : {}),
     ...(typeof b.envKey === "string" ? { envKey: b.envKey } : {}),
     ...(typeof b.target === "string" ? { target: b.target } : {}),
@@ -182,12 +166,15 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
 });
 
-const deleteCredential = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
-  const id = params.id!;
-  const ok = await kc.remove(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
-  return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+const removal = (action: string, remove: (kc: Keychain, actorId: string, id: string) => Promise<boolean>) =>
+  keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+    const id = params.id!;
+    const ok = await remove(kc, actorId, id);
+    if (ok) audit(deps, { principalId: actorId, action, resource: id, scopeLabel: scopeId });
+    return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
+  });
+
+const deleteCredential = removal("keychain.delete", (kc, actorId, id) => kc.remove(actorId, id));
 
 const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   const mine = await kc.listGrants({ ownerId: actorId });
@@ -196,12 +183,7 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   return sendJson(res, 200, { grants: [...byId.values()] });
 });
 
-const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
-  const id = params.id!;
-  const ok = await kc.revokeGrant(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
-  return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+const revokeGrant = removal("keychain.revoke", (kc, actorId, id) => kc.revokeGrant(actorId, id));
 
 const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const { res, app, deps, body } = ctx;
@@ -244,11 +226,9 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const requesterDestination =
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
   const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
-  const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
-  const requesterMessageTs =
-    originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
-      ? originRun.request.origin.messageTs
-      : undefined;
+  const run = originRun?.sessionId === capability.threadRef ? originRun : null;
+  const requesterSeq = run?.turnUserSeq;
+  const requesterMessageTs = run?.request.origin.kind === "human" ? run.request.origin.messageTs : undefined;
   const { ask, existing } = await kc.createAsk({
     ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
@@ -299,18 +279,17 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
     return sendJson(res, 404, { error: "not_found" });
-  try {
-    if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: 'expected { principalId, decision: "once"|"standing"|"deny" }',
-      });
-    const view = await deps.keychainApprovals.decide(params.id!, { externalId: b.principalId }, b.decision);
-    return sendJson(res, 200, view);
-  } catch (e) {
-    if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
-    throw e;
-  }
+  if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: 'expected { principalId, decision: "once"|"standing"|"deny" }',
+    });
+  const { keychainApprovals } = deps;
+  const decision = b.decision;
+  const principalId = b.principalId;
+  return keychainErrors(res, async () =>
+    sendJson(res, 200, await keychainApprovals.decide(params.id!, { externalId: principalId }, decision)),
+  );
 }
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [

@@ -12,7 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
-import { decisionsResource } from "../src/api/routes/decisions-resource.ts";
+import { ADMIN_RESOURCE_BY_ID } from "../src/api/routes/admin-resources.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
@@ -344,6 +344,7 @@ test("a deployment credential cannot back a decision provider", async () => {
   const provider = (credential: string) => ({
     provider: { id: "p", protocol: "decisions", baseUrl: "https://api.search.example/search", credential },
   });
+  const decisionsResource = ADMIN_RESOURCE_BY_ID.get("decisions")!;
   const refused = await decisionsResource.apply!(ctx(provider("search")), { id: "admin" } as never, ORG);
   assert.match(String((refused as { error?: string }).error), /supplied by this deployment/);
   assert.deepEqual(saved, []);

@@ -20,7 +20,7 @@ export interface ChannelMembership {
   principalId: string;
 }
 
-export interface GroupMembership {
+interface GroupMembership {
   groupId: string;
   principalId: string;
 }

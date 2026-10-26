@@ -12,7 +12,7 @@ interface SurfaceContextApp {
   deleteContextRequest(id: string): Promise<void>;
 }
 
-export type ContextOutcome =
+type ContextOutcome =
   { status: "done"; result: SurfaceContextResult } | { status: "failed"; error?: string } | { status: "timeout" };
 
 export async function awaitContextOutcome(
@@ -54,9 +54,7 @@ export function createSurfaceContextPuller(
     return null;
   };
   return {
-    async pull(source, query): Promise<SurfaceContextResult | null> {
-      return parkAndWait(source, query);
-    },
+    pull: parkAndWait,
     async searchLive(source, query): Promise<SurfaceContextResult | null> {
       const token = await opts.searchToken?.(source, query.viewer);
       return parkAndWait(source, token ? { ...query, viewerToken: token } : query);

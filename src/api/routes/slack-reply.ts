@@ -116,14 +116,8 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   try {
     const native = await nativeSlackConnection(ctx);
     if (native) return await replyVia(native);
-    const hasComposioLink = await hasSlackAccount(ctx);
-    if (!hasComposioLink && (await nativeSlackConfigured(ctx)))
-      return sendJson(ctx.res, send ? 409 : 200, {
-        connected: false,
-        error: "slack_link_required",
-        message: "Link your personal Slack account to reply.",
-      });
-    const connection = await composioSlackConnection(ctx);
+    const connection =
+      (await hasSlackAccount(ctx)) || !(await nativeSlackConfigured(ctx)) ? await composioSlackConnection(ctx) : null;
     if (connection === undefined) return;
     if (connection) return await replyVia(connection);
     return sendJson(ctx.res, send ? 409 : 200, {

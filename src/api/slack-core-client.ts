@@ -199,13 +199,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
     },
 
-    async ackEmojiOverride() {
-      return await deps.config.getAckEmojiDurable(orgScope);
-    },
-
-    async publishEmojiCatalog(emoji) {
-      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
-    },
+    ackEmojiOverride: () => deps.config.getAckEmojiDurable(orgScope),
+    publishEmojiCatalog: (emoji) => deps.config.setSlackEmojiCatalog(orgScope, emoji),
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
@@ -218,14 +213,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       };
     },
 
-    async channelHeaderPinEnabled(scope) {
-      return deps.config.getChannelHeaderPinDurable(scope);
-    },
-
+    channelHeaderPinEnabled: (scope) => deps.config.getChannelHeaderPinDurable(scope),
     onScopeModelChanged(listener) {
       deps.config.onRuntimeSelectionChanged((scope) => listener(scope));
     },
-
     onChannelHeaderPinChanged(listener) {
       deps.config.onChannelHeaderPinChanged((scope) => listener(scope));
     },
@@ -261,9 +252,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       await deps.memory.capture(scopeId(kind === "group" ? "group" : "channel", container), [note], Date.now());
     },
 
-    async readSurfaceMessages(container, opts) {
-      return deps.app.readSurfaceMessages(container, { ...opts, noFallback: true });
-    },
+    readSurfaceMessages: (container, opts) => deps.app.readSurfaceMessages(container, { ...opts, noFallback: true }),
 
     async ingestSurfaceEvents(events, self) {
       if (!events.length) return;
@@ -282,29 +271,23 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return replayableRequest(run.request);
     },
 
-    submitTurn(body) {
-      return deps.app.turn({ ...body, surface: "slack" });
-    },
+    submitTurn: (body) => deps.app.turn({ ...body, surface: "slack" }),
 
     async waitRun(runId, hooks = {}) {
-      let replyingSignaled = false;
-      let firstBlockSignaled = false;
-      let surfaceSignaled = false;
+      const signaled = new Set<"replying" | "firstBlock" | "surface">();
+      const once = (signal: "replying" | "firstBlock" | "surface", fire: () => void): void => {
+        if (signaled.has(signal)) return;
+        signaled.add(signal);
+        fire();
+      };
       const signalReplying = (durable = false): void => {
-        if (replyingSignaled || !(durable || deps.turnStream.replying(runId))) return;
-        replyingSignaled = true;
-        hooks.onReplying?.();
+        if (!signaled.has("replying") && (durable || deps.turnStream.replying(runId)))
+          once("replying", () => hooks.onReplying?.());
       };
       const signalFirstBlock = (text: string): void => {
-        if (firstBlockSignaled || !text.trim()) return;
-        firstBlockSignaled = true;
-        hooks.onFirstBlock?.(text);
+        if (text.trim()) once("firstBlock", () => hooks.onFirstBlock?.(text));
       };
-      const signalSurface = (): void => {
-        if (surfaceSignaled) return;
-        surfaceSignaled = true;
-        hooks.onSurfacePosted?.();
-      };
+      const signalSurface = (): void => once("surface", () => hooks.onSurfacePosted?.());
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.turnStream.subscribe(runId, {
@@ -377,9 +360,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return (await deps.app.activeRunForThread(threadRef))?.runId;
     },
 
-    stopConversation(threadRef) {
-      return deps.app.stopConversation(threadRef);
-    },
+    stopConversation: (threadRef) => deps.app.stopConversation(threadRef),
 
     async signalRunAbort(runId) {
       const outcome = await deps.app.signalRun(runId, { kind: "abort" });
@@ -437,17 +418,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     slack: deps.slack,
-    holdDirectorySync(fn) {
-      return lease.hold("slack:directory-sync", fn);
-    },
-    holdEnvelopeReplay(account, fn) {
-      return lease.hold(`slack:envelope-replay:${account}`, fn);
-    },
+    holdDirectorySync: (fn) => lease.hold("slack:directory-sync", fn),
+    holdEnvelopeReplay: (account, fn) => lease.hold(`slack:envelope-replay:${account}`, fn),
     stagedEnvelopes: deps.stagedEnvelopes,
 
-    pendingContextRequests() {
-      return deps.app.pendingContextRequests("slack");
-    },
+    pendingContextRequests: () => deps.app.pendingContextRequests("slack"),
 
     onContextRequest(listener) {
       return deps.app.onContextRequestCreated((request) => {
@@ -455,9 +430,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       });
     },
 
-    pickAckEmoji(text, candidates) {
-      return deps.pickAckEmoji?.(text, candidates) ?? Promise.resolve(undefined);
-    },
+    pickAckEmoji: (text, candidates) => deps.pickAckEmoji?.(text, candidates) ?? Promise.resolve(undefined),
 
     async inboxSlackMessage(msg) {
       const at = Math.round(Number.parseFloat(msg.ts) * 1000);
@@ -493,9 +466,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async fulfillContextRequest(id, outcome) {
       await deps.app
         .fulfillContextRequest(id, outcome)
-        .then((ok) => {
-          if (!ok) return;
-        })
         .catch(swallowAs("slack-core-client: fulfill context request", undefined));
     },
   };

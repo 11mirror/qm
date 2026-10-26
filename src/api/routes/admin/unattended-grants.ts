@@ -1,8 +1,7 @@
 import { adminOperations } from "../../../tools/admin.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin } from "../shared.ts";
+import { orgAdmin } from "./common.ts";
 import type { ApiCtx, Route } from "../route.ts";
-import { tenant } from "../../../tenant.ts";
 
 export function unattendedGrantListing(routes: ReadonlyArray<Route<ApiCtx>>) {
   return routes.flatMap((route) => {
@@ -16,14 +15,6 @@ export function unattendedGrantListing(routes: ReadonlyArray<Route<ApiCtx>>) {
 }
 
 export async function listUnattendedGrants(ctx: ApiCtx, routes: ReadonlyArray<Route<ApiCtx>>): Promise<void> {
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  audit(ctx.deps, {
-    principalId: actor.id,
-    action: "unattended-grants.read",
-    resource: "unattended-grants",
-    scopeLabel: scope,
-  });
+  if (!(await orgAdmin(ctx, "unattended-grants"))) return;
   sendJson(ctx.res, 200, { grants: unattendedGrantListing(routes) });
 }

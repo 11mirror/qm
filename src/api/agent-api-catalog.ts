@@ -21,9 +21,6 @@ interface AgentApiFamily {
   routes: AgentApiRoute[];
 }
 
-const CONVERSATION_UPDATE =
-  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
-
 const FAMILIES: AgentApiFamily[] = [
   {
     guidance:
@@ -248,7 +245,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "POST",
         path: "/v1/conversations/:id",
-        summary: `${CONVERSATION_UPDATE} 404 for a conversation not on their list`,
+        summary:
+          "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person. 404 for a conversation not on their list",
       },
     ],
   },
@@ -614,10 +612,7 @@ export interface AgentApiListing {
 }
 
 export function renderAgentApis(claims: CapabilityClaims, admin: { isAdmin: boolean; role?: string }): AgentApiListing {
-  const view: AgentApiView = {
-    claims,
-    isAdmin: admin.isAdmin,
-  };
+  const view: AgentApiView = { claims, isAdmin: admin.isAdmin };
   const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {
     actorId: claims.actorId,

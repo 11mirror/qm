@@ -1,36 +1,88 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
+import type { ServerResponse } from "node:http";
 import { sendJson } from "../../http.ts";
-import { requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
+import { ALL_PROVIDERS_AVAILABLE, type ModelProviderAvailability } from "../../../model/pi-models.ts";
 
-export async function requireScopedResource<T>(
+export interface AdminAuthz {
+  actor: Principal;
+  scope: string;
+  orgWide: boolean;
+  audit: (action: string, resource: string, scopeLabel?: string) => void;
+}
+
+export const auditAs = (deps: ServerDeps, principalId: string, action: string, resource: string, scopeLabel: string) =>
+  audit(deps, { principalId, action, resource, scopeLabel });
+
+function authorized(ctx: ApiCtx, actor: Principal, scope: string, read?: string): AdminAuthz {
+  const authz: AdminAuthz = {
+    actor,
+    scope,
+    orgWide: parseScopeId(scope).kind === "org",
+    audit: (action, resource, scopeLabel = scope) => auditAs(ctx.deps, actor.id, action, resource, scopeLabel),
+  };
+  if (read) authz.audit(`${read}.read`, read);
+  return authz;
+}
+
+export async function adminAt(ctx: ApiCtx, scope: string, read?: string): Promise<AdminAuthz | null> {
+  const actor = await authorizeAdmin(ctx, scope);
+  return actor && authorized(ctx, actor, scope, read);
+}
+
+export const orgAdmin = (ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> =>
+  adminAt(ctx, tenant().orgScope, read);
+
+export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> {
+  const authz = await requireScopedAdmin(ctx);
+  return authz && authorized(ctx, authz.actor, authz.scope, read);
+}
+
+export const badRequest = (res: ServerResponse, message: string): void =>
+  sendJson(res, 400, { error: "bad_request", message });
+
+export const notFound = (res: ServerResponse): void => sendJson(res, 404, { error: "not_found" });
+
+export const limitParam = (url: URL, fallback: number, max: number): number =>
+  Math.min(max, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || fallback));
+
+export const pick = <T, K extends keyof T>(record: T, keys: readonly K[]): Pick<T, K> =>
+  Object.fromEntries(keys.map((key) => [key, record[key]])) as Pick<T, K>;
+
+export async function modelKeys(
+  deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
+): Promise<ModelProviderAvailability> {
+  return deps.modelCredentials ? deps.modelCredentials.availability() : (deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE);
+}
+
+type StringKey<T> = { [K in keyof T]: T[K] extends string ? K : never }[keyof T];
+
+export async function requireScopedResource<T, K extends StringKey<T>>(
   ctx: ApiCtx,
   load: () => Promise<T | null | undefined> | T | null | undefined,
-  scopeOf: (record: T) => string,
+  scopeKey: K,
   noun: string,
   scopeMismatch: "forbid" | "fallback" = "forbid",
-): Promise<{ actor: Principal; scope: string; record: T } | null> {
-  const authz = await requireScopedAdmin(ctx);
+): Promise<(AdminAuthz & { record: T }) | null> {
+  const authz = await scopedAdmin(ctx);
   if (!authz) return null;
   const record = await load();
   if (!record) {
-    sendJson(ctx.res, 404, { error: "not_found" });
+    notFound(ctx.res);
     return null;
   }
-  if (parseScopeId(authz.scope).kind !== "org" && scopeOf(record) !== authz.scope) {
-    if (scopeMismatch === "forbid") {
-      sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
-      return null;
-    }
-    return { actor: authz.actor, scope: scopeOf(record), record };
+  const recordScope = record[scopeKey] as string;
+  if (authz.orgWide || recordScope === authz.scope) return { ...authz, record };
+  if (scopeMismatch === "forbid") {
+    sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
+    return null;
   }
-  return { ...authz, record };
+  return { ...authorized(ctx, authz.actor, recordScope), record };
 }
-
-export const FILES_PAGE_SIZE = 200;
 
 export async function discoverScopes(
   app: App,

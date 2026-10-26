@@ -50,13 +50,7 @@ import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import type {
-  ConnectorTokenStore,
-  Keychain,
-  KeychainAsk,
-  KeychainGrant,
-  ServiceCredentialStore,
-} from "../credentials/keychain.ts";
+import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../credentials/keychain.ts";
 import type { SecretDropStore } from "../credentials/secret-drop.ts";
 import type { DropResolution } from "../triggers/keychain-ask.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
@@ -200,7 +194,6 @@ export interface ServerDeps {
   serviceCreds?: ServiceCredentialStore;
   outbound?: Outbound;
   keychainApprovals?: KeychainApprovals;
-  fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   secretDrops?: SecretDropStore;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   blobTransfer?: BlobTransferStore;
