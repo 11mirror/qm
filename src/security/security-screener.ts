@@ -1,10 +1,9 @@
 import { readCappedText } from "../util/response-body.ts";
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
-import type { SecurityScreenVerdict } from "./security-posture.ts";
+import { MAX_SCREEN_CHARS, type SecurityScreenVerdict } from "./security-posture.ts";
 import { swallow } from "../util/errors.ts";
-import { retryAfterMs } from "../util/async.ts";
+import { fetchWithRetry } from "../util/async.ts";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
 
@@ -39,11 +38,10 @@ export interface SecurityScreener {
   }): Promise<SecurityScreenClassification>;
 }
 
-const MAX_SECURITY_SCREEN_CHARS = 16_000;
 const MAX_SECURITY_SCREEN_RESPONSE_BYTES = 64 * 1024;
 const SECURITY_SCREEN_CHUNK_CHARS = 1_600;
 const SECURITY_SCREEN_CHUNK_OVERLAP_CHARS = 256;
-const SECURITY_SCREEN_RETRY_MS = [250, 1_000, 4_000];
+const SECURITY_SCREEN_RETRY_BASE_MS = 500;
 const OUTCOME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
 function securityScreenChunks(text: string): string[] {
@@ -165,7 +163,7 @@ export function createSecurityScreenProxy(opts: {
   return {
     provider: opts.provider,
     async classify(input) {
-      if (input.payload.length > MAX_SECURITY_SCREEN_CHARS) {
+      if (input.payload.length > MAX_SCREEN_CHARS) {
         throw new Error("Security screen proxy payload exceeds the supported limit");
       }
       const chunks = securityScreenChunks(input.payload);
@@ -190,30 +188,26 @@ export function createSecurityScreenProxy(opts: {
               ...(opts.provider === "qm" ? {} : { [opts.provider]: coordinates }),
             },
           });
-          for (let attempt = 0; attempt <= SECURITY_SCREEN_RETRY_MS.length; attempt += 1) {
-            const response = await request(opts.endpoint, {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                "x-api-key": opts.token,
-              },
-              body,
-              redirect: "error",
-              signal: chunkSignal,
-            });
-            if (response.status === 429 && attempt < SECURITY_SCREEN_RETRY_MS.length) {
-              const waitMs = retryAfterMs(response.headers) ?? SECURITY_SCREEN_RETRY_MS[attempt]!;
-              await cancelResponseBody(response);
-              await delay(waitMs, undefined, { signal: chunkSignal });
-              continue;
-            }
-            if (!response.ok) {
-              await cancelResponseBody(response);
-              throw new Error(`Security screen proxy returned HTTP ${response.status}`);
-            }
-            return classification(await responseText(response), opts.provider);
+          const response = await fetchWithRetry(
+            (attemptSignal) =>
+              request(opts.endpoint, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "x-api-key": opts.token,
+                },
+                body,
+                redirect: "error",
+                signal: attemptSignal,
+              }),
+            "refused",
+            { signal: chunkSignal, timeoutMs: opts.timeoutMs, baseDelayMs: SECURITY_SCREEN_RETRY_BASE_MS },
+          );
+          if (!response.ok) {
+            await cancelResponseBody(response);
+            throw new Error(`Security screen proxy returned HTTP ${response.status}`);
           }
-          throw new Error("Security screen proxy retry loop exhausted");
+          return classification(await responseText(response), opts.provider);
         },
         signal,
       );
