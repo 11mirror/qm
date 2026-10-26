@@ -8,7 +8,7 @@ let loading: Promise<void> | null = null;
 
 function rerenderMountedBlocks(): void {
   if (typeof document === "undefined") return;
-  for (const el of document.querySelectorAll("markdown-block, qm-markdown")) {
+  for (const el of document.querySelectorAll("qm-markdown")) {
     (el as { requestUpdate?: () => void }).requestUpdate?.();
   }
 }
