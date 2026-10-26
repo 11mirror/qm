@@ -32,9 +32,9 @@ export function parseTranscriptImport(line: string): TranscriptImport {
       !Number.isSafeInteger(entry.createdAt) ||
       entry.createdAt < 0 ||
       entry.createdAt > MAX_DATE_MS ||
-      entry.createdAt < previous
+      entry.createdAt <= previous
     )
-      throw new Error("transcript import: entry times must be ascending epoch milliseconds");
+      throw new Error("transcript import: entry times must be strictly ascending epoch milliseconds");
     previous = entry.createdAt;
     return entry.role === "user"
       ? {

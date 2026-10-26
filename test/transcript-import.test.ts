@@ -124,6 +124,7 @@ test("an import refuses a conversation that someone else can see", async () => {
       /other participants/,
     );
     assert.deepEqual(await store.visibleEntries(session.id, "bob@example.com"), []);
+    assert.equal((await store.get(session.id))!.title, undefined);
   });
 });
 
@@ -153,6 +154,34 @@ test("an imported conversation's activity is its newest message even within a mi
   });
 });
 
+test("an import waits for a conversation's live turn instead of writing into it", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const session = await store.getOrCreateByThread(thread, "dm", "personal:ada@example.com", undefined, "web");
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await assert.rejects(
+      Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)])),
+      /in use/,
+    );
+    await store.releaseLease(lease);
+    const [done] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
+    assert.equal(done!.appended, 4);
+  });
+});
+
+test("importing into an empty existing conversation dates it by the imported messages", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    await store.getOrCreateByThread(thread, "dm", "personal:ada@example.com", undefined, "web");
+    const [result] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
+    assert.equal(result!.session.createdAt, T0);
+    const page = await store.listParticipantPage("ada@example.com", { limit: 10 });
+    const activity = page.sessions[0]!.lastActivityAt!;
+    assert.ok(activity >= T0 + 60_000 && activity <= T0 + 65_000);
+  });
+});
+
 test("transcript lines are rejected unless they describe the principal's own web thread", () => {
   const ok = { principalId: "ada@example.com", threadRef: "web:ada@example.com:t1", entries: conversation };
   assert.equal(parseTranscriptImport(JSON.stringify(ok)).scopeId, "personal:ada@example.com");
@@ -164,6 +193,7 @@ test("transcript lines are rejected unless they describe the principal's own web
     ["role", { ...ok, entries: [{ role: "tool", text: "x", createdAt: T0 }] }],
     ["text", { ...ok, entries: [{ role: "user", text: " ", createdAt: T0 }] }],
     ["ascending", { ...ok, entries: [conversation[1], conversation[0]] }],
+    ["ascending", { ...ok, entries: [conversation[0], { ...conversation[1], createdAt: T0 }] }],
     ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: T0 + 0.5 }] }],
     ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: 9e15 }] }],
   ];

@@ -313,19 +313,22 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         entries.set(session.id, []);
         byThread.set(spec.threadRef, session.id);
       }
-      if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
-      if ([...(windows.get(session.id)?.keys() ?? [])].some((principalId) => principalId !== spec.principalId))
-        throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
-      await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
-      const after = (entries.get(session.id) ?? []).reduce(
-        (latest, entry) => Math.max(latest, entry.createdAt),
-        -Infinity,
-      );
-      const appended = record(
-        session.id,
-        spec.entries.filter((entry) => entry.createdAt > after),
-      );
-      return { session, appended: appended.length };
+      const target = session;
+      const refuseShared = () => {
+        if ([...(windows.get(target.id)?.keys() ?? [])].some((principalId) => principalId !== spec.principalId))
+          throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
+        const held = leases.get(target.id);
+        if (held && now() < held.expiresAt) throw new Error(`importTranscript: ${spec.threadRef} is in use`);
+      };
+      refuseShared();
+      await this.addParticipant(target.id, spec.principalId, undefined, { includeHistory: true });
+      refuseShared();
+      const log = entries.get(target.id) ?? [];
+      const after = log.reduce((latest, entry) => Math.max(latest, entry.createdAt), -Infinity);
+      const fresh = spec.entries.filter((entry) => entry.createdAt > after);
+      if (!log.length && fresh.length) target.createdAt = fresh[0]!.createdAt;
+      if (spec.title?.trim() && !target.title) target.title = spec.title.trim();
+      return { session: target, appended: record(target.id, fresh).length };
     },
 
     async deleteSessionIfEmpty(sessionId) {

@@ -1128,6 +1128,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       };
     });
     const createdAt = items.reduce((latest, item) => Math.max(latest, item.createdAt), -Infinity);
+    const userActivityAt = items.reduce(
+      (latest, item) => (USER_ITEM_KINDS.includes(item.kind) ? Math.max(latest, item.createdAt) : latest),
+      0,
+    );
     for (const item of items) {
       if (item.kind !== "Retraction" || typeof item.body.ts !== "string") continue;
       const inBatch = items.findLast(
@@ -1174,7 +1178,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
               first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
                                         THEN $6 ELSE first_user_preview END,
               last_user_preview = COALESCE($7, last_user_preview),
-              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
+              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $9::bigint)
                                         ELSE last_user_activity END
         WHERE id = $1`,
       [
@@ -1186,6 +1190,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
         lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
         items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
+        userActivityAt,
       ],
     );
     return full;
@@ -1697,6 +1702,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [sessionId, spec.principalId],
         );
         if (others.rows.length) throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
+        const leased = await client.query("SELECT 1 FROM session_leases WHERE session_id = $1 AND expires_at > $2", [
+          sessionId,
+          now(),
+        ]);
+        if (leased.rows.length) throw new Error(`importTranscript: ${spec.threadRef} is in use`);
         await client.query(
           `INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq)
            VALUES ($1, $2, 0, NULL, 0, NULL)
@@ -1714,20 +1724,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionId,
           spec.entries.filter((entry) => entry.createdAt > after),
         );
+        const first = appended[0]?.createdAt ?? null;
         const newest = appended.reduce((latest, entry) => Math.max(latest, entry.createdAt), 0);
-        const newestUser = appended.reduce(
-          (latest, entry) => (entry.type === "user" ? Math.max(latest, entry.createdAt) : latest),
-          0,
-        );
         await client.query(
           `UPDATE sessions
               SET title = COALESCE(title, $2),
-                  last_activity = GREATEST(COALESCE(last_activity, 0), $3::bigint),
-                  last_user_activity = CASE WHEN $4::bigint > 0
-                                            THEN GREATEST(COALESCE(last_user_activity, 0), $4::bigint)
-                                            ELSE last_user_activity END
+                  created_at = CASE WHEN $4::boolean AND $5::bigint IS NOT NULL THEN $5::bigint ELSE created_at END,
+                  last_activity = CASE WHEN $4::boolean AND $5::bigint IS NOT NULL THEN $3::bigint
+                                       ELSE GREATEST(COALESCE(last_activity, 0), $3::bigint) END
             WHERE id = $1`,
-          [sessionId, spec.title?.trim() || null, newest, newestUser],
+          [sessionId, spec.title?.trim() || null, newest, after === -Infinity, first],
         );
         const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
         return { session: rowToSession(row.rows[0]!), appended: appended.length };
