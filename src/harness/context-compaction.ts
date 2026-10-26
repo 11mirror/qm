@@ -1,7 +1,7 @@
 import type { RunStop } from "../runs/run-store.ts";
 import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, itemFields, proseText, stepMessage, type Item } from "../sessions/items.ts";
-import { headSlice, tailSlice } from "../util/text.ts";
+import { headTailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
 import { documentAttachmentTokens, replayableDocumentMetas } from "../core/document-kinds.ts";
 
@@ -11,10 +11,8 @@ const CHAINED_SUMMARY_PREFIX_HEADROOM = 1_000;
 const FALLBACK_SUMMARY_BODY_CHARS = 8_000;
 const FALLBACK_SUMMARY_TAIL_CHARS = 6_000;
 
-function headTailSlice(s: string, maxChars: number, tailChars: number): string {
-  if (s.length <= maxChars) return s;
-  const notice = `…[truncated — ${s.length} chars]…`;
-  return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
+function truncatedMiddle(s: string, maxChars: number, tailChars: number): string {
+  return headTailSlice(s, maxChars, tailChars, `…[truncated — ${s.length} chars]…`);
 }
 
 export const INTERRUPTED_TOOL_RESULT =
@@ -121,7 +119,7 @@ export function compactTranscript(history: Item[]): string {
   for (const item of history)
     if (item.kind === "ToolResult" && item.callId && item.body.interrupted !== true) recorded.add(item.callId);
   const lines: string[] = [];
-  const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
+  const push = (line: string) => lines.push(truncatedMiddle(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
   for (const item of history) {
     if (item.kind === "Reasoning") continue;
     const stamp = itemStamp(item.createdAt);
@@ -212,7 +210,7 @@ export function compactionThroughSeq(items: Item[]): number {
 
 export function deterministicCompactSummary(history: Item[]): string {
   const throughSeq = compactionThroughSeq(history);
-  const body = headTailSlice(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
+  const body = truncatedMiddle(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
   return `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.\n${body}`;
 }
 

@@ -1425,7 +1425,7 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
   const slack = surfaceTool(ref);
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
-  assert.match(out.content[0]!.text, /post, react, edit, delete/);
+  assert.match(out.content[0]!.text, /post, reach, react, edit, delete/);
 });
 
 test("the post delivery ack is never screened — a classifier false positive cannot quarantine a sent reply", async () => {
