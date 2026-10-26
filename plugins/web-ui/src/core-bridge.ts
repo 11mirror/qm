@@ -1040,6 +1040,57 @@ export async function signalLiveRun(
   }
 }
 
+interface Drive {
+  stream: AssistantMessageEventStream;
+  partial: AssistantMessage;
+  work: WorkBlock;
+  notify: () => void;
+  settle: (status: "complete" | "failed") => void;
+  signal?: AbortSignal;
+  gen: number;
+}
+
+function driveStreamFn(
+  slot: RunSlot | undefined,
+  onWork: WorkObserver | undefined,
+  run: (drive: Drive) => Promise<void>,
+  prepare?: (partial: AssistantMessage) => void,
+): StreamFn {
+  const fn = (
+    model: Model<Api>,
+    _context: Context,
+    options?: { signal?: AbortSignal },
+  ): AssistantMessageEventStream => {
+    const stream = createAssistantMessageEventStream();
+    const gen = beginSubmit(slot);
+    const partial = baseAssistant(model);
+    prepare?.(partial);
+    const work: WorkBlock = { status: "thinking", activity: [] };
+    (partial as AssistantWork).work = work;
+    const notify = (): void => onWork?.(work);
+    const settle = (status: "complete" | "failed"): void => {
+      work.status = status;
+      work.finishedAt = Date.now();
+      notify();
+    };
+    void (async () => {
+      try {
+        notify();
+        stream.push({ type: "start", partial });
+        stream.push({ type: "text_start", contentIndex: 0, partial });
+        await run({ stream, partial, work, notify, settle, signal: options?.signal, gen });
+      } catch (e) {
+        settle("failed");
+        fail(stream, partial, e instanceof Error ? e.message : String(e));
+      } finally {
+        dropStopForGeneration(slot, gen);
+      }
+    })();
+    return stream;
+  };
+  return fn as unknown as StreamFn;
+}
+
 export function makeCoreStreamFn(
   threadRef: string,
   agent: Agent,
@@ -1048,16 +1099,7 @@ export function makeCoreStreamFn(
   slot?: RunSlot,
   onSendIssues?: SendIssueObserver,
 ): StreamFn {
-  const fn = (
-    model: Model<Api>,
-    _context: Context,
-    options?: { signal?: AbortSignal },
-  ): AssistantMessageEventStream => {
-    const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, false, slot, onSendIssues);
-    return stream;
-  };
-  return fn as unknown as StreamFn;
+  return driveStreamFn(slot, onWork, (d) => drive(d, threadRef, agent, getTurnOptions, false, slot, onSendIssues));
 }
 
 export async function activeRunForThread(threadRef: string): Promise<ActiveRun> {
@@ -1082,7 +1124,7 @@ export async function queueTurn(
   const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
     method: "POST",
     body: JSON.stringify(
-      turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
+      turnRequestBody(threadRef, text, agent.state.model.id, getTurnOptions, { idempotencyKey, attachments }),
     ),
   });
   if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
@@ -1106,16 +1148,21 @@ export function makeRunResumeStreamFn(
   slot?: RunSlot,
   seedText?: string,
 ): StreamFn {
-  const fn = (
-    model: Model<Api>,
-    _context: Context,
-    options?: { signal?: AbortSignal },
-  ): AssistantMessageEventStream => {
-    const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot, seedText);
-    return stream;
-  };
-  return fn as unknown as StreamFn;
+  const snapshotText = initialRun?.partial ?? "";
+  return driveStreamFn(
+    slot,
+    onWork,
+    async ({ stream, partial, notify, signal, gen }) => {
+      const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
+      if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
+      if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
+      await followRun(stream, partial, runId, signal, notify, st, slot, gen);
+    },
+    (partial) => {
+      (partial as AssistantWork).streamingBaseline =
+        snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
+    },
+  );
 }
 
 export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
@@ -1152,23 +1199,13 @@ export function makeOpenerStreamFn(
   onWork: WorkObserver | undefined,
   slot?: RunSlot,
 ): StreamFn {
-  const fn = (
-    model: Model<Api>,
-    _context: Context,
-    options?: { signal?: AbortSignal },
-  ): AssistantMessageEventStream => {
-    const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, true, slot);
-    return stream;
-  };
-  return fn as unknown as StreamFn;
+  return driveStreamFn(slot, onWork, (d) => drive(d, threadRef, agent, getTurnOptions, true, slot));
 }
 
 function turnRequestBody(
   threadRef: string,
   text: string,
-  model: Model<Api>,
-  agent: Agent,
+  modelId: string,
   getTurnOptions?: () => TurnOptions,
   send: { idempotencyKey?: string; attachments?: CoreAttachment[] } = {},
 ): Record<string, unknown> {
@@ -1180,7 +1217,7 @@ function turnRequestBody(
     desktopClientId: desktopTurnId(),
     text,
     threadRef,
-    ...(thinkingLevel ? { model: model.id, thinkingLevel } : {}),
+    ...(thinkingLevel ? { model: modelId, thinkingLevel } : {}),
     ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
@@ -1211,27 +1248,15 @@ export function userSendMessage(text: string, attachments?: unknown[]): AgentMes
 }
 
 async function drive(
-  stream: AssistantMessageEventStream,
-  model: Model<Api>,
+  { stream, partial, notify, settle, signal, gen }: Drive,
   threadRef: string,
   agent: Agent,
   getTurnOptions?: () => TurnOptions,
-  signal?: AbortSignal,
-  onWork?: WorkObserver,
   opener?: boolean,
   slot?: RunSlot,
   onSendIssues?: SendIssueObserver,
 ): Promise<void> {
-  const gen = beginSubmit(slot);
-  const partial = baseAssistant(model);
-  const work: WorkBlock = { status: "thinking", activity: [] };
-  (partial as AssistantWork).work = work;
-  const notify = (): void => onWork?.(work);
   try {
-    notify();
-    stream.push({ type: "start", partial });
-    stream.push({ type: "text_start", contentIndex: 0, partial });
-
     const { text, attachments, idempotencyKey, issues, droppedIds, retryable } = opener
       ? {
           text: "",
@@ -1243,9 +1268,7 @@ async function drive(
         }
       : await latestUserTurn(agent);
     if (!opener && !text.trim() && attachments.length === 0) {
-      work.status = "failed";
-      work.finishedAt = Date.now();
-      notify();
+      settle("failed");
       if (issues.length) {
         (partial as AssistantWork).sendFailed = "attachments";
         (partial as AssistantWork).droppedAttachmentIds = droppedIds;
@@ -1258,7 +1281,7 @@ async function drive(
     const submit = await api<{ status?: string; runId?: string; reply?: string; reason?: string }>("/api/turn", {
       method: "POST",
       body: JSON.stringify({
-        ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        ...turnRequestBody(threadRef, text, partial.model, getTurnOptions, { idempotencyKey, attachments }),
         ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
@@ -1279,68 +1302,21 @@ async function drive(
     }
 
     if (submit.status === "pending_approval") {
-      work.status = "failed";
-      work.finishedAt = Date.now();
-      notify();
+      settle("failed");
       (partial as AssistantWork).sendBlocked = "pending_approval";
       fail(stream, partial, submit.reason ?? PENDING_APPROVAL_REASON);
       return;
     }
 
-    work.status = "complete";
-    work.finishedAt = Date.now();
-    notify();
+    settle("complete");
     finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
-    work.status = "failed";
-    work.finishedAt = Date.now();
-    notify();
-    if (e instanceof TypeError) {
-      const errorMessage = "Message wasn’t sent. Check your connection and try again.";
-      const message = latestUserMessage(agent);
-      if (message) message.sendFailure = errorMessage;
-      fail(stream, partial, errorMessage, true);
-      return;
-    }
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
-  } finally {
-    dropStopForGeneration(slot, gen);
-  }
-}
-
-async function resumeDrive(
-  stream: AssistantMessageEventStream,
-  model: Model<Api>,
-  runId: string,
-  initialRun?: RunPoll,
-  signal?: AbortSignal,
-  onWork?: WorkObserver,
-  slot?: RunSlot,
-  seedText?: string,
-): Promise<void> {
-  const gen = beginSubmit(slot);
-  const partial = baseAssistant(model);
-  const snapshotText = initialRun?.partial ?? "";
-  (partial as AssistantWork).streamingBaseline =
-    snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
-  const work: WorkBlock = { status: "thinking", activity: [] };
-  (partial as AssistantWork).work = work;
-  const notify = (): void => onWork?.(work);
-  try {
-    notify();
-    stream.push({ type: "start", partial });
-    stream.push({ type: "text_start", contentIndex: 0, partial });
-    const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
-    if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
-    if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
-    await followRun(stream, partial, runId, signal, notify, st, slot, gen);
-  } catch (e) {
-    work.status = "failed";
-    work.finishedAt = Date.now();
-    notify();
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
-  } finally {
-    dropStopForGeneration(slot, gen);
+    if (!(e instanceof TypeError)) throw e;
+    settle("failed");
+    const errorMessage = "Message wasn’t sent. Check your connection and try again.";
+    const message = latestUserMessage(agent);
+    if (message) message.sendFailure = errorMessage;
+    fail(stream, partial, errorMessage, true);
   }
 }
 

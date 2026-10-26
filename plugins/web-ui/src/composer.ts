@@ -71,7 +71,6 @@ import { createModelPicker } from "./model-picker";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
-const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
 const THREAD_PICKS_CAP = 50;
 function loadThreadPicks(): Map<string, ModelOptionValue> {
@@ -170,14 +169,6 @@ const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
 function slashQuery(draft: string): string | null {
   const m = SLASH_TOKEN.exec(draft);
   return m ? (m[2] ?? "") : null;
-}
-
-export function resyncModelSelection(): void {
-  try {
-    localStorage.removeItem(LEGACY_MODEL_STORAGE_KEY);
-  } catch {
-    void 0;
-  }
 }
 
 export interface ComposerSubmission {

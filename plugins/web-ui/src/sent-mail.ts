@@ -25,6 +25,15 @@ export interface SentEmail {
   sentAt: number;
 }
 
+type SentDetail = SentEmail & {
+  from: string;
+  cc: string;
+  body: string;
+  rfcMessageId?: string;
+  html: boolean;
+  attachments: string[];
+};
+
 interface SentMailPage {
   accountType?: SentEmail["accountType"];
   messages: SentEmail[];
@@ -41,16 +50,7 @@ let loaded = false;
 let error = "";
 let generation = 0;
 let selected: SentEmail | null = null;
-let detail:
-  | (SentEmail & {
-      from: string;
-      cc: string;
-      body: string;
-      rfcMessageId?: string;
-      html: boolean;
-      attachments: string[];
-    })
-  | null = null;
+let detail: SentDetail | null = null;
 let detailError = "";
 const chatItems = new Map<string, LedgerItem>();
 let chatItemId: string | null = null;
@@ -66,7 +66,7 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
   const current = ++detailGeneration;
   draw();
   try {
-    const result = await api<NonNullable<typeof detail>>(
+    const result = await api<SentDetail>(
       `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
     );
     if (current === detailGeneration) {

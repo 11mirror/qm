@@ -51,7 +51,7 @@ import { brandMark, brandName } from "./ui";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
-import { clearSkillsCache, resyncModelSelection } from "./composer";
+import { clearSkillsCache } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
@@ -1123,7 +1123,6 @@ export async function boot(): Promise<void> {
   if (runtimeConfig) {
     seedRuntimeConfig(personalScope, runtimeConfig);
   }
-  resyncModelSelection();
   mountShell();
   renderList();
   shellMounted = true;
