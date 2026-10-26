@@ -1274,3 +1274,37 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
     else assert.ok(refreshedScreens > 0);
   });
 }
+
+test("the history tool opens one item without reading the transcript, and still finds it by search", async () => {
+  const harness = createMockHarness();
+  const opened: Array<string | null> = [];
+  let found: string[] = [];
+  let rememberedSeq = -1;
+  harness.turns.runTurn = async (turn) => {
+    if (turn.input.includes("recall")) {
+      opened.push(await turn.tools.historyOpen(rememberedSeq));
+      opened.push(await turn.tools.historyOpen(9_999));
+      found = await turn.tools.history("ZEBRA-DELTA-42");
+    }
+    return { reply: "done" };
+  };
+  const { orchestrator, sessions } = buildOrchestrator({ harness });
+  assert.equal((await orchestrator.handleTurn(dm("dm:U1:history-open", "remember ZEBRA-DELTA-42"))).status, "ok");
+  const session = (await sessions.getByThread("dm:U1:history-open"))!;
+  const { lease } = await sessions.acquireLease(session.id);
+  const remembered = await sessions.append(lease!, { kind: "UserMessage", text: "remember ZEBRA-DELTA-42" });
+  await sessions.releaseLease(lease!);
+  rememberedSeq = remembered.seq;
+  let fullReads = 0;
+  const getItems = sessions.getItems.bind(sessions);
+  sessions.getItems = async (...args) => {
+    if (args[0] === session.id && args[1] === undefined) fullReads++;
+    return getItems(...args);
+  };
+  const before = fullReads;
+  assert.equal((await orchestrator.handleTurn(dm("dm:U1:history-open", "recall it"))).status, "ok");
+  assert.match(opened[0] ?? "", /ZEBRA-DELTA-42/);
+  assert.equal(opened[1], null, "an unknown seq opens nothing");
+  assert.ok(found.some((hit) => hit.includes("ZEBRA-DELTA-42")));
+  assert.equal(fullReads - before, 1, "only search reads the whole transcript");
+});
