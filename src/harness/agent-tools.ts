@@ -896,7 +896,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     });
   }
 
-  const sandboxActions = ["status", "restart", "list", "create", "set_default", "retire"];
+  const sandboxActions = Object.keys(SANDBOX_TOOL_ARGS.sandbox!);
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
@@ -925,7 +925,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.name ? { name: params.name } : {}),
       });
       try {
-        if (!sandboxActions.includes(params.action)) throw new Error("unsupported sandbox action");
         if (["list", "create", "set_default", "retire"].includes(params.action)) {
           if (!tc.sandboxResources) throw new Error("sandbox inventory unavailable");
           const result = await tc.sandboxResources(
@@ -938,16 +937,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
           return recordText(callId, { tool: "sandbox", action: params.action }, JSON.stringify(result));
         }
-        if (params.sandbox_id === null) throw new Error("null only clears a default");
+        const sandboxId = params.sandbox_id ?? undefined;
         if (params.action === "restart") {
-          await tc.restartComputer(params.sandbox_id);
+          await tc.restartComputer(sandboxId);
           return recordText(
             callId,
             { tool: "sandbox", action: "restart", restarted: true },
             "Computer restarting. Give it a moment to boot before running the next command.",
           );
         }
-        const s = await tc.computerStatus(params.sandbox_id);
+        const s = await tc.computerStatus(sandboxId);
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
         const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
@@ -1933,20 +1932,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
       });
       const pid = params.process_id ?? "";
-      if (["poll", "stop", "watch", "send_input"].includes(params.action) && !pid)
-        return recordFail(
-          callId,
-          { tool: "background", action: params.action, error: `${params.action} requires process_id` },
-          `[error] background ${params.action} requires \`process_id\`.`,
-        );
       try {
         switch (params.action) {
-          default:
-            return recordFail(
-              callId,
-              { tool: "background", action: params.action, invalid: true },
-              "[error] unsupported background action",
-            );
           case "poll": {
             const r = await tc.backgroundPoll(pid, {
               ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
@@ -2013,14 +2000,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             }
           }
           case "unwatch": {
-            if (!params.monitor_id)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "unwatch requires monitor_id" },
-                "[error] background unwatch requires `monitor_id`.",
-              );
             try {
-              const r = await tc.backgroundUnwatch(params.monitor_id);
+              const r = await tc.backgroundUnwatch(params.monitor_id!);
               return recordResult(
                 callId,
                 { tool: "background", action: params.action, ...r },
@@ -2037,13 +2018,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             }
           }
           case "send_input": {
-            if (params.data === undefined)
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: "send_input requires data" },
-                "[error] background send_input requires `data` (the text to send to the job's stdin).",
-              );
-            const r = await tc.backgroundWrite(pid, params.data);
+            const r = await tc.backgroundWrite(pid, params.data!);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
@@ -3921,26 +3896,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     else if (entry.source === "connector" && entry.reason === CONNECTOR_SHADOWED)
       console.warn(`[mcp] ${entry.name} is hidden because a built-in tool has the same name`);
   }
-  const operationFields: Record<string, Record<string, string[]>> = {
-    sandbox: {
-      status: ["sandbox_id"],
-      restart: ["sandbox_id"],
-      list: [],
-      create: ["backend", "name"],
-      set_default: ["sandbox_id"],
-      retire: ["sandbox_id"],
-    },
-    background: {
-      poll: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
-      send_input: ["process_id", "data"],
-      stop: ["process_id", "signal"],
-      list: [],
-      watch: ["process_id", "since_cursor", "pattern", "instructions"],
-      unwatch: ["monitor_id"],
-    },
-  };
   const validateSandboxTool = (tool: ToolDefinition): ToolDefinition => {
-    if (!["execute", "background", "sandbox"].includes(tool.name)) return tool;
+    const rules = SANDBOX_TOOL_ARGS[tool.name];
+    if (!rules) return tool;
     const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
     const schema = Type.Object(properties, { additionalProperties: false });
     return {
@@ -3948,31 +3906,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: schema,
       async execute(callId, params, signal, onUpdate, ctx) {
         const action = isObj(params) ? String(params.action) : "";
-        const operations = operationFields[tool.name];
-        const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
-        let required: string[];
-        if (tool.name === "execute") required = ["command", "purpose"];
-        else if (tool.name === "sandbox") {
-          required = ["purpose"];
-          if (["set_default", "retire"].includes(action)) required.push("sandbox_id");
-          if (action === "create") required.push("backend");
-        } else {
-          required = action === "list" ? [] : ["process_id"];
-          if (action === "unwatch") required = ["monitor_id"];
-          if (action === "send_input") required.push("data");
-        }
-        const missing = required.find(
+        const rule = "" in rules ? rules[""] : Object.hasOwn(rules, action) ? rules[action] : undefined;
+        const missing = rule?.required.find(
           (key) =>
             !isObj(params) ||
             params[key] === undefined ||
             (typeof params[key] === "string" && key !== "data" && !params[key].trim()),
         );
+        const allowed = rule?.fields && ["action", "purpose", ...rule.fields, ...rule.required];
         if (
+          !rule ||
           !Check(schema, params) ||
           missing ||
-          (operations &&
-            (!fields || Object.keys(params).some((key) => !["action", "purpose", ...fields].includes(key)))) ||
-          (tool.name === "sandbox" && params.sandbox_id === null && action !== "set_default")
+          (allowed && Object.keys(params).some((key) => !allowed.includes(key))) ||
+          Object.entries(params).some(([key, value]) => value === null && !rule.nullable?.includes(key))
         ) {
           await recordCall(callId, {
             tool: tool.name,
@@ -3997,6 +3944,35 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });
 }
+
+/**
+ * Argument rules for execute, sandbox and background, keyed by tool then action ("" = the tool has no
+ * action). `required` fields must be present and non-blank; `fields` (with `required`, `action` and
+ * `purpose`) are the only ones an action accepts, and omitting it skips that check; `nullable` fields
+ * may be null. A call breaking a rule is refused before the tool runs, so handlers can rely on them.
+ */
+const SANDBOX_TOOL_ARGS: Record<
+  string,
+  Record<string, { required: string[]; fields?: string[]; nullable?: string[] }>
+> = {
+  execute: { "": { required: ["command", "purpose"] } },
+  sandbox: {
+    status: { required: ["purpose"], fields: ["sandbox_id"] },
+    restart: { required: ["purpose"], fields: ["sandbox_id"] },
+    list: { required: ["purpose"], fields: [] },
+    create: { required: ["purpose", "backend"], fields: ["name"] },
+    set_default: { required: ["purpose", "sandbox_id"], fields: [], nullable: ["sandbox_id"] },
+    retire: { required: ["purpose", "sandbox_id"], fields: [] },
+  },
+  background: {
+    poll: { required: ["process_id"], fields: ["since_cursor", "wait_seconds", "max_bytes"] },
+    send_input: { required: ["process_id", "data"], fields: [] },
+    stop: { required: ["process_id"], fields: ["signal"] },
+    list: { required: [], fields: [] },
+    watch: { required: ["process_id"], fields: ["since_cursor", "pattern", "instructions"] },
+    unwatch: { required: ["monitor_id"], fields: [] },
+  },
+};
 
 const RETRY_SAFE_FIELD = "retrySafe";
 
