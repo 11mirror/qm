@@ -40,17 +40,10 @@ export interface SlackPluginConfig {
   apiUrl?: string;
   eventsMode?: "socket" | "http";
   signingSecret?: string;
-  ackCapMs?: number;
   userToken?: string;
-  copilotBotToken?: string;
   webUiPublicUrl?: string;
   identityEmail?: string;
   logLevel?: string;
-  userSnapshotTtlMs?: number;
-  channelMembersTtlMs?: number;
-  maxPrivateChannels?: number;
-  recentMessages?: number;
-  userCacheTtlMs?: number;
   botIdentity?: { username?: string; icon_emoji?: string };
   devIntrospection?: { port: number };
 }
@@ -91,9 +84,7 @@ export function slackPluginConfigFromEnv(
     ...opt("apiUrl", env.SLACK_API_URL),
     ...(eventsMode === "http" ? { eventsMode } : {}),
     ...opt("signingSecret", env.SLACK_SIGNING_SECRET),
-    ...opt("ackCapMs", num(env.SLACK_ACK_CAP_MS)),
     ...opt("userToken", env.SLACK_USER_TOKEN),
-    ...opt("copilotBotToken", env.SLACK_COPILOT_BOT_TOKEN),
     ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
     ...opt("sharedServiceUrl", env.QM_SLACK_SERVICE_URL),
     ...opt("identityEmail", env.SLACK_IDENTITY_EMAIL),
@@ -103,11 +94,6 @@ export function slackPluginConfigFromEnv(
       return { ...(allowFrom.length ? { allowFrom } : {}), ...(denyMessage ? { denyMessage } : {}) };
     })(),
     ...opt("logLevel", env.SLACK_LOG_LEVEL),
-    ...opt("userSnapshotTtlMs", num(env.SLACK_USER_SNAPSHOT_TTL_MS)),
-    ...opt("channelMembersTtlMs", num(env.SLACK_CHANNEL_MEMBERS_TTL_MS)),
-    ...opt("maxPrivateChannels", num(env.SLACK_MAX_PRIVATE_CHANNELS)),
-    ...opt("recentMessages", num(env.SLACK_RECENT_MESSAGES)),
-    ...opt("userCacheTtlMs", num(env.SLACK_USER_CACHE_TTL_MS)),
     ...(() => {
       const identity = botIdentityFromEnv(env);
       return Object.keys(identity).length ? { botIdentity: identity } : {};
