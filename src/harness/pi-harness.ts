@@ -663,6 +663,8 @@ export function seedRawMessagesIntoSession(session: unknown, messages: readonly 
 }
 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
+/** Request-body cap for model-gateway calls, kept under the gateway's ~10 MB HTTP body limit. */
+const GATEWAY_REQUEST_MAX_BYTES = 9_000_000;
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;
   let listKey: "messages" | "input" | "contents" | undefined;
@@ -1602,7 +1604,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
         try {
           const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
-          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+          finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
         } catch (e) {
           swallow("pi: request byte budget", e);
         }
