@@ -160,9 +160,6 @@
   font-size: var(--font-13);
   font-weight: 500;
 }
-.top-banner.dev {
-  background: var(--dev-accent);
-}
 .top-banner b {
   font-weight: 700;
 }
@@ -205,16 +202,12 @@
   }
 }
 
-.signin-panel,
-.signin form {
+.signin-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 340px;
   max-width: 100%;
-}
-.signin form {
-  width: auto;
 }
 .signin-brand {
   display: flex;
@@ -224,17 +217,6 @@
   font-weight: 600;
   letter-spacing: 0;
   margin-bottom: 4px;
-}
-.signin-brand .dev-chip {
-  margin-left: auto;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--dev-accent);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: var(--font-10);
-  font-weight: 700;
-  letter-spacing: 0.1em;
 }
 .signin-body {
   font-size: var(--font-13-5);
