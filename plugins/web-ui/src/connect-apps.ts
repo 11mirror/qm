@@ -8,23 +8,136 @@ import {
   type PickerState,
   ACCOUNT_ID,
 } from "./connection-return";
-import { LitElement, html, nothing } from "lit";
-import { Check, TriangleAlert } from "lucide";
+import { LitElement, html, nothing, render } from "lit";
+import { ArrowUpRight, Check, RefreshCw, Search, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { webFetch } from "./core-bridge";
-import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
+import { connectorLogo } from "./connector-logo";
+import type { Me } from "./shell-state";
+import "./connect-apps.css";
+import "./onboarding-slack";
+import "./slack-account";
 
 interface ConnectedAccount {
   id: string;
   toolkit: string;
   missingScopes?: string[];
 }
-import type { Me } from "./shell-state";
-import "./connect-apps.css";
-import "./onboarding-slack";
-import "./slack-account";
 
 const continuedAttempts = new Set<string>();
+
+async function fetchPages<T>(
+  url: string,
+  signal: AbortSignal,
+  unfinished: string,
+  failed: (result: { message?: string }) => string,
+): Promise<T[]> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  let cursor = "";
+  do {
+    if (seen.has(cursor) || seen.size >= 100) throw new Error(unfinished);
+    seen.add(cursor);
+    const response = await webFetch(`${url}?${new URLSearchParams({ cursor })}`, { signal });
+    const result = await response.json();
+    if (!response.ok || !Array.isArray(result.items)) throw new Error(failed(result));
+    items.push(...result.items);
+    cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
+  } while (cursor);
+  return items;
+}
+
+interface ConnectionService {
+  id: string;
+  name: string;
+  description: string;
+  popularity: number;
+  logoUrl?: string;
+  connected?: boolean;
+  stale?: boolean;
+}
+
+function mountConnectionPicker(
+  container: HTMLElement,
+  services: ConnectionService[],
+  onSelect: (service: ConnectionService) => void,
+  state: PickerState,
+  only?: ConnectionService,
+): void {
+  const sorted = [...services].sort((a, b) => b.popularity - a.popularity || a.name.localeCompare(b.name));
+  function draw(): void {
+    const words = state.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = sorted.filter((service) => {
+      const text = `${service.name} ${service.description}`.toLowerCase();
+      return words.every((word) => text.includes(word));
+    });
+    const shown = state.expanded || words.length ? matches : matches.slice(0, 6);
+    render(
+      html`<section class="connection-picker" aria-label=${only ? `Connect ${only.name}` : "Connect your apps"}>
+        <header class="connection-picker-header">
+          <div>
+            <h3>${only ? `Connect ${only.name}` : "Connect your apps"}</h3>
+          </div>
+        </header>
+        ${
+          only
+            ? nothing
+            : html`<label class="connection-picker-search">
+                  ${icon(Search, 16)}
+                  <input
+                    type="search"
+                    aria-label="Search apps"
+                    placeholder="Search apps…"
+                    .value=${state.query}
+                    @input=${(event: Event) => {
+                      state.query = (event.target as HTMLInputElement).value;
+                      draw();
+                    }}
+                  />
+                </label>
+                <div class="connection-picker-caption" role="status" aria-live="polite">
+                  ${words.length ? `${matches.length} ${matches.length === 1 ? "app" : "apps"} found` : "Popular apps"}
+                </div>`
+        }
+        <div class="connection-picker-grid">
+          ${shown.map((service) => {
+            let action = { label: `Connect ${service.name}`, mark: ArrowUpRight };
+            if (service.stale) action = { label: `Reconnect ${service.name}`, mark: RefreshCw };
+            else if (service.connected) action = { label: `${service.name} connected`, mark: Check };
+            return html`<button
+              type="button"
+              class=${service.stale ? "connection-picker-app stale" : "connection-picker-app"}
+              ?disabled=${service.connected && !service.stale}
+              aria-label=${action.label}
+              @click=${() => onSelect(service)}
+            >
+              ${connectorLogo(service.id, service.logoUrl)}
+              <span class="connection-picker-name">${service.name}</span>
+              <span class="connection-picker-trailing">${icon(action.mark, 14)}</span>
+            </button>`;
+          })}
+        </div>
+        ${matches.length === 0 ? html`<p class="connection-picker-empty">No apps match “${state.query}”. Try another name.</p>` : nothing}
+        ${
+          !words.length && matches.length > 6
+            ? html`<button
+                class="connection-picker-more"
+                type="button"
+                @click=${() => {
+                  state.expanded = !state.expanded;
+                  draw();
+                }}
+              >
+                ${state.expanded ? "Show fewer apps" : `Browse all ${services.length} apps`}
+              </button>`
+            : nothing
+        }
+      </section>`,
+      container,
+    );
+  }
+  draw();
+}
 
 export class ConnectApps extends LitElement {
   static properties = {
@@ -207,21 +320,12 @@ export class ConnectApps extends LitElement {
     const controller = (this.connectionsController = new AbortController());
     this.connectionError = "";
     try {
-      const accounts: ConnectedAccount[] = [];
-      const seen = new Set<string>();
-      let cursor = "";
-      do {
-        if (seen.has(cursor) || seen.size >= 100) throw new Error("Could not finish checking connected apps.");
-        seen.add(cursor);
-        const response = await webFetch(`${this.base}api/composio/connections?${new URLSearchParams({ cursor })}`, {
-          signal: controller.signal,
-        });
-        const result = await response.json();
-        if (!response.ok || !Array.isArray(result.items))
-          throw new Error("Could not check connected apps. Please try again.");
-        accounts.push(...result.items);
-        cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
-      } while (cursor);
+      const accounts = await fetchPages<ConnectedAccount>(
+        `${this.base}api/composio/connections`,
+        controller.signal,
+        "Could not finish checking connected apps.",
+        () => "Could not check connected apps. Please try again.",
+      );
       if (!this.isConnected || controller.signal.aborted) return;
       this.connections = accounts;
       if (this.realReturn) {
@@ -264,25 +368,16 @@ export class ConnectApps extends LitElement {
     this.loading = true;
     this.error = "";
     const services: ConnectionService[] = [];
-    const cursors = new Set<string>();
-    let cursor = "";
     try {
-      do {
-        if (cursors.has(cursor)) throw new Error("Could not finish loading apps. Please try again.");
-        cursors.add(cursor);
-        const response = await webFetch(`${this.base}api/composio/toolkits?${new URLSearchParams({ cursor })}`, {
-          signal: controller.signal,
-        });
-        const result = await response.json();
-        if (!response.ok)
-          throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
-        for (const item of result.items as Array<{ id: string; name: string; description: string }>) {
-          if (item.id !== "slack" && !services.some((service) => service.id === item.id))
-            services.push({ ...item, popularity: 100000 - services.length });
-        }
-        cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
-        if (cursors.size > 100) throw new Error("Could not finish loading apps. Please try again.");
-      } while (cursor);
+      const items = await fetchPages<{ id: string; name: string; description: string }>(
+        `${this.base}api/composio/toolkits`,
+        controller.signal,
+        "Could not finish loading apps. Please try again.",
+        (result) => result.message ?? "App connections are unavailable right now. Please try again.",
+      );
+      for (const item of items)
+        if (item.id !== "slack" && !services.some((service) => service.id === item.id))
+          services.push({ ...item, popularity: 100000 - services.length });
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -352,10 +447,7 @@ export class ConnectApps extends LitElement {
         title: `Checking ${serviceName} connection…`,
         detail: "Confirming access before marking it connected.",
       },
-      success: {
-        title: `${serviceName} connected`,
-        detail: "",
-      },
+      success: { title: `${serviceName} connected`, detail: "" },
       cancelled: {
         title: `${serviceName} wasn’t connected`,
         detail: "You cancelled authorization. You can try again whenever you’re ready.",

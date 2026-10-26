@@ -6,8 +6,6 @@ import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./connect-apps";
-import { setupContent } from "./setup-widget";
-import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
   activityLabel,
@@ -135,7 +133,8 @@ import {
 } from "./timeline";
 import { activityItems, type Item } from "./items";
 import "./slack-setup";
-import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
+import { connectorCard, connectorLinksIn, setupContent, stripConnectorLinks } from "./connector-link";
+import type { ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";

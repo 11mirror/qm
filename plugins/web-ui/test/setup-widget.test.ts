@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setupContent } from "../src/setup-widget.ts";
+import { setupContent } from "../src/connector-link.ts";
 
 test("renders a standalone setup directive in order with surrounding reply text", () => {
   const parts = setupContent("Choose an app below.\n\n::connect-apps{}\n\nI'll help once it is connected.");
