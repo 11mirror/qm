@@ -16,6 +16,7 @@ import { withSlackUnfurlOption, type ReachResolution } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
 import { InstructionsUpdateDeniedError, InstructionsVersionConflictError } from "./app-types.ts";
+import { InstructionsTooLargeError } from "../resolution/config-store.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
@@ -159,7 +160,12 @@ export interface ControlService {
     expectedVersion?: number,
   ): Promise<
     | ControlOk<{ version: number }>
-    | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
+    | ControlErr<
+        | "instructions_update_denied"
+        | "instructions_version_conflict"
+        | "payload_too_large"
+        | "instructions_update_failed"
+      >
   >;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -614,6 +620,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         if (e instanceof InstructionsUpdateDeniedError) return fail("instructions_update_denied", errMessage(e));
         if (e instanceof InstructionsVersionConflictError) return fail("instructions_version_conflict", errMessage(e));
+        if (e instanceof InstructionsTooLargeError) return fail("payload_too_large", e.message);
         return fail("instructions_update_failed", errMessage(e));
       }
     },

@@ -1,4 +1,3 @@
-import { MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionCatalog, parseDecisionProvider, parseDecisionRule } from "../../decisions/decisions.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
@@ -274,8 +273,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, actor, scope) => {
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
       if (typeof body.content !== "string") return { error: "instructions requires { content: string }" };
-      if (body.content.length > MAX_INSTRUCTIONS_CHARS)
-        return { error: `instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters` };
       if (body.expectedVersion === undefined) {
         await ctx.deps.config.setInstructions(scope, body.content, actor.id);
         return { ok: true };

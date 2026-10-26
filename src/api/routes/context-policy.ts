@@ -1,6 +1,6 @@
 import { parseScopeId, type ScopeId } from "../../types.ts";
 import { InstructionsVersionConflictError } from "../app-types.ts";
-import { MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
+import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, refuse } from "./shared.ts";
@@ -75,10 +75,7 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   if (b.instructions !== undefined && typeof b.instructions !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "instructions must be a string" });
   if (typeof b.instructions === "string" && b.instructions.length > MAX_INSTRUCTIONS_CHARS)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `instructions are capped at ${MAX_INSTRUCTIONS_CHARS} characters`,
-    });
+    return sendJson(res, 413, { error: "payload_too_large", message: new InstructionsTooLargeError().message });
   const settings = await checkChannelSettings(deps.channelPolicy!, container, { ...b, bots: b.bots ?? {} });
   if ("message" in settings)
     return sendJson(res, settings.status, {

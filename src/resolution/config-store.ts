@@ -21,6 +21,16 @@ import { errMessage } from "../util/errors.ts";
 /** The longest instruction text a scope may hold. */
 export const MAX_INSTRUCTIONS_CHARS = 100_000;
 
+export class InstructionsTooLargeError extends Error {
+  constructor() {
+    super(`instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters`);
+  }
+}
+
+function assertInstructionsSize(content: string): void {
+  if (content.length > MAX_INSTRUCTIONS_CHARS) throw new InstructionsTooLargeError();
+}
+
 export interface PersistedInstructions {
   scopeId: ScopeId;
   content: string;
@@ -108,7 +118,12 @@ export interface ScopedConfigStore {
   /** Read a scope's instructions from the store (another instance may have written them) and refresh the cache. */
   getInstructionsDurable(id: ScopeId): Promise<string | null>;
   setInstructions(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setInstructionsIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
+  setInstructionsIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+  ): Promise<number | null>;
   instructionsVersion(id: ScopeId): number;
   instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
   captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
@@ -443,8 +458,10 @@ export function createConfigStore(
     if (instructions?.history) instructionsHistory.set(id, instructions.history);
     else instructionsHistory.delete(id);
   };
-  const cloneInstructions = (instructions: PersistedInstructions | null): InstructionsSnapshot => (instructions ? structuredClone(instructions) : null);
-  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean => isDeepStrictEqual(left, right);
+  const cloneInstructions = (instructions: PersistedInstructions | null): InstructionsSnapshot =>
+    instructions ? structuredClone(instructions) : null;
+  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean =>
+    isDeepStrictEqual(left, right);
   const mergeInstructionsHistory = (
     embedded: readonly PersistedInstructionsRevision[] | undefined,
     legacy: readonly PersistedInstructionsRevision[],
@@ -510,7 +527,8 @@ export function createConfigStore(
         ids.flatMap((id) => [
           writeQueue(`instructions:${id}`, async () => {
             const instructions = await instructionsStore.get(id);
-            if (instructions) instructionsCache.set(id, { content: instructions.content, version: instructions.version });
+            if (instructions)
+              instructionsCache.set(id, { content: instructions.content, version: instructions.version });
             else if (id !== org) instructionsCache.delete(id);
           }),
           settings.commandPolicies.reload(id),
@@ -550,7 +568,8 @@ export function createConfigStore(
         return instructionsCache.get(id)?.content ?? null;
       });
     },
-    setInstructions(id, content, updatedBy) {
+    async setInstructions(id, content, updatedBy) {
+      assertInstructionsSize(content);
       return writeQueue(`instructions:${id}`, async () => {
         const legacy = legacyInstructionsHistory.get(id) ?? [];
         const append = (current: PersistedInstructions): PersistedInstructions => {
@@ -589,6 +608,7 @@ export function createConfigStore(
       });
     },
     async setInstructionsIfVersion(id, expectedVersion, content, updatedBy) {
+      assertInstructionsSize(content);
       return writeQueue(`instructions:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedInstructionsRevision = {

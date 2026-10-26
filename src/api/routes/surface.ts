@@ -10,6 +10,7 @@ import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } fro
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { InstructionsUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { InstructionsTooLargeError } from "../../resolution/config-store.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
@@ -933,6 +934,8 @@ export async function postInstructions(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof InstructionsUpdateDeniedError)
       return sendJson(res, 403, { error: "instructions_update_denied", message: e.message });
+    if (e instanceof InstructionsTooLargeError)
+      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
     return sendJson(res, 500, { error: "instructions_update_failed", message: errMessage(e) });
   }
 }
