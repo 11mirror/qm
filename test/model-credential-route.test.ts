@@ -519,8 +519,8 @@ test("surface-config reports company ChatGPT OAuth without making it a Pi API cr
   }
 });
 
-test("a Claude subscription token is reported as company subscription auth", async () => {
-  const srv = start({ anthropicApiKey: "sk-ant-oat-test" });
+test("a company Claude subscription credential is reported as company subscription auth", async () => {
+  const srv = start({ claudeAuthCredential: "cred-claude" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
