@@ -7,9 +7,8 @@ description: Get work done that needs another person's own logins, files or memo
 
 ## First, can you do it yourself?
 
-- **Open posture** (your prompt has `## Sharing posture: Open`): do the work yourself with the
-  requester's own logins. Don't hand it off.
-- **Isolated:** hand off only when the work needs that person's own logins, keys, files or memory.
+- **The requester's own logins:** do the work yourself with them. Don't hand it off.
+- **Someone else's:** hand off only when the work needs that person's own logins, keys, files or memory.
   Shared services and org credentials don't need a hand-off. If you only need one of their
   credentials, use the `request-access` skill instead.
 

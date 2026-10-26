@@ -1,4 +1,4 @@
-import type { ActorAssertion, TurnRequest } from "../types.ts";
+import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -14,7 +14,6 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../core/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
-import { unscreenedNotice } from "../security/security-posture.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
@@ -41,6 +40,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
   async function judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision> {
     if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
     const policy = await deps.channelPolicy?.get(container);
+    const containerKind = (
+      await deps.surfaceCache.containerState(container).catch(swallowAs("ambient: container state", null))
+    )?.kind;
+    const instructions =
+      (await deps.config
+        ?.getInstructionsDurable(scopeId(containerKind === "group" ? "group" : "channel", container))
+        .catch(swallowAs("ambient: read channel instructions", null))) ?? "";
     const cursorKey = `${tenant().orgId}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
@@ -93,7 +99,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         .catch(reportFailureAs("ambient: record judgment", undefined));
     };
     const watchReason =
-      (policy?.orders ?? "").trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
+      instructions.trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
     let ambientOffReason: string | null = null;
     if ((await deps.config?.getOrgAmbientDurable()) === false) {
       ambientOffReason = "ambient is switched off org-wide";
@@ -101,7 +107,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       ambientOffReason = "ambient is switched off for this channel";
     } else if (policy?.ambientEnabled === undefined && !watchReason) {
       ambientOffReason =
-        "ambient defaults off — no standing orders or action-bot triggers here, so only @mentions engage";
+        "ambient defaults off — no channel instructions or action-bot triggers here, so only @mentions engage";
     }
     if (ambientOffReason) {
       recordJudgment({ decision: "ignore", reason: ambientOffReason });
@@ -120,19 +126,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       ),
     ];
     const actionLines = actionBots.map((n) => `Posts from bot "${n}" are triggers you should act on.`);
-    const ordersForJudge = actionLines.length
-      ? [actionLines.join("\n"), policy?.orders ?? ""].filter((s) => s.trim()).join("\n")
-      : (policy?.orders ?? "");
+    const judgeInstructions = [actionLines.join("\n"), instructions].filter((s) => s.trim()).join("\n");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length) {
-      const containerKind = (
-        await deps.surfaceCache.containerState(container).catch(swallowAs("ambient: container state", null))
-      )?.kind;
       const judgeBatch: AmbientBatch = {
         container,
         surface,
         ...(containerKind ? { kind: containerKind } : {}),
-        orders: ordersForJudge,
+        instructions: judgeInstructions,
         ...(self ? { self } : {}),
         messages: forJudge,
         ...(backdrop.length ? { backdrop } : {}),
@@ -282,7 +283,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             channel: batch.container,
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
-            orders: batch.orders,
             recentMessages: shown,
             instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
@@ -307,20 +307,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
     const session = await deps.sessions.getByThread(liveRef).catch(swallowAs("ambient: live session", null));
-    const decision = await deps.orchestrator
-      .screenSecuritySteer({
-        payload: req.text,
-        actor: { id: `system:ambient:${tenant().orgId}`, type: "internal" },
-        conversation:
-          batch.kind === "group"
-            ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }
-            : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
-        ...(session ? { sessionId: session.id } : {}),
-      })
-      .catch(swallowAs("ambient: steer screening", "block" as const));
-    if (decision === "block") return false;
-    const steerText = decision === "unscreened" ? `${unscreenedNotice("mid-turn message")}\n${req.text}` : req.text;
-    await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req });
+    deps.orchestrator.observeSecuritySteer({
+      payload: req.text,
+      actor: { id: `system:ambient:${tenant().orgId}`, type: "internal" },
+      conversation:
+        batch.kind === "group"
+          ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }
+          : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
+      ...(session ? { sessionId: session.id } : {}),
+    });
+    await deps.signals.send(live.id, { kind: "steer", text: req.text, ts: latestTs, request: req });
     const after = await deps.runs.get(live.id);
     if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
     return true;
@@ -328,10 +324,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
 
   async function addressedWakeText(input: OrchestratorInput): Promise<string> {
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
-    const policy = deps.channelPolicy
-      ? await deps.channelPolicy.get(container).catch(swallowAs("ambient: channel policy", undefined))
-      : undefined;
-    const orders = policy?.orders;
     const sender = input.actor.displayName?.trim() || input.actor.id;
     const surface = input.surface ?? "slack";
     return buildWakeEnvelope({
@@ -340,7 +332,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       channel: container,
       at: new Date(),
       why: `${sender} addressed you directly; they expect a response.`,
-      ...(orders ? { orders } : {}),
       recentMessages: [],
       addressedMessages: [
         {

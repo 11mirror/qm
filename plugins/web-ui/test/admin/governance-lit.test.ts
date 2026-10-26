@@ -10,14 +10,7 @@ function setup() {
 test("Lit mounts Governance without wrappers or duplicate ids", () => {
   const dom = setup();
   try {
-    for (const id of [
-      "security-posture",
-      "auto-flagger",
-      "sharing-posture",
-      "command-policy",
-      "egress",
-      "ambient-policy",
-    ]) {
+    for (const id of ["auto-flagger", "command-policy", "egress", "ambient-policy"]) {
       const card = dom.window.document.getElementById(`card-${id}`)!;
       assert.equal(card.tagName, "SECTION");
       assert.equal(card.parentElement?.className, "governance-content");
@@ -25,42 +18,6 @@ test("Lit mounts Governance without wrappers or duplicate ids", () => {
     }
     const ids = [...dom.window.document.querySelectorAll("[id]")].map((node) => node.id);
     assert.equal(new Set(ids).size, ids.length);
-  } finally {
-    dom.window.close();
-  }
-});
-test("editing and reverting a posture drives radio, dirty state and save button", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({securityPosture:"auto"},"org:test")');
-    const doc = dom.window.document;
-    const button = doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!;
-    const input = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
-    input.click();
-    assert.equal(button.disabled, false);
-    assert.equal(doc.getElementById("st-security-posture")!.textContent, "Unsaved changes");
-    assert.equal(dom.window.eval('governanceUI.collect("security-posture").posture'), "strict");
-    doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="auto"]')!.click();
-    assert.equal(button.disabled, true);
-    assert.equal(doc.getElementById("st-security-posture")!.textContent, "");
-  } finally {
-    dom.window.close();
-  }
-});
-test("loading another scope resets posture radios after both choices were clicked", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({securityPosture:"auto"},"org:first")');
-    const doc = dom.window.document;
-    const strict = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
-    const auto = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="auto"]')!;
-    strict.click();
-    auto.click();
-    dom.window.eval('governanceUI.load({securityPosture:"strict"},"org:second")');
-    assert.equal(strict.checked, true);
-    assert.equal(auto.checked, false);
-    assert.equal(dom.window.eval('governanceUI.collect("security-posture").posture'), "strict");
-    assert.equal(doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!.disabled, true);
   } finally {
     dom.window.close();
   }
@@ -107,14 +64,14 @@ test("bot ledger changes derive rollup enablement and payload from state", () =>
   }
 });
 test("saving an older submitted draft preserves edits made during the request", () => {
-  const state = new GovernanceState("security-posture");
-  state.load({ posture: "auto" });
-  state.change("security-posture", "strict");
+  const state = new GovernanceState("org-ambient");
+  state.load({ on: true });
+  state.change("governance-org-ambient", false);
   const submitted = state.collect();
   state.saving = true;
-  state.change("security-posture", "auto");
+  state.change("governance-org-ambient", true);
   state.commit(submitted);
-  assert.equal(state.draft.posture, "auto");
+  assert.equal(state.draft.on, true);
   assert.equal(state.dirty, true);
   assert.equal(state.message, "Unsaved changes");
 });

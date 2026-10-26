@@ -20,7 +20,7 @@ import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
 
-type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
+type ContextInput = Parameters<typeof sharingSourcesForTurn>[0] & {
   resolution: Resolution;
   external?: boolean;
   audience: Principal[];
@@ -39,9 +39,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
 // A turn-local view, never a reusable capability or a cross-turn cache.
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
-  const sharingSources = input.external
-    ? []
-    : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+  const sharingSources = input.external ? [] : await sharingSourcesForTurn(input);
   const memoryScopeId = writableMemoryScope(resolution.layers, input.targetScope);
   const baseRecallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
   const read = [
@@ -67,8 +65,7 @@ export async function resolveTurnContext(input: ContextInput) {
     targetScope: input.targetScope,
     nativeScopes: baseRecallScopes,
     audience: input.audience,
-    open: resolution.sharingPosture === "open",
-    config: input.config,
+    open: !input.external,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
     currentScopeMembers: input.currentScopeMembers,
   };
@@ -105,9 +102,7 @@ export async function resolveTurnContext(input: ContextInput) {
     },
     listFiles: () => handles,
     listSkills: async (sources?: readonly string[]) => {
-      const sharingSources = input.external
-        ? []
-        : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+      const sharingSources = input.external ? [] : await sharingSourcesForTurn(input);
       const skillScopes = [
         ...new Set([
           memoryScopeId,

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { setChannelInstructions } from "./support/channel-instructions.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -19,13 +20,13 @@ const DIRECTIVE = [
   `!engage !postthread ${X_LINK_TS} Arrr, a fresh dispatch washes up from the X seas! 🏴‍☠️`,
 ].join("\n");
 
-test("exemplar (piratey X-link): the worker gets the standing order verbatim and threads its reply under the trigger", async () => {
+test("exemplar (piratey X-link): the worker gets the channel instructions verbatim and threads its reply under the trigger", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-exemplar-pirate-"));
   const built = buildTestApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
     const container = "C-pirate";
-    await built.app.setChannelPolicy(container, DIRECTIVE, "U-alice");
+    await setChannelInstructions(built, container, DIRECTIVE, "U-alice");
 
     await built.app.ingestSurfaceEvents(
       [
@@ -58,13 +59,18 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
 
     const workerSession = await built.sessions.getByThread(`slack:${container}:ambient:${X_LINK_TS}`);
     assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
-    const entries = await built.sessions.getItems(workerSession!.id);
-    const wake = entries.find((e) => e.kind === "UserMessage" && (e.text ?? "").includes("<standing-orders"));
-    assert.ok(wake, "the wake carries a standing-orders element");
-    const text = wake!.text ?? "";
+    const prompts = JSON.stringify(await built.sessions.listLlmRequests(workerSession!.id));
     for (const line of ["DON'T: respond piratey to messages without an X link", "(per alice, updated 2026-07-01)"]) {
-      assert.ok(text.includes(line), `standing order not verbatim in the wake: missing "${line}"`);
+      assert.ok(
+        prompts.includes(JSON.stringify(line).slice(1, -1)),
+        `instructions not verbatim in the prompt: "${line}"`,
+      );
     }
+    const entries = await built.sessions.getItems(workerSession!.id);
+    assert.ok(
+      !entries.some((e) => e.kind === "UserMessage" && (e.text ?? "").includes("<standing-orders")),
+      "the wake no longer repeats the instructions",
+    );
   } finally {
     await built.runtime.stop();
   }

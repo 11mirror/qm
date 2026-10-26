@@ -122,7 +122,7 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
       ),
       input.adminOperations ? Object.keys(adminOperations) : ["whoami"],
     ),
-    native("guidance", gate(control || input.surfaceTools, control ? CONTROL_ON : POSTS_ITSELF, CONTROL_OFF)),
+    native("instructions", gate(control || input.surfaceTools, control ? CONTROL_ON : POSTS_ITSELF, CONTROL_OFF)),
     native(
       surface,
       gate(

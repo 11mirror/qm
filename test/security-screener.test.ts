@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSecurityScreenProxy } from "../src/security/security-screener.ts";
-import { createSecurityClassifier } from "../src/core/orchestrator/security-screen.ts";
+import { createSecurityObserver } from "../src/core/orchestrator/security-screen.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 
@@ -331,13 +331,13 @@ test("the security screen proxy accepts concurrent classifications and rejects o
   await Promise.all([first, second, third]);
 });
 
-test("observed screening returns immediately and audits each verdict once it settles", async () => {
+test("observed screening audits each verdict once it settles", async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
   const events: AuditEvent[] = [];
-  const classify = createSecurityClassifier({
+  const classify = createSecurityObserver({
     securityScreener: {
       provider: "example-screen",
       async classify() {
@@ -348,20 +348,16 @@ test("observed screening returns immediately and audits each verdict once it set
     harness: { models: {} },
     auditLog: { record: (event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
-  const verdicts = await Promise.all(
-    Array.from({ length: 20 }, (_, i) =>
-      classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", undefined, {
-        mode: "observe",
-        sessionId: "s1",
-        runId: "r1",
-      }),
-    ),
+  const observed = Array.from({ length: 20 }, (_, i) =>
+    classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", {
+      sessionId: "s1",
+      runId: "r1",
+    }),
   );
-  assert.ok(verdicts.every((verdict) => verdict?.decision === "auto" && !verdict.unscreened));
-  assert.equal(events.length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(events.length, 0, "observing never waits on the verdict");
   release();
-  const deadline = Date.now() + 2_000;
-  while (events.length < 20 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+  await Promise.all(observed);
   assert.ok(events.every((event) => event.status === "would_block"));
   assert.equal(events.length, 20);
   const detail = JSON.parse(events.at(-1)!.detail!) as Record<string, unknown>;

@@ -101,7 +101,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           if (entry.kind === "ToolResult") results.push({ isError: entry.isError ?? undefined });
           return turn.emit(entry);
         },
-        screenToolResult: turn.screenToolResult,
+        observeToolResult: turn.observeToolResult,
         pendingApprovals: [],
       };
       const options: AgentToolsOptions = {

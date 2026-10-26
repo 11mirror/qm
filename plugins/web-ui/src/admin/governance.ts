@@ -1,46 +1,19 @@
-import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus } from "./setting-controls.ts";
 import { html, type TemplateResult } from "lit";
 import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
-import { brandName } from "../ui.ts";
 export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
-  "card-security-posture": (s) =>
-    html`<section class=${govClass(s, true)} id="card-security-posture">
-      <div class="head">
-        <h2>Security posture</h2>
-        <p>Choose how the agent screens external content and when it requires your approval.</p>
-      </div>
-      <div class="body">
-        ${choiceGroup(
-          {
-            name: "security-posture-choice",
-            value: s.draft.posture,
-            onChange: (event: Event) => changeField(s, "security-posture", event),
-          },
-          [
-            [
-              "auto",
-              "Auto",
-              "Default. Blocks private-network access. Screens external content when the deployment configures a screener; model screening is off by default.",
-            ],
-            ["dangerous", "Dangerous", "No posture-based screening; deployment-required screening still applies."],
-            ["strict", "Strict", "Every tool action requires human approval."],
-          ],
-        )}
-      </div>
-      ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
   "card-auto-flagger": (s) =>
     html`<section class=${govClass(s)} id="card-auto-flagger">
       <div class="head">
         <h2>Auto flagger</h2>
         <p>
-          Model and prompt used when the deployment explicitly enables model screening. These settings do not enable
-          screening. The security boundary and required verdict format remain fixed.
+          Model and prompt the security screen uses to observe external content. The security boundary and required
+          verdict format remain fixed.
         </p>
       </div>
       <div class="body">
@@ -148,18 +121,18 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>
-          What the agent proactively acts on in this channel. The standing order is plain prose the ambient judge weighs
-          each batch of new messages against. Empty means it stays silent unless addressed. The bot ledger says how each
-          automated poster is treated: <b>ignore</b> never wakes the judge, <b>rollup</b> batches its posts (judged at
-          most once per the given hours), <b>action</b> marks its posts as triggers to act on, <b>user</b> reads it like
-          a person.
+          When the agent wakes on overheard messages in this channel. The ambient judge weighs each batch of new
+          messages against the channel's instructions (edit them under Instructions); with none set it stays silent
+          unless addressed. The bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the
+          judge, <b>rollup</b> batches its posts (judged at most once per the given hours), <b>action</b> marks its
+          posts as triggers to act on, <b>user</b> reads it like a person.
         </p>
       </div>
       <div class="body">
         <label for="ambient-enabled">Ambient behavior</label>
         <p class="hint" style="margin: 2px 0 6px">
           When off, the agent never wakes on overheard messages in this channel; it only responds to direct @mentions.
-          Default: on only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
+          Default: on only when the channel has instructions (or an action-mode bot is set below), otherwise mention-only.
         </p>
         <select
           id="ambient-enabled"
@@ -167,17 +140,10 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.draft.ambientEnabled == null ? "default" : String(s.draft.ambientEnabled ? "on" : "off")}
           @change=${(event: Event) => changeField(s, "ambient-enabled", event)}
         >
-          <option value="default">Default (on when standing orders are set)</option>
+          <option value="default">Default (on when instructions are set)</option>
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
-        <label for="ambient-orders">Standing order</label>
-        <textarea
-          id="ambient-orders"
-          placeholder="(none, the agent stays silent here unless addressed)"
-          .value=${s.value("ambient-orders")}
-          @input=${(event: Event) => changeField(s, "ambient-orders", event)}
-        ></textarea>
         <div class="tablewrap" style="margin-top: 14px">
           <table class="rules">
             <thead>
@@ -205,43 +171,6 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="foot">
         <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button
         >${saveButton(s, "Save", s.disabled)}${settingStatus(s)}
-      </div>
-    </section>`,
-  "card-sharing-posture": (s) =>
-    html`<section class=${govClass(s, true)} id="card-sharing-posture">
-      <div class="head">
-        <h2>Sharing posture</h2>
-        <p>The organization is a ceiling. Personal and room scopes can opt out, and Isolated always wins.</p>
-      </div>
-      <div class="body">
-        <p id="sharing-posture-effective">${sharingLabel(s)}</p>
-        ${choiceGroup(
-          {
-            name: "sharing-posture-choice",
-            value: s.draft.posture,
-            onChange: (event: Event) => changeField(s, "sharing-posture", event),
-          },
-          [
-            ["isolated", "Isolated", "Resources stay in their own scope unless explicitly shared."],
-            [
-              "open",
-              "Open",
-              brandName() +
-                " can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
-            ],
-          ],
-        )}
-      </div>
-      <div class="foot">
-        ${saveButton(s, "Apply", s.disabled)}
-        <button
-          type="button"
-          id="sharing-posture-inherit"
-          ?hidden=${s.scope.startsWith("org:") || s.context.sharingPostureOverride == null}
-        >
-          Follow organization
-        </button>
-        ${settingStatus(s)}
       </div>
     </section>`,
   "card-egress": (s) =>
@@ -370,15 +299,6 @@ function changeField(s: GovernanceState, id: string, event: Event) {
   if (id === "governance-org-ambient") value = value === "on";
   if (id === "ambient-enabled") value = value === "default" ? null : value === "on";
   s.change(id, value);
-}
-function sharingLabel(s: GovernanceState): string {
-  const title = (value: string) => value[0].toUpperCase() + value.slice(1);
-  const inherited = s.scope.startsWith("org:") ? "Default" : "Following organization";
-  return (
-    (s.context.sharingPostureOverride == null ? inherited : "Configured: " + title(s.context.sharingPostureOverride)) +
-    " · Effective: " +
-    title(s.context.sharingPosture || "isolated")
-  );
 }
 let rowId = 0;
 function addRule(s: GovernanceState) {

@@ -14,11 +14,7 @@ import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/ha
 import { countTokens } from "../../src/util/tokens.ts";
 import { isReply, isUserMessage } from "../../src/sessions/items.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
-import {
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-  type ToolResultScreen,
-} from "../../src/security/security-posture.ts";
+import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../../src/security/security-screen.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -56,8 +52,8 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!search ",
   "!read_members",
   "!read_file ",
-  "!set_standing_order ",
-  "!get_standing_order",
+  "!set_instructions ",
+  "!get_instructions",
 ];
 
 function streamChunks(text: string): string[] {
@@ -171,17 +167,6 @@ export function createMockHarness(): Harness {
         summary?: string;
       }> = [];
       let pausedOnApproval = false;
-      const gateTool = (tool: string): boolean => {
-        if (!turn.toolApprovalGate || turn.toolApprovalGate(tool)) return false;
-        collected.push({
-          command: tool,
-          reason: "strict posture: this tool call requires human approval",
-          kind: "approval",
-          approvalKey: `tool:${tool}`,
-        });
-        pausedOnApproval = true;
-        return true;
-      };
 
       if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
         reply = "[strict/read-only posture: that tool is unavailable]";
@@ -375,49 +360,22 @@ export function createMockHarness(): Harness {
         else if (command0.startsWith("!owner ")) tag = "!owner ";
         const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
         const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
-        if (gateTool("execute")) {
-          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
-          usedTool = true;
-          reply = "";
-        } else {
-          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
-          let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
-          if (tag === "!scratch ") opts = { scratch: true };
-          else if (tag === "!owner ") opts = { ownerAuth: true };
-          const result = await turn.tools.execute(command, opts);
-          await turn.emit({ kind: "ToolResult", body: { ...result } });
-          usedTool = true;
-          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        }
+        await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
+        let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
+        if (tag === "!scratch ") opts = { scratch: true };
+        else if (tag === "!owner ") opts = { ownerAuth: true };
+        const result = await turn.tools.execute(command, opts);
+        await turn.emit({ kind: "ToolResult", body: { ...result } });
+        usedTool = true;
+        reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
       } else if (command0.startsWith("!screened-run ")) {
         const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
         await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
         const result = await turn.tools.execute(command);
         const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        const screen = turn.screenToolResult
-          ? await turn
-              .screenToolResult({
-                tool: "execute",
-                result: output,
-                unscreenable: false,
-                provenance: "external",
-              })
-              .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
-          : ({ outcome: "allow" } as ToolResultScreen);
-        if (screen.outcome === "quarantine") {
-          const stub = "[tool output quarantined by the security screen]";
-          await turn.emit({
-            kind: "ToolResult",
-            tool: "execute",
-            text: stub,
-            isError: true,
-            body: { quarantined: true, quarantineReason: "screen_verdict" },
-          });
-          reply = stub;
-        } else {
-          await turn.emit({ kind: "ToolResult", body: { ...result } });
-          reply = output;
-        }
+        turn.observeToolResult?.({ tool: "execute", result: output, unscreenable: false, provenance: "external" });
+        await turn.emit({ kind: "ToolResult", body: { ...result } });
+        reply = output;
         usedTool = true;
       } else if (command0.startsWith("!reach ")) {
         const rest = command0.slice("!reach ".length);
@@ -498,7 +456,7 @@ export function createMockHarness(): Harness {
         const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
         const callKey = toolCallApprovalKey("example_send", args);
         usedTool = true;
-        if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
+        if (turn.toolApprovalGate?.(callKey)) reply = `sent ${JSON.stringify(args)}`;
         else {
           collected.push({
             command: `example_send ${JSON.stringify(args)}`,
@@ -511,9 +469,6 @@ export function createMockHarness(): Harness {
           pausedOnApproval = true;
           reply = "";
         }
-      } else if (command0.startsWith("!read ") && gateTool("read")) {
-        usedTool = true;
-        reply = "";
       } else if (command0.startsWith("!read ")) {
         const path = command0.slice(6).trim();
         const { content } = await turn.tools.read(path);
@@ -567,14 +522,9 @@ export function createMockHarness(): Harness {
         const sp = rest.indexOf(" ");
         const path = sp === -1 ? rest : rest.slice(0, sp);
         const data = sp === -1 ? "" : rest.slice(sp + 1);
-        if (gateTool("write")) {
-          usedTool = true;
-          reply = "";
-        } else {
-          await turn.tools.write(path, data);
-          usedTool = true;
-          reply = `wrote ${path}`;
-        }
+        await turn.tools.write(path, data);
+        usedTool = true;
+        reply = `wrote ${path}`;
       } else if (
         command0.startsWith("!writeattach ") ||
         command0.startsWith("!attachsilent ") ||
@@ -789,19 +739,17 @@ export function createMockHarness(): Harness {
         } else {
           reply = `file-pointer: ${r.sizeBytes ?? 0}B ${r.contentType ?? "binary"}`;
         }
-      } else if (command0.startsWith("!set_standing_order ")) {
-        const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
-        const r = await turn.tools.setStandingOrder(orders);
-        await turn.emit({ kind: "ToolResult", tool: "set_standing_order", body: { ok: r.ok } });
+      } else if (command0.startsWith("!set_instructions ")) {
+        const text = cmd.slice(cmd.indexOf("!set_instructions ") + "!set_instructions ".length).trim();
+        const r = await turn.tools.instructionsWrite(text);
+        await turn.emit({ kind: "ToolResult", tool: "set_instructions", body: { ok: r.ok } });
         usedTool = true;
-        reply = r.ok ? "standing order set" : `[couldn't set standing order] ${r.message ?? "unavailable"}`;
-      } else if (command0 === "!get_standing_order") {
-        const r = await turn.tools.getStandingOrder();
-        await turn.emit({ kind: "ToolResult", tool: "get_standing_order", body: { ok: r.ok } });
+        reply = r.ok ? "instructions set" : `[couldn't set instructions] ${r.message}`;
+      } else if (command0 === "!get_instructions") {
+        const r = turn.tools.instructionsRead();
+        await turn.emit({ kind: "ToolResult", tool: "get_instructions", body: { ok: !("code" in r) } });
         usedTool = true;
-        reply = r.ok
-          ? `standing order: ${r.orders || "(none)"}`
-          : `[couldn't read standing order] ${r.message ?? "unavailable"}`;
+        reply = "code" in r ? "[couldn't read instructions]" : `instructions: ${r.instructions || "(none)"}`;
       } else if (command0 === "!priorturns") {
         reply = turn.priorTurns?.length
           ? "priorturns:\n" + turn.priorTurns.map((t) => `${t.role}${t.name ? `/${t.name}` : ""}: ${t.text}`).join("\n")

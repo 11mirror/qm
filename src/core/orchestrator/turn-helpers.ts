@@ -82,14 +82,10 @@ export async function loadActiveBundles(store: SkillBundleStore, resolved: Skill
   return bundles.filter((b): b is SkillBundle => b !== null);
 }
 
-export function egressClaimAllowingControlPlane(
-  egress: EgressPolicy,
-  apiBaseUrl: string,
-  denyPrivateNetworks = false,
-): EgressPolicy | undefined {
+/** The sandbox egress claim: the scope's host policy, with private networks denied except the core API host. */
+export function egressClaimAllowingControlPlane(egress: EgressPolicy, apiBaseUrl: string): EgressPolicy {
   const allowedHosts = egress.allowedHosts ?? [];
   const deniedHosts = egress.deniedHosts ?? [];
-  if (allowedHosts.length === 0 && deniedHosts.length === 0 && !denyPrivateNetworks) return undefined;
   let coreHost = "";
   if (apiBaseUrl) {
     try {
@@ -103,13 +99,12 @@ export function egressClaimAllowingControlPlane(
     coreHost && allowedHosts.length > 0 && !allowedHosts.includes(coreHost)
       ? [...allowedHosts, coreHost]
       : allowedHosts;
-  const claim: EgressPolicy = {
+  return {
     allowedHosts: allowedWithCore,
-    ...(denyPrivateNetworks ? { denyPrivateNetworks: true } : {}),
-    ...(denyPrivateNetworks && coreHost ? { privateNetworkAllowedHosts: [coreHost] } : {}),
+    denyPrivateNetworks: true,
+    ...(coreHost ? { privateNetworkAllowedHosts: [coreHost] } : {}),
     ...(safeDenied.length ? { deniedHosts: safeDenied } : {}),
   };
-  return claim.allowedHosts.length || claim.deniedHosts?.length || claim.denyPrivateNetworks ? claim : undefined;
 }
 
 export function stripTurnBoilerplate(text: string): string {

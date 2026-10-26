@@ -13,7 +13,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     adminGrants: TEST_ADMIN_GRANTS,
     databasePoolMax: 4,
     databaseDirectPoolMax: 8,
-    securityScreen: "enforce",
     port: 0,
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,

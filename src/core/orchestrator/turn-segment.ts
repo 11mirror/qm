@@ -1,14 +1,13 @@
 import type { TurnCtx } from "./turn-context.ts";
-import type { InboundScreen } from "./inbound-screen.ts";
+import type { ScreenTrace } from "./inbound-screen.ts";
 import type { frameTurnPrompt } from "./turn-prompt.ts";
-import type { ApprovalLedger, QuarantineReleaseApproval } from "./approvals.ts";
+import type { ApprovalLedger } from "./approvals.ts";
 import type { buildTurnTools } from "./turn-tools.ts";
 import type { prepareTurnInput } from "./turn-input.ts";
 import type { selectTurnRuntime } from "./turn-runtime.ts";
-import type { SecurityClassifier } from "./security-screen.ts";
+import type { SecurityObserver } from "./security-screen.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
-import { SECURITY_TOOL_RESULT_QUARANTINE } from "../../audit/audit-log.ts";
 import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
@@ -24,16 +23,7 @@ import { environmentDelta } from "../environment-facts.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
-import {
-  quarantineReleaseKey,
-  securityScreenChunks,
-  toolLabelOf,
-  UNSCREENED_REASON,
-  unscreenedNotice,
-  type SecurityScreenVerdict,
-  type ToolResultScreen,
-  type ToolResultScreenInput,
-} from "../../security/security-posture.ts";
+import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
 import { artifactImageLoader } from "../../harness/replay-images.ts";
 import {
   environmentNote,
@@ -49,7 +39,7 @@ import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
-import { isScreenableTextAttachment, stripAckPrefix } from "./turn-helpers.ts";
+import { stripAckPrefix } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
@@ -69,23 +59,10 @@ export interface TurnRunState {
   remainingDocumentTokens: number;
 }
 
-function quarantinePreview(payload: string): string {
-  const cleaned = payload
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.length > 240 ? `${cleaned.slice(0, 240)}…` : cleaned;
-}
-
-function quarantineFullText(payload: string): string {
-  const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
-  return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
-}
-
 export function createHarnessSegment(
   ctx: TurnCtx,
   turn: {
-    screen: InboundScreen;
+    screenTrace: ScreenTrace;
     framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
     approvalLedger: ApprovalLedger;
     provision: ReturnType<typeof createTurnSandboxes>["provision"];
@@ -98,7 +75,6 @@ export function createHarnessSegment(
     memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
     systemPrompt: string;
     session: Session;
-    quarantineReleaseApprovals: QuarantineReleaseApproval[];
     gapWork: { listener?: (work: GapWork) => void };
     emitGapWork: (phase: GapPhase, start: number, end: number) => void;
     lease: Lease;
@@ -109,7 +85,7 @@ export function createHarnessSegment(
     emittedEntries: Item[];
     syntheticPrompt: boolean;
     blobTransfer: OrchestratorDeps["blobTransfer"];
-    classifySecurityData: SecurityClassifier;
+    observeSecurityData: SecurityObserver;
   },
 ) {
   const {
@@ -129,9 +105,8 @@ export function createHarnessSegment(
     resolution,
     scopeId,
   } = ctx;
-  const { securityPolicy, recordScreenRequest, screenTrace, enforceScreen } = turn.screen;
   const { surfaceName, delegateWork, turnContextBlocks, turnInboxDir, memoryHeading } = turn.framed;
-  const { authorizeCommand, consume: consumeApproval, authorizeToolCall } = turn.approvalLedger;
+  const { consume: consumeApproval } = turn.approvalLedger;
   const { spine, spineFirst, fileRegistration, earlyTaskAck, mayReadArtifact, surfaceToolDeps, tools } = turn.turnTools;
   const {
     inboundIssues,
@@ -140,7 +115,6 @@ export function createHarnessSegment(
     resumePlan,
     history,
     documentInputs,
-    screenDocuments,
     observeDocuments,
     turnEnvironmentContents,
     continueTurn,
@@ -157,6 +131,7 @@ export function createHarnessSegment(
     runtimeState,
   } = turn.selected;
   const {
+    screenTrace,
     provision,
     strictReadOnly,
     mcpToolsReady,
@@ -164,7 +139,6 @@ export function createHarnessSegment(
     memoryView,
     systemPrompt,
     session,
-    quarantineReleaseApprovals,
     gapWork,
     emitGapWork,
     lease,
@@ -175,7 +149,7 @@ export function createHarnessSegment(
     emittedEntries,
     syntheticPrompt,
     blobTransfer,
-    classifySecurityData,
+    observeSecurityData,
   } = turn;
   const runHarnessSegment = async (
     harnessInput: string,
@@ -285,30 +259,22 @@ export function createHarnessSegment(
             ? request.conversationHeader?.trim()
             : undefined;
         if (refreshedInbox) {
-          let allowed = true;
-          if (securityPolicy.screening !== "off") {
-            for (const chunk of securityScreenChunks("conversation-header", refreshedInbox)) {
-              const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                ...screenTrace,
-                sessionId: session.id,
-                hook: "user_input",
-                request: text,
-                surface: "steer",
-                origin: input.origin.kind,
-              });
-              if (verdict?.decision !== "auto" || verdict.unscreened) {
-                allowed = false;
-                break;
-              }
-            }
-          }
-          text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
+          for (const chunk of securityScreenChunks("conversation-header", refreshedInbox))
+            void observeSecurityData(chunk, actor.id, scopeId, {
+              ...screenTrace,
+              sessionId: session.id,
+              hook: "user_input",
+              request: text,
+              surface: "steer",
+              origin: input.origin.kind,
+            });
+          text = `${text}\n\n${refreshedInbox}`;
         }
         if (!request?.attachments?.length) return { text, author };
         const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
         const inboxDir = `${turnInboxDir}/${randomUUID()}`;
         const received = strictReadOnly
-          ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
+          ? { metas: [], images: [], tooMany: [], unavailable: [] }
           : await materializeInbound(
               deps.sandbox,
               provision,
@@ -316,16 +282,14 @@ export function createHarnessSegment(
               blobTransfer,
               { ...fileRegistration, seed },
               inboxDir,
-              securityPolicy.screening !== "off"
-                ? ({ content, name, mimetype }) =>
-                    classifySecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, undefined, {
-                      ...screenTrace,
-                      sessionId: session.id,
-                      hook: "tool_response",
-                      surface: "inbound_file",
-                      origin: input.origin.kind,
-                    })
-                : undefined,
+              ({ content, name, mimetype }) =>
+                void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
+                  ...screenTrace,
+                  sessionId: session.id,
+                  hook: "tool_response",
+                  surface: "inbound_file",
+                  origin: input.origin.kind,
+                }),
             );
         const steeredDocuments = await loadDocumentInputs(
           deps.files,
@@ -337,9 +301,7 @@ export function createHarnessSegment(
           initialDocuments,
           run.remainingDocumentTokens,
         );
-        let steeredUnscreened = false;
-        if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
-        else observeDocuments(steeredDocuments, text);
+        observeDocuments(steeredDocuments, text);
         run.remainingDocumentBytes -= steeredDocuments.documents.reduce(
           (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
           0,
@@ -359,12 +321,6 @@ export function createHarnessSegment(
             inboundManifest(received.metas, inboxDir, received.unstaged),
             ...steeredDocuments.notices,
             inboundIssuesNote(issues),
-            enforceScreen &&
-            (steeredUnscreened ||
-              received.unscreened.length ||
-              received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
-              ? unscreenedNotice("inbound content")
-              : "",
           ]
             .filter(Boolean)
             .join("\n\n"),
@@ -435,141 +391,21 @@ export function createHarnessSegment(
         effectiveTurnWallClockMs > 0
           ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
           : effectiveTurnWallClockMs,
-      ...(securityPolicy.screening !== "off"
-        ? {
-            screenToolResult: async ({
-              tool,
-              result,
-              unscreenable,
-              provenance,
-              sourceScopeId,
-              source,
-            }: ToolResultScreenInput): Promise<ToolResultScreen> => {
-              if (provenance !== "external") return { outcome: "allow" };
-              const toolLabel = toolLabelOf(tool);
-              const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-              const screenChunk = (chunk: string) =>
-                classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                  ...screenTrace,
-                  sessionId: session.id,
-                  hook: "tool_response",
-                  request: input.text,
-                  surface: toolLabel,
-                  origin: input.origin.kind,
-                });
-              if (!enforceScreen) {
-                if (!unscreenable)
-                  await Promise.all(
-                    securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result).map(screenChunk),
-                  );
-                return { outcome: "allow" };
-              }
-              if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
-                deps.auditLog.record({
-                  at: Date.now(),
-                  principalId: actor.id,
-                  action: "security_posture.tool_result_released",
-                  resource: input.surface ?? "unknown",
-                  scopeLabel: scopeId,
-                  status: "allowed",
-                  detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                });
-                return { outcome: "unscreened" };
-              }
-              const chunks = unscreenable ? [] : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
-              if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
-              const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-              for (let i = 0; i < chunks.length && !verdicts.some((v) => v?.decision === "strict"); i += 4) {
-                verdicts.push(...(await Promise.all(chunks.slice(i, i + 4).map(screenChunk))));
-              }
-              const verdict =
-                verdicts.find((v) => v?.decision === "strict") ??
-                (verdicts.length === chunks.length && verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
-                  ? verdicts[0]
-                  : undefined);
-              if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
-              if (verdict?.decision === "strict") {
-                const releaseKey = `security-screen-release:${toolLabel}`;
-                if (authorizeCommand(releaseKey)) {
-                  deps.auditLog.record({
-                    at: Date.now(),
-                    principalId: actor.id,
-                    action: "security_posture.tool_result_release",
-                    resource: input.surface ?? "unknown",
-                    scopeLabel: scopeId,
-                    status: "allowed",
-                    detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                  });
-                  return { outcome: "allow" };
-                }
-                deps.auditLog.record({
-                  at: Date.now(),
-                  principalId: actor.id,
-                  action: SECURITY_TOOL_RESULT_QUARANTINE,
-                  resource: input.surface ?? "unknown",
-                  scopeLabel: scopeId,
-                  status: "refused",
-                  detail: JSON.stringify({
-                    reason: "screen_verdict",
-                    tool: toolLabel,
-                    ...(source ? { source } : {}),
-                    ...(verdict.reason ? { verdict: verdict.reason } : {}),
-                  }),
-                });
-                if (
-                  !quarantineReleaseApprovals.some(
-                    (qa) =>
-                      qa.approvalKey === releaseKey &&
-                      qa.screenedOutput?.text === result &&
-                      qa.screenedOutput?.sourceScopeId === sourceScopeId,
-                  )
-                ) {
-                  quarantineReleaseApprovals.push({
-                    command: `release quarantined ${toolLabel} output`,
-                    reason: verdict.reason
-                      ? `security screen flagged this ${toolLabel} output: ${verdict.reason}`
-                      : `security screen flagged this ${toolLabel} output`,
-                    purpose: `Release the quarantined ${toolLabel} output into the conversation (once), or keep it blocked.`,
-                    summary: `Blocked content preview: ${quarantinePreview(result)}`,
-                    summaryDetail: quarantineFullText(result),
-                    ...(!toolLabel.startsWith("session_message_")
-                      ? {
-                          screenedOutput: {
-                            tool: toolLabel,
-                            text: result,
-                            ...(sourceScopeId ? { sourceScopeId } : {}),
-                          },
-                        }
-                      : {}),
-                    approvalKey: releaseKey,
-                    grantModes: { session: false, always: false },
-                  });
-                }
-                return {
-                  outcome: "quarantine",
-                  approvalRequested: true,
-                  ...(verdict.reason ? { reason: verdict.reason } : {}),
-                };
-              }
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
-                action: "security_posture.tool_result_failed_open",
-                resource: input.surface ?? "unknown",
-                scopeLabel: scopeId,
-                status: "allowed",
-                detail: JSON.stringify({
-                  reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
-                }),
-              });
-              return { outcome: "unscreened" };
-            },
-          }
-        : {}),
-      toolApprovalGate: (tool: string, callKey?: string) => {
-        if (callKey) return consumeApproval(callKey);
-        return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
+      observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
+        if (provenance !== "external" || unscreenable) return;
+        const toolLabel = toolLabelOf(tool);
+        const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
+        for (const chunk of securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result))
+          void observeSecurityData(chunk, actor.id, scopeId, {
+            ...screenTrace,
+            sessionId: session.id,
+            hook: "tool_response",
+            request: input.text,
+            surface: toolLabel,
+            origin: input.origin.kind,
+          });
       },
+      toolApprovalGate: consumeApproval,
       systemPrompt,
       history: continuation?.history ?? history,
       tools,

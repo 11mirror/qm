@@ -1,6 +1,3 @@
-import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
-import type { SharingPosture } from "./resolution/sharing-posture.ts";
-
 export type PrincipalType = "internal" | "guest";
 
 export const PRINCIPAL_TYPES = ["internal", "guest"] as const satisfies readonly PrincipalType[];
@@ -143,8 +140,6 @@ export interface Resolution {
   systemPrompt: string;
   egress: EgressPolicy;
   commandPolicy: CommandPolicy;
-  securityPolicy: ResolvedSecurityPolicy;
-  sharingPosture?: SharingPosture;
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
@@ -626,7 +621,6 @@ export interface PendingApproval {
 }
 
 export interface PendingApprovalRecord {
-  screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;
   createdAt?: number;

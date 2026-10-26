@@ -316,13 +316,14 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
-  soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
-  soulWrite(
+  instructionsRead():
+    { effectiveInstructions: string; instructions: string | null; instructionsVersion: number } | ControlUnavailable;
+  instructionsWrite(
     content: string,
     expectedVersion?: number,
   ): Promise<
     | ControlOk<{ version: number }>
-    | ControlErr<"soul_update_denied" | "soul_version_conflict" | "soul_update_failed">
+    | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
     | ControlUnavailable
   >;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
@@ -422,9 +423,8 @@ interface SurfaceFileResult {
   message?: string;
 }
 
-type SurfaceStandingOrderResult =
-  | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
-  | { ok: false; message: string };
+type ChannelBehaviorResult =
+  { ok: true; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean } | { ok: false; message: string };
 
 export interface SurfaceToolDeps {
   post(
@@ -447,13 +447,8 @@ export interface SurfaceToolDeps {
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
   readFile(ref: string): Promise<SurfaceFileResult>;
-  getStandingOrder(): Promise<SurfaceStandingOrderResult>;
-  setStandingOrder(
-    orders: string | undefined,
-    bots?: Record<string, BotPolicy>,
-    ambientEnabled?: boolean | null,
-    expectedOrders?: string,
-  ): Promise<SurfaceStandingOrderResult>;
+  getChannelBehavior(): Promise<ChannelBehaviorResult>;
+  setChannelBehavior(bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null): Promise<ChannelBehaviorResult>;
 }
 
 export interface ControlUnavailable {
@@ -1406,13 +1401,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         (c, cl) => c.updateWebhook(id, { action }, cl),
         (r) => r.ok,
       ),
-    soulRead() {
+    instructionsRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
-      return deps.control.readSoul(deps.controlClaims);
+      return deps.control.readInstructions(deps.controlClaims);
     },
-    soulWrite: (content, expectedVersion) =>
+    instructionsWrite: (content, expectedVersion) =>
       controlOp(
-        async (c, cl) => c.writeSoul(content, cl, expectedVersion),
+        async (c, cl) => c.writeInstructions(content, cl, expectedVersion),
         (r) => r.ok,
       ),
     shareArtifact: (req) =>
@@ -1451,9 +1446,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
     readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
-    getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
-    setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
-      surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),
+    getChannelBehavior: () => surfaceOp((s) => s.getChannelBehavior()),
+    setChannelBehavior: (bots, ambientEnabled) => surfaceOp((s) => s.setChannelBehavior(bots, ambientEnabled)),
     attach: (files, sandboxId) =>
       deps.attach
         ? deps.attach(files, sandboxId)

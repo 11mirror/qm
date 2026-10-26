@@ -13,41 +13,35 @@ const team = (over: Partial<TurnTeam> = {}): TurnTeam => ({
   present: new Set(["ann@x.com", "bo@x.com"]),
   ...over,
 });
-const turn = (
-  scope: ScopeId,
-  audience: string[],
-  posture: "open" | "isolated" = "isolated",
-  actorId = "ann@x.com",
-) => ({
+const turn = (scope: ScopeId, audience: string[], actorId = "ann@x.com") => ({
   scope,
   actorId,
   audience: audience.map(person),
-  posture,
 });
 const room = scopeId("channel", "C1");
+const optedOut = (over: Partial<TurnTeam> = {}) => team({ isolatedInOpen: true, ...over });
 
-test("isolated: a member's own DM gets the team", () => {
-  assert.deepEqual(teamsForTurn([team()], turn(scopeId("personal", "ann@x.com"), ["ann@x.com"])).teamIds, ["finance"]);
+test("a member's own DM gets the team", () => {
+  assert.deepEqual(teamsForTurn([optedOut()], turn(scopeId("personal", "ann@x.com"), ["ann@x.com"])).teamIds, [
+    "finance",
+  ]);
 });
 
-test("isolated: a room qualifies only while everyone present is on the team", () => {
-  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "bo@x.com"])).teamIds, ["finance"]);
-  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "bo@x.com", "cy@x.com"])).teamIds, []);
+test("an opted-out team qualifies in a room only while everyone present is on the team", () => {
+  assert.deepEqual(teamsForTurn([optedOut()], turn(room, ["ann@x.com", "bo@x.com"])).teamIds, ["finance"]);
+  assert.deepEqual(teamsForTurn([optedOut()], turn(room, ["ann@x.com", "bo@x.com", "cy@x.com"])).teamIds, []);
 });
 
-test("isolated: configured rooms keep the team for members when a non-member joins", () => {
-  const t = team({ configured: true });
+test("configured rooms keep an opted-out team for members when a non-member joins", () => {
+  const t = optedOut({ configured: true });
   assert.deepEqual(teamsForTurn([t], turn(room, ["ann@x.com", "cy@x.com"])).teamIds, ["finance"]);
-  assert.deepEqual(teamsForTurn([t], turn(room, ["ann@x.com", "cy@x.com"], "isolated", "cy@x.com")).teamIds, []);
+  assert.deepEqual(teamsForTurn([t], turn(room, ["ann@x.com", "cy@x.com"], "cy@x.com")).teamIds, []);
 });
 
-test("open: available wherever a member speaks unless the team opts out", () => {
-  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "cy@x.com"], "open")).teamIds, ["finance"]);
-  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "cy@x.com"], "open", "cy@x.com")).teamIds, []);
-  assert.deepEqual(
-    teamsForTurn([team({ isolatedInOpen: true })], turn(room, ["ann@x.com", "cy@x.com"], "open")).teamIds,
-    [],
-  );
+test("a team is available wherever a member speaks unless the team opts out", () => {
+  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "cy@x.com"])).teamIds, ["finance"]);
+  assert.deepEqual(teamsForTurn([team()], turn(room, ["ann@x.com", "cy@x.com"], "cy@x.com")).teamIds, []);
+  assert.deepEqual(teamsForTurn([optedOut()], turn(room, ["ann@x.com", "cy@x.com"])).teamIds, []);
 });
 
 test("multiple teams all apply; the note names the configured room's team or asks", () => {
@@ -68,8 +62,6 @@ const fakeStore = (teams: TurnTeam[]): TeamStore => ({
 });
 const group = (audience: Principal[]) =>
   ({ kind: "group", channelRef: "G1", threadRef: "t", audience }) as unknown as Conversation;
-const isolated = { resolveSharingPostureDurable: async () => "isolated" as const };
-const open = { resolveSharingPostureDurable: async () => "open" as const };
 
 test("scopeTeamsToTurn stamps teams only onto members and keeps their existing team ids", async () => {
   const teams = fakeStore([team()]);
@@ -78,7 +70,7 @@ test("scopeTeamsToTurn stamps teams only onto members and keeps their existing t
       actor: { ...person("ann@x.com"), teamIds: ["legacy"] },
       conversation: group([person("ann@x.com"), person("bo@x.com")]),
     },
-    { teams, config: isolated },
+    { teams },
     false,
   );
   assert.deepEqual(out.actor.teamIds, ["legacy", "finance"]);
@@ -91,7 +83,7 @@ test("scopeTeamsToTurn stamps teams only onto members and keeps their existing t
   const guest = { id: "g@y.com", type: "guest" } as Principal;
   const mixed = await scopeTeamsToTurn(
     { actor: person("ann@x.com"), conversation: group([person("ann@x.com"), person("cy@x.com"), guest]) },
-    { teams, config: open },
+    { teams },
     false,
   );
   assert.deepEqual(
@@ -101,10 +93,10 @@ test("scopeTeamsToTurn stamps teams only onto members and keeps their existing t
 });
 
 test("scopeTeamsToTurn leaves the turn untouched when no team applies or the turn is external", async () => {
-  const teams = fakeStore([team()]);
+  const teams = fakeStore([optedOut()]);
   const input = { actor: person("ann@x.com"), conversation: group([person("ann@x.com"), person("cy@x.com")]) };
-  assert.equal(await scopeTeamsToTurn(input, { teams, config: isolated }, false), input);
-  assert.equal(await scopeTeamsToTurn(input, { teams, config: open }, true), input);
+  assert.equal(await scopeTeamsToTurn(input, { teams }, false), input);
+  assert.equal(await scopeTeamsToTurn(input, { teams: fakeStore([team()]) }, true), input);
 });
 
 test("team scope read and write follow team membership", async () => {

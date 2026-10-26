@@ -1,6 +1,6 @@
 ---
 name: admin
-description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
+description: Act for an org admin — the admin API (scope directory, per-scope config & instructions, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
 ---
 
 # admin — act for an org admin, from chat
@@ -35,11 +35,10 @@ Limits the API enforces (don't offer what it will refuse):
 - Your token elevates only on turns the admin **started themselves** — on autonomous
   runs (crons, webhooks) the admin plane refuses it, whoever owns the run.
 - Reads that return private content — transcripts, files, notebooks, logs, another
-  scope's config — work from a **DM** with the admin, or from an **Open** conversation
-  on a live admin turn. Organization, personal, and conversation sharing restrictions
-  all apply; any Isolated setting keeps the DM requirement. The request uses the
+  scope's config — work from a **DM** with the admin, or from a shared conversation
+  on a turn the admin started. The request uses the
   authenticated speaker's live admin grant, not another participant's authority.
-  Open reads can expose private data to everyone in the conversation: retrieve and
+  Reads outside a DM can expose private data to everyone in the conversation: retrieve and
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron can carry **unattended read grants** (`unattendedGrants` on the cron tool;
@@ -171,13 +170,13 @@ GET /v1/admin/scopes        → every scope with display labels (#channel names,
 ## Read & govern a scope's config
 
 ```bash
-GET /v1/admin/scopes/<scopeId>                → resolved config: commandPolicy, soul (+version), egress, flags, connectors, serviceCredentials
-PUT /v1/admin/scopes/<scopeId>/<resource>     → resource ∈ soul | command-policy | egress |
+GET /v1/admin/scopes/<scopeId>                → resolved config: commandPolicy, instructions (+version), egress, flags, connectors, serviceCredentials
+PUT /v1/admin/scopes/<scopeId>/<resource>     → resource ∈ instructions | command-policy | egress |
                                                 connectors | service-credentials |
                                                 base-model (org-wide LLM; body { modelId } — e.g. gpt-5.5; empty string clears)
 ```
 
-GET first, then PUT the corrected value (`soul` takes `{content}`, `egress` takes
+GET first, then PUT the corrected value (`instructions` takes `{content}`, `egress` takes
 `{allowedHosts,deniedHosts}`, the toggles take `{on}`). Changes apply next turn.
 
 ## Read & fix any scope's memory
@@ -263,7 +262,7 @@ reads admin data, settle the grants at creation, not after the first fire fails:
   (cron/webhook) without the unattended grant the route needs. Report it where the run
   delivers — never finish silently — naming the grant the message cites so the owner can
   add it from their DM.
-- `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this live admin turn;
+- `403 … returns private content — ask the agent in a DM` — this turn in the shared room was not started by the admin;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to put an unattended read grant on a personal-scope cron — from
   their DM, never from here).

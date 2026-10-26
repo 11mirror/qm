@@ -131,18 +131,10 @@ short status update, for example:
 - The Right Hand: warm, anticipatory, and concrete without fawning.
 
 They may instead name a writer or paste their own writing. Save the choice in memory. Also
-update SOUL when it should shape nearly every turn: read the current value, preserve it,
-and write first-person operating rules plus two or three short examples in the chosen
-voice, including disagreement or bad news. Avoid generic assistant tics such as reflexive
-hedging, praise, and decorative bullets.
-
-```bash
-curl -sS "$AGENT_API_URL/v1/soul" -H "X-Agent-Capability: $AGENT_API_TOKEN"
-curl -sS -X POST "$AGENT_API_URL/v1/soul" \
-  -H "X-Agent-Capability: $AGENT_API_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"content":"<full revised first-person SOUL>"}'
-```
+update your instructions when it should shape nearly every turn: read them with the
+`instructions` tool, preserve what is there, and add first-person operating rules plus two or
+three short examples in the chosen voice, including disagreement or bad news. Avoid generic
+assistant tics such as reflexive hedging, praise, and decorative bullets.
 
 ## 2. Read their work
 

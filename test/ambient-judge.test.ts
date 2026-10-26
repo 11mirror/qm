@@ -5,7 +5,7 @@ import { parseAmbientDecision, renderAmbientPrompt, type AmbientBatch } from "..
 const base = (over: Partial<AmbientBatch>): AmbientBatch => ({
   container: "C1",
   surface: "slack",
-  orders: "",
+  instructions: "",
   self: { name: "agent", mentionId: "U00000002" },
   messages: [],
   ...over,

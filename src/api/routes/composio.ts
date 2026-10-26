@@ -73,19 +73,11 @@ async function resolveCredential(ctx: ApiCtx): Promise<Access | Denial> {
   if (!(await activePrincipal(ctx.deps, principal))) return deny(403, "forbidden");
   const personal = scopeId("personal", principal);
   const cap = ctx.capability;
-  if (
-    cap &&
-    (cap.ownerConnections !== true ||
-      cap.deployment ||
-      cap.botActor ||
-      (cap.scopeId !== personal &&
-        livePersonCapability(cap) &&
-        (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open"))
-  )
+  if (cap && (cap.ownerConnections !== true || cap.deployment || cap.botActor))
     return deny(
       403,
       "private_connections",
-      "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+      "Use your connected apps in your own conversation, or on a turn a person started in this conversation.",
     );
   const own = (await ctx.deps.keychain?.listByOwner(principal)) ?? [];
   const candidates = own.filter(

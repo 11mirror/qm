@@ -9,7 +9,7 @@ import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { InstructionsUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
@@ -523,7 +523,6 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
     nativeScopes: [viewerScope],
     audience: [actor],
     open: true,
-    config: deps.config,
     isCurrentSharedScopeMember: (person, target) => ctx.app.isCurrentSharedScopeMember(person, target),
     currentScopeMembers: (target) => ctx.app.currentScopeMembers(target),
   });
@@ -905,14 +904,14 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   });
 }
 
-function getSoul(ctx: ApiCtx): void {
+function getInstructions(ctx: ApiCtx): void {
   const { res, app, url, capability } = ctx;
   const scopeIdVal = capability?.scopeId ?? url.searchParams.get("scopeId");
   if (!scopeIdVal) return sendJson(res, 400, { error: "bad_request", message: "scopeId required" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal));
+  return sendJson(res, 200, app.getInstructions(scopeIdVal));
 }
 
-export async function postSoul(ctx: ApiCtx): Promise<void> {
+export async function postInstructions(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   const b = body as { scopeId?: unknown; content?: unknown; actorId?: unknown };
   const scopeIdVal = capability ? capability.scopeId : b.scopeId;
@@ -924,7 +923,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     Boolean(capability) ||
     (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
   try {
-    const version = await app.updateSoul(
+    const version = await app.updateInstructions(
       scopeIdVal,
       content,
       actorId,
@@ -932,9 +931,9 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     );
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
-    if (e instanceof SoulUpdateDeniedError)
-      return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
-    return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
+    if (e instanceof InstructionsUpdateDeniedError)
+      return sendJson(res, 403, { error: "instructions_update_denied", message: e.message });
+    return sendJson(res, 500, { error: "instructions_update_failed", message: errMessage(e) });
   }
 }
 
@@ -965,8 +964,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: putChannelHeaderPin,
   },
-  { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
-  { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
+  { method: "GET", path: "/v1/instructions", auth: "either", handle: getInstructions },
+  { method: "POST", path: "/v1/instructions", actor: "body.actorId", auth: "either", handle: postInstructions },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
@@ -979,7 +978,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
     { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
     { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
-    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", allowedInStrict: true, handle: restoreSkill },
+    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
   ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },

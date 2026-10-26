@@ -28,7 +28,7 @@ export class SettingsState extends SettingState {
   editing = false;
   history: Data[] = [];
   collect(_validate = true): Data {
-    if (_validate && this.key === "soul" && (this.draft.content || "").length > 100000)
+    if (_validate && this.key === "instructions" && (this.draft.content || "").length > 100000)
       throw new Error("Maximum length reached");
     if (this.key !== "runtime" && runtimeKeys.includes(this.key)) {
       if (this.draft.inherit) return { inherit: true };
@@ -66,7 +66,7 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  [...runtimeKeys, "webui-models", "memory-embedding-model", "soul", "branding"].map((key) => [
+  [...runtimeKeys, "webui-models", "memory-embedding-model", "instructions", "branding"].map((key) => [
     key,
     new SettingsState(key),
   ]),
@@ -85,9 +85,9 @@ export function load(data: Data, scope: string, only?: string) {
     } else if (key === "memory-embedding-model") {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
       s.available = org && "memoryEmbeddingModel" in data;
-    } else if (key === "soul") {
-      s.draft = { content: data.soul || "", expectedVersion: data.soulVersion || 0 };
-      s.history = data.soulHistory || [];
+    } else if (key === "instructions") {
+      s.draft = { content: data.instructions || "", expectedVersion: data.instructionsVersion || 0 };
+      s.history = data.instructionsHistory || [];
       s.editing = false;
       s.available = true;
     } else {
@@ -122,7 +122,7 @@ const label = (s: SettingsState, id: string) => {
   return m?.name && m.name !== id ? `${m.name} (${id})` : id;
 };
 function card(s: SettingsState) {
-  if (s.key === "soul") return soulCard(s);
+  if (s.key === "instructions") return instructionsCard(s);
   if (s.key === "branding") return brandingCard(s);
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
@@ -179,71 +179,73 @@ export function mountCards() {
   mountProviders();
   mountCredentials();
   mountRuntimes();
-  for (const key of ["webui-models", "soul", "branding"]) {
+  for (const key of ["webui-models", "instructions", "branding"]) {
     const s = states.get(key)!;
     s.render = mountTemplate(`template[data-settings-card="card-${key}"]`, () => card(s));
   }
 }
 
-let soulActions: { restore: (revision: Data) => Promise<void> } = {
+let instructionsActions: { restore: (revision: Data) => Promise<void> } = {
   restore: async () => {},
 };
-export const configureSoul = (actions: typeof soulActions) => void (soulActions = actions);
-export function refreshSoul(data: Data) {
-  const s = states.get("soul")!;
-  s.draft.expectedVersion = data.soulVersion || 0;
-  s.baseline = JSON.stringify({ content: data.soul || "", expectedVersion: s.draft.expectedVersion });
-  s.history = data.soulHistory || [];
+export const configureInstructions = (actions: typeof instructionsActions) => void (instructionsActions = actions);
+export function refreshInstructions(data: Data) {
+  const s = states.get("instructions")!;
+  s.draft.expectedVersion = data.instructionsVersion || 0;
+  s.baseline = JSON.stringify({ content: data.instructions || "", expectedVersion: s.draft.expectedVersion });
+  s.history = data.instructionsHistory || [];
   s.changed();
 }
-function soulCard(s: SettingsState) {
+function instructionsCard(s: SettingsState) {
   const saved = JSON.parse(s.baseline).content || "";
   const content = s.draft.content || "";
   return html`<section
     class=${classMap({ card: true, "sv-customize": true, "is-editing": s.editing, dirty: s.dirty })}
-    id="card-soul"
+    id="card-instructions"
   >
     <div class="head">
-      <h2>Organization SOUL</h2>
+      <h2>Instructions</h2>
       <p>
         Write the standing instructions composed into every system prompt for this scope. Saving creates a durable
         revision; restoring an older revision creates a new one.
       </p>
     </div>
-    <div class="body soul-preview-body">
-      <div class="soul-preview-label" id="soul-preview-label">Standing instructions</div>
-      <p class="soul-preview" id="soul-preview" aria-labelledby="soul-preview-label">
+    <div class="body instructions-preview-body">
+      <div class="instructions-preview-label" id="instructions-preview-label">Standing instructions</div>
+      <p class="instructions-preview" id="instructions-preview" aria-labelledby="instructions-preview-label">
         ${saved || "No saved instructions"}
       </p>
     </div>
-    <div class="body soul-workbench">
-      <label for="soul">Standing instructions</label
+    <div class="body instructions-workbench">
+      <label for="instructions">Standing instructions</label
       ><textarea
-        id="soul"
+        id="instructions"
         maxlength="100000"
         placeholder="No scope-specific instructions"
         .value=${content}
         @input=${(e: Event) => s.change("content", value(e))}
       ></textarea>
-      <div class="soul-meta">
-        <span id="soul-ver"
+      <div class="instructions-meta">
+        <span id="instructions-ver"
           >${s.draft.expectedVersion ? "Saved version " + s.draft.expectedVersion : "No saved revision"}</span
-        ><span id="soul-size"
+        ><span id="instructions-size"
           >${content.length.toLocaleString() + " characters · about " + Math.ceil(content.length / 4).toLocaleString() + " tokens"}</span
-        ><span id="soul-validation">${content.length >= 100000 ? "Maximum length reached" : "Draft valid"}</span>
+        ><span id="instructions-validation"
+          >${content.length >= 100000 ? "Maximum length reached" : "Draft valid"}</span
+        >
       </div>
-      <div class="soul-diff" id="soul-diff">
+      <div class="instructions-diff" id="instructions-diff">
         <section>
           <h3>Saved revision</h3>
-          <pre id="soul-saved">${saved || "No saved instructions"}</pre>
+          <pre id="instructions-saved">${saved || "No saved instructions"}</pre>
         </section>
         <section>
           <h3>Current draft</h3>
-          <pre id="soul-draft">
+          <pre id="instructions-draft">
 ${content === saved ? "No draft changes" : content || "Instructions will be cleared"}</pre>
         </section>
       </div>
-      <div class="soul-history" id="soul-history" aria-label="SOUL version history">
+      <div class="instructions-history" id="instructions-history" aria-label="Instructions version history">
         <h3>Version history</h3>
         ${
           s.history.length
@@ -251,7 +253,7 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
                 s.history,
                 (r) => r.version,
                 (r) =>
-                  html`<div class="soul-revision">
+                  html`<div class="instructions-revision">
                     <p>
                       Version ${r.version}<small
                         >${r.updatedBy || "Author unavailable"} ·
@@ -261,7 +263,7 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
                     <button
                       type="button"
                       ?disabled=${r.version === s.draft.expectedVersion || s.saving}
-                      @click=${() => soulActions.restore({ ...r })}
+                      @click=${() => instructionsActions.restore({ ...r })}
                     >
                       ${r.version === s.draft.expectedVersion ? "Current" : "Restore"}
                     </button>
@@ -275,22 +277,22 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
       <button
         type="button"
         class="viewlink"
-        id="soul-history-link"
+        id="instructions-history-link"
         @click=${() => {
           s.editing = true;
           s.render();
-          document.getElementById("soul-history")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          document.getElementById("instructions-history")?.scrollIntoView({ behavior: "smooth", block: "center" });
         }}
       >
         View history ›</button
       ><button
         type="button"
-        id="soul-edit"
+        id="instructions-edit"
         @click=${() => {
           s.editing = !s.editing;
           if (!s.editing) s.draft.content = saved;
           s.changed();
-          if (s.editing) document.getElementById("soul")?.focus();
+          if (s.editing) document.getElementById("instructions")?.focus();
         }}
       >
         ${s.editing ? "Cancel" : "Edit"}</button

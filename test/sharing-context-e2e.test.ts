@@ -39,7 +39,6 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     const computer = await built.sandboxResources.create(actor, scope, "sprites", "default");
     await built.sandboxResources.setDefault(actor, scope, computer.id);
   }
-  await built.config.setSharingPosture("org:default-org", "open");
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
     const result = await built.app.turn({
       surface: "test",
@@ -102,7 +101,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   return { ...built, turn, skill, remove, file, filePath };
 }
 
-test("sharing e2e: personal files and memories follow the speaker, opt-out, and automation boundaries", async (t) => {
+test("sharing e2e: personal files and memories follow the speaker and automation boundaries", async (t) => {
   const b = await fixture(t);
   for (const [id, marker] of [
     ["U1", "ALICE_PAYLOAD"],
@@ -122,12 +121,6 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     }),
     "BOB_PAYLOAD",
   );
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  await b.file("personal:U1", "notes.txt", "NEW_PRIVATE_PAYLOAD");
-  assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), /no file/);
-  assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
-  await b.config.clearSharingPosture("personal:U1");
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
   assert.match(
     await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
     /no file/,
@@ -210,9 +203,6 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     "available",
   );
   assert.deepEqual(await b.keychain!.grantsForScope("channel:C1"), []);
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  assert.match(await childTurn(read), /no file/);
-  await b.config.clearSharingPosture("personal:U1");
   await b.remove("U1");
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
@@ -224,10 +214,6 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
   await b.turn("hello", true);
   assert.equal(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), "ROOM_FILE");
   assert.match(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
-  await b.config.setSharingPosture("channel:C1", "isolated");
-  assert.match(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), /no file/);
-  assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
-  await b.config.clearSharingPosture("channel:C1");
   assert.equal(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), "ROOM_FILE");
   await b.remove("U1");
   assert.match(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), /no file/);
@@ -235,7 +221,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
   assert.doesNotMatch(await b.turn("!sysprompt"), /ROOM_MEMORY|open-channel-C1/);
 });
 
-test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
+test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after archive", async (t) => {
   const b = await fixture(t);
   const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
@@ -247,11 +233,6 @@ test("sharing e2e: skill lazy assets execute, update, and disappear from the sam
   await b.skills.review(s.id, "U1", []);
   await b.skills.publish(s.id);
   await assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_TWO");
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
-  assert.match(await b.turn("!skill carried-helper", true), /no skill file/);
-  assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
-  await b.config.clearSharingPosture("personal:U1");
   await assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_TWO");
   await b.skills.archive(s.id);
   assert.match(await b.turn("!skill carried-helper", true), /no skill file/);
@@ -266,29 +247,6 @@ test("sharing e2e: room skills are removed from an existing DM computer after me
   assert.doesNotMatch(await b.turn("!sysprompt", false, "U4"), /room-helper/);
   await b.remove("U1");
   assert.match(await b.turn("!skill room-helper"), /no skill file/);
-  assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\""), "0");
-});
-
-test("sharing e2e: Isolated preserves local skills and explicit grants without implicit carry", async (t) => {
-  const b = await fixture(t);
-  await b.skill("personal:U1", "personal-helper", "PERSONAL");
-  const s = await b.skill("personal:U2", "explicit-helper", "EXPLICIT");
-  await b.config.setSharingPosture("org:default-org", "isolated");
-  await b.acl.grant(
-    {
-      ownerScopeId: "personal:U2",
-      ref: `skill:${s.id}`,
-      granteeScopeId: "personal:U1",
-      permission: "read",
-      grantedBy: "U2",
-    },
-    "U2",
-  );
-  assert.match(await b.turn("!sysprompt"), /personal-helper/);
-  await assert.equal(await b.turn("!skill-run explicit-helper python3 {dir}/scripts/value.py"), "EXPLICIT");
-  assert.doesNotMatch(await b.turn("!sysprompt", true), /personal-helper|explicit-helper/);
-  await b.acl.revoke("personal:U2", `skill:${s.id}`, "personal:U1", "U2", "U2");
-  assert.match(await b.turn("!skill explicit-helper"), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\""), "0");
 });
 
@@ -345,37 +303,6 @@ test("sharing e2e: binary carry never materializes bytes and text artifacts use 
     ),
     "False",
   );
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  assert.match(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), /no file/);
-});
-
-test("sharing e2e: explicit text-file grants survive Isolated and revoke without stale reads", async (t) => {
-  const b = await fixture(t);
-  await b.files.put({
-    id: "shared-note",
-    ownerScopeId: "personal:U2",
-    createdBy: "U2",
-    name: "shared-note.txt",
-    path: "shared-note.txt",
-    mimetype: "text/plain",
-    data: Buffer.from("EXPLICIT_TEXT"),
-    direction: "out",
-  });
-  await b.acl.grant(
-    {
-      ownerScopeId: "personal:U2",
-      ref: "shared-note",
-      granteeScopeId: "personal:U1",
-      permission: "read",
-      grantedBy: "U2",
-    },
-    "U2",
-  );
-  await b.config.setSharingPosture("org:default-org", "isolated");
-  assert.equal(await b.turn("!read shared/shared-note.txt"), "EXPLICIT_TEXT");
-  assert.match(await b.turn("!read shared/shared-note.txt", true), /no file/);
-  await b.acl.revoke("personal:U2", "shared-note", "personal:U1", "U2", "U2");
-  assert.match(await b.turn("!read shared/shared-note.txt"), /no file/);
 });
 
 test("sharing e2e: unavailable connector skills cannot be read or executed", async (t) => {
@@ -410,21 +337,6 @@ test("sharing e2e: switching the speaker removes the previous speaker's skill be
   await assert.equal(await b.turn("!skill-run speaker-helper python3 {dir}/scripts/value.py", true), "SPEAKER_ONE");
 });
 
-test("sharing e2e: a newly blocked skill asset removes previously materialized content", async (t) => {
-  const b = await fixture(t);
-  const s = await b.skill("personal:U1", "screened-helper", "OLD_SAFE_ASSET");
-  await assert.equal(await b.turn("!skill-run screened-helper python3 {dir}/scripts/value.py", true), "OLD_SAFE_ASSET");
-  await b.skills.update(s.id, {
-    ...s.manifest,
-    files: [{ path: "scripts/value.py", content: "# !security-risk\nprint('UNSCREENED_NEW_ASSET')\n" }],
-  });
-  await b.skills.review(s.id, "U1", []);
-  await b.skills.publish(s.id);
-  assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
-  assert.match(await b.turn("!skill screened-helper", true), /no skill file/);
-  assert.ok((await b.auditLog.events()).some((e) => e.action === "sharing.skill_screen_blocked"));
-});
-
 test("sharing e2e: local notebooks retain late facts while unclassified carried memory stays private", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(
@@ -439,16 +351,6 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
   assert.match(p, /### #engineering[\s\S]*ROOM_FACT_END/);
   assert.match(await b.turn("!sysprompt"), /PERSONAL_FACT_119/);
   assert.doesNotMatch(await b.turn("!memorysearch PERSONAL_FACT_119", true), /PERSONAL_FACT_119/);
-});
-
-test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {
-  const b = await fixture(t, { securityScreen: "off" });
-  await b.skill("personal:U1", "unscreened-helper", "SHARED_SKILL_OK");
-  await assert.equal(
-    await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
-    "SHARED_SKILL_OK",
-  );
-  assert.equal(b.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {
@@ -533,18 +435,6 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
         publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
       },
     });
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
-  await b.config.setSharingPosture("personal:U1", "open");
-  await b.config.setSharingPosture("channel:C1", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
-  await b.config.setSharingPosture("channel:C1", "open");
-  await b.config.setSharingPosture("org:default-org", "isolated");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
-  await b.config.setSharingPosture("org:default-org", "open");
   await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
   await assert.rejects(denied({ kind: "ambient" }), /owner-auth box is not available/);
   await assert.rejects(denied({ kind: "ambient", live: false }), /owner-auth box is not available/);

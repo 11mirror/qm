@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
-import { postSoul } from "../src/api/routes/surface.ts";
+import { postInstructions } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
+import { type PersistedInstructions, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
@@ -241,44 +241,44 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
   assert.equal(await app.managesScope(GROUP_MEMBER, groupScope), true, "group member may set the floor");
   assert.equal(await app.managesScope(PUB_MEMBER, pubScope), false, "public member may NOT set the floor");
   assert.equal(await app.managesScope(OUTSIDER, privScope), false, "a non-member may NOT");
-  assert.ok((await app.updateSoul(privScope, "be terse", PRIV_MEMBER, { allowSharedScope: true })) > 0);
-  assert.ok((await app.updateSoul(groupScope, "be kind", GROUP_MEMBER, { allowSharedScope: true })) > 0);
-  await assert.rejects(() => app.updateSoul(privScope, "x", PRIV_MEMBER), /not authorized/);
+  assert.ok((await app.updateInstructions(privScope, "be terse", PRIV_MEMBER, { allowSharedScope: true })) > 0);
+  assert.ok((await app.updateInstructions(groupScope, "be kind", GROUP_MEMBER, { allowSharedScope: true })) > 0);
+  await assert.rejects(() => app.updateInstructions(privScope, "x", PRIV_MEMBER), /not authorized/);
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
-  const souls = testMap<PersistedSoul>();
+  const instructions = testMap<PersistedInstructions>();
   const lock = testAdvisoryLock();
-  const leftConfig = testConfigStore(ORG, { souls });
-  const rightConfig = testConfigStore(ORG, { souls });
+  const leftConfig = testConfigStore(ORG, { instructions });
+  const rightConfig = testConfigStore(ORG, { instructions });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
-  assert.equal(await left.updateSoul(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
-  assert.equal(rightConfig.soulVersion(privScope), 0, "the second core starts with a stale cache");
-  assert.equal(await right.updateSoul(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
-  assert.equal((await souls.get(privScope))?.version, 2);
-  assert.equal((await souls.get(privScope))?.content, "right");
+  assert.equal(await left.updateInstructions(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
+  assert.equal(rightConfig.instructionsVersion(privScope), 0, "the second core starts with a stale cache");
+  assert.equal(await right.updateInstructions(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
+  assert.equal((await instructions.get(privScope))?.version, 2);
+  assert.equal((await instructions.get(privScope))?.content, "right");
 });
 
 test("SOUL: a durable write failure rejects and restores the live cache", async () => {
   const control = { fail: false };
-  const souls = failingPutMap<PersistedSoul>(control);
-  const config = testConfigStore(ORG, { souls });
+  const instructions = failingPutMap<PersistedInstructions>(control);
+  const config = testConfigStore(ORG, { instructions });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
-  assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
+  assert.equal(await app.updateInstructions(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   control.fail = true;
   await assert.rejects(
-    () => app.updateSoul(privScope, "cache only", PRIV_MEMBER, { allowSharedScope: true }),
+    () => app.updateInstructions(privScope, "cache only", PRIV_MEMBER, { allowSharedScope: true }),
     /forced durable put failure/,
   );
-  assert.equal(config.getSoul(privScope), "durable");
-  assert.equal(config.soulVersion(privScope), 1);
+  assert.equal(config.getInstructions(privScope), "durable");
+  assert.equal(config.instructionsVersion(privScope), 1);
 });
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
-  const config = testConfigStore(ORG, { souls: failingPutMap<PersistedSoul>(control) });
+  const config = testConfigStore(ORG, { instructions: failingPutMap<PersistedInstructions>(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -290,14 +290,14 @@ test("SOUL: the HTTP route reports durable storage failures as 500", async () =>
       out.body = data ? JSON.parse(data) : undefined;
     },
   };
-  await postSoul({
+  await postInstructions({
     res,
     app,
     body: { content: "cannot persist" },
     capability: { actorId: PRIV_MEMBER, scopeId: privScope },
   } as unknown as ApiCtx);
   assert.equal(out.status, 500);
-  assert.equal(out.body?.error, "soul_update_failed");
+  assert.equal(out.body?.error, "instructions_update_failed");
 });
 
 test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 403 denial", async () => {
@@ -312,18 +312,18 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
       out.body = data ? JSON.parse(data) : undefined;
     },
   };
-  await postSoul({
+  await postInstructions({
     res,
     app,
     body: { scopeId: scopeId("personal", OWNER), content: "not yours", actorId: OUTSIDER },
   } as unknown as ApiCtx);
   assert.equal(out.status, 403);
-  assert.equal(out.body?.error, "soul_update_denied");
+  assert.equal(out.body?.error, "instructions_update_denied");
 });
 
 test("SOUL: failed persistence restores the pre-write cache even when compensating reads fail", async () => {
-  const backing = testMap<PersistedSoul>();
-  const prior: PersistedSoul = {
+  const backing = testMap<PersistedInstructions>();
+  const prior: PersistedInstructions = {
     scopeId: privScope,
     content: "durable prior",
     version: 7,
@@ -332,7 +332,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
   await backing.put(privScope, prior);
-  const config = testConfigStore(ORG, { souls: putThenFailReadsMap(backing) });
+  const config = testConfigStore(ORG, { instructions: putThenFailReadsMap(backing) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {
@@ -343,7 +343,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     end() {},
   };
 
-  await postSoul({
+  await postInstructions({
     res,
     app,
     body: { content: "rejected cache value" },
@@ -351,9 +351,9 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
   } as unknown as ApiCtx);
 
   assert.equal(out.status, 500);
-  assert.equal(config.getSoul(privScope), prior.content);
-  assert.equal(config.soulVersion(privScope), prior.version);
-  assert.deepEqual(config.soulHistory(privScope), prior.history);
+  assert.equal(config.getInstructions(privScope), prior.content);
+  assert.equal(config.instructionsVersion(privScope), prior.version);
+  assert.deepEqual(config.instructionsHistory(privScope), prior.history);
 });
 
 test("crons: owner and a private-channel member manage; a public-channel member and a non-member do not", async () => {

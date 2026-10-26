@@ -108,9 +108,6 @@ test("browser inference uses the company gateway with scoped model authorization
   const limited = await post(body);
   assert.equal(limited.status, 429);
   assert.ok(!(await limited.text()).includes(key));
-  await built.config.setSecurityPosture("personal:U1", "strict");
-  assert.equal((await post(body)).status, 403);
-  await built.config.setSecurityPosture("personal:U1", "auto");
   await built.config.setPersonalModelAuth("U1", true, "openai");
   assert.equal((await post(body)).status, 409);
   await built.userModelCredentials.setOAuth("U1", "anthropic", {

@@ -5,12 +5,6 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import {
-  composeSecurityPosture,
-  DEFAULT_SECURITY_POSTURE,
-  type SecurityPosture,
-} from "../security/security-posture.ts";
-import { composeSharingPostures, DEFAULT_SHARING_POSTURE, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import {
   deriveConnectorKey,
@@ -24,26 +18,27 @@ import {
 } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 
-export interface PersistedSoul {
+/** The longest instruction text a scope may hold. */
+export const MAX_INSTRUCTIONS_CHARS = 100_000;
+
+export interface PersistedInstructions {
   scopeId: ScopeId;
   content: string;
   version: number;
   updatedAt?: number;
   updatedBy?: string;
-  history?: PersistedSoulRevision[];
+  history?: PersistedInstructionsRevision[];
   mutationId?: string;
 }
-export interface PersistedSoulRevision {
+export interface PersistedInstructionsRevision {
   scopeId: ScopeId;
   content: string;
   version: number;
   updatedAt: number;
   updatedBy?: string;
 }
-type SoulSnapshot = PersistedSoul | null;
+type InstructionsSnapshot = PersistedInstructions | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
-export type PersistedSecurityPosture = ScopedRow<"posture", SecurityPosture>;
-export type PersistedSharingPosture = ScopedRow<"posture", SharingPosture>;
 export type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
 export type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
 export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
@@ -97,10 +92,8 @@ export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
 interface ScopeConfigPresence {
-  soul: boolean;
+  instructions: boolean;
   commandPolicy: boolean;
-  securityPosture: boolean;
-  sharingPosture: boolean;
   approvalGrantModes: boolean;
   egress: boolean;
   unfulfilledInsights: boolean;
@@ -114,25 +107,23 @@ export interface PersistedDeploymentIdentity {
 }
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
-  getSoul(id: ScopeId): string | null;
-  setSoul(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setSoulIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
-  soulVersion(id: ScopeId): number;
-  soulHistory(id: ScopeId): PersistedSoulRevision[];
-  captureSoulSnapshot(id: ScopeId): Promise<SoulSnapshot>;
-  restoreSoulSnapshot(id: ScopeId, snapshot: SoulSnapshot): Promise<boolean>;
-  restoreSoulCacheSnapshot(id: ScopeId, snapshot: SoulSnapshot): void;
+  getInstructions(id: ScopeId): string | null;
+  /** Read a scope's instructions from the store (another instance may have written them) and refresh the cache. */
+  getInstructionsDurable(id: ScopeId): Promise<string | null>;
+  setInstructions(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
+  setInstructionsIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+  ): Promise<number | null>;
+  instructionsVersion(id: ScopeId): number;
+  instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
+  captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
+  restoreInstructionsSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): Promise<boolean>;
+  restoreInstructionsCacheSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): void;
   getCommandPolicy(id: ScopeId): CommandPolicy | null;
   setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
-  getSecurityPosture(id: ScopeId): SecurityPosture;
-  getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
-  setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
-  getSharingPosture(id: ScopeId): SharingPosture;
-  getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
-  getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
-  resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture>;
-  setSharingPosture(id: ScopeId, posture: SharingPosture): Promise<void>;
-  clearSharingPosture(id: ScopeId): Promise<void>;
   getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
@@ -203,11 +194,9 @@ export interface ScopedConfigStore {
 
 export interface ConfigStoreMaps {
   connectorClients?: DurableMap<StoredConnectorClient>;
-  souls?: DurableMap<PersistedSoul>;
-  soulHistory?: DurableMap<PersistedSoulRevision>;
+  instructions?: DurableMap<PersistedInstructions>;
+  instructionsHistory?: DurableMap<PersistedInstructionsRevision>;
   commandPolicies?: DurableMap<ScopedRow<"policy", CommandPolicy>>;
-  securityPostures?: DurableMap<PersistedSecurityPosture>;
-  sharingPostures?: DurableMap<PersistedSharingPosture>;
   approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
   egressPolicies?: DurableMap<PersistedEgressPolicy>;
   unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
@@ -229,11 +218,9 @@ export interface ConfigStoreMaps {
 
 const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   connectorClients: "connector_clients",
-  souls: "soul_configs",
-  soulHistory: "soul_history",
+  instructions: "soul_configs",
+  instructionsHistory: "soul_history",
   commandPolicies: "command_policies",
-  securityPostures: "security_postures",
-  sharingPostures: "sharing_postures",
   approvalGrantModes: "approval_grant_modes",
   egressPolicies: "egress_policies",
   unfulfilledInsights: "unfulfilled_insights_flag",
@@ -262,16 +249,14 @@ export function createConfigStore(
   orgId: string,
   opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
-    defaultSecurityPosture?: SecurityPosture;
-    defaultSharingPosture?: SharingPosture;
   },
 ): ScopedConfigStore {
-  const souls = new Map<ScopeId, { content: string; version: number }>();
-  const soulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
-  const legacySoulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
+  const instructionsCache = new Map<ScopeId, { content: string; version: number }>();
+  const instructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
+  const legacyInstructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
-  const soulStore = opts.souls;
-  const soulHistoryStore = opts.soulHistory;
+  const instructionsStore = opts.instructions;
+  const instructionsHistoryStore = opts.instructionsHistory;
   const baseModelStore = opts.baseModels;
   const slackEmojiCatalogStore = opts.slackEmojiCatalog;
   const deploymentIdentity = opts.deploymentIdentity;
@@ -327,8 +312,6 @@ export function createConfigStore(
     );
   const settings = {
     commandPolicies: field("commandPolicies", "policy"),
-    securityPostures: field("securityPostures", "posture"),
-    sharingPostures: field("sharingPostures", "posture"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
     unfulfilledInsights: field("unfulfilledInsights", "on"),
@@ -433,8 +416,6 @@ export function createConfigStore(
       cacheBaseModel(org, saved);
     });
   };
-  const defaultSecurityPosture = opts.defaultSecurityPosture ?? DEFAULT_SECURITY_POSTURE;
-  const defaultSharingPosture = opts.defaultSharingPosture ?? DEFAULT_SHARING_POSTURE;
   const orgDefaultPolicy = defaultOrgPolicy();
   const orgDefaultEgress: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
   const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };
@@ -442,37 +423,39 @@ export function createConfigStore(
     session: orgModes.session && (scope?.session ?? true),
     always: orgModes.always && (scope?.always ?? true),
   });
-  const defaultOrgSoul = {
+  const defaultOrgInstructions = {
     content:
       "You are a helpful internal assistant for this organization. Be concise, accurate, and respect data boundaries: never reveal information to people who are not party to the current conversation.",
     version: 1,
   };
-  souls.set(org, defaultOrgSoul);
+  instructionsCache.set(org, defaultOrgInstructions);
 
   let hydrated: Promise<void> | null = null;
-  const loadSoulCache = (id: ScopeId, soul: PersistedSoul | null): void => {
-    if (soul) souls.set(id, { content: soul.content, version: soul.version });
-    else if (id === org) souls.set(org, defaultOrgSoul);
-    else souls.delete(id);
-    if (soul?.history) soulHistory.set(id, soul.history);
-    else soulHistory.delete(id);
+  const loadInstructionsCache = (id: ScopeId, stored: PersistedInstructions | null): void => {
+    if (stored) instructionsCache.set(id, { content: stored.content, version: stored.version });
+    else if (id === org) instructionsCache.set(org, defaultOrgInstructions);
+    else instructionsCache.delete(id);
+    if (stored?.history) instructionsHistory.set(id, stored.history);
+    else instructionsHistory.delete(id);
   };
-  const cloneSoul = (soul: PersistedSoul | null): SoulSnapshot => (soul ? structuredClone(soul) : null);
-  const sameSoul = (left: SoulSnapshot, right: SoulSnapshot): boolean => isDeepStrictEqual(left, right);
-  const mergeSoulHistory = (
-    embedded: readonly PersistedSoulRevision[] | undefined,
-    legacy: readonly PersistedSoulRevision[],
-  ): PersistedSoulRevision[] => {
-    const byVersion = new Map<number, PersistedSoulRevision>();
+  const cloneInstructions = (stored: PersistedInstructions | null): InstructionsSnapshot =>
+    stored ? structuredClone(stored) : null;
+  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean =>
+    isDeepStrictEqual(left, right);
+  const mergeInstructionsHistory = (
+    embedded: readonly PersistedInstructionsRevision[] | undefined,
+    legacy: readonly PersistedInstructionsRevision[],
+  ): PersistedInstructionsRevision[] => {
+    const byVersion = new Map<number, PersistedInstructionsRevision>();
     for (const revision of legacy) byVersion.set(revision.version, revision);
     for (const revision of embedded ?? []) byVersion.set(revision.version, revision);
     return [...byVersion.values()].sort((a, b) => b.version - a.version);
   };
   const historyIncludingCurrent = (
-    current: PersistedSoul,
-    legacy: readonly PersistedSoulRevision[],
-  ): PersistedSoulRevision[] => {
-    const history = mergeSoulHistory(current.history, legacy);
+    current: PersistedInstructions,
+    legacy: readonly PersistedInstructionsRevision[],
+  ): PersistedInstructionsRevision[] => {
+    const history = mergeInstructionsHistory(current.history, legacy);
     if (!history.some((revision) => revision.version === current.version)) {
       history.push({
         scopeId: current.scopeId,
@@ -490,14 +473,13 @@ export function createConfigStore(
     async refreshSecurity(ids) {
       await Promise.all(
         ids.flatMap((id) => [
-          writeQueue(`soul:${id}`, async () => {
-            const soul = await soulStore.get(id);
-            if (soul) souls.set(id, { content: soul.content, version: soul.version });
-            else if (id !== org) souls.delete(id);
+          writeQueue(`instructions:${id}`, async () => {
+            const stored = await instructionsStore.get(id);
+            if (stored) instructionsCache.set(id, { content: stored.content, version: stored.version });
+            else if (id !== org) instructionsCache.delete(id);
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
-          settings.sharingPostures.reload(id),
         ]),
       );
     },
@@ -506,33 +488,39 @@ export function createConfigStore(
         hydrated = (async () => {
           const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId });
           if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
-          for (const r of await soulStore.all()) {
-            souls.set(r.scopeId, { content: r.content, version: r.version });
-            if (r.history?.length) soulHistory.set(r.scopeId, r.history);
+          for (const r of await instructionsStore.all()) {
+            instructionsCache.set(r.scopeId, { content: r.content, version: r.version });
+            if (r.history?.length) instructionsHistory.set(r.scopeId, r.history);
           }
-          for (const r of await soulHistoryStore.all()) {
-            const legacyRevisions = legacySoulHistory.get(r.scopeId) ?? [];
+          for (const r of await instructionsHistoryStore.all()) {
+            const legacyRevisions = legacyInstructionsHistory.get(r.scopeId) ?? [];
             if (!legacyRevisions.some((revision) => revision.version === r.version)) legacyRevisions.push(r);
-            legacySoulHistory.set(r.scopeId, legacyRevisions);
-            const revisions = soulHistory.get(r.scopeId) ?? [];
+            legacyInstructionsHistory.set(r.scopeId, legacyRevisions);
+            const revisions = instructionsHistory.get(r.scopeId) ?? [];
             if (!revisions.some((revision) => revision.version === r.version)) revisions.push(r);
-            soulHistory.set(r.scopeId, revisions);
+            instructionsHistory.set(r.scopeId, revisions);
           }
-          for (const revisions of legacySoulHistory.values()) revisions.sort((a, b) => b.version - a.version);
-          for (const revisions of soulHistory.values()) revisions.sort((a, b) => b.version - a.version);
+          for (const revisions of legacyInstructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
+          for (const revisions of instructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           await Promise.all(allSettings.map((setting) => setting.hydrate()));
         })();
       }
       return hydrated;
     },
-    getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
-      return writeQueue(`soul:${id}`, async () => {
-        if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
-        const legacy = legacySoulHistory.get(id) ?? [];
-        const append = (current: PersistedSoul): PersistedSoul => {
-          const revision: PersistedSoulRevision = {
+    getInstructions: (id) => instructionsCache.get(id)?.content ?? null,
+    getInstructionsDurable(id) {
+      return writeQueue(`instructions:${id}`, async () => {
+        loadInstructionsCache(id, await instructionsStore.get(id));
+        return instructionsCache.get(id)?.content ?? null;
+      });
+    },
+    setInstructions(id, content, updatedBy) {
+      return writeQueue(`instructions:${id}`, async () => {
+        if (!instructionsStore.update) throw new Error("instructions store does not support atomic updates");
+        const legacy = legacyInstructionsHistory.get(id) ?? [];
+        const append = (current: PersistedInstructions): PersistedInstructions => {
+          const revision: PersistedInstructionsRevision = {
             scopeId: id,
             content,
             version: current.version + 1,
@@ -545,10 +533,10 @@ export function createConfigStore(
             mutationId: randomBytes(12).toString("hex"),
           };
         };
-        let saved = await soulStore.update(id, append);
+        let saved = await instructionsStore.update(id, append);
         if (!saved) {
-          const baseVersion = souls.get(id)?.version ?? 0;
-          const revision: PersistedSoulRevision = {
+          const baseVersion = instructionsCache.get(id)?.version ?? 0;
+          const revision: PersistedInstructionsRevision = {
             scopeId: id,
             content,
             version: baseVersion + 1,
@@ -556,40 +544,40 @@ export function createConfigStore(
             ...(updatedBy ? { updatedBy } : {}),
           };
           const mutationId = randomBytes(12).toString("hex");
-          const candidate: PersistedSoul = { ...revision, history: [revision], mutationId };
-          const canonical = await soulStore.putIfAbsent(id, candidate);
-          saved = canonical.mutationId === mutationId ? canonical : await soulStore.update(id, append);
+          const candidate: PersistedInstructions = { ...revision, history: [revision], mutationId };
+          const canonical = await instructionsStore.putIfAbsent(id, candidate);
+          saved = canonical.mutationId === mutationId ? canonical : await instructionsStore.update(id, append);
         }
-        if (!saved) throw new Error("SOUL disappeared during atomic update");
-        legacySoulHistory.delete(id);
-        loadSoulCache(id, saved);
+        if (!saved) throw new Error("instructions disappeared during atomic update");
+        legacyInstructionsHistory.delete(id);
+        loadInstructionsCache(id, saved);
         return saved.version;
       });
     },
-    async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
-      return writeQueue(`soul:${id}`, async () => {
+    async setInstructionsIfVersion(id, expectedVersion, content, updatedBy) {
+      return writeQueue(`instructions:${id}`, async () => {
         const version = expectedVersion + 1;
-        const revision: PersistedSoulRevision = {
+        const revision: PersistedInstructionsRevision = {
           scopeId: id,
           content,
           version,
           updatedAt: Date.now(),
           ...(updatedBy ? { updatedBy } : {}),
         };
-        const legacyHistory = legacySoulHistory.get(id) ?? [];
+        const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
         const mutationId = randomBytes(12).toString("hex");
-        const candidate: PersistedSoul = { ...revision, history: [revision], mutationId };
-        const durable = await soulStore.get(id);
-        let saved: PersistedSoul;
+        const candidate: PersistedInstructions = { ...revision, history: [revision], mutationId };
+        const durable = await instructionsStore.get(id);
+        let saved: PersistedInstructions;
         if (!durable) {
-          if ((souls.get(id)?.version ?? 0) !== expectedVersion) return null;
-          const canonical = await soulStore.putIfAbsent(id, candidate);
+          if ((instructionsCache.get(id)?.version ?? 0) !== expectedVersion) return null;
+          const canonical = await instructionsStore.putIfAbsent(id, candidate);
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
         } else {
-          if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
+          if (!instructionsStore.update) throw new Error("instructions store does not support atomic updates");
           let accepted = false;
-          const updated = await soulStore.update(id, (current) => {
+          const updated = await instructionsStore.update(id, (current) => {
             if (current.version !== expectedVersion) return current;
             accepted = true;
             return {
@@ -603,72 +591,36 @@ export function createConfigStore(
           if (!accepted || !updated) return null;
           saved = updated;
         }
-        souls.set(id, { content: saved.content, version: saved.version });
-        soulHistory.set(id, saved.history ?? [revision]);
-        legacySoulHistory.delete(id);
+        instructionsCache.set(id, { content: saved.content, version: saved.version });
+        instructionsHistory.set(id, saved.history ?? [revision]);
+        legacyInstructionsHistory.delete(id);
         return saved.version;
       });
     },
-    soulVersion: (id) => souls.get(id)?.version ?? 0,
-    soulHistory: (id) => (soulHistory.get(id) ?? []).slice(0, 25),
-    captureSoulSnapshot(id) {
-      return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
+    instructionsVersion: (id) => instructionsCache.get(id)?.version ?? 0,
+    instructionsHistory: (id) => (instructionsHistory.get(id) ?? []).slice(0, 25),
+    captureInstructionsSnapshot(id) {
+      return writeQueue(`instructions:${id}`, async () => cloneInstructions(await instructionsStore.get(id)));
     },
-    restoreSoulSnapshot(id, snapshot) {
-      return writeQueue(`soul:${id}`, async () => {
+    restoreInstructionsSnapshot(id, snapshot) {
+      return writeQueue(`instructions:${id}`, async () => {
         try {
-          if (snapshot) await soulStore.put(id, cloneSoul(snapshot)!);
-          else await soulStore.delete(id);
-          const restored = await soulStore.get(id);
-          loadSoulCache(id, restored);
-          return sameSoul(restored, snapshot);
+          if (snapshot) await instructionsStore.put(id, cloneInstructions(snapshot)!);
+          else await instructionsStore.delete(id);
+          const restored = await instructionsStore.get(id);
+          loadInstructionsCache(id, restored);
+          return sameInstructions(restored, snapshot);
         } catch (error) {
-          loadSoulCache(id, await soulStore.get(id));
+          loadInstructionsCache(id, await instructionsStore.get(id));
           throw error;
         }
       });
     },
-    restoreSoulCacheSnapshot(id, snapshot) {
-      loadSoulCache(id, cloneSoul(snapshot));
+    restoreInstructionsCacheSnapshot(id, snapshot) {
+      loadInstructionsCache(id, cloneInstructions(snapshot));
     },
     getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
-    getSecurityPosture(id) {
-      const orgPosture = settings.securityPostures.get(org) ?? defaultSecurityPosture;
-      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPostures.get(id));
-    },
-    async getSecurityPostureDurable(id) {
-      const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
-      if (id === org) return orgPosture;
-      return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
-    },
-    async setSecurityPosture(id, posture) {
-      const effective =
-        id === org
-          ? posture
-          : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
-      await settings.securityPostures.set(id, effective);
-    },
-    getSharingPosture(id) {
-      const orgPosture = settings.sharingPostures.get(org) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPostures.get(id)]);
-    },
-    async getSharingPostureDurable(id) {
-      const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
-    },
-    getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
-    async resolveSharingPostureDurable(personalId, targetId) {
-      const [orgPosture, personalPosture, targetPosture] = await Promise.all(
-        [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
-      );
-      return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
-        personalId === org ? undefined : personalPosture,
-        targetId === org || targetId === personalId ? undefined : targetPosture,
-      ]);
-    },
-    setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
-    clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
     getApprovalGrantModes(id) {
       const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -850,10 +802,8 @@ export function createConfigStore(
     },
     async scopeConfigPresence(id) {
       const stores = {
-        soul: soulStore,
+        instructions: instructionsStore,
         commandPolicy: settings.commandPolicies.store,
-        securityPosture: settings.securityPostures.store,
-        sharingPosture: settings.sharingPostures.store,
         approvalGrantModes: settings.approvalGrantModes.store,
         egress: settings.egressPolicies.store,
         unfulfilledInsights: settings.unfulfilledInsights.store,
@@ -867,29 +817,29 @@ export function createConfigStore(
       return Object.fromEntries(present) as Record<keyof typeof stores, boolean>;
     },
     async refreshScope(id) {
-      const [soul, baseModel] = await Promise.all([
-        soulStore.get(id),
+      const [stored, baseModel] = await Promise.all([
+        instructionsStore.get(id),
         baseModelStore.get(id),
         ...allSettings.map((setting) => setting.refresh(id)),
       ]);
-      let refreshedSoul = soul;
-      const legacyHistory = legacySoulHistory.get(id) ?? [];
-      if (soul && soul.history === undefined && legacyHistory.length) {
-        const mergedHistory = mergeSoulHistory(soul.history, legacyHistory);
-        if (!isDeepStrictEqual(mergedHistory, soul.history ?? [])) {
-          refreshedSoul = soulStore.update
-            ? await soulStore.update(id, (current) =>
+      let refreshedInstructions = stored;
+      const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
+      if (stored && stored.history === undefined && legacyHistory.length) {
+        const mergedHistory = mergeInstructionsHistory(stored.history, legacyHistory);
+        if (!isDeepStrictEqual(mergedHistory, stored.history ?? [])) {
+          refreshedInstructions = instructionsStore.update
+            ? await instructionsStore.update(id, (current) =>
                 current.history !== undefined
                   ? current
-                  : { ...current, history: mergeSoulHistory(current.history, legacyHistory) },
+                  : { ...current, history: mergeInstructionsHistory(current.history, legacyHistory) },
               )
-            : { ...soul, history: mergedHistory };
+            : { ...stored, history: mergedHistory };
         }
-        legacySoulHistory.delete(id);
-      } else if (soul?.history !== undefined) {
-        legacySoulHistory.delete(id);
+        legacyInstructionsHistory.delete(id);
+      } else if (stored?.history !== undefined) {
+        legacyInstructionsHistory.delete(id);
       }
-      loadSoulCache(id, refreshedSoul);
+      loadInstructionsCache(id, refreshedInstructions);
       if (baseModel) baseModels.set(id, baseModel);
       else baseModels.delete(id);
     },

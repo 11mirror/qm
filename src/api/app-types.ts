@@ -81,7 +81,7 @@ import type {
   SearchOpts,
   SurfaceCache,
 } from "../surface-cache/surface-cache.ts";
-import { type BotPolicy, type ChannelPolicy, type ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
+import { type ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
@@ -417,16 +417,16 @@ export interface App {
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
-  getSoul(scopeId: ScopeId): {
+  getInstructions(scopeId: ScopeId): {
     scopeId: ScopeId;
-    soul: string | null;
-    soulVersion: number;
+    instructions: string | null;
+    instructionsVersion: number;
     orgScopeId: ScopeId;
-    orgSoul: string | null;
-    orgSoulVersion: number;
-    effectiveSoul: string;
+    orgInstructions: string | null;
+    orgInstructionsVersion: number;
+    effectiveInstructions: string;
   };
-  updateSoul(
+  updateInstructions(
     scopeId: ScopeId,
     content: string,
     actorId: string,
@@ -471,15 +471,6 @@ export interface App {
   searchSurface(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
   readSurfaceMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   listSurfaceContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
-  getChannelPolicy(container: string): Promise<ChannelPolicy | null>;
-  setChannelPolicy(
-    container: string,
-    orders: string,
-    setBy?: string,
-    bots?: Record<string, BotPolicy>,
-    sessionId?: string,
-    ambientEnabled?: boolean | null,
-  ): Promise<ChannelPolicy | null>;
   judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
@@ -727,17 +718,17 @@ export function toFileItem(a: FileArtifact): FileListItem {
   };
 }
 
-export class SoulUpdateDeniedError extends Error {
+export class InstructionsUpdateDeniedError extends Error {
   constructor() {
-    super("not authorized to update SOUL for this scope");
-    this.name = "SoulUpdateDeniedError";
+    super("not authorized to update instructions for this scope");
+    this.name = "InstructionsUpdateDeniedError";
   }
 }
 
-export class SoulVersionConflictError extends Error {
+export class InstructionsVersionConflictError extends Error {
   constructor() {
-    super("Guidance changed; read it and retry the edit.");
-    this.name = "SoulVersionConflictError";
+    super("Instructions changed; read them and retry the edit.");
+    this.name = "InstructionsVersionConflictError";
   }
 }
 

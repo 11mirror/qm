@@ -13,7 +13,6 @@ import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../f
 import { swallowAs } from "../util/errors.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
-import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 import { isUserMessage, type Item } from "../sessions/items.ts";
@@ -227,7 +226,6 @@ export function inboundIssuesNote(issues: readonly string[]): string {
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
   unavailable?: readonly string[];
-  blocked?: readonly string[];
   surfaceNotes?: readonly string[];
 }): string[] {
   const issues: string[] = [];
@@ -238,9 +236,6 @@ export function inboundIssueList(opts: {
   }
   if (opts.unavailable?.length) {
     issues.push(`${opts.unavailable.join(", ")} — no longer available (the upload may have expired)`);
-  }
-  if (opts.blocked?.length) {
-    issues.push(`${opts.blocked.join(", ")} — withheld by the external-data security screen`);
   }
   for (const n of opts.surfaceNotes ?? []) if (n.trim()) issues.push(n.trim());
   return issues;
@@ -288,18 +283,12 @@ export async function materializeInbound(
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
   inboxDir = INBOX_DIR,
-  screenText?: (input: {
-    content: string;
-    name: string;
-    mimetype: string;
-  }) => Promise<SecurityScreenVerdict | undefined>,
+  observeText?: (input: { content: string; name: string; mimetype: string }) => void,
 ): Promise<{
   metas: AttachmentMeta[];
   images: InboundImage[];
   tooMany: string[];
   unavailable: string[];
-  blocked: string[];
-  unscreened: string[];
   unstaged?: Set<string>;
 }> {
   let target: Promise<SandboxHandle | null> | undefined;
@@ -313,8 +302,6 @@ export async function materializeInbound(
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
   const unavailable: string[] = [];
-  const blocked: string[] = [];
-  const unscreened: string[] = [];
   const usedNames = new Set<string>();
   for (const a of attachments) {
     if (metas.length >= MAX_INBOUND_FILES) {
@@ -330,15 +317,8 @@ export async function materializeInbound(
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
-    const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
-    if (screenText && textContent !== null) {
-      const verdict = await screenText({ content: textContent, name, mimetype });
-      if (verdict?.decision === "strict") {
-        blocked.push(name);
-        continue;
-      }
-      if (!verdict || verdict.unscreened) unscreened.push(name);
-    }
+    const textContent = observeText ? decodeText(bytes, name, mimetype) : null;
+    if (observeText && textContent !== null) observeText({ content: textContent, name, mimetype });
     const box = await computer();
     if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
     const registered = register
@@ -370,7 +350,7 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
+  return { metas, images, tooMany, unavailable, ...(unstaged.size ? { unstaged } : {}) };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";

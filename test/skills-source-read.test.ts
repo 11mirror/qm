@@ -1,3 +1,4 @@
+import type { SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -139,9 +140,11 @@ test("a body read avoids sandbox work and a file request materializes that skill
   unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
   const visible = [resolution, unrelated];
   const handle = { id: "box", rootDir: "/workspace" };
+  let packBundle: SkillBundle | null = null;
   const turn = createTurnSandboxes({
     deps: {
       skills: { recordUse: async () => {} },
+      skillBundles: { get: async (id: string) => (id === "pack" ? packBundle : null) },
       sandboxResources: {
         access: async (_actor: string, id: string) => {
           if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
@@ -203,9 +206,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   await turn.useSkill("source-helper", "SKILL.md", "box");
   assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
-  resolution.screenedBundles = [
-    { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
-  ];
+  packBundle = {
+    packId: "pack",
+    commit: "c",
+    hash: "pack-hash",
+    files: [{ path: "lib.txt", content: "PACK_RESOURCE" }],
+  };
   const beforeResource = new Map(files);
   await turn.provisionResource("resource-1");
   assert.deepEqual(files, beforeResource);

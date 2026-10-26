@@ -33,14 +33,12 @@ import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import { tenant } from "../../tenant.ts";
 
 import type { TurnCtx } from "./turn-context.ts";
-import type { InboundScreen } from "./inbound-screen.ts";
 
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 export async function buildCredentialCatalog(
   ctx: TurnCtx,
   turn: {
-    securityPolicy: InboundScreen["securityPolicy"];
     strictReadOnly: boolean;
     sharingSources: Awaited<ReturnType<typeof resolveTurnContext>>["sharingSources"];
     delivery: ReturnType<typeof deliveryCandidatesFor>;
@@ -64,7 +62,7 @@ export async function buildCredentialCatalog(
     scopeId,
     isCurrentSharedScopeMember,
   } = ctx;
-  const { securityPolicy, strictReadOnly, sharingSources, delivery, defaultDestination, session } = turn;
+  const { strictReadOnly, sharingSources, delivery, defaultDestination, session } = turn;
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const openSpeakerKeychain =
     liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
@@ -73,12 +71,10 @@ export async function buildCredentialCatalog(
     input.origin.kind === "automation" &&
     input.origin.useOwnerKeychain === true &&
     conversation.kind !== "dm" &&
-    !!deps.config &&
     !!deps.isCurrentSharedScopeMember &&
     (await isOpenScopeMember({
       actorId: actor.id,
       scope: scopeId,
-      config: deps.config,
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
   const isolateOwnerKeychain = !external && (openSpeakerKeychain || openAutomationKeychain);
@@ -89,11 +85,7 @@ export async function buildCredentialCatalog(
   const credentialIdentities = new Map<string, string>();
 
   const authorizeOwnerCredentials = async (): Promise<void> => {
-    if (
-      (openSpeakerKeychain || openAutomationKeychain) &&
-      (!(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
-        (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
-    ) {
+    if ((openSpeakerKeychain || openAutomationKeychain) && !(await isCurrentSharedScopeMember(actor.id, scopeId))) {
       throw new Error("Open speaker keychain access is no longer authorized");
     }
   };
@@ -439,7 +431,7 @@ export async function buildCredentialCatalog(
       {
         ...scopeAttestation,
         aud: EGRESS_PROXY_AUD,
-        egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
+        egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? ""),
         exp: sandboxTokenExpiry,
       },
       egressSecret,

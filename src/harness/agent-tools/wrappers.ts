@@ -61,7 +61,6 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
-const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
 
@@ -98,7 +97,6 @@ export function withToolApprovalGate(
   return {
     ...tool,
     async execute(callId: string, params: unknown) {
-      const gate = ref.toolApprovalGate;
       const resourceTool = RESOURCE_TOOL_NAMES.has(tool.name);
       const resourceAction =
         resourceTool && isObj(params) && typeof params.action === "string" ? params.action : undefined;
@@ -128,28 +126,17 @@ export function withToolApprovalGate(
           true,
         );
       }
-      if (callKey ? !gate?.(approvalIdentity, callKey) : gate && !gate(approvalIdentity)) {
-        const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
-        ref.pendingApprovals?.push(
-          callKey
-            ? {
-                command: approvalCallText(commandLabel, params),
-                reason,
-                kind: "approval",
-                approvalKey: callKey,
-                summary: commandLabel,
-                grantModes: { session: false, always: false },
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-              }
-            : {
-                command: commandLabel,
-                reason,
-                kind: "approval",
-                approvalKey: `tool:${approvalIdentity}`,
-                ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-              },
-        );
+      if (callKey && !ref.toolApprovalGate?.(callKey)) {
+        const reason = declaredReason!;
+        ref.pendingApprovals?.push({
+          command: approvalCallText(commandLabel, params),
+          reason,
+          kind: "approval",
+          approvalKey: callKey,
+          summary: commandLabel,
+          grantModes: { session: false, always: false },
+          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+        });
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,

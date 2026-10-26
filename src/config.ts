@@ -17,12 +17,6 @@ import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
-  DEFAULT_SECURITY_POSTURE,
-  type SecurityPosture,
-  type SecurityScreenMode,
-} from "./security/security-posture.ts";
-import { DEFAULT_SHARING_POSTURE, type SharingPosture } from "./resolution/sharing-posture.ts";
-import {
   parseSlackContextSource,
   type SlackContextSource,
   slackPluginConfigFromEnv,
@@ -78,8 +72,6 @@ interface DeploymentConfig {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  securityPosture: SecurityPosture;
-  sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
@@ -156,7 +148,6 @@ interface DeploymentConfig {
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
-  securityScreen: SecurityScreenMode;
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -898,20 +889,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     );
   }
 
-  const ignoredPostureEnv = [
-    "HARNESS_SECURITY_POSTURE",
-    "HARNESS_SHARING_POSTURE",
-    "SECURITY_SCREEN",
-    "SECURITY_SCREEN_CLASSIFIER",
-    "SECURITY_SCREEN_BACKEND",
-    "SECURITY_SCREEN_ALL_POSTURES",
-    "SECURITY_SCREEN_PROXY_ROLLOUT",
-  ].filter((name) => env[name]?.trim());
-  if (ignoredPostureEnv.length) {
-    console.warn(
-      `[config] ${ignoredPostureEnv.join(", ")} ${ignoredPostureEnv.length === 1 ? "is" : "are"} no longer read: the default security posture is ${DEFAULT_SECURITY_POSTURE}, the default sharing posture is ${DEFAULT_SHARING_POSTURE}, and screening observes. Remove the variables.`,
-    );
-  }
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
@@ -981,9 +958,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
       : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
-    securityPosture: DEFAULT_SECURITY_POSTURE,
-    sharingPosture: DEFAULT_SHARING_POSTURE,
-    securityScreen: "observe",
     ...(hasProxyScreen
       ? { securityScreenProxy: { provider: proxyProvider!, endpoint: proxyEndpoint!, token: proxyToken! } }
       : {}),

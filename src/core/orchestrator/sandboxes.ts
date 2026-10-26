@@ -266,7 +266,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (laidTrees.has(treeKey)) return;
     const start = Date.now();
     try {
-      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
+      const bundles = deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : [];
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
       laidTrees.add(treeKey);
     } catch (err) {
@@ -329,17 +329,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const writableScopeId = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
-    if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
-      return false;
+    if (!openResourceAccess || actor.type !== "internal" || !deps.isCurrentSharedScopeMember) return false;
     const personal = personalScope(actor.id);
     for (const scope of new Set([scopeId, target])) {
-      if (scope === personal) {
-        if ((await deps.config.resolveSharingPostureDurable(personal, scope)) !== "open") return false;
-      } else if (
+      if (
+        scope !== personal &&
         !(await isOpenScopeMember({
           actorId: actor.id,
           scope,
-          config: deps.config,
           isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
         }))
       )
@@ -446,11 +443,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const provisionOwnerAuth = ownerAuthAvailable
     ? async (): Promise<SandboxHandle> => {
         // Recheck each command, including commands reusing this turn's isolated computer.
-        if (
-          openSpeakerKeychain &&
-          (!(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)) ||
-            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
-        )
+        if (openSpeakerKeychain && !(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)))
           throw new Error("Open speaker keychain access is no longer authorized");
         if (ownerAuthBox.handle) return ownerAuthBox.handle;
         if (ownerAuthBox.pending && !ownerAuthProvisionInFlight) {

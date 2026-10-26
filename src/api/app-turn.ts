@@ -22,7 +22,6 @@ import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import { type App, type AppDeps, STALE_LEASE_GRACE_MS } from "./app-types.ts";
-import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 import { isUserMessage } from "../sessions/items.ts";
@@ -421,18 +420,14 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
             origin.kind === "ambient" ? null : targetRun.request.actor.id,
             req.text,
           );
-          let injectedText = steerText;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
+            deps.orchestrator.observeSecuritySteer({
               payload: steerText,
               actor,
               conversation,
               ...(session ? { sessionId: session.id } : {}),
             });
-            if (decision === "block")
-              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : h.drive(targetRun.id);
-            if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
           const fileNames = (req.attachments ?? []).map((a) =>
             a.sourceId
@@ -442,7 +437,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
             ts: String(Date.now()),
-            text: injectedText,
+            text: steerText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
           };

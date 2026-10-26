@@ -5,12 +5,12 @@ import { SettingsState, load as loadSettings, states as settingsStates } from ".
 import { CredentialState } from "../../src/admin/settings-credentials.ts";
 import { GovernanceState, load, states } from "../../src/admin/governance-state.ts";
 
-test("governance posture saves refresh only the saved card", () => {
-  load({ securityPosture: "auto", sharingPosture: "isolated" }, "org:test");
-  states.get("sharing-posture")!.change("sharing-posture", "open");
-  load({ securityPosture: "strict", sharingPosture: "isolated" }, "org:test", "security-posture");
-  assert.equal(states.get("sharing-posture")!.draft.posture, "open");
-  assert.equal(states.get("sharing-posture")!.dirty, true);
+test("governance saves refresh only the saved card", () => {
+  load({ orgAmbient: true, autoFlagger: { modelId: "a", rubric: "r" } }, "org:test");
+  states.get("org-ambient")!.change("governance-org-ambient", false);
+  load({ orgAmbient: true, autoFlagger: { modelId: "a", rubric: "saved" } }, "org:test", "auto-flagger");
+  assert.equal(states.get("org-ambient")!.draft.on, false);
+  assert.equal(states.get("org-ambient")!.dirty, true);
 });
 
 test("the org ambient reply policy collects exactly the toggled value", () => {
@@ -95,8 +95,8 @@ test("credential edits carry the loaded revision and preserve injection settings
   });
 });
 
-test("SOUL saves carry the expected version", () => {
-  const state = new SettingsState("soul");
+test("instructions saves carry the expected version", () => {
+  const state = new SettingsState("instructions");
   state.draft = { content: "test", expectedVersion: 4 };
   assert.equal(state.collect().expectedVersion, 4);
 });

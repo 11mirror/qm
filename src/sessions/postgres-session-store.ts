@@ -62,7 +62,7 @@ import {
   USER_ITEM_KINDS,
   USER_KINDS,
 } from "./items.ts";
-import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
+import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-screen.ts";
 
 const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;

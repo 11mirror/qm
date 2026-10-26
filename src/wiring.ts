@@ -589,8 +589,6 @@ export function buildApp(
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
-    defaultSecurityPosture: config.securityPosture,
-    defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   const skills: SkillStore = createSkillStore({
@@ -721,12 +719,7 @@ export function buildApp(
     config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
       ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
       : undefined;
-  const resolution = createResolutionService(
-    config.orgId,
-    configStore,
-    acl,
-    config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
-  );
+  const resolution = createResolutionService(config.orgId, configStore, acl);
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
   const blobTransfer: BlobTransferStore = config.s3Bucket
@@ -995,7 +988,7 @@ export function buildApp(
           actorId: "system:sandbox-create",
           scopeId,
           aud: EGRESS_PROXY_AUD,
-          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? "", true),
+          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? ""),
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
@@ -1304,7 +1297,7 @@ export function buildApp(
     return routed.choice;
   });
 
-  if (config.securityScreen === "off" || config.securityScreenProxy) {
+  if (config.securityScreenProxy) {
     delete harness.models.screenSecurity;
   }
 
@@ -1698,7 +1691,7 @@ export function buildApp(
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
   });
   let securityScreener = overrides.securityScreener;
-  if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
+  if (!securityScreener && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
       ...config.securityScreenProxy,
       timeoutMs: config.securityScreenTimeoutMs,

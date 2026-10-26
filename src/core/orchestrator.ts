@@ -1,10 +1,10 @@
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
-import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
+import { type ScopeId, type TurnResult } from "../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
 import type { GapWork } from "../harness/harness.ts";
-import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-posture.ts";
+import { securityScreenPayload } from "../security/security-screen.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -15,7 +15,7 @@ import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orches
 import { admitTurn } from "./orchestrator/admit.ts";
 import { holdTurnLease } from "./orchestrator/turn-lease.ts";
 import { openTurnSession, resolveTurnScope, resolveTurnWorkspace } from "./orchestrator/turn-context.ts";
-import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
+import { observeInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
 import { concludeTurn, mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
@@ -26,15 +26,11 @@ import { buildTurnTools, firstAckPublisher } from "./orchestrator/turn-tools.ts"
 import { prepareTurnInput, turnFailureUserItem } from "./orchestrator/turn-input.ts";
 import { selectTurnRuntime } from "./orchestrator/turn-runtime.ts";
 import { createHarnessSegment, runSegments, type TurnRunState } from "./orchestrator/turn-segment.ts";
-import {
-  consumeApprovalDecision,
-  loadApprovalLedger,
-  type QuarantineReleaseApproval,
-} from "./orchestrator/approvals.ts";
+import { consumeApprovalDecision, loadApprovalLedger } from "./orchestrator/approvals.ts";
 import { createSessionTitles } from "./session-title.ts";
 import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createSecurityObserver } from "./orchestrator/security-screen.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -85,11 +81,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     return byId;
   }
 
-  const securitySteersInFlight = new Set<string>();
   const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
     createCompaction(deps);
 
-  const classifySecurityData = createSecurityClassifier(deps);
+  const observeSecurityData = createSecurityObserver(deps);
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -99,75 +94,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   });
 
   const orchestrator: Orchestrator = {
-    async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
-      const resolution = await deps.resolution.resolve(conversation, actor);
-      const { screening } = resolution.securityPolicy;
-      if (screening === "off") return "allow";
-      const scopeLabel = deps.resolution.scopeFor(conversation, actor);
+    observeSecuritySteer({ payload, actor, conversation, sessionId }) {
       const bounded = securityScreenPayload({
         surface: "external",
         text: "",
         triggered: true,
         securityScreenData: payload,
       });
-      const steerContext = {
+      if (!bounded || bounded.truncated) return;
+      void observeSecurityData(bounded.content, actor.id, deps.resolution.scopeFor(conversation, actor), {
         hook: "user_input",
         surface: "steer",
         origin: "ambient",
         thread: conversation.threadRef,
         ...(sessionId ? { sessionId } : {}),
-      } as const;
-      if (screening === "observe") {
-        if (bounded && !bounded.truncated)
-          await classifySecurityData(bounded.content, actor.id, scopeLabel, undefined, {
-            ...steerContext,
-            mode: "observe",
-          });
-        return "allow";
-      }
-      const block = (cause: string, reason?: string): "block" => {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "security_posture.steer_block",
-          resource: conversation.threadRef,
-          scopeLabel,
-          status: "strict",
-          detail: JSON.stringify({ cause, ...(reason ? { reason } : {}) }),
-        });
-        return "block";
-      };
-      if (!deps.securityScreener && !deps.harness.models.screenSecurity) return block("no-screener");
-      if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
-      if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
-      if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
-      if (!bounded || bounded.truncated) return block("oversize-input");
-      securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await classifySecurityData(
-        bounded.content,
-        actor.id,
-        scopeLabel,
-        sessionId
-          ? async (rec, signal) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel }, signal);
-            }
-          : undefined,
-        { ...steerContext, mode: "enforce" },
-      ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
-      if (verdict?.decision === "auto") {
-        if (!verdict.unscreened) return "allow";
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "security_posture.steer_failed_open",
-          resource: conversation.threadRef,
-          scopeLabel,
-          status: "allowed",
-          detail: JSON.stringify({ cause: UNSCREENED_REASON }),
-        });
-        return "unscreened";
-      }
-      return block("strict-verdict", verdict?.reason);
+      });
     },
 
     async regenerateTitle(sessionId, principalId, participantIds) {
@@ -215,10 +156,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } = admission.admitted;
       const ctx = await resolveTurnScope(deps, admission.admitted);
       const { resolution, actorGrants, scopeId, reconcileSessionParticipants } = ctx;
-      const screened = await screenInboundTurn(ctx, { classifySecurityData, blobTransfer });
-      if ("result" in screened) return screened.result;
-      const { securityPolicy, enforceScreen, screenTrace, pendingScreenRequests, recordScreenRequest } =
-        screened.screen;
+      const screenTrace = observeInboundTurn(ctx, { observeSecurityData, blobTransfer });
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
@@ -228,15 +166,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resolution.grantedHandles = context.listFiles();
       let memoryView = await context.memorySnapshot(false);
       const framed = await frameTurnPrompt(ctx, {
-        securityPolicy,
-        enforceScreen,
         screenTrace,
-        recordScreenRequest,
         useMemory,
         context,
         memoryScopeId,
         memoryStrategy,
-        classifySecurityData,
+        observeSecurityData,
       });
       let systemPrompt = framed.systemPrompt;
       const { turnContextBlocks, delivery, defaultDestination, configuredProviders, timeBlock, onboardingBlock } =
@@ -268,11 +203,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeLabel: scopeId,
       });
 
-      let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
       const approvalLedger = loadApprovalLedger(await actorGrants(), session.id, resolution.approvalGrantModes);
-      const quarantineReleaseApprovals: QuarantineReleaseApproval[] = [];
       const catalog = await buildCredentialCatalog(ctx, {
-        securityPolicy,
         strictReadOnly,
         sharingSources,
         delivery,
@@ -325,7 +257,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       try {
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
-          await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
@@ -348,20 +279,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const decided = await consumeApprovalDecision({
             deps,
             decision: input.approval,
-            surface: input.surface,
             sessionId: session.id,
             lease,
             actorId: actor.id,
             scopeId,
             resolution,
-            audience: conversation.audience,
             ledger: approvalLedger,
             withRosterVersion: withManagedRosterVersion,
             mirror: mirrorRunActivity,
           });
           if (decided.kind === "settled") return decided.result;
-          releasedToolOutput = decided.releasedToolOutput;
-          systemPrompt += decided.promptNote;
         }
 
         const finished = await finishSystemPrompt(ctx, {
@@ -421,14 +348,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const { spine, surfaceToolDeps, attachStaging } = turnTools;
         const prepared = await prepareTurnInput(ctx, {
-          screen: screened.screen,
+          screenTrace,
           strictReadOnly,
           context,
           framed,
           session,
           isRetry,
           recordedTurn,
-          releasedToolOutput,
           provision,
           lease,
           turnAbort,
@@ -439,7 +365,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           blobTransfer,
           documentTokenBudget,
           compactContextIfNeeded,
-          classifySecurityData,
+          observeSecurityData,
         });
         run.contextRecovered = prepared.contextRecovered;
         run.remainingDocumentBytes = prepared.remainingDocumentBytes;
@@ -455,12 +381,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const turnStart = Date.now();
         const emittedEntries: Item[] = [];
-        const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
+        const syntheticPrompt = syntheticInput || partial || approvalReplay;
         run.failureUserItem = syntheticPrompt ? undefined : turnFailureUserItem(ctx, inboundIssues);
         const selected = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
         const { restoredRuntime } = selected;
         const runHarnessSegment = createHarnessSegment(ctx, {
-          screen: screened.screen,
+          screenTrace,
           framed,
           approvalLedger,
           provision,
@@ -473,7 +399,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryView,
           systemPrompt,
           session,
-          quarantineReleaseApprovals,
           gapWork,
           emitGapWork,
           lease,
@@ -484,7 +409,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           emittedEntries,
           syntheticPrompt: Boolean(syntheticPrompt),
           blobTransfer,
-          classifySecurityData,
+          observeSecurityData,
         });
         run.runtimeHandoffs = restoredRuntime ? 1 : 0;
         const result = await runSegments(ctx, {
@@ -533,7 +458,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let finalResult = await settleTurnResult(ctx, {
           session,
           strictReadOnly,
-          quarantineReleaseApprovals,
           hasSurfaceToolDeps: Boolean(surfaceToolDeps),
           isPollFire,
           emittedEntries,

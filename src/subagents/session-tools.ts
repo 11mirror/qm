@@ -146,7 +146,6 @@ export interface SessionSyscalls {
 }
 
 export interface SessionSyscallsFactory {
-  rejectMessage?(sessionId: string, messageId: string): Promise<void>;
   forTurn(binding: SessionSyscallBinding): SessionSyscalls;
 }
 
@@ -275,7 +274,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
-    rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
       const callerTitle = binding.session.title?.trim() || "this conversation";
 

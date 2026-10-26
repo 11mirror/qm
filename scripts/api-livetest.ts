@@ -20,7 +20,10 @@ const built = buildApp({
   runStore: "memory",
 });
 await built.start();
-await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");
+await built.config.setInstructions(
+  scopeId("personal", "USOUL"),
+  "When you reply, always end with the exact token --AGENT-X.",
+);
 mkdirSync(join(DATA, "workspaces", "org__acme"), { recursive: true });
 writeFileSync(join(DATA, "workspaces", "org__acme", "announce.txt"), "GLOBAL-ANNOUNCE-OK: org-wide announcement.\n");
 

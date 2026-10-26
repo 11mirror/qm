@@ -19,7 +19,7 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 function recordSessionBusy(
   deps: Pick<OrchestratorDeps, "errors">,
   busy: {
-    site: "turn" | "quarantined_input" | "flagged_input";
+    site: "turn";
     attempt: LeaseAttempt;
     waitedMs?: number;
     sessionId: string;
@@ -50,7 +50,7 @@ export async function acquireTurnLeaseOrRefuse(
   deps: Pick<OrchestratorDeps, "errors" | "sessions" | "turnLeaseWaitMs">,
   args: {
     sessionId: string;
-    site: "turn" | "flagged_input";
+    site: "turn";
     scopeId: ScopeId;
     automated: boolean;
     runId?: string;

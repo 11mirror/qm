@@ -242,12 +242,13 @@ interface SurfaceSearchStoreHit {
 
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
-  screenSecuritySteer(input: {
+  /** Observe a mid-turn message with the security screen; never blocks the steer. */
+  observeSecuritySteer(input: {
     payload: string;
     actor: Principal;
     conversation: Conversation;
     sessionId?: string;
-  }): Promise<"allow" | "block" | "unscreened">;
+  }): void;
   regenerateTitle(
     sessionId: string,
     principalId: string,

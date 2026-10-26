@@ -121,7 +121,7 @@ import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
-} from "../security/security-posture.ts";
+} from "../security/security-screen.ts";
 import { errMessage } from "../util/errors.ts";
 import { createGrindMeter } from "./grind.ts";
 import {
@@ -1376,7 +1376,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         pendingApprovals: [],
         silentRequested: false,
         pollFire: !!dispatched.pollFire,
-        screenToolResult: dispatched.screenToolResult,
+        observeToolResult: dispatched.observeToolResult,
         governGoal: dispatched.governGoal,
         saveGoal: dispatched.saveGoal,
         emit: dispatched.emit,
@@ -1677,7 +1677,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.onGapWork = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
-          entry.ref.screenToolResult = undefined;
+          entry.ref.observeToolResult = undefined;
         }
         if (persistError) throw persistError;
         if (wallClockTurnFailure(wallClock, stop.userAborted, turn.cancel?.aborted === true)) {
