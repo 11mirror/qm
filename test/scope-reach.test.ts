@@ -252,7 +252,6 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
   await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });
@@ -276,7 +275,6 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
   await call(execute, { command: "x", scope: "scratch", purpose: "Run test command" });
@@ -286,7 +284,7 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
   await call(execute, { command: "x", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, undefined);
   const e = textOf(await call(execute, { command: "x", scope: "scratch", durable: true, purpose: "Run test command" }));
-  assert.match(e, /scratch box cannot be made durable/);
+  assert.match(e, /invalid execute arguments/);
 });
 
 test("reachExec ON: the scoped/scratch keywords match case-insensitively, never routed as a room", async () => {

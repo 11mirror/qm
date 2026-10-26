@@ -683,7 +683,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     callId: string,
     params: {
       command: string;
-      computer?: string;
       sandbox_id?: string | null;
       backend?: string;
       name?: string;
@@ -696,7 +695,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    if (params.computer) throw new Error("Computer actions moved to the sandbox tool; migrate has been retired.");
     let scopeNote: { scope?: string } = {};
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
@@ -769,10 +767,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
     recordFail(callId, summary, message);
 
-  const SCRATCH_DURABLE_ERROR =
-    '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
-  const SCOPED_EPHEMERAL_ERROR =
-    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
   const outboundFilesSchema = Type.Array(
     Type.Union([
       Type.String({ minLength: 1 }),
@@ -789,8 +783,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
   const FILE_SEND_GUIDANCE =
     "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
-  const DURABLE_PARAM_DESC =
-    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
   const scopedBullet =
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
@@ -808,9 +800,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
-    (scratchExec
-      ? "`durable` defaults to true on scoped and false on scratch — the only supported pairings today; it doesn't apply to a reached room.\n"
-      : "") +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
@@ -818,7 +807,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     scopedBullet +
     '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
     scratchBullet +
-    "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
 
@@ -826,24 +814,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     callId: string,
     params: {
       command: string;
-      computer?: string;
       timeout_seconds?: number;
       purpose?: string;
       scope?: string;
-      durable?: boolean;
       credentials?: string[];
     },
   ) => {
     const scope = (params.scope ?? "scoped").trim();
     const keyword = scope.toLowerCase();
-    const durable = params.durable;
-    if (keyword === "scoped") {
-      if (durable === false) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
-      }
-      return runExecute(callId, params, { scratch: false });
-    }
+    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
     if (keyword === "scratch") {
       if (!scratchExec) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
@@ -853,23 +832,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           '[error] a scratch box isn\'t available here — use scope:"scoped" or name a room like "#project-alpha".',
         );
       }
-      if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
-      }
       return runExecute(callId, params, { scratch: true });
     }
-    if (keyword === "owner") {
-      if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "owner_durable" },
-          "[error] an owner-auth box is invocation-only and cannot be durable — drop `durable`.",
-        );
-      }
-      return runExecute(callId, params, { ownerAuth: true });
-    }
+    if (keyword === "owner") return runExecute(callId, params, { ownerAuth: true });
     return runExecute(callId, params, { reachTarget: scope });
   };
 
@@ -895,7 +860,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               },
             ),
           ),
-      durable: optionalBoolean(reachExec ? `${DURABLE_PARAM_DESC} Ignored when reaching a room.` : DURABLE_PARAM_DESC),
     }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
   });
@@ -1848,11 +1812,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
     await recordCall(callId, { ...params, tool: "execute", background: true });
-    if (
-      (params.scope ?? "scoped").trim().toLowerCase() !== "scoped" ||
-      params.durable === false ||
-      params.sandbox_id === null
-    )
+    if ((params.scope ?? "scoped").trim().toLowerCase() !== "scoped" || params.sandbox_id === null)
       return invalidExecute(
         callId,
         { tool: "execute", background: true },
