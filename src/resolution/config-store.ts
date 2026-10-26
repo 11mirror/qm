@@ -153,8 +153,6 @@ export interface ScopedConfigStore {
   getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
   setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection): Promise<void>;
   clearPurposeRuntime(purpose: RuntimePurpose): Promise<void>;
-  getBaseModel(id: ScopeId): string | null;
-  setBaseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getRuntimeSelection(id: ScopeId): ScopedRuntimeSelection | null;
   setRuntimeSelection(id: ScopeId, selection: RuntimeSelection | null): Promise<void>;
   acknowledgeRuntimeSelection(id: ScopeId): Promise<void>;
@@ -171,10 +169,8 @@ export interface ScopedConfigStore {
   getIndividualModelAuthDurable(principalId?: string): Promise<boolean>;
   setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai"): Promise<void>;
   getModelAccountDurable(principalId: string): Promise<ModelAccount>;
-  getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
   getWebuiModels(id: ScopeId): string[] | null;
   setWebuiModels(id: ScopeId, ids: string[] | null): Promise<void>;
-  getBaseModelDurable(id: ScopeId): Promise<string | null>;
   getWebuiModelsDurable(id: ScopeId): Promise<string[] | null>;
   getAckEmoji(id: ScopeId): string[] | null;
   setAckEmoji(id: ScopeId, names: string[] | null): Promise<void>;
@@ -729,17 +725,6 @@ export function createConfigStore(
     },
     setPurposeRuntime,
     clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
-    getBaseModel: (id) => baseModels.get(id)?.modelId ?? null,
-    async setBaseModel(id, modelId) {
-      await writeQueue(`model:${id}`, async () => {
-        const saved = await updateBaseModelRow(id, (current) => {
-          if (modelId === null) return withoutRuntime(id, current);
-          return { ...current, scopeId: id, modelId };
-        });
-        cacheBaseModel(id, saved);
-      });
-      noteRuntimeSelectionChanged(id);
-    },
     getRuntimeSelection: (id) => runtimeSelection(baseModels.get(id)),
     async setRuntimeSelection(id, selection) {
       await writeQueue(`model:${id}`, async () => {
@@ -792,10 +777,6 @@ export function createConfigStore(
       const id = scopeId("personal", principalId);
       await settings.individualModelAuth.store.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
     },
-    getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
-    getBaseModelDurable: async (id) =>
-      (await baseModelStore.get(id))?.modelId ??
-      (id === org ? null : ((await baseModelStore.get(org))?.modelId ?? null)),
     getWebuiModels: (id) => settings.webuiModels.get(id) ?? null,
     setWebuiModels: (id, ids) => settings.webuiModels.set(id, ids?.length ? ids : null),
     getWebuiModelsDurable: async (id) =>

@@ -929,7 +929,7 @@ test("browse follows a live org base model change, not the process-start default
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "claude-opus-5", "starts on the deployment default");
 
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setRuntimeSelection("org:default-org", { modelId: "gpt-5.6-sol" });
   res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live2" } }));
   assert.equal(res.status, "ok");
   assert.equal(

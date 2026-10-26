@@ -187,7 +187,7 @@ test("a configured base model the cold catalog cannot resolve stays listed witho
     openrouter: true,
   }));
   for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
-    await srv.built.config.setBaseModel("org:default-org", modelId);
+    await srv.built.config.setRuntimeSelection("org:default-org", { modelId });
     const response = await fetch(srv.base + scopePath + "?view=models", { headers: ADMIN });
     assert.equal(response.status, 200);
     const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };

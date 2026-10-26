@@ -268,7 +268,7 @@ test(
     await a.setSharingPosture(ch, "open");
     await a.setApprovalGrantModes(ch, { session: false, always: true });
     await a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
-    await a.setBaseModel(ch, "claude-opus-4-8");
+    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
     await a.setBrowseMaxSteps(ch, 120);
     await a.setBrowseModel(ch, "claude-sonnet-4-6");
     await settle(
@@ -299,7 +299,7 @@ test(
       { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },
       "the egress policy survived",
     );
-    assert.equal(b.getBaseModel(ch), "claude-opus-4-8", "the base model survived");
+    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, "claude-opus-4-8", "the base model survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
     assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
   },
@@ -319,8 +319,8 @@ test(
       lastVersion = await a.setSoul(ch, `soul v${i}`);
       await a.setEgress(ch, { allowedHosts: [`host${i}.example`], deniedHosts: [] });
     }
-    await a.setBaseModel(ch, "claude-opus-4-8");
-    await a.setBaseModel(ch, null);
+    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
+    await a.setRuntimeSelection(ch, null);
     await a.setBrowseMaxSteps(ch, 60);
     await a.setBrowseMaxSteps(ch, null);
     await a.setBrowseModel(ch, "claude-sonnet-4-6");
@@ -343,7 +343,7 @@ test(
       { allowedHosts: ["host8.example"], deniedHosts: [] },
       "the durable egress ends on the last write",
     );
-    assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
+    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, null, "a cleared base model stays cleared after restart");
     assert.equal(b.getBrowseMaxSteps(ch), null, "a cleared browse step limit stays cleared after restart");
     assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
   },

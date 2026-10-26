@@ -92,15 +92,13 @@ export async function runtimeConfigBody(
       ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
       : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
-  const orgLegacyModel = orgStored ? null : await config.getBaseModelOwnDurable(org);
-  let orgDefault: RuntimeChoice & { revision: number } = { ...fallback, revision: orgStored?.revision ?? 0 };
-  if (orgStored) orgDefault = { ...storedChoice(orgStored), revision: orgStored.revision ?? 0 };
-  else if (orgLegacyModel) orgDefault = { modelId: orgLegacyModel, revision: 0 };
+  const orgDefault: RuntimeChoice & { revision: number } = orgStored
+    ? { ...storedChoice(orgStored), revision: orgStored.revision ?? 0 }
+    : { ...fallback, revision: 0 };
   const stored = scope === org ? orgStored : await config.getRuntimeSelectionDurable(scope);
-  const legacyModel = scope === org ? null : await config.getBaseModelOwnDurable(scope);
-  let scopeOverride: (RuntimeChoice & { orgRevision?: number }) | null = null;
-  if (stored) scopeOverride = { ...storedChoice(stored), orgRevision: stored.orgRevision };
-  else if (legacyModel) scopeOverride = { modelId: legacyModel, orgRevision: 0 };
+  const scopeOverride: (RuntimeChoice & { orgRevision?: number }) | null = stored
+    ? { ...storedChoice(stored), orgRevision: stored.orgRevision }
+    : null;
   const effective = purpose
     ? await resolveRuntimeChoiceDurable(config, org, scope, fallback, requested, undefined, purpose)
     : (scopeOverride ?? orgDefault);
@@ -177,7 +175,7 @@ export async function webuiModelEnabled(
   if (picker.length === 0) return false;
   const org = tenant().orgScope;
   const stored = await config.getRuntimeSelectionDurable(org);
-  const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
+  const orgModel = stored?.modelId ?? runtimeFallback(ctx).modelId;
   const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;
   return modelId === orgModel || modelId === purposeModel;
 }

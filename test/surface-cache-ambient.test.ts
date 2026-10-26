@@ -347,7 +347,11 @@ test("a judge failure leaves the batch unjudged so the next pass judges it again
     await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "!judge-down", createdAt: 1 }]);
     assert.equal((await built.app.judgeAmbientContainer("slack", container)).act, false);
-    assert.deepEqual(await built.ambientJudgments!.list({ scope: container }), [], "a failed judge records no judgment");
+    assert.deepEqual(
+      await built.ambientJudgments!.list({ scope: container }),
+      [],
+      "a failed judge records no judgment",
+    );
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "launch moved", createdAt: 1 }]);
     await built.app.judgeAmbientContainer("slack", container);
     const rows = await built.ambientJudgments!.list({ scope: container });
@@ -543,7 +547,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildTestApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setRuntimeSelection("org:default-org", { modelId: "gpt-5.6-sol" });
   built.runtime.start();
   try {
     const container = "C-admin-base";

@@ -26,7 +26,7 @@ test("browser follows durable user AI access and personal model defaults", async
   assert.equal(selected.account, "openai");
   assert.equal(selected.routing?.provider, "openai");
   assert.equal(selected.routing?.kind, "apikey");
-  await built.config.setBaseModel("personal:U1", "gpt-5.6-terra");
+  await built.config.setRuntimeSelection("personal:U1", { modelId: "gpt-5.6-terra" });
   assert.equal((await resolveBrowserModel(input)).model, "gpt-5.6-terra");
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
   selected = await resolveBrowserModel(input);
@@ -47,7 +47,7 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
     expiresAt: Date.now() + 3600_000,
   });
   await built.config.setPersonalModelAuth("U1", true, "openai");
-  await built.config.setBaseModel("personal:U1", "gpt-6-astra");
+  await built.config.setRuntimeSelection("personal:U1", { modelId: "gpt-6-astra" });
   const selection = await resolveBrowserModel({
     actorId: "U1",
     config: built.config,
