@@ -3,7 +3,6 @@ import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { Cron, InboxItem, TurnRequest } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { hashId } from "../util/crypto.ts";
-import { fencedCodeBlocks } from "../util/markdown.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import type { InboxLedger } from "./ledger.ts";
 import { agentSourcePayload, ledgerState } from "./view.ts";
@@ -66,30 +65,12 @@ function followUpPrompt(cron: Cron, item: InboxItem, message: string): string {
           "If the API reports a draft conflict, stop and ask the person to review the new draft; never retry with a newer version automatically. Do not claim a send succeeded unless the API confirms it. Do not send an actioned or dismissed item.",
         ].join("\n")
       : "Reply conversationally. Carry out what the person asks for this item, within the cron task below.",
-    'If they asked you to change the proposal without sending, end your reply with a fenced json block: {"proposal": {<the complete revised proposal, same shape as the one above>}}. Leave the block out when the proposal is unchanged or the reply was sent.',
+    `If they asked you to change the proposal without sending, save it with POST $AGENT_API_URL/v1/crons/${encodeURIComponent(cron.id)}/items/${encodeURIComponent(item.id)}/action with the x-agent-capability: $AGENT_API_TOKEN header and JSON {"kind":"edit","args":{"proposal":<the complete revised proposal, same shape as the one above>${item.proposal ? `,"expectedProposalAt":${item.proposal.at}` : ""}}}. Skip it when the proposal is unchanged or the reply was sent.`,
     "[End inbox item chat]",
     "",
     "Cron task:",
     promptText(cron.action ?? ""),
   ].join("\n");
-}
-
-function proposalOf(reply: string): { text: string; proposal?: Record<string, unknown> } {
-  const blocks = fencedCodeBlocks(reply);
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    let value: unknown;
-    try {
-      value = JSON.parse(blocks[i]!.body);
-    } catch {
-      continue;
-    }
-    const proposal = value && typeof value === "object" ? (value as Record<string, unknown>).proposal : undefined;
-    if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)) break;
-    const block = blocks[i]!;
-    const text = `${reply.slice(0, block.start).trimEnd()}\n\n${reply.slice(block.end).trimStart()}`.trim();
-    return { text: text || reply.trim(), proposal: proposal as Record<string, unknown> };
-  }
-  return { text: reply.trim() };
 }
 
 function turnFailure(outcome: TriggerOutcome): string | null {
@@ -121,7 +102,7 @@ export function createInboxChat(deps: { items: InboxLedger; trigger: TriggerDeps
         await deps.items.appendThread(item.id, [{ role: "system", text: `The agent could not answer: ${failure}` }]);
         throw new Error(failure);
       }
-      const { text, proposal } = proposalOf(outcome.reply ?? "");
+      const text = (outcome.reply ?? "").trim();
       if (text)
         await deps.items.appendThread(item.id, [
           {
@@ -129,16 +110,6 @@ export function createInboxChat(deps: { items: InboxLedger; trigger: TriggerDeps
             text: text.length <= THREAD_MESSAGE_MAX ? text : `${text.slice(0, THREAD_MESSAGE_MAX - 3)}...`,
           },
         ]);
-      if (proposal) {
-        const adapter = adapterForItem(asked);
-        const data = adapter ? adapter.parseProposal(proposal) : proposal;
-        if (data)
-          await deps.items.setProposal(item.id, {
-            data,
-            by: "agent",
-            ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-          });
-      }
       return deps.items.get(item.id);
     },
   };

@@ -1,6 +1,6 @@
 const APP_LINK = /\[([^[\]\n]+)\]\((\/d\/[^\s)[]+)\)/g;
 
-export interface FencedCodeBlock {
+interface FencedCodeBlock {
   start: number;
   end: number;
   body: string;
@@ -17,7 +17,7 @@ function fenceRun(line: string): string | undefined {
   return line.slice(indent, run);
 }
 
-export function fencedCodeBlocks(text: string): FencedCodeBlock[] {
+function fencedCodeBlocks(text: string): FencedCodeBlock[] {
   const blocks: FencedCodeBlock[] = [];
   let open: { start: number; run: string; bodyStart: number } | undefined;
   let offset = 0;
