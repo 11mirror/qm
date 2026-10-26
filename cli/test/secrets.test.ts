@@ -182,7 +182,7 @@ test("AWS public app domains require and route their gate secret to core", () =>
   const disabled = makeConfig({ target: "aws" });
   assert.ok(!computedSecrets(disabled).some((secret) => secret.name === "AWS_DEPLOY_GATE_SECRET"));
 
-  const enabled = makeConfig({ target: "aws", env: { core: { AWS_DEPLOY_APPS_DOMAIN: "apps.example.com" } } });
+  const enabled = makeConfig({ target: "aws", env: { core: { DEPLOY_APPS_DOMAIN: "apps.example.com" } } });
   const gate = secretByName(enabled, "AWS_DEPLOY_GATE_SECRET");
   assert.equal(gate.required, true);
   assert.deepEqual(runtimeSecretNames("core", gate), ["AWS_DEPLOY_GATE_SECRET"]);

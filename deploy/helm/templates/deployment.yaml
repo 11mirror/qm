@@ -86,7 +86,7 @@ spec:
           {{- end }}
           {{- if $root.Values.publicUrl }}
           {{- if eq $name "core" }}
-          {{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}
+          {{- $_ := set $wired "PUBLIC_API_URL" $root.Values.publicUrl }}
           {{- $_ := set $wired "PUBLIC_WEB_URL" $root.Values.publicUrl }}
           {{- end }}
           {{- if eq $name "portal" }}

@@ -9,7 +9,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/porta
 const CORE = () => (process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "");
 const SECRET = () => process.env.CORE_SIGNING_SECRET ?? "";
 const APPS_DOMAIN = () => process.env.DEPLOY_APPS_DOMAIN ?? "";
-const SESSION_SECRET = () => process.env.DEPLOY_APPS_SESSION_SECRET ?? "";
+const SESSION_SECRET = () => process.env.PORTAL_SESSION_SECRET ?? "";
 const EVENTS_URL = () =>
   process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`;
 

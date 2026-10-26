@@ -162,7 +162,7 @@ function derivedValues(
   const corePublicHosts = webEdge ? awsCoreHostnames(config) : [];
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
-      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
+      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or DEPLOY_APPS_DOMAIN",
     );
   }
   if (webEdge && !declared.includes("public_port")) {

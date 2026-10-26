@@ -2081,7 +2081,6 @@ export function buildApp(
     providerKeys,
     modelProviders: providerKeys,
     runWaitMs: config.runWaitMs,
-    inlineTurns: config.roles.includes("harness"),
   });
   const inboxRealtime = createInboxRealtime({
     crons,

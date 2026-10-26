@@ -108,7 +108,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   maxContextTokens?: number;
   turnWallClockMs: number;
   runWaitMs: number;
-  roles: QmRole[];
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
@@ -186,8 +185,7 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
 }
 
 export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
-  if (config.anthropicApiKey ? config.anthropicApiKey.includes("sk-ant-oat") : config.claudeAuthCredential)
-    return "anthropic";
+  if (!config.anthropicApiKey && config.claudeAuthCredential) return "anthropic";
   if (config.codexAuthCredential) return "openai";
   return undefined;
 }
@@ -340,8 +338,6 @@ function awsSandboxEnv(env: Env) {
 function awsDeployEnv(env: Env, deployAppsDomain: string | undefined) {
   const e = readEnv(env, {
     AWS_DEPLOY_REGION: raw,
-    AWS_REGION: raw,
-    AWS_DEFAULT_REGION: raw,
     AWS_DEPLOY_PROFILE: str,
     AWS_DEPLOY_IMAGE: raw,
     AWS_DEPLOY_IMAGE_VERSION: str,
@@ -353,17 +349,15 @@ function awsDeployEnv(env: Env, deployAppsDomain: string | undefined) {
     AWS_DEPLOY_MAX_DURATION_SEC: num,
     AWS_DEPLOY_MAX_IDLE_SEC: num,
     AWS_DEPLOY_SUSPENDED_SEC: num,
-    AWS_DEPLOY_APPS_DOMAIN: str,
     AWS_DEPLOY_GATE_SECRET: str,
     AWS_DEPLOY_TOKEN_TTL_MIN: num,
     AWS_DEPLOY_DATA_BUCKET: str,
     AWS_DEPLOY_DATA_PREFIX: str,
     AWS_DEPLOY_DATA_ROLE_ARN: str,
     AWS_DEPLOY_SNAPSHOT_INTERVAL_MS: num,
-    DEPLOY_APPS_DOMAIN: str,
   });
   return {
-    region: e.AWS_DEPLOY_REGION ?? e.AWS_REGION ?? e.AWS_DEFAULT_REGION ?? "us-west-2",
+    region: e.AWS_DEPLOY_REGION ?? "us-west-2",
     imageIdentifier: e.AWS_DEPLOY_IMAGE ?? "qm-microvm-sandbox",
     ...defined({
       profile: e.AWS_DEPLOY_PROFILE,
@@ -376,7 +370,7 @@ function awsDeployEnv(env: Env, deployAppsDomain: string | undefined) {
       maximumDurationInSeconds: e.AWS_DEPLOY_MAX_DURATION_SEC,
       maxIdleDurationSeconds: e.AWS_DEPLOY_MAX_IDLE_SEC,
       suspendedDurationSeconds: e.AWS_DEPLOY_SUSPENDED_SEC,
-      appsDomain: e.AWS_DEPLOY_APPS_DOMAIN ?? (e.DEPLOY_APPS_DOMAIN && deployAppsDomain ? deployAppsDomain : undefined),
+      appsDomain: deployAppsDomain,
       gateSecret: e.AWS_DEPLOY_GATE_SECRET,
       tokenTtlMinutes: e.AWS_DEPLOY_TOKEN_TTL_MIN,
       dataBucket: e.AWS_DEPLOY_DATA_BUCKET,
@@ -450,16 +444,9 @@ function deployAppsEnv(
   deployAppsLoginUrl?: string;
   deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
 } {
-  const explicit = env.DEPLOY_APPS_SESSION_SECRET;
-  const shared = env.PORTAL_SESSION_SECRET;
-  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (explicit || shared ? defaultLoginUrl : undefined);
-  if (loginUrl && !explicit && !shared) {
-    throw new Error("DEPLOY_APPS_LOGIN_URL requires DEPLOY_APPS_SESSION_SECRET");
-  }
-  if (explicit && !loginUrl) {
-    throw new Error("DEPLOY_APPS_SESSION_SECRET needs a sign-in address — set DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL");
-  }
-  const secret = explicit ?? (loginUrl ? shared : undefined);
+  const secret = env.PORTAL_SESSION_SECRET || undefined;
+  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (secret ? defaultLoginUrl : undefined);
+  if (loginUrl && !secret) throw new Error("DEPLOY_APPS_LOGIN_URL requires PORTAL_SESSION_SECRET");
   const loginPath = env.DEPLOY_APPS_LOGIN_PATH ?? "/auth/login";
   if (loginPath !== "/auth/login" && loginPath !== "/auth/trusted/login") {
     throw new Error("DEPLOY_APPS_LOGIN_PATH must be /auth/login or /auth/trusted/login");
@@ -501,7 +488,8 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
 
-function deployAppsDomainEnv(env: Env, deployProvider: string): string | undefined {
+function deployAppsDomainEnv(env: Env): string | undefined {
+  // Porter's sandbox-ingress name (PORTER_DEPLOY_APPS_DOMAIN) is a separate, ungated mechanism; it stays separate.
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
     const canonical = raw.toLowerCase().replace(/\.$/, "");
@@ -518,8 +506,7 @@ function deployAppsDomainEnv(env: Env, deployProvider: string): string | undefin
     }
     return canonical;
   }
-  if (deployProvider === "porter" && env.PORTER_DEPLOY_APPS_DOMAIN) return env.PORTER_DEPLOY_APPS_DOMAIN;
-  return env.AWS_DEPLOY_APPS_DOMAIN;
+  return env.DEPLOY_PROVIDER === "porter" ? env.PORTER_DEPLOY_APPS_DOMAIN || undefined : undefined;
 }
 
 const DEFAULT_ORG_ID = "default-org";
@@ -557,37 +544,10 @@ export function numEnv(value: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-const QM_ROLES = ["api", "surfaces", "harness"] as const;
-type QmRole = (typeof QM_ROLES)[number];
-
-function rolesFromEnv(value: string | undefined): QmRole[] {
-  if (value === undefined || value.trim() === "") return [...QM_ROLES];
-  const roles = [
-    ...new Set(
-      value
-        .split(",")
-        .map((role) => role.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
-  const unknown = roles.filter((role) => !(QM_ROLES as readonly string[]).includes(role));
-  if (unknown.length || !roles.length)
-    throw new Error(
-      `QM_ROLES=${JSON.stringify(value)} must list one or more of ${QM_ROLES.join(", ")}, comma-separated.`,
-    );
-  return roles as QmRole[];
-}
-
-function backgroundWorkFor(roles: readonly QmRole[], env: NodeJS.ProcessEnv): boolean {
-  if (roles.includes("surfaces") && !roles.includes("harness"))
-    throw new Error(
-      "QM_ROLES with surfaces needs harness too: Slack sending and context reads run in the process that runs turns.",
-    );
-  const explicit = readEnv(env, { BACKGROUND_WORK_ENABLED: flag }).BACKGROUND_WORK_ENABLED;
-  if (roles.includes("harness")) return explicit ?? CONFIG_DEFAULTS.backgroundWorkEnabled;
-  if (explicit)
-    throw new Error("BACKGROUND_WORK_ENABLED=1 needs the harness role; add harness to QM_ROLES or unset it.");
-  return false;
+function backgroundWorkEnabled(env: Env): boolean {
+  return (
+    readEnv(env, { BACKGROUND_WORK_ENABLED: flag }).BACKGROUND_WORK_ENABLED ?? CONFIG_DEFAULTS.backgroundWorkEnabled
+  );
 }
 
 function orgBrandingFromEnv(env: Env): Config["brandingDefault"] {
@@ -696,7 +656,10 @@ function resolveStoreKinds(env: Env): Pick<Config, "runStore"> {
   return { runStore };
 }
 
-/** The signing secrets a surface could otherwise use to forge capabilities, portal identity or connector keys must differ. */
+/**
+ * Source requests, capability tokens, portal identity and connector keys each sign with their own secret, so a
+ * surface holding one cannot forge another. Whenever source signing or portal identity is on, all three are required.
+ */
 function assertDistinctSecrets(secrets: {
   signing?: string;
   capability?: string;
@@ -704,9 +667,9 @@ function assertDistinctSecrets(secrets: {
   connector?: string;
   enforcePortalIdentity: boolean;
 }): void {
-  if (secrets.enforcePortalIdentity) {
+  if (secrets.signing || secrets.enforcePortalIdentity) {
     const shared = (name: string, value: string | undefined): string | null => {
-      if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
+      if (!value) return `${name} is not set`;
       return value === secrets.signing ? `${name} must differ from CORE_SIGNING_SECRET` : null;
     };
     const problem =
@@ -717,7 +680,7 @@ function assertDistinctSecrets(secrets: {
         : null);
     if (problem)
       throw new Error(
-        `signed portal identity is required but ${problem}. Provision distinct secrets or enforcement is bypassable.`,
+        `${problem}: CORE_SIGNING_SECRET, CAPABILITY_SECRET and PORTAL_IDENTITY_SECRET must all be set and distinct, or a surface could forge capabilities or portal identity.`,
       );
   }
   const reusedConnectorKey = (
@@ -731,9 +694,6 @@ function assertDistinctSecrets(secrets: {
 }
 
 function loadDeploymentConfig(env: Env): DeploymentConfig {
-  const roles = rolesFromEnv(env.QM_ROLES);
-  if (roles.length < QM_ROLES.length && env.BACKGROUND_DEPLOYMENT_ID)
-    throw new Error("QM_ROLES cannot split roles while BACKGROUND_DEPLOYMENT_ID is set; unset one of them.");
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
@@ -755,7 +715,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
         "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
       );
   }
-  const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
+  const deployAppsDomain = deployAppsDomainEnv(env);
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
     const described = missingSecrets.map((name) => {
@@ -766,15 +726,15 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   }
   assertDistinctSecrets({
     signing: env.CORE_SIGNING_SECRET || undefined,
-    capability: (env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET) || undefined,
-    portalIdentity: (env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET) || undefined,
+    capability: env.CAPABILITY_SECRET || undefined,
+    portalIdentity: env.PORTAL_IDENTITY_SECRET || undefined,
     connector: env.CONNECTOR_SECRET_KEY || undefined,
     enforcePortalIdentity: env.NODE_ENV === "production" || env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
   });
   const modelProvider = modelProviderEnvStrict(env);
   const { runStore } = resolveStoreKinds(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");
-  if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
+  if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !deployAppsDomain) {
     console.warn(
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
@@ -901,8 +861,8 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     SPEND_EXPORT_TOKEN: str,
     GIT_SHA: str,
     CORE_SIGNING_SECRET: str,
-    CAPABILITY_SECRET: raw,
-    PORTAL_IDENTITY_SECRET: raw,
+    CAPABILITY_SECRET: str,
+    PORTAL_IDENTITY_SECRET: str,
     CAPABILITY_TOKEN_COMPRESSION: flag,
     REQUIRE_SIGNED_PORTAL_IDENTITY: raw,
     CONNECTOR_SECRET_KEY: str,
@@ -930,8 +890,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
-  const capabilitySecret = e.CAPABILITY_SECRET ?? e.CORE_SIGNING_SECRET;
-  const portalIdentitySecret = e.PORTAL_IDENTITY_SECRET ?? e.CORE_SIGNING_SECRET;
   return {
     ...defined({
       suggestedActivitiesContext: e.SUGGESTED_ACTIVITIES_CONTEXT?.slice(0, 8000),
@@ -965,8 +923,8 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       spendExportToken: e.SPEND_EXPORT_TOKEN,
       buildSha: e.GIT_SHA,
       signingSecret: e.CORE_SIGNING_SECRET,
-      capabilitySecret: capabilitySecret || undefined,
-      portalIdentitySecret: portalIdentitySecret || undefined,
+      capabilitySecret: e.CAPABILITY_SECRET,
+      portalIdentitySecret: e.PORTAL_IDENTITY_SECRET,
       connectorSecretKey: e.CONNECTOR_SECRET_KEY,
       slackEventsPort,
       deploymentLayerDir: e.DEPLOYMENT_LAYER ? resolve(e.DEPLOYMENT_LAYER) : undefined,
@@ -1003,8 +961,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     approvalSummaryTimeoutMs: CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs: CONFIG_DEFAULTS.securityScreenTimeoutMs,
-    roles,
-    backgroundWorkEnabled: backgroundWorkFor(roles, env),
+    backgroundWorkEnabled: backgroundWorkEnabled(env),
     capabilityTokenCompression: e.CAPABILITY_TOKEN_COMPRESSION ?? false,
     requireSignedPortalIdentity: e.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     layerEnv: { ...env },
@@ -1022,14 +979,14 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     ...sandboxProvidersEnv(env),
     awsSandbox: awsSandboxEnv(env),
     porterDeploy: porterDeployEnv(env),
-    awsDeploy: awsDeployEnv(env, deployAppsDomain),
+    awsDeploy: awsDeployEnv(env, env.DEPLOY_APPS_DOMAIN?.trim() ? deployAppsDomain : undefined),
   };
 }
 
 function loadTenantConfig(env: Env): TenantConfig {
-  const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
+  const publicApiUrl = env.PUBLIC_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
-  const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
+  const deployAppsDomain = deployAppsDomainEnv(env);
   const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
   const slack = slackPluginConfigFromEnv(env);
   const externalSlackPolicies = Object.fromEntries(
