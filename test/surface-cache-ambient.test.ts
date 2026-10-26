@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { buildTestApp } from "./support/test-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { quietRuns } from "./support/turns.ts";
 
 async function listFull(store: any, opts?: any): Promise<any[]> {
   const rows = await store.list(opts);
@@ -26,19 +25,6 @@ async function judged(store: any, container: string, ready: (rows: any[]) => boo
   return listFull(store, { scope: container });
 }
 
-async function pollDeliveries(
-  outbound: { pending(type: string): Promise<unknown[]> },
-  deadlineMs = 5_000,
-): Promise<any[]> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const pending = (await outbound.pending("slack")) as any[];
-    if (pending.length) return pending;
-    await sleep(50);
-  }
-  return [];
-}
-
 test("ingest → ambient judge engages → spawns a smart-model worker that posts to the container", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -50,10 +36,12 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
       { container, ts: "100.1", authorId: "U1", text: "did the Q3 launch slip?", createdAt: 1 },
     ]);
 
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the spawned worker posted exactly once");
-    assert.match(pending[0].text, /^ambient reply/);
-    assert.equal(pending[0].destination.target, container, "a plain post lands top-level in the container");
+    assert.match(pending[0]!.text, /^ambient reply/);
+    assert.equal(pending[0]!.destination.target, container, "a plain post lands top-level in the container");
     const worker = await built.sessions.getByThread(`slack:${container}:ambient:100.1`);
     assert.ok(worker);
     const classifier = (await built.sessions.listLlmRequests(worker!.id)).find((rec) => rec.model === "mock-security");
@@ -97,8 +85,8 @@ test("unaddressed chatter with no standing orders stays silent (silence is the d
     ]);
     const decision = await built.app.judgeAmbientContainer("slack", "C-quiet");
     assert.equal(decision.act, false);
-    await sleep(200);
-    const pending = (await built.posts.pending("slack")) as any[];
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 0, "idle chatter produces no proactive post");
   } finally {
     await built.runtime.stop();
@@ -116,13 +104,15 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
     ]);
     const decision = await built.app.judgeAmbientContainer("slack", container);
     assert.equal(decision.act, false, "the judge never runs in a switched-off channel");
-    await sleep(200);
+    await quietRuns(built);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "no proactive post");
     await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
     const replay = await built.app.judgeAmbientContainer("slack", container);
     assert.equal(replay.act, false, "messages overheard while off are not replayed");
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "fresh messages engage again after re-enabling");
   } finally {
     await built.runtime.stop();
@@ -145,9 +135,11 @@ test("default rule: standing orders opt the room into ambient, regardless of siz
         members: Array.from({ length: 9 }, (_, i) => `U${i + 1}`),
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "a room with standing orders is watched whatever its size");
-    assert.match(pending[0].text, /^ambient reply/);
+    assert.match(pending[0]!.text, /^ambient reply/);
   } finally {
     await built.runtime.stop();
   }
@@ -170,9 +162,11 @@ test("default rule: an action-mode bot entry opts the room in, with no standing 
         createdAt: 1,
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "an action-bot trigger engages without standing orders");
-    assert.match(pending[0].text, /^fixing it/);
+    assert.match(pending[0]!.text, /^fixing it/);
   } finally {
     await built.runtime.stop();
   }
@@ -190,11 +184,13 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
     ]);
     const decision = await built.app.judgeAmbientContainer("slack", container);
     assert.equal(decision.act, false, "the org switch wins over an explicit per-channel on");
-    await sleep(200);
+    await quietRuns(built);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0);
     await built.config.setOrgAmbient(true);
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "flipping the org switch back on restores ambient");
   } finally {
     await built.runtime.stop();
@@ -247,8 +243,8 @@ test("a formal @mention WITH content is left to the mention turn path (excluded 
       "slack",
       { name: "bot", mentionId: "UBOT" },
     );
-    await sleep(300);
-    const pending = (await built.posts.pending("slack")) as any[];
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 0, "no second, top-level ambient reply for a formal mention+content");
   } finally {
     await built.runtime.stop();
@@ -266,8 +262,8 @@ test("a BARE @mention is ALSO owned by the direct dispatch path, so the ambient 
       "slack",
       { name: "bot", mentionId: "UBOT" },
     );
-    await sleep(300);
-    const pending = (await built.posts.pending("slack")) as any[];
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 0, "the direct path owns the mention; the ambient judge does not double-reply");
   } finally {
     await built.runtime.stop();
@@ -283,14 +279,16 @@ test("a message the direct path owns (ingested handled) is excluded from the amb
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "following up on the thread", handled: true, createdAt: 1 },
     ]);
-    await sleep(300);
-    const pending = (await built.posts.pending("slack")) as any[];
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 0, "a born-handled message is owned by the direct path, never the judge");
 
     await built.app.ingestSurfaceEvents([
       { container, ts: "2.0", authorId: "U1", text: "following up on the thread", createdAt: 2 },
     ]);
-    const pending2 = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending2 = await built.posts.pending("slack");
     assert.equal(pending2.length, 1, "an un-owned message still engages the judge");
   } finally {
     await built.runtime.stop();
@@ -319,7 +317,7 @@ test("a message that @mentions ANOTHER person (not the bot) is judged normally, 
       "the other-person mention was judged, not excluded",
     );
     assert.ok(!rows.some((r: any) => r.decision === "fastlane"), "it is not treated as a formal self-mention");
-    const pending = (await built.posts.pending("slack")) as any[];
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 0, "and with no engaging order, nothing is posted");
   } finally {
     await built.runtime.stop();
@@ -347,7 +345,11 @@ test("a judge failure leaves the batch unjudged so the next pass judges it again
     await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "!judge-down", createdAt: 1 }]);
     assert.equal((await built.app.judgeAmbientContainer("slack", container)).act, false);
-    assert.deepEqual(await built.ambientJudgments!.list({ scope: container }), [], "a failed judge records no judgment");
+    assert.deepEqual(
+      await built.ambientJudgments!.list({ scope: container }),
+      [],
+      "a failed judge records no judgment",
+    );
     await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "launch moved", createdAt: 1 }]);
     await built.app.judgeAmbientContainer("slack", container);
     const rows = await built.ambientJudgments!.list({ scope: container });
@@ -383,10 +385,12 @@ test("the worker DECIDES where to post: a thread_ts roots the reply under the me
     await built.app.ingestSurfaceEvents([
       { container, ts: "200.1", authorId: "U1", text: "a fresh tweet link", createdAt: 1 },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1);
-    assert.equal(pending[0].destination.target, `${container}:200.1`, "reply threaded exactly where the agent chose");
-    assert.match(pending[0].text, /^ahoy matey/);
+    assert.equal(pending[0]!.destination.target, `${container}:200.1`, "reply threaded exactly where the agent chose");
+    assert.match(pending[0]!.text, /^ahoy matey/);
   } finally {
     await built.runtime.stop();
   }
@@ -401,7 +405,8 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Ann", text: "check <https://x.com/foo>", createdAt: 1 },
     ]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const sub = await built.sessions.getByThread(`slack:${container}:ambient:300.1`);
     assert.ok(sub, "the ambient worker session exists");
     const items = await built.sessions.getItems(sub!.id);
@@ -490,7 +495,8 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
     const container = "C-row";
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.decision, "act");
@@ -514,7 +520,8 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
     const container = "C-judgemodel";
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.model, "claude-sonnet-5", "the judge model is recorded, not the detect model");
@@ -531,7 +538,8 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
     const container = "C-openai-judge";
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.model, "gpt-5.6-luna", "the auxiliary follows the configured base model's provider");
@@ -549,7 +557,8 @@ test("an admin-set org base model drives the auxiliary, not just the PI_MODEL en
     const container = "C-admin-base";
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(
@@ -603,7 +612,8 @@ test("worker seed is the trigger plus the 3 messages before it (§2.4)", async (
       })),
       { container, ts: "406.0", authorId: "U6", text: "trigger !engage !post reply", createdAt: 6 },
     ]);
-    await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
     const sub = await built.sessions.getByThread(`slack:${container}:ambient:406.0`);
     assert.ok(sub, "the ambient worker session exists");
     const items = await built.sessions.getItems(sub!.id);
@@ -628,7 +638,7 @@ test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "NewsBot", text: "big news !engage !post go", bot: true, createdAt: 1 },
     ]);
-    await sleep(300);
+    await quietRuns(built);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "an ignored bot never triggers a post");
     assert.equal(
       (await built.ambientJudgments!.list({ scope: container })).length,
@@ -699,7 +709,7 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
     await built.app.ingestSurfaceEvents([
       { container, ts: "2.0", authorName: "NewsBot", text: "item 2", bot: true, createdAt: 2 },
     ]);
-    await sleep(300);
+    await quietRuns(built);
     assert.equal(
       (await built.ambientJudgments!.list({ scope: container })).length,
       1,
@@ -715,7 +725,9 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
         createdAt: 3,
       },
     ]);
-    const posted = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const posted = await built.posts.pending("slack");
     assert.ok(posted.length >= 1, "a human message lifts the rollup hold and the batch engages");
     const engaged = (
       await judged(built.ambientJudgments!, container, (rows) => rows.some((r: any) => r.decision === "act"))
@@ -742,9 +754,11 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Alice", text: "!post solicited reply", createdAt: 1 },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the solicited worker posted exactly once");
-    assert.match(pending[0].text, /^solicited reply/);
+    assert.match(pending[0]!.text, /^solicited reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:300.1`);
     assert.ok(session, "the worker session exists");
     const participants = await built.sessions.participantsOf(session!.id);
@@ -779,10 +793,12 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
       { container, ts: "350.1", authorId: "U1", authorName: "Alice", text: "!sysprompt", createdAt: 1 },
     ]);
 
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1);
-    assert.match(pending[0].text, /Alice \(alice@acme\.com\)/);
-    assert.match(pending[0].text, /Bob \(bob@acme\.com\)/);
+    assert.match(pending[0]!.text, /Alice \(alice@acme\.com\)/);
+    assert.match(pending[0]!.text, /Bob \(bob@acme\.com\)/);
   } finally {
     await built.runtime.stop();
   }
@@ -805,7 +821,9 @@ test("an ambient worker in a group DM runs at the group scope, not a fabricated 
         createdAt: 1,
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the spawned worker posted");
     const session = await built.sessions.getByThread(`slack:${container}:ambient:400.1`);
     assert.ok(session, "the worker session exists");
@@ -837,9 +855,11 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
         createdAt: 1,
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the solicited worker posted exactly once");
-    assert.match(pending[0].text, /^group solicited reply/);
+    assert.match(pending[0]!.text, /^group solicited reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:500.1`);
     assert.ok(session, "the worker session exists");
     assert.equal(session!.scopeId, `group:${container}`, "and it lives at the group scope");
@@ -870,7 +890,9 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
         createdAt: 1,
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the wake still engages (proactively)");
     const session = await built.sessions.getByThread(`slack:${container}:ambient:600.1`);
     assert.ok(session, "the worker session exists");
@@ -903,9 +925,11 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
       },
       { container, ts: "500.2", authorId: "U2", authorName: "Mallory", text: "unrelated chatter", createdAt: 2 },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the wake still engaged, proactively");
-    assert.match(pending[0].text, /^disarmed reply/);
+    assert.match(pending[0]!.text, /^disarmed reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:500.2`);
     assert.ok(session, "the worker session exists, keyed on the batch's latest ts");
     const participants = await built.sessions.participantsOf(session!.id);
@@ -931,9 +955,11 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
     await built.app.ingestSurfaceEvents([
       { container, ts: "600.1", authorId: "U1", authorName: "Alice", text: "!post private reply", createdAt: 1 },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1);
-    assert.match(pending[0].text, /^private reply/);
+    assert.match(pending[0]!.text, /^private reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:600.1`);
     const participants = await built.sessions.participantsOf(session!.id);
     assert.deepEqual(participants, ["alice@acme.com"], "attested private room confers the asker's authority");
@@ -958,9 +984,11 @@ test("a solicited wake whose author isn't in the directory degrades to the proac
         createdAt: 1,
       },
     ]);
-    const pending = await pollDeliveries(built.posts);
+    await built.posts.waitFor((post) => post.destination.type === "slack");
+    await quietRuns(built);
+    const pending = await built.posts.pending("slack");
     assert.equal(pending.length, 1, "the fallback worker still posted");
-    assert.match(pending[0].text, /^fallback reply/);
+    assert.match(pending[0]!.text, /^fallback reply/);
     const session = await built.sessions.getByThread(`slack:${container}:ambient:400.1`);
     assert.ok(session, "the worker session exists");
     const participants = await built.sessions.participantsOf(session!.id);
@@ -987,10 +1015,7 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
     { container, ts: "100.2", authorId: "U2", text: "same here, meetup page too", createdAt: 2 },
   ]);
   let signals: any[] = [];
-  for (const deadline = Date.now() + 5_000; !signals.length && Date.now() < deadline;) {
-    signals = await built.signals.takePending(live!.id);
-    if (!signals.length) await sleep(50);
-  }
+  await settle(async () => (signals = await built.signals.takePending(live!.id)).length > 0);
   assert.equal(signals.length, 1, "the second wake steered the live run");
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text!, /meetup page too/);

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settledRun } from "./support/turns.ts";
 
 const actor = { externalId: "U1" };
 function dm(text: string): TurnRequest {
@@ -20,24 +21,15 @@ function dm(text: string): TurnRequest {
   };
 }
 
-async function settled(built: ReturnType<typeof buildApp>, runId: string) {
-  for (let i = 0; i < 300; i++) {
-    const run = await built.runs.get(runId);
-    if (run && (run.status === "done" || run.status === "failed")) return run;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`run ${runId} did not settle`);
-}
-
 test("a run's tool entries are read from the session, bounded by its turn and its viewer", async () => {
   const built = buildApp(testConfig());
   built.runtime.start();
   try {
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const first = await built.app.turn(dm("!run echo hi"));
-    const run = await settled(built, first.runId!);
+    const run = await settledRun(built.runs, first.runId!);
     const second = await built.app.turn(dm("plain follow-up"));
-    await settled(built, second.runId!);
+    await settledRun(built.runs, second.runId!);
     const owner = run.request.actor.id;
     const entries = await built.app.getRunToolItems(first.runId!, owner);
     assert.deepEqual(
@@ -60,7 +52,7 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
   try {
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const first = await built.app.turn(dm("!run echo hi"));
-    const run = await settled(built, first.runId!);
+    const run = await settledRun(built.runs, first.runId!);
     const session = (await built.sessions.getByThread(run.sessionId))!;
     const { lease } = await built.sessions.acquireLease(session.id);
     await built.sessions.append(lease!, {
@@ -84,7 +76,7 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
     });
     await built.sessions.releaseLease(lease!);
     const second = await built.app.turn(dm("!run echo again"));
-    await settled(built, second.runId!);
+    await settledRun(built.runs, second.runId!);
     const owner = run.request.actor.id;
     const callIds = (items: Array<{ callId: string | null }>) => items.map((e) => e.callId);
     const all = await built.app.getRunToolItems(run.id, owner);
@@ -115,7 +107,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
       if (event.kind === "refresh") log.push("refresh");
     });
     built.runtime.start();
-    await settled(built, turn.runId!);
+    await settledRun(built.runs, turn.runId!);
     unsubscribe();
     for (const type of ["ToolCall", "ToolResult"]) {
       const at = log.indexOf(type);

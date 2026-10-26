@@ -6,6 +6,7 @@ import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { settle } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -117,11 +118,6 @@ function scripted(log: string[]): Orchestrator {
   } as unknown as Orchestrator;
 }
 
-async function until(check: () => Promise<boolean>): Promise<void> {
-  for (let i = 0; i < 200 && !(await check()); i++) await sleep(10);
-  assert.ok(await check(), "timed out");
-}
-
 async function withWorkers(
   count: number,
   body: (ctx: { runs: RunStore; log: string[]; sweep: () => Promise<boolean> }) => Promise<void>,
@@ -148,10 +144,10 @@ test("a busy worker parks a cron turn for a person's turn, then resumes it", () 
     1,
     async ({ runs, log, sweep }) => {
       const background = (await runs.enqueue({ sessionId: "cron", request: cron("long cron") })).run;
-      await until(status(runs, background, "running"));
+      await settle(status(runs, background, "running"));
       await runs.enqueue({ sessionId: "dm", request: request("quick person") });
       assert.equal(await sweep(), true);
-      await until(status(runs, background, "done"));
+      await settle(status(runs, background, "done"));
       assert.equal((await runs.get(background.id))?.preemptions, 1);
       assert.deepEqual(log, [
         "start long cron #1",
@@ -169,10 +165,10 @@ test("one waiting turn parks one run, even while that run is slow to stop", () =
     const crons: Run[] = [];
     for (const name of ["a", "b", "c"])
       crons.push((await runs.enqueue({ sessionId: name, request: cron(`slow ${name}`) })).run);
-    for (const run of crons) await until(status(runs, run, "running"));
+    for (const run of crons) await settle(status(runs, run, "running"));
     const person = (await runs.enqueue({ sessionId: "dm", request: request("quick person") })).run;
     assert.deepEqual([await sweep(), await sweep(), await sweep()], [true, false, false]);
-    await until(status(runs, person, "done"));
+    await settle(status(runs, person, "done"));
     const parks = await Promise.all(crons.map(async (run) => (await runs.get(run.id))!.preemptions));
     assert.deepEqual(parks.sort(), [0, 0, 1]);
   }));
@@ -180,7 +176,7 @@ test("one waiting turn parks one run, even while that run is slow to stop", () =
 test("subagents of a person's turn and thrice-parked runs keep their worker", () =>
   withWorkers(2, async ({ runs, sweep }) => {
     const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
-    await until(status(runs, parent, "done"));
+    await settle(status(runs, parent, "done"));
     const capped = (
       await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), turnWallClockMs: 60_000 } })
     ).run;
@@ -189,8 +185,8 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
       await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" });
     }
     const child = (await runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") })).run;
-    await until(status(runs, capped, "running"));
-    await until(status(runs, child, "running"));
+    await settle(status(runs, capped, "running"));
+    await settle(status(runs, child, "running"));
     await runs.enqueue({ sessionId: "dm", request: request("quick person") });
     assert.equal(await sweep(), false);
     assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend the claim budget");

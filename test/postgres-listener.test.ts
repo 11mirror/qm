@@ -4,17 +4,10 @@ import pg from "pg";
 import { subscribePostgresChannel } from "../src/persistence/postgres-listener.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { settle } from "./support/settle.ts";
 
 const url = process.env.DATABASE_URL;
 const skip = !url;
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 8_000;
-  while (!(await check())) {
-    assert.ok(Date.now() < deadline, "condition timed out");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
 test("channels share a backend, recover after termination, and release it after unsubscribe", { skip }, async () => {
   const observer = new pg.Client({ connectionString: url });
   await observer.connect();
@@ -44,20 +37,20 @@ test("channels share a backend, recover after termination, and release it after 
         () => resyncs++,
       ),
     );
-    await until(() => resyncs === 2);
+    await settle(() => resyncs === 2);
     assert.equal((await pids()).length, 1);
     await observer.query("SELECT pg_notify('consolidation_a','one'),pg_notify('consolidation_b','two')");
-    await until(() => seen.length === 2);
+    await settle(() => seen.length === 2);
     assert.deepEqual(seen.sort(), ["a:one", "b:two"]);
     await observer.query("SELECT pg_terminate_backend($1)", [(await pids())[0]]);
-    await until(() => resyncs === 4);
+    await settle(() => resyncs === 4);
     assert.equal((await pids()).length, 1);
     await stops[0]!();
     await observer.query("SELECT pg_notify('consolidation_a','ignored'),pg_notify('consolidation_b','three')");
-    await until(() => seen.includes("b:three"));
+    await settle(() => seen.includes("b:three"));
     assert.equal(seen.length, 3);
     await stops[1]!();
-    await until(async () => (await pids()).length === 0);
+    await settle(async () => (await pids()).length === 0);
   } finally {
     await Promise.all(stops.map((stop) => stop()));
     await observer.end();
@@ -77,20 +70,20 @@ test("notification buses and run signals share a listener without closing their 
   const offB = b.subscribe(() => messages++, { onResync: () => ready++ });
   const offSignal = signals.onSignal("consolidation-run", () => signalsSeen++);
   try {
-    await until(() => ready === 2 && signalsSeen > 0);
+    await settle(() => ready === 2 && signalsSeen > 0);
     signalsSeen = 0;
     await observer.query("SELECT pg_notify('run_signals','consolidation-run')");
-    await until(() => signalsSeen > 0);
+    await settle(() => signalsSeen > 0);
     a.emit("one");
-    await until(() => messages === 2);
+    await settle(() => messages === 2);
     offA();
     await a.close!();
     b.emit("two");
-    await until(() => messages === 3);
+    await settle(() => messages === 3);
     offSignal();
     await signals.close!();
     b.emit("three");
-    await until(() => messages === 4);
+    await settle(() => messages === 4);
   } finally {
     offA();
     offB();
@@ -119,7 +112,7 @@ test("immediate unsubscribe and replacement do not leak a pending connection", {
   );
   try {
     await closing;
-    await until(() => ready);
+    await settle(() => ready);
   } finally {
     await second();
   }
