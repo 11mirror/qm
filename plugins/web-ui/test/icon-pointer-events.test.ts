@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { shellCss } from "./shell-css.ts";
 
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/" });
 for (const [key, value] of Object.entries({
@@ -17,7 +17,7 @@ const { html, render } = await import("lit");
 const { Archive, Link, X } = await import("lucide");
 const { icon } = await import("../src/icons.ts");
 const style = document.createElement("style");
-style.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+style.textContent = shellCss();
 document.head.append(style);
 
 for (const [label, glyph] of [
