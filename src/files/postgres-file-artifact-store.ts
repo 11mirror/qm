@@ -75,6 +75,13 @@ export function createPostgresFileArtifactStore(
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
       ],
     },
+    {
+      id: "files/artifacts/0003",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS file_artifacts_document
+           ON file_artifacts ((COALESCE(created_in_scope, owner_scope_id)), sha256) WHERE sha256 IS NOT NULL`,
+      ],
+    },
   ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
@@ -91,42 +98,53 @@ export function createPostgresFileArtifactStore(
     const limit = clampLimit(opts?.limit);
     const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
     const params: unknown[] = [scopes as string[]];
-    let access = "owner_scope_id = ANY($1::text[])";
+    let access = (t: string) => `${t}.owner_scope_id = ANY($1::text[])`;
     if (sharedRefs !== undefined) {
       params.push(
         sharedRefs.map((r) => r.ownerScopeId),
         sharedRefs.map((r) => r.id),
       );
-      access = `(${access} OR (enabled = TRUE AND (owner_scope_id, id) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
+      const own = access;
+      access = (t) =>
+        `(${own(t)} OR (${t}.enabled = TRUE AND (${t}.owner_scope_id, ${t}.id) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
     }
-    const filters = [access];
-    if (!opts?.includeDisabled) filters.push("enabled = TRUE");
+    const filters: Array<(t: string) => string> = [access];
+    if (!opts?.includeDisabled) filters.push((t) => `${t}.enabled = TRUE`);
     if (opts?.createdInScope != null) {
       params.push(opts.createdInScope);
-      filters.push(`created_in_scope = $${params.length}::text`);
+      const n = params.length;
+      filters.push((t) => `${t}.created_in_scope = $${n}::text`);
     }
     if (opts?.nameQuery != null) {
       params.push(likeContains(opts.nameQuery));
-      filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
+      const n = params.length;
+      filters.push((t) => `${t}.name ILIKE $${n}::text ESCAPE '\\'`);
     }
-    const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
-    const documents =
+    const visibleTo = (t: string) => filters.map((f) => f(t)).join(" AND ");
+    // A shared listing shows one row per document: copies with the same bytes created in the same
+    // scope collapse to the caller's own copy, else the oldest. A row is kept when no visible copy
+    // outranks it, so the page is cut straight from the created_at order without sorting every file.
+    const owned = (t: string) => `(${t}.owner_scope_id = ANY($1::text[]))`;
+    const representative =
       sharedRefs === undefined
-        ? visible
-        : `
-      SELECT DISTINCT ON (COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id)) *
-      FROM (${visible}) visible
-      ORDER BY COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id),
-               (owner_scope_id = ANY($1::text[])) DESC, created_at ASC, id ASC`;
+        ? ""
+        : ` AND (f.sha256 IS NULL OR NOT EXISTS (
+        SELECT 1 FROM file_artifacts c
+        WHERE ${visibleTo("c")}
+          AND c.sha256 = f.sha256
+          AND COALESCE(c.created_in_scope, c.owner_scope_id) = COALESCE(f.created_in_scope, f.owner_scope_id)
+          AND c.id <> f.id
+          AND (${owned("c")} > ${owned("f")}
+               OR (${owned("c")} = ${owned("f")} AND (c.created_at, c.id) < (f.created_at, f.id)))))`;
     let pageFilter = "";
     if (cursor) {
       params.push(cursor.createdAt, cursor.id);
-      pageFilter = `WHERE (created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
+      pageFilter = ` AND (f.created_at, f.id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
     }
     params.push(limit + 1);
     const rows = await q(
-      `SELECT * FROM (${documents}) documents ${pageFilter}
-      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+      `SELECT f.* FROM file_artifacts f WHERE ${visibleTo("f")}${representative}${pageFilter}
+      ORDER BY f.created_at DESC, f.id DESC LIMIT $${params.length}`,
       params,
     );
     const all = rows.map(rowToArtifact);
