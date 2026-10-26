@@ -214,9 +214,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         },
       };
     },
-    async cronNote() {
-      return { ok: true, applied: true };
-    },
     async cronDelete() {
       return { ok: true };
     },
@@ -236,21 +233,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     },
     async cronRun() {
       return { ok: true, fireKey: "cron:c1:manual:test" };
-    },
-    async cronRetarget(id) {
-      return {
-        ok: true,
-        cron: {
-          id,
-          ownerScopeId: "personal:U1",
-          owner: "U1",
-          createdBy: "U1",
-          enabled: true,
-          createdAt: 0,
-          schedule: { everyMs: 3_600_000 },
-          destination: { type: "slack", target: "C9", audienceScopeId: "channel:C9" },
-        },
-      };
     },
     async webhookCreate(req) {
       return {
@@ -2018,44 +2000,7 @@ test("cron create requires a schedule and a task/text — crisp [error], no thro
   );
 });
 
-test("cron note dispatches, and requires a non-empty note", async () => {
-  assert.match(
-    textOut(await call(tool("cron"), { action: "note", id: "cron-1", note: "Quiet. Updated data. No issues." })),
-    /Noted — the next fire of cron-1 will see it\./,
-  );
-  assert.match(textOut(await call(tool("cron"), { action: "note", id: "cron-1" })), /\[error\].*requires `note`/);
-  assert.match(
-    textOut(await call(tool("cron"), { action: "note", id: "cron-1", note: "   " })),
-    /\[error\].*requires `note`/,
-  );
-});
-
-test("cron note admits it when a newer note superseded the write, instead of claiming success", async () => {
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    async cronNote() {
-      return { ok: true, applied: false };
-    },
-  };
-  const out = textOut(await call(tool("cron", tc), { action: "note", id: "cron-1", note: "old shift report" }));
-  assert.match(out, /\[not stored\] a newer shift-change note for cron-1 already exists/);
-  assert.doesNotMatch(out, /Noted — the next fire/);
-});
-
-test("cron note rejects arguments exceeding the advertised cap before dispatch", async () => {
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    async cronNote() {
-      return { ok: false, code: "bad_request", message: "the note is 401 chars — the cap is 400." };
-    },
-  };
-  assert.match(
-    textOut(await call(tool("cron", tc), { action: "note", id: "cron-1", note: "x".repeat(401) })),
-    /\[error\] Invalid arguments for cron action note/,
-  );
-});
-
-test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
+test("cron list/get/runs/patch/delete/run/disable each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
   assert.match(textOut(await call(tool("cron"), { action: "get", id: "cron-1" })), /Gmail digest/);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
@@ -2066,10 +2011,6 @@ test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async
   assert.match(textOut(await call(tool("cron"), { action: "delete", id: "cron-1" })), /Deleted cron cron-1/);
   assert.match(textOut(await call(tool("cron"), { action: "run", id: "cron-1" })), /Fired cron cron-1/);
   assert.match(textOut(await call(tool("cron"), { action: "disable", id: "cron-1" })), /Paused cron cron-1/);
-  assert.match(
-    textOut(await call(tool("cron"), { action: "retarget", id: "cron-1", destinationKey: "k" })),
-    /Retargeted cron/,
-  );
 });
 
 test("cron list paginates live-first/newest-first with a footer naming the next offset", async () => {
@@ -2218,13 +2159,9 @@ test("webhook list paginates; action text is one line, generous but bounded", as
 });
 
 test("cron actions needing an id return a crisp [error] when it's missing", async () => {
-  for (const action of ["get", "runs", "patch", "delete", "run", "disable", "note"]) {
+  for (const action of ["get", "runs", "patch", "delete", "run", "disable"]) {
     assert.match(textOut(await call(tool("cron"), { action })), /\[error\].*requires `id`/);
   }
-  assert.match(
-    textOut(await call(tool("cron"), { action: "retarget", id: "cron-1" })),
-    /\[error\].*requires `destinationKey`/,
-  );
 });
 
 test("cron surfaces a resolution error (e.g. ambiguous recipient) with candidates, not a throw", async () => {

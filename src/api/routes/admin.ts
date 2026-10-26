@@ -12,13 +12,7 @@ import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
-import {
-  archiveAdminSkill,
-  getAdminSkill,
-  listAdminArtifacts,
-  putAdminCronDestination,
-  putAdminCronRuntime,
-} from "./admin/artifacts.ts";
+import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
 import { adminMemory, listMemoryScopes } from "./admin/memory.ts";
 import { manageSandboxResources } from "./admin/sandbox.ts";
 import {
@@ -304,7 +298,6 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: listAdminArtifacts,
     },
-    { method: "PUT", path: "/v1/admin/crons/:id/runtime", auth: "either", handle: putAdminCronRuntime },
     { method: "PUT", path: "/v1/admin/crons/:id/destination", auth: "either", handle: putAdminCronDestination },
     {
       method: "GET",

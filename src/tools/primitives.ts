@@ -285,12 +285,6 @@ export interface ToolContext extends SurfaceToolDeps {
     | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">
     | ControlUnavailable
   >;
-  cronNote(
-    id: string,
-    note: string,
-  ): Promise<
-    ControlOk<{ applied: boolean }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
-  >;
   cronDelete(
     id: string,
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
@@ -304,12 +298,6 @@ export interface ToolContext extends SurfaceToolDeps {
     | ControlOk<{ fireKey: string }>
     | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
     | ControlUnavailable
-  >;
-  cronRetarget(
-    id: string,
-    destinationKey: string,
-  ): Promise<
-    ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "unknown_destination"> | ControlUnavailable
   >;
   webhookCreate(req: WebhookCreateRequest): Promise<WebhookCreateResult | ControlUnavailable>;
   webhookList(): Promise<Webhook[] | ControlUnavailable>;
@@ -1374,11 +1362,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         (c, cl) => c.patchCron(id, req, cl),
         (r) => r.ok,
       ),
-    cronNote: (id, note) =>
-      controlOp(
-        (c, cl) => c.noteCron(id, note, cl),
-        (r) => r.ok,
-      ),
     cronDelete: (id) =>
       controlOp(
         (c, cl) => c.deleteCron(id, cl),
@@ -1392,11 +1375,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronRun: (id) =>
       controlOp(
         (c, cl) => c.runCron(id, cl),
-        (r) => r.ok,
-      ),
-    cronRetarget: (id, destinationKey) =>
-      controlOp(
-        (c, cl) => c.retargetCron(id, destinationKey, cl),
         (r) => r.ok,
       ),
     webhookCreate: (req) =>

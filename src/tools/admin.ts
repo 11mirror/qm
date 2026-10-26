@@ -104,10 +104,6 @@ export const adminOperations = {
   skills: operation("List skills belonging to a scope.", "GET", "/skills", scope),
   skill: operation("Read one skill.", "GET", "/skills/:id", scopedId),
   archive_skill: operation("Archive a skill. Confirm first.", "DELETE", "/skills/:id", scopedId),
-  cron_runtime: operation("Set a cron runtime, or null to inherit. Confirm first.", "PUT", "/crons/:id/runtime", {
-    ...scopedId,
-    value: object,
-  }),
   cron_destination: operation("Set or clear a cron destination. Confirm first.", "PUT", "/crons/:id/destination", {
     ...scopedId,
     value: object,

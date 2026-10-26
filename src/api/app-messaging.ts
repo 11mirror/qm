@@ -18,9 +18,6 @@ import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
-import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
-import { assertCronRuntime } from "../cron/runtime.ts";
-import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
@@ -67,12 +64,9 @@ export function createMessagingMethods(
   | "updateCron"
   | "deleteCron"
   | "setCronEnabled"
-  | "setCronFireNote"
   | "listCronFires"
   | "cronFiresByThreadRefs"
-  | "latestCronFireForThread"
   | "setCronDestination"
-  | "setCronRuntime"
   | "createWebhook"
   | "getWebhook"
   | "listWebhooks"
@@ -150,18 +144,8 @@ export function createMessagingMethods(
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
-  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "action" | "message">) => {
-    assertCronRuntime(cron);
-    if (!cron.runtime) return;
-    const error =
-      validateRuntimeChoice(cron.runtime) ??
-      (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
-    if (error) throw new Error(error);
-  };
-
   return {
     async createCron(input) {
-      await validateRuntime(input);
       validateUserSchedule(input.schedule);
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
@@ -182,9 +166,6 @@ export function createMessagingMethods(
     cronFiresByThreadRefs(threadRefs) {
       return deps.crons.firesByThreadRefs(threadRefs);
     },
-    latestCronFireForThread(id, threadRef) {
-      return deps.crons.latestFireForThread(id, threadRef);
-    },
     listCrons() {
       return deps.crons.list();
     },
@@ -204,7 +185,6 @@ export function createMessagingMethods(
     async updateCron(id, patch) {
       const before = await deps.crons.get(id);
       if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
@@ -233,27 +213,6 @@ export function createMessagingMethods(
     },
     setCronEnabled(id, enabled) {
       return deps.crons.setEnabled(id, enabled);
-    },
-    async setCronFireNote(id, note) {
-      const before = await deps.crons.get(id);
-      if (!before) return "missing";
-      const outcome = await deps.crons.setFireNote(id, note);
-      if (outcome === "applied") {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: note.by ?? before.owner,
-          action: "cron_note",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
-      }
-      return outcome;
-    },
-    async setCronRuntime(id, runtime) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      await validateRuntime({ ...before, runtime });
-      return deps.crons.update(id, { runtime });
     },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);

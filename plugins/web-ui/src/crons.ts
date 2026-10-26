@@ -40,7 +40,6 @@ export interface CronView {
   createdAt: number;
   lastFiredAt?: number;
   nextFireAt?: number;
-  lastFireNote?: { text: string; at: number; by?: string } | null;
   scopeName?: string;
   permission?: "read" | "manage";
 }
@@ -405,14 +404,6 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
         ${c.destination ? fieldTpl("Destination", `${c.destination.type} → ${c.destination.target}`) : nothing}
         ${fieldTpl("Next run", next != null ? new Date(next).toLocaleString() : "Never")}
         ${fieldTpl("Last fired", c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never")}
-        ${
-          c.lastFireNote
-            ? fieldTpl(
-                `${c.lastFireNote.by ? `Note left by ${c.lastFireNote.by}` : "Note from last fire"} (${new Date(c.lastFireNote.at).toLocaleString()})`,
-                c.lastFireNote.text,
-              )
-            : nothing
-        }
         ${manageable ? cronRunHistory(c) : nothing}
         ${
           manageable

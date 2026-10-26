@@ -56,8 +56,7 @@ import {
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
 import { SANDBOX_CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
-import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../api/control-service.ts";
-import { utcMinute } from "../util/time.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "../api/control-service.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
@@ -205,7 +204,6 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
-  runtime?: import("./harness.ts").RuntimeChoice | null;
   id: string;
   title?: string;
   enabled: boolean;
@@ -215,12 +213,11 @@ interface CronLike {
   message?: string;
   nextFireAt?: number;
   destination?: { type: string; target: string };
-  lastFireNote?: { text: string; at: number; by?: string };
   unattendedGrants?: string[];
 }
 
 const LIST_PAGE_SIZE = 25;
-const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note", "retarget"]);
+const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run"]);
 const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
@@ -277,27 +274,18 @@ function fmtCronLine(c: CronLike, preview = false): string {
   else if (c.enabled) state = "";
   const dest = c.destination ? ` → ${c.destination.type}:${c.destination.target}` : "";
   const next = c.nextFireAt ? ` (next ${new Date(c.nextFireAt).toISOString()})` : "";
-  const note =
-    !preview && c.lastFireNote && Number.isFinite(c.lastFireNote.at)
-      ? `\n    shift-change note (${utcMinute(c.lastFireNote.at)}${c.lastFireNote.by ? `, by ${c.lastFireNote.by}` : ""}): ${c.lastFireNote.text}`
-      : "";
-  const runtime = c.runtime
-    ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
-    : "";
   const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${note}`;
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${grants}`;
 }
 
 function fmtCronCreated(r: {
   cron: CronLike;
   recipient?: { displayName: string };
   channel?: { name: string };
-  group?: { groupId: string };
 }): string {
   let to = "";
   if (r.recipient) to = `\nAddressed to ${r.recipient.displayName} (DM).`;
   else if (r.channel) to = `\nAddressed to #${r.channel.name}.`;
-  else if (r.group) to = `\nAddressed to a group DM.`;
   return `Created cron ${fmtCronLine(r.cron)}${to}`;
 }
 
@@ -2122,16 +2110,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
       "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
       "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
-      "To deliver elsewhere, set `recipient` " +
-      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched), `channel` " +
-      "(a channel name → that channel), `participants` (a list of member ids → a group DM, which has no name; " +
-      "you're added automatically; the group must already exist — post to it once with the slack tool's " +
-      "reach action, which opens it, then schedule into it), or `destinationKey` " +
-      '(a key from the "Where scheduled tasks post" ' +
-      'menu when one is shown). To schedule something privately for whoever asked instead, set scope="personal" ' +
-      '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
-      "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
-      "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
+      "The only other destination is a named Slack target: set `recipient` " +
+      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched) or `channel` " +
+      "(a channel name → that channel). Don't bury \"send this to Slack\" inside `task`. A cron's destination is fixed at create; " +
+      "to move one, create the new cron and delete the old. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
       "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
       "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
       "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
@@ -2147,12 +2129,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
       "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
       "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
-      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
+      "`task` or only on sandbox disk. Confirm publication succeeds and use a cron-specific filename; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
       "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
-      "still running — repeating it never double-fires; action=disable pauses it.\n" +
-      "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +
-      `reads before it starts — one or two sentences, max ${CRON_FIRE_NOTE_MAX_CHARS} chars: the outcome plus ` +
-      "anything the next fire must know. It overwrites the previous fire's note.",
+      "still running — repeating it never double-fires; action=disable pauses it.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -2164,15 +2143,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           Type.Literal("delete"),
           Type.Literal("run"),
           Type.Literal("disable"),
-          Type.Literal("retarget"),
-          Type.Literal("note"),
         ],
         {
           description:
-            "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, retarget where it delivers, or note — leave a short shift-change note for its next fire.",
+            "create a cron, list yours, get/runs/patch/delete one by id, run one now, or disable (pause) one.",
         },
       ),
-      id: optionalString("get/runs/patch/delete/run/disable/retarget/note only: the cron id."),
+      id: optionalString("get/runs/patch/delete/run/disable only: the cron id."),
       title: optionalString(
         'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
       ),
@@ -2195,48 +2172,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
       recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
       channel: optionalString("create: a channel name to post to (core resolves it)."),
-      scope: Type.Optional(
-        Type.Literal("personal", {
-          description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
-        }),
-      ),
-      participants: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            "create: a group DM's other member ids (you're added automatically); a group DM has no name, so core matches it by exact membership, and the group must already exist — reach it once first, which opens it.",
-        }),
-      ),
-      destinationKey: optionalString('create/retarget: a key from the "Where scheduled tasks post" menu.'),
       session: optionalBoolean(
         "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
       ),
       unfurlLinks: optionalBoolean(
         "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-      ),
-      note: Type.Optional(
-        Type.String({
-          maxLength: CRON_FIRE_NOTE_MAX_CHARS,
-          description:
-            `note only: the shift-change note for the cron's next fire — one or two sentences (max ${CRON_FIRE_NOTE_MAX_CHARS} chars): ` +
-            "outcome + anything the next fire must know. Overwrites the previous note.",
-        }),
-      ),
-      runtime: Type.Optional(
-        Type.Union(
-          [
-            Type.Null(),
-            Type.Object({
-              modelId: Type.String(),
-              effortLevel: Type.Optional(Type.String()),
-              fastMode: Type.Optional(Type.Boolean()),
-            }),
-          ],
-          {
-            description:
-              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
-          },
-        ),
       ),
       unattendedGrants: Type.Optional(
         Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
@@ -2284,15 +2224,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
           const r = await tc.cronCreate({
             schedule: params.schedule,
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
             ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
             ...(params.channel !== undefined ? { channel: params.channel } : {}),
-            ...(params.scope !== undefined ? { scope: params.scope } : {}),
-            ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
-            ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
@@ -2313,7 +2249,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               created: true,
               ...(r.recipient ? { recipient: r.recipient } : {}),
               ...(r.channel ? { channel: r.channel } : {}),
-              ...(r.group ? { group: r.group } : {}),
             },
             fmtCronCreated(r),
           );
@@ -2365,21 +2300,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             r.runs.length === r.total
               ? ""
               : `\n(showing ${r.runs.length} of ${r.total}; omit limit for all retained entries)`;
-          const noteLine =
-            r.cron.lastFireNote && Number.isFinite(r.cron.lastFireNote.at)
-              ? `\n(shift-change note (${utcMinute(r.cron.lastFireNote.at)}${r.cron.lastFireNote.by ? `, by ${r.cron.lastFireNote.by}` : ""}): ${r.cron.lastFireNote.text})`
-              : "";
           return recordResult(
             callId,
             { tool: "cron", id, count: r.runs.length, total: r.total },
-            text(lines.length ? `${lines.join("\n")}${suffix}${noteLine}` : "(no recorded fires for this cron)"),
+            text(lines.length ? `${lines.join("\n")}${suffix}` : "(no recorded fires for this cron)"),
             false,
             { screenAs: { provenance: "external", source: "shared crons" } },
           );
         }
         case "patch": {
           const r = await tc.cronPatch(id, {
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
@@ -2412,31 +2342,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             `Fired cron ${id} — the run is starting now and delivers on its own when it finishes.`,
           );
         }
-        case "note": {
-          if (typeof params.note !== "string" || !params.note.trim()) {
-            return fail("note required", "cron note requires `note` (the short message the next fire reads).");
-          }
-          const r = await tc.cronNote(id, params.note);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(
-            callId,
-            { tool: "cron", id, noted: r.applied },
-            r.applied
-              ? `Noted — the next fire of ${id} will see it.`
-              : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
-          );
-        }
-        case "retarget": {
-          if (typeof params.destinationKey !== "string" || !params.destinationKey) {
-            return fail(
-              "destinationKey required",
-              "cron retarget requires `destinationKey` (a key from the delivery menu).",
-            );
-          }
-          const r = await tc.cronRetarget(id, params.destinationKey);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(callId, { tool: "cron", id }, `Retargeted cron ${fmtCronLine(r.cron)}`);
-        }
       }
     },
   });
@@ -2450,7 +2355,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=create takes `action` (what to do on each event; the event payload is appended " +
       "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
       'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      `\`destinationKey\` (same delivery menu as crons). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
+      `\`destinationKey\` (a key from the "Where scheduled tasks post" menu). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
       `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
       "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
       "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +

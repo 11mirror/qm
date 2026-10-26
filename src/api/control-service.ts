@@ -4,16 +4,10 @@ import type { Cron, CronFireLogEntry, CronSchedule, Destination, Webhook } from 
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import {
-  cronFireReadsNotes,
-  describeRunNowRefusal,
-  echoesCronContextMarkers,
-  flattenFireNote,
-  type Scheduler,
-} from "../cron/scheduler.ts";
+import { describeRunNowRefusal, type Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
-import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
+import { withSlackUnfurlOption } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
@@ -32,16 +26,12 @@ import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
 export interface CronCreateRequest {
-  runtime?: Cron["runtime"];
   schedule: CronSchedule;
   title?: string;
   action?: string;
   text?: string;
   recipient?: string;
   channel?: string;
-  participants?: string[];
-  scope?: "personal";
-  destinationKey?: string;
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
@@ -54,7 +44,6 @@ export type CronCreateResult =
       cron: Cron;
       recipient?: { principalId: string; displayName: string };
       channel?: { channelId: string; name: string };
-      group?: { groupId: string };
     }
   | {
       ok: false;
@@ -64,10 +53,8 @@ export type CronCreateResult =
         | "ambiguous_recipient"
         | "channel_not_found"
         | "ambiguous_channel"
-        | "group_not_found"
         | "not_a_member"
         | "identity_unverified"
-        | "unknown_destination"
         | "forbidden"
         | "cron_create_failed";
       message: string;
@@ -86,7 +73,6 @@ export type WebhookCreateResult =
   | { ok: false; code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
-  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   text?: string;
@@ -111,8 +97,6 @@ export interface CronRunsResult {
 export const CRON_PATCH_NOTHING_TO_CHANGE =
   "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, unattendedGrants, or session";
 
-export const CRON_FIRE_NOTE_MAX_CHARS = 400;
-
 export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 
@@ -133,11 +117,6 @@ export interface ControlService {
     req: CronPatchRequest,
     claims: CapabilityClaims,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
-  noteCron(
-    id: string,
-    text: string,
-    claims: CapabilityClaims,
-  ): Promise<ControlOk<{ applied: boolean }> | ControlErr<"not_found" | "forbidden" | "bad_request">>;
   deleteCron(
     id: string,
     claims: CapabilityClaims,
@@ -154,11 +133,6 @@ export interface ControlService {
     | ControlOk<{ fireKey: string }>
     | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
   >;
-  retargetCron(
-    id: string,
-    destinationKey: string,
-    claims: CapabilityClaims,
-  ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "unknown_destination">>;
   createWebhook(
     req: WebhookCreateRequest,
     claims: CapabilityClaims,
@@ -251,7 +225,6 @@ function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): Cro
 
 function hasCronPatchField(req: CronPatchRequest): boolean {
   return (
-    req.runtime !== undefined ||
     req.title !== undefined ||
     req.action !== undefined ||
     req.text !== undefined ||
@@ -306,7 +279,6 @@ function patchFromCronPatchRequest(
   }
   return {
     ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
-    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
@@ -359,42 +331,20 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.inbox && req.action === undefined) {
         return { ok: false, code: "bad_request", message: "an inbox cron needs a task, not exact text" };
       }
-      const hasParticipants = Array.isArray(req.participants);
-      const wantsGroup = hasParticipants && req.participants!.length > 0;
-      const wantsPersonal = req.scope === "personal";
-      if (
-        [req.recipient !== undefined, req.channel !== undefined, wantsGroup, wantsPersonal].filter(Boolean).length > 1
-      ) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message:
-            'specify at most one of scope:"personal", recipient (a teammate), channel, or participants (a group DM)',
-        };
-      }
-      if (wantsPersonal && req.destinationKey !== undefined) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message: 'scope:"personal" runs at your own scope — it can\'t also take a destinationKey',
-        };
+      if (req.recipient !== undefined && req.channel !== undefined) {
+        return { ok: false, code: "bad_request", message: "specify at most one of recipient (a teammate) or channel" };
       }
 
       let destination: Destination | undefined;
       let ownerScopeId = capability.scopeId;
       let resolvedRecipient: { principalId: string; displayName: string } | undefined;
       let resolvedChannel: { channelId: string; name: string } | undefined;
-      let resolvedGroup: { groupId: string } | undefined;
 
-      if (wantsPersonal) {
-        destination = principalDestination(capability.actorId, capability.actorId);
-        ownerScopeId = destination.audienceScopeId ?? ownerScopeId;
-      } else if (req.recipient !== undefined || req.channel !== undefined || hasParticipants) {
+      if (req.recipient !== undefined || req.channel !== undefined) {
         const r = await app.resolveReachTarget(
           {
             ...(req.recipient !== undefined ? { recipient: req.recipient } : {}),
             ...(req.channel !== undefined ? { channel: req.channel } : {}),
-            ...(hasParticipants ? { participants: req.participants } : {}),
           },
           capability.actorId,
         );
@@ -405,15 +355,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             | "ambiguous_recipient"
             | "channel_not_found"
             | "ambiguous_channel"
-            | "group_not_found"
             | "not_a_member"
             | "identity_unverified" = "bad_request";
-          const RESOLVER_CODES = new Set(["recipient_not_found", "ambiguous_recipient", "group_not_found"]);
-          if (RESOLVER_CODES.has(r.error)) {
-            code = r.error as typeof code;
+          if (r.error === "recipient_not_found" || r.error === "ambiguous_recipient") {
+            code = r.error;
           } else if (r.status === 404) {
-            if (req.recipient !== undefined) code = "recipient_not_found";
-            else code = wantsGroup ? "group_not_found" : "channel_not_found";
+            code = req.recipient !== undefined ? "recipient_not_found" : "channel_not_found";
           } else if (r.status === 409) {
             code = req.recipient !== undefined ? "ambiguous_recipient" : "ambiguous_channel";
           } else if (r.status === 403) {
@@ -442,20 +389,9 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           resolvedChannel = r.channel;
           ownerScopeId = r.destination.audienceScopeId ?? ownerScopeId;
         }
-        if (r.group) {
-          resolvedGroup = r.group;
-          ownerScopeId = r.destination.audienceScopeId ?? ownerScopeId;
-        }
       } else {
-        const resolved = resolveCapabilityDestination(capability, req.destinationKey);
-        if (!resolved.ok) {
-          return {
-            ok: false,
-            code: "unknown_destination",
-            message: "destinationKey is not one of the destinations available for this conversation",
-          };
-        }
-        destination = resolved.destination;
+        const resolved = resolveCapabilityDestination(capability, undefined);
+        if (resolved.ok) destination = resolved.destination;
       }
 
       if (req.unattendedGrants?.length) {
@@ -479,7 +415,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
-        ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
         ...(req.text !== undefined ? { message: req.text } : {}),
         owner: capability.actorId,
@@ -499,7 +434,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           cron,
           ...(resolvedRecipient ? { recipient: resolvedRecipient } : {}),
           ...(resolvedChannel ? { channel: resolvedChannel } : {}),
-          ...(resolvedGroup ? { group: resolvedGroup } : {}),
         };
       } catch (e) {
         return { ok: false, code: "cron_create_failed", message: errMessage(e) };
@@ -559,7 +493,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
-        if (req.runtime !== undefined) changeSummary.push("runtime");
         if (req.title !== undefined) changeSummary.push("title");
         if (req.action !== undefined || req.text !== undefined) changeSummary.push("task");
         if (req.schedule !== undefined) changeSummary.push("schedule");
@@ -575,59 +508,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         return { ok: false, code: "cron_update_failed", message: errMessage(e) };
       }
-    },
-
-    async noteCron(id, text, capability) {
-      const flattened = flattenFireNote(text);
-      if (!flattened)
-        return { ok: false, code: "bad_request", message: "the note is empty — say what the next fire should know" };
-      const length = [...flattened].length;
-      if (length > CRON_FIRE_NOTE_MAX_CHARS) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files via the available Files API, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
-        };
-      }
-      if (echoesCronContextMarkers(flattened)) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message: "the note can't include the cron runtime context markers — write a plain report instead",
-        };
-      }
-      const cron = await app.getCron(id);
-      if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
-      if (cron.archived) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message: `cron ${id} is archived — its fires won't run, so a note would never be read`,
-        };
-      }
-      if (!cronFireReadsNotes(cron)) {
-        return {
-          ok: false,
-          code: "bad_request",
-          message: `cron ${id}'s fires don't read shift-change notes (it is one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
-        };
-      }
-      const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
-      if (!ownFire && (cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
-      }
-      const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
-      const outcome = await app.setCronFireNote(id, {
-        text: flattened,
-        at: fireEntry?.firedAt ?? Date.now(),
-        ...(ownFire ? {} : { by: capability.actorId }),
-      });
-      if (outcome === "missing") return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"]);
-      return { ok: true, applied: outcome === "applied" };
     },
 
     async deleteCron(id, capability) {
@@ -683,35 +563,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return { ok: false, code: refusal.error, message: refusal.message };
       }
       return { ok: true, fireKey: result.fireKey };
-    },
-
-    async retargetCron(id, destinationKey, capability) {
-      const cron = await app.getCron(id);
-      if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
-      const resolved = resolveCapabilityDestination(capability, destinationKey);
-      if (!resolved.ok) {
-        return {
-          ok: false,
-          code: "unknown_destination",
-          message: "destinationKey is not one of the destinations available for this conversation",
-        };
-      }
-      if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(
-          app,
-          admin,
-          { ...cron, destination: resolved.destination },
-          capability,
-        );
-        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
-      }
-      if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination);
-      const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
-      await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
-      return { ok: true, cron: updated ?? cron };
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
