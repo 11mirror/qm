@@ -93,12 +93,17 @@ export function proxyTarget(port: number): HostTarget {
           upRes.pipe(res);
         },
       );
+      let clientGone = false;
       up.on("error", (error) => {
-        console.warn(`[tenant-host] worker on port ${port} unreachable: ${errMessage(error)}`);
+        if (!clientGone) console.warn(`[tenant-host] worker on port ${port} unreachable: ${errMessage(error)}`);
         if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         res.end();
       });
-      res.on("close", () => up.destroy());
+      res.on("close", () => {
+        if (res.writableFinished) return;
+        clientGone = true;
+        up.destroy();
+      });
       req.pipe(up);
     },
     upgrade(req, socket, head) {
