@@ -43,6 +43,15 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
   const late = await store.append(lease, { kind: "UserMessage", text: "U1 only again" });
   await store.releaseLease(lease);
 
+  const both = (await store.visibleItems(s.id, ["U1", "U2"])).map((i) => i.seq);
+  assert.ok(both.includes(mid.seq) && !both.includes(early.seq) && !both.includes(late.seq));
+  assert.deepEqual(
+    both,
+    (await store.visibleItems(s.id, "U2")).map((i) => i.seq),
+    "intersection of both windows",
+  );
+  assert.deepEqual(await store.visibleItems(s.id, ["U1", "nobody"]), [], "a non-participant sees nothing");
+
   const rows = await store.attributedTurns();
   const u1 = rows.filter((r) => r.principalId === "U1" && r.sessionId === s.id);
   const u2 = rows.filter((r) => r.principalId === "U2" && r.sessionId === s.id);

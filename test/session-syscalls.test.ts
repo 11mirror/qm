@@ -1865,7 +1865,7 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
   const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
   const stopped = await stopSessionTree(
     {
-      sessions: { childrenOf: async (id: string) => (id === "root" ? [child] : []) },
+      sessions: { descendantsOf: async () => [{ ...child, rootId: root.id }] },
       runs: {
         inFlightForThread: async (threadRef: string) =>
           [{ id: `run-${threadRef}`, status: "running" }] as unknown as Run[],
