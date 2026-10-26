@@ -278,138 +278,43 @@ function editorPane() {
     </section>`;
   }
   const reviewed = e.review === editKey(e);
-  let saveLabel = "Save";
-  if (saving) saveLabel = "Saving…";
-  else if (reviewed) saveLabel = "Publish change";
-  return html`
-    <form
-      class="skill-form-page"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void saveEdit();
-      }}
-    >
-      ${listBackLink("Back to skills", closeFocusedFlow)}
-      <div class="skill-form-heading">
-        <div>
-          <h1 class="pane-title">Edit <bdi>/${e.name}</bdi></h1>
-          <p>Available to ${editAudience(e.scopeId)}</p>
-        </div>
-        <span class="badge">Editing</span>
-      </div>
-      <label class="skill-field">
-        <span>Description</span>
-        <input
-          id="skill-edit-description"
-          class="skill-desc-input"
-          type="text"
-          .value=${e.description}
-          data-focus-key="skill-edit-description"
-          ?disabled=${saving}
-          @input=${(ev: Event) => {
-            e.description = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
-      <label class="skill-field">
-        <span>Instructions</span>
-        <textarea
-          class="skill-body-input"
-          spellcheck="false"
-          data-focus-key="skill-edit-body"
-          ?disabled=${saving}
-          @input=${(ev: Event) => {
-            e.body = (ev.target as HTMLTextAreaElement).value;
-            drawSkills();
-          }}
-          .value=${e.body}
-        ></textarea>
-      </label>
-      ${editError ? html`<div class="card-meta skill-shadowed">${editError}</div>` : nothing}
-      ${
-        reviewed
-          ? html`<div class="skill-impact" role="alert">
-              <strong>Publish this change to <bdi>${scopeTitle(e.scopeId ?? null)}</bdi>?</strong>
-              <div class="card-meta">
-                Everyone in this context can invoke the updated instructions. Description
-                ${e.description === e.originalDescription ? "unchanged" : "changed"}; instructions
-                ${e.body === e.originalBody ? "unchanged" : "changed"}.
-              </div>
-            </div>`
-          : nothing
-      }
-      <div class="actions skill-form-actions">
-        <button
-          class="btn primary"
-          type="submit"
-          ?disabled=${saving}
-          @click=${(event: MouseEvent) => {
-            if (reviewed && event.detail > 1) event.preventDefault();
-          }}
-        >
-          ${saveLabel}
-        </button>
-        ${
-          reviewed
-            ? html`<button
-                class="btn"
-                type="button"
-                ?disabled=${saving}
-                @click=${() => {
-                  e.review = null;
-                  drawSkills();
-                }}
-              >
-                Review again
-              </button>`
-            : nothing
-        }
-        <button class="btn" type="button" ?disabled=${saving} @click=${closeFocusedFlow}>Cancel</button>
-      </div>
-    </form>
-  `;
+  return skillForm({
+    title: html`Edit <bdi>/${e.name}</bdi>`,
+    sub: `Available to ${editAudience(e.scopeId)}`,
+    badge: "Editing",
+    submit: saveEdit,
+    busy: saving,
+    error: editError,
+    reviewed,
+    label: reviewed ? "Publish change" : "Save",
+    ready: true,
+    reviewAgain: () => (e.review = null),
+    fields: html`${skillText(e, "description", "Description", "skill-edit-description", saving, { id: "skill-edit-description" })}
+    ${skillText(e, "body", "Instructions", "skill-edit-body", saving, { area: true })}`,
+    impact: html`<strong>Publish this change to <bdi>${scopeTitle(e.scopeId ?? null)}</bdi>?</strong>
+      <div class="card-meta">
+        Everyone in this context can invoke the updated instructions. Description
+        ${e.description === e.originalDescription ? "unchanged" : "changed"}; instructions
+        ${e.body === e.originalBody ? "unchanged" : "changed"}.
+      </div>`,
+  });
 }
 
 function creatorPane() {
   const c = creating!;
-  const ready = c.name.trim() !== "" && c.description.trim() !== "" && c.body.trim() !== "";
   const reviewed = c.review === createKey(c);
-  let createLabel = "Create skill";
-  if (creatingSaving) createLabel = "Saving…";
-  else if (reviewed) createLabel = "Publish skill";
-  return html`
-    <form
-      class="skill-form-page"
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void saveCreate();
-      }}
-    >
-      ${listBackLink("Back to skills", closeFocusedFlow)}
-      <div class="skill-form-heading">
-        <div>
-          <h1 class="pane-title">New skill</h1>
-          <p>Create a reusable procedure for yourself or a shared context.</p>
-        </div>
-        <span class="badge">New</span>
-      </div>
-      <label class="skill-field">
-        <span>Name</span>
-        <input
-          id="skill-create-name"
-          class="skill-desc-input"
-          type="text"
-          placeholder="watch-pipeline"
-          data-focus-key="skill-create-name"
-          .value=${c.name}
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.name = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
+  return skillForm({
+    title: "New skill",
+    sub: "Create a reusable procedure for yourself or a shared context.",
+    badge: "New",
+    submit: saveCreate,
+    busy: creatingSaving,
+    error: createError,
+    reviewed,
+    label: reviewed ? "Publish skill" : "Create skill",
+    ready: c.name.trim() !== "" && c.description.trim() !== "" && c.body.trim() !== "",
+    reviewAgain: () => (c.review = null),
+    fields: html`${skillText(c, "name", "Name", "skill-create-name", creatingSaving, { id: "skill-create-name", placeholder: "watch-pipeline" })}
       <label class="skill-field">
         <span>Available to</span>
         ${fieldSelect({
@@ -425,64 +330,103 @@ function creatorPane() {
         })}
         <small class="card-meta">Everyone in a shared context can invoke and edit this skill.</small>
       </label>
-      <label class="skill-field">
-        <span>Description</span>
-        <input
-          class="skill-desc-input"
-          type="text"
-          placeholder="One line: what it does / when to use it"
-          data-focus-key="skill-create-description"
-          .value=${c.description}
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.description = (ev.target as HTMLInputElement).value;
-            drawSkills();
-          }}
-        />
-      </label>
-      <label class="skill-field">
-        <span>Instructions</span>
-        <textarea
-          class="skill-body-input"
-          spellcheck="false"
-          placeholder="The SKILL.md contents: the steps to follow when this skill is used."
-          data-focus-key="skill-create-body"
-          ?disabled=${creatingSaving}
-          @input=${(ev: Event) => {
-            c.body = (ev.target as HTMLTextAreaElement).value;
-            drawSkills();
-          }}
-          .value=${c.body}
-        ></textarea>
-      </label>
-      ${createError ? html`<div class="card-meta skill-shadowed">${createError}</div>` : nothing}
-      ${
-        reviewed
-          ? html`<div class="skill-impact" role="alert">
-              <strong>Publish <bdi>/${c.name.trim()}</bdi> to <bdi>${scopeTitle(c.scopeId)}</bdi>?</strong>
-              <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>
-            </div>`
-          : nothing
-      }
+      ${skillText(c, "description", "Description", "skill-create-description", creatingSaving, { placeholder: "One line: what it does / when to use it" })}
+      ${skillText(c, "body", "Instructions", "skill-create-body", creatingSaving, { area: true, placeholder: "The SKILL.md contents: the steps to follow when this skill is used." })}`,
+    impact: html`<strong>Publish <bdi>/${c.name.trim()}</bdi> to <bdi>${scopeTitle(c.scopeId)}</bdi>?</strong>
+      <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>`,
+  });
+}
+
+function skillText<K extends string>(
+  draft: Record<K, string>,
+  key: K,
+  label: string,
+  focusKey: string,
+  busy: boolean,
+  o: { id?: string; placeholder?: string; area?: boolean } = {},
+): TemplateResult {
+  const onInput = (ev: Event) => {
+    draft[key] = (ev.target as HTMLInputElement).value;
+    drawSkills();
+  };
+  return html`<label class="skill-field">
+    <span>${label}</span>
+    ${
+      o.area
+        ? html`<textarea
+            class="skill-body-input"
+            spellcheck="false"
+            placeholder=${o.placeholder ?? nothing}
+            data-focus-key=${focusKey}
+            ?disabled=${busy}
+            @input=${onInput}
+            .value=${draft[key]}
+          ></textarea>`
+        : html`<input
+            id=${o.id ?? nothing}
+            class="skill-desc-input"
+            type="text"
+            placeholder=${o.placeholder ?? nothing}
+            data-focus-key=${focusKey}
+            .value=${draft[key]}
+            ?disabled=${busy}
+            @input=${onInput}
+          />`
+    }
+  </label>`;
+}
+
+function skillForm(o: {
+  title: TemplateResult | string;
+  sub: string;
+  badge: string;
+  submit: () => Promise<void>;
+  busy: boolean;
+  error: string;
+  reviewed: boolean;
+  label: string;
+  ready: boolean;
+  reviewAgain: () => void;
+  fields: TemplateResult;
+  impact: TemplateResult;
+}): TemplateResult {
+  return html`
+    <form
+      class="skill-form-page"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        void o.submit();
+      }}
+    >
+      ${listBackLink("Back to skills", closeFocusedFlow)}
+      <div class="skill-form-heading">
+        <div>
+          <h1 class="pane-title">${o.title}</h1>
+          <p>${o.sub}</p>
+        </div>
+        <span class="badge">${o.badge}</span>
+      </div>
+      ${o.fields} ${o.error ? html`<div class="card-meta skill-shadowed">${o.error}</div>` : nothing}
+      ${o.reviewed ? html`<div class="skill-impact" role="alert">${o.impact}</div>` : nothing}
       <div class="actions skill-form-actions">
         <button
           class="btn primary"
           type="submit"
-          ?disabled=${creatingSaving || !ready}
+          ?disabled=${o.busy || !o.ready}
           @click=${(event: MouseEvent) => {
-            if (reviewed && event.detail > 1) event.preventDefault();
+            if (o.reviewed && event.detail > 1) event.preventDefault();
           }}
         >
-          ${createLabel}
+          ${o.busy ? "Saving…" : o.label}
         </button>
         ${
-          reviewed
+          o.reviewed
             ? html`<button
                 class="btn"
                 type="button"
-                ?disabled=${creatingSaving}
+                ?disabled=${o.busy}
                 @click=${() => {
-                  c.review = null;
+                  o.reviewAgain();
                   drawSkills();
                 }}
               >
@@ -490,7 +434,7 @@ function creatorPane() {
               </button>`
             : nothing
         }
-        <button class="btn" type="button" ?disabled=${creatingSaving} @click=${closeFocusedFlow}>Cancel</button>
+        <button class="btn" type="button" ?disabled=${o.busy} @click=${closeFocusedFlow}>Cancel</button>
       </div>
     </form>
   `;

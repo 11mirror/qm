@@ -235,9 +235,6 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
   const versions = [...(d.versions ?? [])].sort((a, b) => b.version - a.version);
   const running = d.status === "running";
   const contextScope = deploymentContextScope(d);
-  const editingName = editingDeploy?.id === d.id && editingDeploy.field === "displayName";
-  const editingSlug = editingDeploy?.id === d.id && editingDeploy.field === "name";
-  const editingEmbed = editingDeploy?.id === d.id && editingDeploy.field === "embedAncestors";
   render(
     html`
       <div class="resource-detail deploy-detail">
@@ -276,33 +273,9 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           canManage(d)
             ? html`<section class="deploy-detail-section">
                 <h3>Settings</h3>
-                <div class="deploy-setting-row">
-                  <div><strong>Display name</strong><span>Shown in the app bar and app list.</span></div>
-                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span dir="auto">${deploymentTitle(d)}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
-                </div>
-                <div class="deploy-setting-row">
-                  <div><strong>App URL</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
-                  ${editingSlug ? deployEditForm(d, "name") : html`<div class="deploy-setting-value"><code>/d/${deploymentSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditDeploy(d, "name")}>Change</button></div>`}
-                </div>
-                <div class="deploy-setting-row">
-                  <div>
-                    <strong>Embedding</strong
-                    ><span
-                      >Sites allowed to show this app inside their own page. Every frame between the app and the browser
-                      tab must be listed.</span
-                    >
-                  </div>
-                  ${
-                    editingEmbed
-                      ? deployEditForm(d, "embedAncestors")
-                      : html`<div class="deploy-setting-value">
-                          ${embedAncestorsSummary(d)}
-                          <button class="btn" type="button" @click=${() => startEditDeploy(d, "embedAncestors")}>
-                            ${d.embedAncestors?.length ? "Change" : "Allow"}
-                          </button>
-                        </div>`
-                  }
-                </div>
+                ${settingRow(d, "displayName", "Display name", "Shown in the app bar and app list.", html`<span dir="auto">${deploymentTitle(d)}</span>`, "Edit")}
+                ${settingRow(d, "name", "App URL", "Changes the app URL. Existing links do not redirect.", html`<code>/d/${deploymentSlug(d)}/</code>`, "Change")}
+                ${settingRow(d, "embedAncestors", "Embedding", "Sites allowed to show this app inside their own page. Every frame between the app and the browser tab must be listed.", embedAncestorsSummary(d), d.embedAncestors?.length ? "Change" : "Allow")}
                 <div class="actions deploy-danger-actions">
                   ${
                     d.status === "archived"
@@ -365,6 +338,27 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
     host,
   );
   if (host.parentElement !== appState.mainEl) appState.mainEl.replaceChildren(host);
+}
+
+function settingRow(
+  d: DeploymentView,
+  field: DeployEditField,
+  title: string,
+  note: string,
+  value: TemplateResult,
+  action: string,
+): TemplateResult {
+  const editing = editingDeploy?.id === d.id && editingDeploy.field === field;
+  return html`<div class="deploy-setting-row">
+    <div><strong>${title}</strong><span>${note}</span></div>
+    ${
+      editing
+        ? deployEditForm(d, field)
+        : html`<div class="deploy-setting-value">
+            ${value}<button class="btn" type="button" @click=${() => startEditDeploy(d, field)}>${action}</button>
+          </div>`
+    }
+  </div>`;
 }
 
 function returnToDeploysList(): void {
@@ -526,16 +520,9 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
   deploySaving = true;
   drawDeployDetail(d);
   try {
-    const { endpoint } = DEPLOY_EDIT_FIELDS[field];
-    const payloads: Record<DeployEditField, object> = {
-      displayName: { displayName: value },
-      name: { name: value },
-      embedAncestors: { embedAncestors },
-    };
-    const payload = payloads[field];
-    await api(`/api/deployments/${encodeURIComponent(d.id)}/${endpoint}`, {
+    await api(`/api/deployments/${encodeURIComponent(d.id)}/${DEPLOY_EDIT_FIELDS[field].endpoint}`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ [field]: field === "embedAncestors" ? embedAncestors : value }),
     });
     editingDeploy = null;
     deployDraft = "";
