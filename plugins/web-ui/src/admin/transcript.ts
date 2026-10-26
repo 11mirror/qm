@@ -2,7 +2,8 @@ import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { node, renderer, badge, scroller } from "./shared.ts";
+import { node, renderer, scroller } from "./shared.ts";
+import { isUserMessage, itemFields, type Item } from "../items.ts";
 type Row = Record<string, any>;
 let generation = 0;
 export function cancel() {
@@ -41,73 +42,69 @@ const contextIcon = (label: string, title: string, onClick: (e: Event) => void, 
   >
     ${brain}
   </button>`;
+const TOOL_KINDS = new Set(["ToolCall", "ToolResult"]);
+const NOISE_KINDS = new Set(["ToolCall", "ToolResult", "Wake", "ContextCompaction", "Retraction", "RuntimeChange"]);
+const kindLabel = (kind: string) =>
+  kind.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/ ([A-Z])/g, (_, c) => " " + c.toLowerCase());
+const json = (value: unknown) => JSON.stringify(value, null, 2);
+function itemText(item: Item): string {
+  if (item.kind === "Wake" && typeof item.body.text === "string") return item.body.text;
+  if (item.kind === "Reasoning") return item.text || (item.body.redacted ? "[redacted thinking]" : "");
+  if (item.text != null && item.kind !== "ToolCall" && item.kind !== "ToolResult") return item.text;
+  return json(itemFields(item));
+}
+const isOriginPrompt = (item: Item) => isUserMessage(item) || item.kind === "Wake";
 export function prepare(data: Row, requests: Row[]) {
-  const entries: Row[] = data.entries || [],
-    events: Row[] = data.deliveryEvents || [],
+  const items: Item[] = data.items || [],
     llm = new Map<any, Row[]>(),
-    byEntry = new Map<any, Row[]>(),
+    byItem = new Map<number, Row[]>(),
     dur = new Map<number, number>(),
-    seqIndex = new Map(entries.map((e, i) => [e.seq, i])),
+    seqIndex = new Map(items.map((item, i) => [item.seq, i])),
     add = (map: Map<any, Row[]>, key: any, rows: Row[]) => map.set(key, [...(map.get(key) || []), ...rows]);
   for (const req of requests) add(llm, req.turnSeq ?? "_orphan", [req]);
-  for (let i = 1; i < entries.length; i++) {
-    const delta = (entries[i].createdAt || 0) - (entries[i - 1].createdAt || 0);
-    if (delta >= 0) dur.set(entries[i].seq, delta);
+  for (let i = 1; i < items.length; i++) {
+    const delta = (items[i].createdAt || 0) - (items[i - 1].createdAt || 0);
+    if (delta >= 0) dur.set(items[i].seq, delta);
   }
   for (const [turn, reqs] of llm) {
-    if (turn === "_orphan" || turn < (entries[0]?.seq || 0)) continue;
+    if (turn === "_orphan" || turn < (items[0]?.seq || 0)) continue;
     const start = seqIndex.get(turn);
     if (start === undefined) {
       add(llm, "_orphan", reqs);
       continue;
     }
     let anchor = start;
-    for (let i = start + 1; i < entries.length && entries[i].type !== "user"; i++)
-      if (entries[i].type === "assistant") anchor = i;
+    for (let i = start + 1; i < items.length && !isUserMessage(items[i]); i++)
+      if (items[i].kind === "AgentMessage") anchor = i;
     add(
-      byEntry,
-      entries[anchor].seq,
+      byItem,
+      items[anchor].seq,
       reqs.sort((a, b) => (a.step || 0) - (b.step || 0)),
     );
   }
-  const results = new Map<any, Row>(),
-    outbound = new Map<any, Row>(),
-    principalIds = new Set(),
-    pairedSeqs = new Set(),
-    merged = new Set(),
+  const results = new Map<string, Item>(),
+    paired = new Set<number>(),
     units: Row[] = [];
-  for (const e of entries)
-    if (e.type === "tool_result" && e.payload?.callId && !results.has(e.payload.callId))
-      results.set(e.payload.callId, e);
-  for (const e of events) {
-    if (e.deliveryId && e.type === "outbound_delivery" && !outbound.has(e.deliveryId)) outbound.set(e.deliveryId, e);
-    if (e.deliveryId && e.type === "principal_delivery") principalIds.add(e.deliveryId);
-  }
-  entries.forEach((e, i) => {
-    if (e.type !== "tool_call" && e.type !== "tool_result")
-      return units.push({ kind: "entry", entry: e, llmReqs: byEntry.get(e.seq) });
-    if (e.type === "tool_result" && pairedSeqs.has(e.seq)) return;
-    let paired: Row | undefined;
-    if (e.type === "tool_call") {
-      if (e.payload?.callId) paired = results.get(e.payload.callId);
-      else if (entries[i + 1]?.type === "tool_result") paired = entries[i + 1];
+  for (const item of items)
+    if (item.kind === "ToolResult" && item.callId && !results.has(item.callId)) results.set(item.callId, item);
+  for (const item of items) {
+    if (!TOOL_KINDS.has(item.kind)) {
+      units.push({ kind: "item", item, llmReqs: byItem.get(item.seq) });
+      continue;
     }
-    if (paired) pairedSeqs.add(paired.seq);
-    const deliveryId = (e.type === "tool_result" ? e : paired)?.payload?.deliveryId,
-      delivery = outbound.get(deliveryId);
-    if (delivery) merged.add(deliveryId);
-    units.push({ kind: "tool", primary: e, paired, delivery, llmReqs: byEntry.get(e.seq) });
-  });
-  for (const event of events)
-    if (!event.deliveryId || !merged.has(event.deliveryId)) units.push({ kind: "delivery_event", event });
-  const at = (unit: Row) => (unit.primary || unit.entry || unit.event)?.createdAt || 0;
-  units.sort((a, b) => at(a) - at(b));
+    if (item.kind === "ToolResult") {
+      if (!paired.has(item.seq)) units.push({ kind: "tool", call: null, result: item, llmReqs: byItem.get(item.seq) });
+      continue;
+    }
+    const result = (item.callId && results.get(item.callId)) || null;
+    if (result) paired.add(result.seq);
+    units.push({ kind: "tool", call: item, result, llmReqs: byItem.get(item.seq) });
+  }
   if (llm.get("_orphan")?.length) units.push({ kind: "llm", reqs: llm.get("_orphan") });
   return {
     units,
     dur,
-    principalIds,
-    originPromptSeq: data.origin && !data.hasMore ? entries.find((e) => e.type === "user")?.seq : null,
+    originPromptSeq: data.origin && !data.hasMore ? items.find(isOriginPrompt)?.seq : null,
   };
 }
 function contextStats(requests: Row[], s: Row, sections?: Row[]) {
@@ -269,11 +266,10 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   });
   const requests: Row[] = await llmPromise.then((llm: Row) => (llm.ok ? llm.data.requests || [] : [])).catch(() => []);
   if (!current()) return;
-  const { units, dur, principalIds, originPromptSeq } = prepare(data, requests),
+  const { units, dur, originPromptSeq } = prepare(data, requests),
     open = new Set<Row>(),
     bodyNodes = new Map<Row, Node>(),
-    toolNodes = new Map<Row, Row>(),
-    panels = new Map<Row, HTMLElement>();
+    toolNodes = new Map<Row, Row>();
   let errors: Row[] = [],
     first = 0,
     paused = false;
@@ -294,10 +290,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     else open.add(unit);
     paint();
   };
-  const ends = ({ primary: p, paired }: Row) => [
-    p.type === "tool_call" ? p : null,
-    p.type === "tool_result" ? p : paired,
-  ];
   const memo = <K, V>(map: Map<K, V>, key: K, make: () => V) => {
     if (!map.has(key)) map.set(key, make());
     return map.get(key)!;
@@ -307,8 +299,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       e.stopPropagation();
       s.go({ view: "history", scope: s.scope, session: sessionId, turn });
     });
-  const timing = (unit: Row) => {
-    const [call, res] = ends(unit);
+  const timing = ({ call, result: res }: Row) => {
     return call && res
       ? [
           [dur.get(call.seq), "model"],
@@ -319,10 +310,10 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   function fullTool(unit: Row) {
     const built = memo(toolNodes, unit, () =>
       s.renderToolEntry(
-        ...ends(unit),
+        unit.call,
+        unit.result,
         unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
         s.stepDurEl(timing(unit)),
-        unit.delivery || null,
       ),
     );
     built.sync?.();
@@ -338,12 +329,13 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           View cron
         </button>`
       : nothing;
-  const body = (entry: Row) =>
-    memo(bodyNodes, entry, () => {
-      const text = s.payloadText(entry.payload);
+  const body = (item: Item) =>
+    memo(bodyNodes, item, () => {
+      const text = itemText(item),
+        user = isUserMessage(item);
       let value: Node;
-      if (entry.type === "user" && s.isXmlishText(text)) value = s.renderXmlish(text);
-      else if (entry.type === "user" || entry.type === "assistant") value = s.renderMarkdown(text);
+      if (user && s.isXmlishText(text)) value = s.renderXmlish(text);
+      else if (user || item.kind === "AgentMessage") value = s.renderMarkdown(text);
       else value = node(html`<pre>${text}</pre>`);
       if ((value as Element).tagName === "PRE") value.textContent = text;
       return value;
@@ -354,17 +346,15 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         <div class="who">${contextButton("orphan", unit.reqs.length)}<span class="role">captured context</span></div>
       </div>`;
     if (unit.kind === "tool") {
-      const e = unit.primary,
-        [call, res] = ends(unit),
-        types = unit.paired ? ["tool_call", "tool_result"] : [e.type];
-      if (unit.delivery) types.push("outbound_delivery");
-      if (principalIds.has(unit.delivery?.deliveryId)) types.push("principal_delivery");
-      const hidden = s.entryHidden(types, !!unit.delivery),
+      const { call, result: res } = unit,
+        e = call || res,
+        kinds = [call, res].filter(Boolean).map((item) => item.kind),
+        hidden = s.entryHidden(kinds),
         full = fullTool(unit);
       full.classList.toggle("filtered", hidden);
-      if (unit.delivery || unit.llmReqs?.length) return full;
-      const cp = call?.payload,
-        rp = res?.payload,
+      if (unit.llmReqs?.length) return full;
+      const cp = call ? itemFields(call) : {},
+        rp = res ? itemFields(res) : {},
         name = s.toolName(cp, rp);
       return html`<div
         class=${classMap({ entry: true, "tool-entry": true, "tool-line-entry": true, open: open.has(unit), filtered: hidden })}
@@ -392,91 +382,26 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         ${full}
       </div>`;
     }
-    if (unit.kind === "delivery_event") {
-      const event = unit.event,
-        outbound = event.type === "outbound_delivery",
-        delivery = outbound || event.type === "principal_delivery",
-        provenance = event.provenance,
-        label = event.origin?.label || s.wakeOriginLabel(provenance?.trigger || provenance?.surface),
-        mirror = s.slackMirrorRef(event),
-        text = event.text || "",
-        shown = open.has(unit) ? "Hide" : "Show";
-      let deliveryState = "delivery";
-      if (event.shadow) deliveryState = "shadow";
-      else if (event.expiredAt) deliveryState = "dropped";
-      else if (delivery) deliveryState = "delivered";
-      const bodyText = [
-        event.destination?.onBehalfOf ? "from " + event.destination.onBehalfOf : null,
-        outbound && event.destination?.target ? "to " + event.destination.target : null,
-        provenance?.fireKey || event.origin?.fireKey ? "origin " + (provenance?.fireKey || event.origin.fireKey) : null,
-        outbound && event.recipientThreadRef ? "recipient thread " + event.recipientThreadRef : null,
-        text,
-      ]
-        .filter((x) => x != null)
-        .join("\n")
-        .trim();
-      const panel = event.llmRequests?.length ? memo(panels, unit, () => requestsPanel(event.llmRequests, s)) : null;
-      panel?.classList.add("inline-context");
-      panel?.classList.toggle("collapsed", !open.has(unit));
-      let originLink: unknown = provenance ? s.metaChip(label) : nothing;
-      if (event.sourceSession?.id)
-        originLink = html`<button
-          type="button"
-          class="origin-link"
-          title=${`Open origin session ${s.shortId(event.sourceSession.id)} · ${provenance?.fireKey || event.idempotencyKey || ""}`}
-          @click=${() => s.go({ view: "history", scope: s.scope, session: event.sourceSession.id })}
-        >
-          ${label}
-        </button>`;
-      return html`<div
-        class=${classMap({ entry: true, "delivery-event-entry": true, filtered: s.entryHidden([outbound ? "outbound_delivery" : "principal_delivery"], false) })}
-      >
-        <div class="who">
-          ${event.llmRequests?.length ? contextIcon(shown + " context", shown + " context · " + requestCount(event.llmRequests.length), toggle(unit), open.has(unit)) : nothing}<span
-            class="entry-label important"
-            >${event.shadow || delivery ? s.deliveryLabel(event) : "Delivery event"}</span
-          >${event.shadow ? html`<span class="entry-label" title="Recorded for observability, never sent to the human (shadow-mode rollout)">not sent</span>` : nothing}${!event.shadow && event.expiredAt ? html`<span class="entry-label" title="Dropped undelivered — the destination failed permanently or the message aged out">never sent</span>` : nothing}${delivery ? badge(s.deliverySurfaceLabel(event), "info") : nothing}${outbound ? nothing : originLink}${cronLink(event.origin)}${
-            mirror
-              ? html`<a
-                  class="link"
-                  href=${s.stateToUrl({ view: "slack", container: mirror.container, ts: mirror.ts })}
-                  title=${"Jump to this message in the mirrored Slack channel " + mirror.container}
-                  @click=${(e: MouseEvent) => {
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                    e.preventDefault();
-                    s.go({ view: "slack", container: mirror.container, ts: mirror.ts });
-                  }}
-                  >View in Slack mirror ↗</a
-                >`
-              : nothing
-          }<span class="when">${deliveryState + " · " + s.fmtTime(event.createdAt)}</span
-          >${s.copyButton("Copy", () => text)}
-        </div>
-        ${panel ?? nothing}
-        <pre>${bodyText}</pre>
-        ${s.deliveryFileBadges(event.attachments)}
-      </div>`;
-    }
-    const e = unit.entry,
-      noise = s.entryIsNoise(e),
-      isOrigin = origin && e.type === "user" && e.seq === originPromptSeq,
-      text = s.payloadText(e.payload);
-    let label = s.titleCase(e.type || "entry");
-    if (e.type === "assistant") label = s.brandSelfLabel();
-    else if (e.type === "user") label = s.payloadName(e.payload) || "User";
+    const e: Item = unit.item,
+      noise = NOISE_KINDS.has(e.kind),
+      user = isUserMessage(e),
+      isOrigin = origin && e.seq === originPromptSeq,
+      text = itemText(e);
+    let label = kindLabel(e.kind);
+    if (e.kind === "AgentMessage") label = s.brandSelfLabel();
+    else if (e.kind === "Reasoning") label = "Thinking";
+    else if (user) label = (typeof e.body.name === "string" && e.body.name.trim()) || e.author || "User";
     if (isOrigin) label = origin.label || s.wakeOriginLabel(origin.trigger);
     const files =
-      e.type === "delivery" || (e.type === "tool_result" && e.payload?.tool === "attach")
-        ? s.deliveryFileBadges(e.payload?.files || [])
-        : nothing;
+      e.kind === "AgentMessage" && Array.isArray(e.body.files) ? s.deliveryFileBadges(e.body.files) : nothing;
     return html`<div
-      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "system", filtered: s.entryHidden([e.type], false) })}
+      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.kind === "Reasoning", "message-entry": user || e.kind === "AgentMessage", "user-entry": user, "assistant-entry": e.kind === "AgentMessage", "cron-prompt-entry": !!isOrigin, "system-entry": e.kind === "Wake", filtered: s.entryHidden([e.kind]) })}
     >
       <div class="who">
         ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle(unit)}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
           class=${"entry-label" + (isOrigin ? " important" : "")}
           >${label}</span
-        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${e.type !== "user" ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span
+        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${!user ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span
           class="when"
           >${"#" + e.seq + " · " + s.fmtTime(e.createdAt)}</span
         >${s.copyButton("Copy", () => text)}
