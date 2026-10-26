@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import type { SandboxBackendId } from "./providers.ts";
-import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
+import { effectiveModelProvider, effectiveSandboxBackend, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue } from "./util.ts";
 
@@ -502,10 +502,7 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "background-work-control")
     return config.target === "aws" && config.aws?.backgroundWorkControl === true;
   if (condition.kind === "sandbox-backend") {
-    const backend =
-      config.env.core?.SANDBOX_BACKEND ??
-      config.sandbox?.backend ??
-      targetEnvDefault(config, "core", "SANDBOX_BACKEND");
+    const backend = effectiveSandboxBackend(config) ?? targetEnvDefault(config, "core", "SANDBOX_BACKEND");
     return backend?.trim() === condition.backend;
   }
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
@@ -517,12 +514,10 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "env-all-absent") {
     return condition.names.every((name) => !config.env[condition.service]?.[name]?.trim());
   }
-  const configuredSandboxBackend =
-    condition.service === "core" && condition.name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
   const value = (
-    config.env[condition.service]?.[condition.name] ??
-    configuredSandboxBackend ??
-    targetEnvDefault(config, condition.service, condition.name)
+    (condition.service === "core" && condition.name === "SANDBOX_BACKEND"
+      ? effectiveSandboxBackend(config)
+      : config.env[condition.service]?.[condition.name]) ?? targetEnvDefault(config, condition.service, condition.name)
   )?.trim();
   if (condition.kind === "env-absent") return !value;
   if (condition.kind === "env-present") return Boolean(value);
