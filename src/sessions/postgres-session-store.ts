@@ -1682,7 +1682,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return withPgTransaction(await pool(), async (client) => {
         const createdAt = spec.entries[0]?.createdAt ?? now();
         await client.query(
-          "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,$5,0,0,$7,$8) ON CONFLICT (thread_ref) DO NOTHING",
+          "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,NULL,0,0,$7,$8) ON CONFLICT (thread_ref) DO NOTHING",
           [
             randomUUID(),
             "dm",
@@ -1721,22 +1721,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [sessionId],
         );
         const after = latest.rows[0]?.at == null ? -Infinity : Number(latest.rows[0].at);
-        const appended = await insertEntries(
-          client,
-          sessionId,
-          spec.entries.filter((entry) => entry.createdAt > after),
-        );
-        const first = appended[0]?.createdAt ?? null;
-        const newest = appended.reduce((latest, entry) => Math.max(latest, entry.createdAt), 0);
+        const fresh = spec.entries.filter((entry) => entry.createdAt > after);
         await client.query(
           `UPDATE sessions
               SET title = COALESCE(title, $2),
-                  created_at = CASE WHEN $4::boolean AND $5::bigint IS NOT NULL THEN $5::bigint ELSE created_at END,
-                  last_activity = CASE WHEN $4::boolean AND $5::bigint IS NOT NULL THEN $3::bigint
-                                       ELSE GREATEST(COALESCE(last_activity, 0), $3::bigint) END
+                  created_at = CASE WHEN $3::bigint IS NULL THEN created_at ELSE $3::bigint END,
+                  last_activity = CASE WHEN $3::bigint IS NULL THEN last_activity ELSE NULL END
             WHERE id = $1`,
-          [sessionId, spec.title?.trim() || null, newest, after === -Infinity, first],
+          [sessionId, spec.title?.trim() || null, after === -Infinity ? (fresh[0]?.createdAt ?? null) : null],
         );
+        const appended = await insertEntries(client, sessionId, fresh);
         const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
         return { session: rowToSession(row.rows[0]!), appended: appended.length };
       });
