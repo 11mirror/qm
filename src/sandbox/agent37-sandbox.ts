@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { fetchWithRetry, sleep } from "../util/async.ts";
+import { createBearerApi, sleep } from "../util/async.ts";
 import { withRequestId, swallowAs } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
@@ -51,16 +51,12 @@ function refusalMessage(body: string): string | null {
   return code && message && REFUSAL_CODES.has(code) ? message : null;
 }
 
-async function apiFailure(action: string, res: Response): Promise<{ detail: string; error: Error }> {
+async function apiFailure(action: string, res: Response): Promise<Error> {
   const body = await res.text().catch(() => "");
-  const detail = withRequestId(`http ${res.status} ${body.slice(0, 200)}`, res.headers);
   const refused = refusalMessage(body);
-  return {
-    detail,
-    error: refused
-      ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`)
-      : new Error(`agent37 ${action}: ${detail}`),
-  };
+  return refused
+    ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`)
+    : new Error(`agent37 ${action}: ${withRequestId(`http ${res.status} ${body.slice(0, 200)}`, res.headers)}`);
 }
 
 interface InstanceInfo {
@@ -86,7 +82,6 @@ export interface Agent37SandboxOptions extends SandboxShared {
 
 export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): Sandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const resources = {
     cpu: opts.cpus ?? DEFAULT_CPUS,
     memory: opts.memoryMb ? Math.ceil(opts.memoryMb / 1024) : DEFAULT_MEMORY_GB,
@@ -95,77 +90,45 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
   const idByName = new Map<string, string>();
 
-  function send(
-    method: string,
-    path: string,
-    body?: unknown,
-    timeoutMs = 60_000,
-    signal?: AbortSignal,
-  ): Promise<Response> {
-    return fetchImpl(`${BASE_URL}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${opts.apiKey ?? ""}`,
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: signal ?? AbortSignal.timeout(timeoutMs),
-    });
-  }
-
-  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
-    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
-    return method === "GET" || method === "DELETE"
-      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
-      : operation();
-  }
-
-  async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
-    const res = await api(method, path, body, timeoutMs);
-    if (!res.ok) {
-      throw (await apiFailure(`${method} ${path}`, res)).error;
-    }
-    return (await res.json()) as T;
-  }
+  const { request: api, json: apiJson } = createBearerApi({
+    baseUrl: BASE_URL,
+    token: opts.apiKey ?? "",
+    fetchImpl: opts.fetchImpl ?? fetch,
+    failure: apiFailure,
+  });
 
   async function findInstance(name: string): Promise<InstanceInfo | null> {
     const { data } = await apiJson<{ data: InstanceInfo[] }>("GET", "/v1/instances");
     return data.find((i) => i.name === name && !GONE_STATES.has(i.status)) ?? null;
   }
 
+  const instanceStatus = async (id: string): Promise<string> =>
+    (await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`)).status;
+
   async function ensureRunning(id: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     for (;;) {
-      const info = await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
-      if (info.status === "running") return;
-      if (DEAD_STATES.has(info.status)) throw new Error(`agent37 instance ${id}: ${info.status}`);
+      const status = await instanceStatus(id);
+      if (status === "running") return;
+      if (DEAD_STATES.has(status)) throw new Error(`agent37 instance ${id}: ${status}`);
       if (Date.now() > deadline)
-        throw new Error(`agent37 instance ${id}: not running after ${READY_TIMEOUT_MS}ms (status=${info.status})`);
-      if (STARTABLE_STATES.has(info.status)) {
-        const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, START_TIMEOUT_MS);
+        throw new Error(`agent37 instance ${id}: not running after ${READY_TIMEOUT_MS}ms (status=${status})`);
+      if (STARTABLE_STATES.has(status)) {
+        const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, { timeoutMs: START_TIMEOUT_MS });
         if (res.ok) continue;
-        if (res.status !== 400 && res.status !== 409) {
-          throw (await apiFailure(`start ${id}`, res)).error;
-        }
+        if (res.status !== 400 && res.status !== 409) throw await apiFailure(`start ${id}`, res);
       }
       await sleep(READY_POLL_MS);
     }
   }
 
   async function createInstance(name: string): Promise<InstanceInfo> {
-    const res = await fetchWithRetry(
-      (signal) =>
-        send(
-          "POST",
-          "/v1/instances",
-          { template: TEMPLATE, name, resources, auto_sleep: true },
-          CREATE_TIMEOUT_MS,
-          signal,
-        ),
-      "refused",
-      { timeoutMs: CREATE_TIMEOUT_MS },
-    );
-    if (!res.ok) throw (await apiFailure(`create ${name}`, res)).error;
+    const res = await api("POST", "/v1/instances", {
+      body: { template: TEMPLATE, name, resources, auto_sleep: true },
+      timeoutMs: CREATE_TIMEOUT_MS,
+      retry: "refused",
+    });
+    if (!res.ok) throw await apiFailure(`create ${name}`, res);
     const info = (await res.json()) as InstanceInfo;
     await ensureRunning(info.id);
     return info;
@@ -186,33 +149,24 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       idByName.delete(name);
       return;
     }
-    const res = await api("DELETE", `/v1/instances/${encodeURIComponent(found)}`, undefined, 120_000);
-    if (!res.ok && res.status !== 404) {
-      throw (await apiFailure(`delete ${name}`, res)).error;
-    }
+    const res = await api("DELETE", `/v1/instances/${encodeURIComponent(found)}`, { timeoutMs: 120_000 });
+    if (!res.ok && res.status !== 404) throw await apiFailure(`delete ${name}`, res);
     idByName.delete(name);
   }
 
   async function postExec(name: string, script: string, timeoutSec: number): Promise<InstanceExecResponse> {
     const id = await instanceIdFor(name);
-    const body = { command: script };
-    const timeoutMs = timeoutSec * 1000 + 2 * EXIT_GRACE_MS;
-    const first = await send("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, body, timeoutMs);
+    const req = { body: { command: script }, timeoutMs: timeoutSec * 1000 + 2 * EXIT_GRACE_MS };
+    const first = await api("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, req);
     let res = first;
     if (!first.ok) {
-      const { detail, error } = await apiFailure(`exec ${name}`, first);
+      const error = await apiFailure(`exec ${name}`, first);
       if (first.status === 404) idByName.delete(name);
-      const notRunning = first.status === 400 && /running instances/i.test(detail);
-      const freezing = first.status === 409;
-      if (first.status !== 404 && !notRunning && !freezing) {
-        throw error;
-      }
+      else if (first.status !== 409 && (first.status !== 400 || (await instanceStatus(id)) === "running")) throw error;
       const retryId = await instanceIdFor(name);
       await ensureRunning(retryId);
-      res = await send("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
-      if (!res.ok) {
-        throw (await apiFailure(`exec ${name}`, res)).error;
-      }
+      res = await api("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, req);
+      if (!res.ok) throw await apiFailure(`exec ${name}`, res);
     }
     const parsed = (await res.json()) as InstanceExecResponse;
     if (parsed.truncated) {

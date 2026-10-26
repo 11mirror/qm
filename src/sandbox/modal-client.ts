@@ -166,7 +166,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
       const commandMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs);
       const timeoutMs = commandMs + MODAL_EXEC_GRACE_MS;
-      const deadlineAt = Date.now() + timeoutMs;
       try {
         let args = ["timeout", String(commandMs / 1000), "sh", "-c", command];
         if (Buffer.byteLength(command, "utf8") > MODAL_MAX_EXEC_ARG_BYTES) {
@@ -184,8 +183,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       } catch (err) {
         if (await hasExited(sdk, sbx, err))
           throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
-        if (err instanceof sdk.TimeoutError || Date.now() >= deadlineAt)
-          return { stdout: "", stderr: errText(err), exitCode: 124 };
+        if (err instanceof sdk.TimeoutError) return { stdout: "", stderr: errText(err), exitCode: 124 };
         throw err;
       }
     },

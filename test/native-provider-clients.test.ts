@@ -108,6 +108,8 @@ let pauseError: Error | undefined;
 let startError: Error | undefined;
 let onDispatch: ((command: string) => void) | undefined;
 let waitError: Error | undefined;
+let e2bRunning = true;
+let waitValue: unknown;
 class FakeSandboxError extends Error {}
 class FakeNotFoundError extends FakeSandboxError {}
 class FakeSandboxNotFoundError extends FakeNotFoundError {}
@@ -126,6 +128,9 @@ class FakeCommandExitError extends FakeSandboxError {
 }
 const fakeE2bSandbox = (sandboxId: string) => ({
   sandboxId,
+  async isRunning() {
+    return e2bRunning;
+  },
   async setTimeout(ms: number) {
     e2bCalls.push(["setTimeout", ms]);
   },
@@ -142,7 +147,7 @@ const fakeE2bSandbox = (sandboxId: string) => ({
         pid: 7,
         async wait() {
           if (waitError) throw waitError;
-          return { exitCode: 0, stdout: "ran", stderr: "" };
+          return waitValue ?? { exitCode: 0, stdout: "ran", stderr: "" };
         },
       };
     },
@@ -412,7 +417,7 @@ test("E2B extends the sandbox timeout only when a command outlives the remaining
   assert.throws(() => createSdkE2bClient({ apiKey: "test", maxLifetimeMs: 0 }), /above 60000/);
 });
 
-test("E2B refuses to re-run a command lost mid-flight and classifies gone sandboxes by SDK error class", async () => {
+test("E2B refuses to re-run a command lost mid-flight and classifies gone sandboxes by SDK error class and sandbox health", async () => {
   const client = createSdkE2bClient({ apiKey: "test" });
   const session = await client.create({ metadata: {}, autoPause: true });
   startError = new FakeSandboxNotFoundError("Sandbox is probably not running anymore");
@@ -425,18 +430,25 @@ test("E2B refuses to re-run a command lost mid-flight and classifies gone sandbo
     (e: Error) => !(e instanceof E2bSandboxGoneError) && /410/.test(e.message),
   );
   startError = undefined;
-  waitError = new FakeTimeoutError(
-    "connection terminated: The sandbox was killed or reached its end of life while the request was in flight.",
+  waitError = new FakeTimeoutError("unavailable");
+  e2bRunning = false;
+  await assert.rejects(
+    session.runCommand("echo"),
+    (e: Error) => e instanceof E2bCommandLostError && e.cause === waitError,
   );
-  await assert.rejects(session.runCommand("echo"), E2bCommandLostError);
+  e2bRunning = true;
   waitError = new FakeSandboxNotFoundError("Sandbox is probably not running anymore");
   await assert.rejects(session.runCommand("echo"), E2bCommandLostError);
   waitError = new FakeTimeoutError("deadline exceeded: This error is likely due to exceeding 'timeoutMs'");
   await assert.rejects(
     session.runCommand("echo"),
     (e: Error) => e instanceof FakeTimeoutError && !(e instanceof E2bCommandLostError),
-    "a command deadline is neither a lost sandbox nor a gone one",
+    "a timeout on a sandbox that is still running is neither a lost sandbox nor a gone one",
   );
+  waitError = undefined;
+  waitValue = {};
+  await assert.rejects(session.runCommand("echo"), /finished without an exit code/);
+  waitValue = undefined;
   waitError = new FakeCommandExitError(3, "out", "err");
   assert.deepEqual(await session.runCommand("exit 3"), { stdout: "out", stderr: "err", exitCode: 3 });
   waitError = undefined;

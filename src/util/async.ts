@@ -135,3 +135,50 @@ export async function fetchWithRetry(
     await wait(retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts));
   }
 }
+
+export interface BearerRequest {
+  body?: unknown;
+  timeoutMs?: number;
+  retry?: RetryClass | false;
+}
+
+export interface BearerApi {
+  request(method: string, path: string, req?: BearerRequest): Promise<Response>;
+  json<T>(method: string, path: string, req?: BearerRequest): Promise<T>;
+}
+
+export function createBearerApi(opts: {
+  baseUrl: string;
+  token: string;
+  fetchImpl: typeof fetch;
+  failure(action: string, res: Response): Promise<Error>;
+}): BearerApi {
+  const send = (method: string, path: string, req: BearerRequest, signal?: AbortSignal): Promise<Response> => {
+    const raw = req.body instanceof Uint8Array;
+    return opts.fetchImpl(`${opts.baseUrl}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${opts.token}`,
+        ...(req.body !== undefined ? { "content-type": raw ? "application/octet-stream" : "application/json" } : {}),
+      },
+      ...(req.body !== undefined
+        ? { body: raw ? (req.body as Uint8Array<ArrayBuffer>) : JSON.stringify(req.body) }
+        : {}),
+      signal: signal ?? AbortSignal.timeout(req.timeoutMs ?? 60_000),
+    });
+  };
+  const request = (method: string, path: string, req: BearerRequest = {}): Promise<Response> => {
+    const retry = req.retry ?? (method === "GET" || method === "DELETE" ? "idempotent" : false);
+    return retry
+      ? fetchWithRetry((signal) => send(method, path, req, signal), retry, { timeoutMs: req.timeoutMs })
+      : send(method, path, req);
+  };
+  return {
+    request,
+    async json<T>(method: string, path: string, req?: BearerRequest): Promise<T> {
+      const res = await request(method, path, req);
+      if (!res.ok) throw await opts.failure(`${method} ${path}`, res);
+      return (await res.json()) as T;
+    },
+  };
+}

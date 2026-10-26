@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { fetchWithRetry, sleep } from "../util/async.ts";
+import { createBearerApi, sleep } from "../util/async.ts";
 import { httpFailure } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
@@ -54,8 +54,6 @@ export interface SmolmachinesSandboxOptions extends SandboxShared {
 
 export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): Sandbox {
   if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
-  const token = opts.token ?? "";
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? BASE_URL).replace(/\/+$/, "");
   const resources = {
     ...(opts.cpus ? { cpus: opts.cpus } : {}),
@@ -71,38 +69,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
   const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
-  function send(
-    method: string,
-    path: string,
-    body?: unknown,
-    timeoutMs = 60_000,
-    signal?: AbortSignal,
-  ): Promise<Response> {
-    return fetchImpl(`${baseUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: signal ?? AbortSignal.timeout(timeoutMs),
-    });
-  }
-
-  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
-    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
-    return method === "GET" || method === "DELETE"
-      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
-      : operation();
-  }
-
-  async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
-    const res = await api(method, path, body, timeoutMs);
-    if (!res.ok) {
-      throw new Error(`smolmachines ${method} ${path}: ${await httpFailure(res)}`);
-    }
-    return (await res.json()) as T;
-  }
+  const { request: api, json: apiJson } = createBearerApi({
+    baseUrl,
+    token: opts.token ?? "",
+    fetchImpl: opts.fetchImpl ?? fetch,
+    failure: async (action, res) => new Error(`smolmachines ${action}: ${await httpFailure(res)}`),
+  });
 
   async function findMachine(name: string): Promise<MachineInfo | null> {
     const machines = await apiJson<MachineInfo[]>("GET", "/v1/machines");
@@ -126,14 +98,16 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function createMachine(name: string, ephemeral: boolean): Promise<{ info: MachineInfo; created: boolean }> {
     const res = await api("POST", "/v1/machines", {
-      name,
-      source: { type: "image", reference: IMAGE },
-      ...(Object.keys(resources).length ? { resources } : {}),
-      network,
-      workdir: HOME_DIR,
-      ephemeral,
-      ...(ephemeral ? { ttlSeconds: SCRATCH_TTL_SEC } : {}),
-      ...(opts.idleParkSec ? { autoStopSeconds: opts.idleParkSec } : {}),
+      body: {
+        name,
+        source: { type: "image", reference: IMAGE },
+        ...(Object.keys(resources).length ? { resources } : {}),
+        network,
+        workdir: HOME_DIR,
+        ephemeral,
+        ...(ephemeral ? { ttlSeconds: SCRATCH_TTL_SEC } : {}),
+        ...(opts.idleParkSec ? { autoStopSeconds: opts.idleParkSec } : {}),
+      },
     });
     if (res.status === 409) {
       const existing = await findMachine(name);
@@ -193,23 +167,22 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function postExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const id = await machineIdFor(name);
-    const body = {
-      command: ["sh", "-c", script],
-      timeoutSeconds: timeoutSec + Math.ceil(EXIT_GRACE_MS / 1000),
+    const req = {
+      body: { command: ["sh", "-c", script], timeoutSeconds: timeoutSec + Math.ceil(EXIT_GRACE_MS / 1000) },
+      timeoutMs: timeoutSec * 1000 + 2 * EXIT_GRACE_MS,
     };
-    const timeoutMs = timeoutSec * 1000 + 2 * EXIT_GRACE_MS;
     const execPath = (machineId: string): string => `${machinePath(machineId)}/exec?output=b64`;
-    const first = await send("POST", execPath(id), body, timeoutMs);
+    const first = await api("POST", execPath(id), req);
     let res = first;
     if (!first.ok) {
       const detail = await httpFailure(first);
       if (first.status === 404) idByName.delete(name);
-      if (first.status !== 409 && first.status !== 404 && !/stopped|suspended/i.test(detail)) {
+      else if (first.status !== 409 && isRunning(await apiJson<MachineInfo>("GET", machinePath(id)))) {
         throw new Error(`smolmachines exec ${name}: ${detail}`);
       }
       const retryId = await machineIdFor(name);
       await startMachine(retryId);
-      res = await send("POST", execPath(retryId), body, timeoutMs);
+      res = await api("POST", execPath(retryId), req);
       if (!res.ok) {
         throw new Error(`smolmachines exec ${name}: ${await httpFailure(res)}`);
       }
@@ -252,17 +225,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const id = await machineIdFor(name);
-    const res = await fetchWithRetry(
-      (signal) =>
-        fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
-          method: "PUT",
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/octet-stream" },
-          body: Buffer.from(data),
-          signal,
-        }),
-      "idempotent",
-      { timeoutMs: FILE_TRANSFER_TIMEOUT_MS },
-    );
+    const res = await api("PUT", filesUrl(id, absPath), {
+      body: data,
+      timeoutMs: FILE_TRANSFER_TIMEOUT_MS,
+      retry: "idempotent",
+    });
     if (!res.ok) {
       throw new Error(`smolmachines write ${absPath}: ${await httpFailure(res)}`);
     }
@@ -270,15 +237,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
     const id = await machineIdFor(name);
-    const res = await fetchWithRetry(
-      (signal) =>
-        fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
-          headers: { authorization: `Bearer ${token}` },
-          signal,
-        }),
-      "idempotent",
-      { timeoutMs: FILE_TRANSFER_TIMEOUT_MS },
-    );
+    const res = await api("GET", filesUrl(id, absPath), { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
     if (res.status === 404) return null;
     if (!res.ok) {
       throw new Error(`smolmachines read ${absPath}: ${await httpFailure(res)}`);
