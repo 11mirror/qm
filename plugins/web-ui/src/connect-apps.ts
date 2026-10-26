@@ -21,7 +21,6 @@ interface ConnectedAccount {
 }
 import type { Me } from "./shell-state";
 import "./connect-apps.css";
-import "./onboarding-slack";
 import "./slack-account";
 
 const continuedAttempts = new Set<string>();
