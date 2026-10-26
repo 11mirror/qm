@@ -6,6 +6,7 @@ import type { ServerResponse } from "node:http";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { zodMessage } from "./shared.ts";
 
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
@@ -74,11 +75,6 @@ const clientResultSchema = z.object({
       .optional(),
   }),
 });
-
-function zodMessage(field: string, error: z.ZodError): string {
-  const issue = error.issues[0]!;
-  return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
-}
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {

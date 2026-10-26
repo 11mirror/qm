@@ -31,6 +31,7 @@ import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
 import { SoulTooLargeError } from "../resolution/config-store.ts";
+import { zodMessage } from "./routes/shared.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -364,6 +365,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     );
     if (!gated) return;
     if (!matched) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+    const schema = matched.route.body;
+    if (schema) {
+      const parsed = schema.safeParse(gated.body);
+      if (!parsed.success)
+        return sendJson(res, 400, { error: "bad_request", message: zodMessage("body", parsed.error) });
+      gated.body = parsed.data;
+    }
     await run(matched.route, matched.params, { ...base, ...gated });
   }
   return server;

@@ -8,6 +8,7 @@ import type { ConfiguredDeps, ServerDeps } from "../deps.ts";
 import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { PortalIdentity } from "../../auth/portal-identity.ts";
+import type { ZodType } from "zod";
 
 export interface BaseCtx {
   req: IncomingMessage;
@@ -51,6 +52,8 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   admin?: AdminAccess;
   allowedInStrict?: true;
   maxBodyBytes?: number;
+  /** Validates (and replaces) the parsed JSON body before the handler runs; a failure is a 400. */
+  body?: ZodType;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {
