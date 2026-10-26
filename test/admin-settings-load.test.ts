@@ -81,7 +81,7 @@ test("Customize completes within 500 ms with unrelated model and connector servi
   const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=customize", { headers: ADMIN });
   assert.equal(response.status, 200);
-  assert.equal(typeof ((await response.json()) as { soul: string }).soul, "string");
+  assert.equal(typeof ((await response.json()) as { instructions: string }).instructions, "string");
   assert.ok(performance.now() - started < 500);
 });
 

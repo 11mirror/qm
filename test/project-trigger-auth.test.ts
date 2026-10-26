@@ -119,21 +119,21 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok(currentVersion);
   const projectToken = await token("member", project.scopeId, currentVersion);
   const slackToken = await token("member", slackScope);
-  assert.equal((await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": staleOwnerToken } })).status, 403);
-  assert.equal((await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": projectToken } })).status, 200);
+  assert.equal((await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": staleOwnerToken } })).status, 403);
+  assert.equal((await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": projectToken } })).status, 200);
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
   await runNowSettled(built.scheduler, projectCron.id);
   assert.equal(await built.crons.get(projectCron.id), null, "a Project cron is deleted once its owner leaves");
 
-  assert.equal((await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": projectToken } })).status, 403);
+  assert.equal((await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": projectToken } })).status, 403);
   assert.equal(
-    (await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": await token("member", `personal:member`) } }))
+    (await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": await token("member", `personal:member`) } }))
       .status,
     200,
   );
-  assert.equal((await fetch(`${base}/v1/soul`, { headers: { "x-agent-capability": slackToken } })).status, 200);
+  assert.equal((await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": slackToken } })).status, 200);
 
   const listedCrons = await built.app.listCronsForViewer("member");
   assert.ok(!listedCrons.owned.some((cron) => cron.id === projectCron.id));

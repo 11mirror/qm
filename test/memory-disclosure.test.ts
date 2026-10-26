@@ -128,7 +128,7 @@ test("empty audience and authorization lookup failures fail closed", async () =>
   for (const patch of [
     { audience: [], currentScopeMembers: async () => [] },
     {
-      isCurrentSharedScopeMember: async () => {
+      currentScopeMembers: async () => {
         throw Error("unavailable");
       },
     },

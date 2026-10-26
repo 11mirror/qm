@@ -97,7 +97,7 @@ describe("capability-token control plane (SOUL)", () => {
   it("updates only the caller's OWN personal SOUL, ignoring body scope/actor", async () => {
     const orgVerBefore = built.config.instructionsVersion(scopeId("org", "default-org"));
     const res = await post(
-      "/v1/soul",
+      "/v1/instructions",
       { content: "Always answer in bullet points.", scopeId: "org:default-org", actorId: "U2" },
       { "x-agent-capability": await capFor("U1") },
     );
@@ -115,7 +115,7 @@ describe("capability-token control plane (SOUL)", () => {
     const channelScope = scopeId("channel", "C");
     const personalBefore = built.config.instructionsVersion(personalScope);
     const res = await post(
-      "/v1/soul",
+      "/v1/instructions",
       { content: "Channel C speaks in haiku.", scopeId: personalScope, actorId: "U2" },
       { "x-agent-capability": await capChannel("U8") },
     );
@@ -136,12 +136,12 @@ describe("capability-token control plane (SOUL)", () => {
     const orgBefore = built.config.instructionsVersion(orgScope);
 
     const orgRes = await post(
-      "/v1/soul",
+      "/v1/instructions",
       { content: "replace org" },
       { "x-agent-capability": await capFor("U1", orgScope) },
     );
     const teamRes = await post(
-      "/v1/soul",
+      "/v1/instructions",
       { content: "replace team" },
       { "x-agent-capability": await capFor("U1", teamScope) },
     );
@@ -156,12 +156,12 @@ describe("capability-token control plane (SOUL)", () => {
     const personalScope = scopeId("personal", "U7");
     await built.config.setInstructions(personalScope, "Prefer precise, compact answers.");
 
-    const res = await get("/v1/soul?scopeId=personal:U2", { "x-agent-capability": await capFor("U7") });
+    const res = await get("/v1/instructions?scopeId=personal:U2", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
 
     const got = (await res.json()) as any;
     assert.equal(got.scopeId, personalScope, "query scope is ignored; the token's signed scope wins");
-    assert.equal(got.soul, "Prefer precise, compact answers.");
+    assert.equal(got.instructions, "Prefer precise, compact answers.");
     assert.ok(got.instructionsVersion >= 1);
     assert.equal(got.orgScopeId, scopeId("org", "default-org"));
     assert.equal(typeof got.orgInstructions, "string");
@@ -174,24 +174,24 @@ describe("capability-token control plane (SOUL)", () => {
     const personalScope = scopeId("personal", "U7");
     const orgInstructions = built.config.getInstructions(orgScope)!;
     await built.config.setInstructions(personalScope, ` ${orgInstructions} `);
-    const res = await get("/v1/soul", { "x-agent-capability": await capFor("U7") });
+    const res = await get("/v1/instructions", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
     const got = (await res.json()) as any;
-    assert.equal(got.soul, ` ${orgInstructions} `);
+    assert.equal(got.instructions, ` ${orgInstructions} `);
     assert.equal(got.effectiveInstructions.split(orgInstructions).length - 1, 1);
-    assert.equal(built.config.getInstructions(personalScope), got.soul);
+    assert.equal(built.config.getInstructions(personalScope), got.instructions);
   });
 
   it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
     await built.config.setInstructions(scopeId("personal", "U8"), "Private U8 instruction.");
     await built.config.setInstructions(scopeId("channel", "C"), "Channel C instruction.");
 
-    const res = await get("/v1/soul?scopeId=personal:U8", { "x-agent-capability": await capChannel("U8") });
+    const res = await get("/v1/instructions?scopeId=personal:U8", { "x-agent-capability": await capChannel("U8") });
     assert.equal(res.status, 200);
 
     const got = (await res.json()) as any;
     assert.equal(got.scopeId, scopeId("channel", "C"));
-    assert.equal(got.soul, "Channel C instruction.");
+    assert.equal(got.instructions, "Channel C instruction.");
     assert.ok(got.effectiveInstructions.includes("Channel C instruction."));
     assert.equal(got.effectiveInstructions.includes("Private U8 instruction."), false);
   });
@@ -213,9 +213,9 @@ describe("capability-token control plane (SOUL)", () => {
   });
 
   it("rejects an invalid/expired token with 401", async () => {
-    assert.equal((await post("/v1/soul", { soul: "x" }, { "x-agent-capability": "garbage" })).status, 401);
+    assert.equal((await post("/v1/instructions", { content: "x" }, { "x-agent-capability": "garbage" })).status, 401);
     const expired = await mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 }, SECRET);
-    assert.equal((await post("/v1/soul", { soul: "x" }, { "x-agent-capability": expired })).status, 401);
+    assert.equal((await post("/v1/instructions", { content: "x" }, { "x-agent-capability": expired })).status, 401);
   });
 
   it("refuses a capability token on a non-self-service route (e.g. /v1/turns) with 403", async () => {
@@ -241,7 +241,7 @@ describe("capability-token control plane (SOUL)", () => {
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );
-    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
+    assert.equal((await get("/v1/instructions", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
   it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
@@ -255,10 +255,10 @@ describe("capability-token control plane (SOUL)", () => {
       liveActor: true,
       members,
     });
-    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
+    assert.equal((await get("/v1/instructions", { "x-agent-capability": token })).status, 200);
     assert.equal(
       (
-        await get("/v1/soul", {
+        await get("/v1/instructions", {
           "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
         })
       ).status,
