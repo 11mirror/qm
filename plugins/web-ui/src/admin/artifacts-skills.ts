@@ -11,10 +11,7 @@ export async function removeSkill(s: Data, c: Context) {
       "DELETE",
       "/api/skills/" + encodeURIComponent(s.id) + "?scope=" + encodeURIComponent(s.ownerScopeId || c.scope),
     );
-    if (!response.ok) {
-      alert(response.data?.message || "1 scope(s) could not be removed.");
-      return;
-    }
+    if (!response.ok) return alert(response.data?.message || "1 scope(s) could not be removed.");
     c.invalidate();
     await c.reload();
   } catch {
@@ -29,14 +26,12 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
     "GET",
     "/api/skills/" + encodeURIComponent(rep.id) + "?scope=" + encodeURIComponent(rep.ownerScopeId || c.scope),
   );
-  if (!response.ok || !response.data) {
-    paint(
+  if (!response.ok || !response.data)
+    return paint(
       html`<p class="empty">
         ${response.status === 403 ? "You don't administer this skill's scope." : "Couldn't load this skill."}
       </p>`,
     );
-    return;
-  }
   const k = response.data;
   const by =
     (k.pack && "from " + (c.packRepoLabel(k.pack.url) || "pack " + c.shortId(k.pack.id, 8))) ||
@@ -117,12 +112,7 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
   let [menu, menuTop, menuLeft] = [null as string | null, 0, 0];
   const statuses = new Map<string, Data>();
   const pending = new Set<string>();
-  const closeMenu = () => {
-    if (menu) {
-      menu = null;
-      draw();
-    }
-  };
+  const closeMenu = () => menu && ((menu = null), draw());
   const abort = new AbortController();
   document.addEventListener("click", closeMenu, { signal: abort.signal });
   document.addEventListener("scroll", closeMenu, { signal: abort.signal, capture: true });
@@ -173,14 +163,10 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
     menu = null;
     if (action === "browse") {
       draw();
-      void browsePack(s, detail, c);
-      return;
+      return void browsePack(s, detail, c);
     }
     if (pending.has(s.id)) return;
-    if (action === "remove" && !confirm("Remove this pack and archive its imported skills?")) {
-      draw();
-      return;
-    }
+    if (action === "remove" && !confirm("Remove this pack and archive its imported skills?")) return draw();
     pending.add(s.id);
     const sync = action === "sync";
     if (sync) statuses.set(s.id, { text: "syncing…", tone: "saving" });
@@ -197,8 +183,7 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
       );
       if (!response.ok) {
         const text = (sync ? "sync failed: " : "Failed: ") + (response.data?.message || response.status);
-        statuses.set(s.id, { text, tone: "err" });
-        return;
+        return void statuses.set(s.id, { text, tone: "err" });
       }
       if (sync) {
         const [n, u, a] = ["imported", "updated", "archived"].map((k) => (response.data?.[k] || []).length);
@@ -371,10 +356,8 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
   const paint = renderer(root);
   paint(html`<div class="loadingline">${"Fetching " + pack.url + "…"}</div>`);
   const response = await c.api("GET", "/api/skill-packs/" + encodeURIComponent(pack.id) + "/catalog");
-  if (!response.ok || !response.data) {
-    paint(html`<p class="empty">${response.data?.message || "Couldn't browse (" + response.status + ")."}</p>`);
-    return;
-  }
+  if (!response.ok || !response.data)
+    return paint(html`<p class="empty">${response.data?.message || "Couldn't browse (" + response.status + ")."}</p>`);
   const plan = response.data,
     candidates: Data[] = plan.candidates || [],
     counts = plan.counts || {};

@@ -30,12 +30,7 @@ function dayMs(day: unknown): number | null {
   return Number.isFinite(ms) && isoDay(ms) === day ? ms : null;
 }
 
-interface SpendWindow {
-  from: string;
-  to: string;
-  preset: string | null;
-  bucket: "day" | "week";
-}
+type SpendWindow = { from: string; to: string; preset: string | null; bucket: "day" | "week" };
 
 function windowOf(start: number, end: number, preset: string | null): SpendWindow {
   return { from: isoDay(start), to: isoDay(end), preset, bucket: end - start > 62 * DAY ? "week" : "day" };

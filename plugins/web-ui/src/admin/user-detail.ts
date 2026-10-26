@@ -8,14 +8,12 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
   paint(html`<div class="detail">Loading…</div>`);
   const r = await s.api("GET", "/api/users/" + encodeURIComponent(principal));
   if (!s.current(principal)) return;
-  if (!r.ok) {
-    paint(
+  if (!r.ok)
+    return paint(
       html`<div class="detail">
         ${r.status === 403 ? "You don't have admin access." : r.data?.message || `Failed to load user (${r.status}).`}
       </div>`,
     );
-    return;
-  }
   const d = r.data || {};
   s.pageShell({
     back,

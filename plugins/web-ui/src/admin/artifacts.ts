@@ -4,6 +4,7 @@ import { card, bareCard, table, renderer, empty, stacked, denseList as dense } f
 import { mountPacks, skillDetail, removeSkill } from "./artifacts-skills.ts";
 export type Data = Record<string, any>;
 export type Context = Record<string, any>;
+type Fact = { id: string; text: string };
 const queries = new Map<string, string>();
 function scopeList(items: Data[], c: Context, noun: string, latest: (r: Data) => number, message: string) {
   const groups = new Map<string, Data>();
@@ -289,10 +290,9 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       back: { label: "← Memory", onClick: () => c.go({ view: "memory", scope: "org:" + c.orgId, session: null }) },
       title: c.orgWide ? "Org-wide" : c.shortName(c.scope),
     });
-  let facts: Array<{ id: string; text: string }> = d.facts || [];
-  let editing: { id: string; text: string } | null = null;
-  let draft = "";
-  let [saving, message, tone] = [false, "", ""];
+  let facts: Fact[] = d.facts || [];
+  let editing: Fact | null = null;
+  let [draft, saving, message, tone] = ["", false, "", ""];
   const change = async (method: "POST" | "PATCH" | "DELETE", body: object) => {
     if (saving) return;
     saving = true;
@@ -316,7 +316,7 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
       draw();
     }
   };
-  const row = (fact: { id: string; text: string }) =>
+  const row = (fact: Fact) =>
     editing?.id === fact.id
       ? html`<li>
           <textarea
@@ -540,10 +540,7 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
     title: cron ? c.firstLine(c.cronName(cron, true), 90) : "Cron",
     context: cron ? c.shortName(cron.ownerScopeId) : "",
   });
-  if (!cron) {
-    render(empty("Cron " + c.shortId(id) + " isn't in this scope."));
-    return;
-  }
+  if (!cron) return render(empty("Cron " + c.shortId(id) + " isn't in this scope."));
   let [editing, saving, expanded, needsToggle] = [false, false, false, true];
   let [fires, error, total] = [null as Data[] | null, "", 0];
   const current = () => ({
@@ -561,8 +558,7 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
     if (saving) return;
     if (!clear && !draft.target.trim()) {
       root.querySelector<HTMLInputElement>('input[name="cron-target"]')?.focus();
-      alert("Target is required.");
-      return;
+      return alert("Target is required.");
     }
     const destination = clear
       ? null
@@ -581,10 +577,7 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
         "/api/crons/" + encodeURIComponent(id) + "/destination?scope=" + encodeURIComponent(c.scope),
         { destination },
       );
-      if (!response.ok) {
-        alert(response.data?.message || "Could not update destination.");
-        return;
-      }
+      if (!response.ok) return alert(response.data?.message || "Could not update destination.");
       cron.destination = destination;
       c.invalidate();
       if (JSON.stringify(draft) === submitted) {

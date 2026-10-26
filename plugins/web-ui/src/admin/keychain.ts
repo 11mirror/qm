@@ -3,16 +3,14 @@ import { card, table, renderer, stacked, matches } from "./shared.ts";
 
 export function keychain(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
-  if (d.enabled === false) {
-    paint(
+  if (d.enabled === false)
+    return paint(
       card(
         "Keychain unavailable",
         "Stable key material is required before the core can store keychain records.",
         html`<p class="empty">Keychain is not configured for this deployment.</p>`,
       ),
     );
-    return;
-  }
   const people = d.people || [],
     credentials = d.credentials || [],
     grants = d.grants || [],

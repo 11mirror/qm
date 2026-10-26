@@ -92,9 +92,7 @@ export function card(title: unknown, subtitle: unknown, content: unknown, headEx
   </section>`;
 }
 
-export function bareCard(content: unknown) {
-  return html`<section class="card"><div class="body">${content}</div></section>`;
-}
+export const bareCard = (content: unknown) => html`<section class="card"><div class="body">${content}</div></section>`;
 
 export function pager(total: number, limit: number, offset: number, go: (page: number) => void) {
   if (total <= limit) return nothing;

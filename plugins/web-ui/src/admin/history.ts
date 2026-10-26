@@ -6,14 +6,8 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   const sessions = (d.sessions || []).filter((row: any) => s.historyKindMatches(row, s.historyKind));
   const orgWide = s.scopeKind(s.scope) === "org";
   const cron = s.historyKind === "cron" ? s.cron : null;
-  const route = (extra: any) => ({
-    view: "history",
-    scope: s.scope,
-    session: null,
-    cursor: null,
-    historyKind: s.historyKind,
-    ...extra,
-  });
+  const { scope, historyKind } = s;
+  const route = (extra: any) => ({ view: "history", scope, session: null, cursor: null, historyKind, ...extra });
   const pages =
     s.cursor || d.nextCursor
       ? html`<div class="pager">
