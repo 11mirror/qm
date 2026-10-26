@@ -95,7 +95,6 @@ test("flag OFF: execute defaults to the scoped box and offers no scratch scope",
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
   assert.doesNotMatch(JSON.stringify(execute!.parameters), /"scratch"/);
@@ -116,7 +115,6 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
 
@@ -136,28 +134,25 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   await call(execute, {
     command: "echo hi",
     scope: "scoped",
-    durable: true,
     timeout_seconds: 9,
     purpose: "Run test command",
   });
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
 });
 
-test("flag ON: unsupported scope/durable pairings return a crisp [error] without executing", async () => {
+test("flag ON: the retired durable argument returns a crisp [error] without executing", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
 
-  const e1 = textOf(
-    await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
-  );
-  assert.match(e1, /\[error\] a scratch box cannot be made durable yet/);
+  for (const [scope, durable] of [
+    ["scratch", true],
+    ["scoped", false],
+  ] as const) {
+    const out = textOf(await call(execute, { command: "echo hi", scope, durable, purpose: "Run test command" }));
+    assert.match(out, /\[error\] invalid execute arguments/);
+  }
 
-  const e2 = textOf(
-    await call(execute, { command: "echo hi", scope: "scoped", durable: false, purpose: "Run test command" }),
-  );
-  assert.match(e2, /\[error\] the scoped computer is always durable today/);
-
-  assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
+  assert.equal(seen.length, 0, "invalid arguments never reach the sandbox");
 });
 
 test("flag ON: the tool_call/tool_result entries record which box ran the command", async () => {
@@ -353,7 +348,6 @@ test("execute schema lists exact command credential handles", async () => {
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
 
