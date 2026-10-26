@@ -8,6 +8,7 @@ import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallow } from "../util/errors.ts";
+import { parseSlackThreadRef } from "../slack/message-gating.ts";
 
 export interface KeychainApprovalView {
   ask: KeychainAsk;
@@ -71,11 +72,11 @@ export function createKeychainApprovals(deps: {
     const visible = session && (await sessions.getForParticipant(session.id, ownerId));
     const slack =
       session && (await app.belongsToScope(ownerId, ask.requesterScopeId))
-        ? /^(?:ch|grp|dm):([^:]+)(?::(\d+\.\d+))?$/.exec(session.threadRef)
+        ? parseSlackThreadRef(session.threadRef)
         : null;
     const slackTs =
       (session?.threadRef === ask.requesterThreadRef ? ask.requesterMessageTs : undefined) ??
-      slack?.[2] ??
+      slack?.root ??
       ask.requesterDestination?.threadTs;
     const grant = ask.grantId ? await keychain.getGrant(ask.grantId) : null;
     return {
@@ -88,7 +89,7 @@ export function createKeychainApprovals(deps: {
       ...(ask.requesterSeq !== undefined && visible?.threadRef === ask.requesterThreadRef
         ? { seq: ask.requesterSeq }
         : {}),
-      ...(slack && slackTs ? { slack: { channel: slack[1]!, ts: slackTs } } : {}),
+      ...(slack && slackTs ? { slack: { channel: slack.container, ts: slackTs } } : {}),
       ...(grant ? { mode: grant.mode } : {}),
     };
   }

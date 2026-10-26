@@ -57,6 +57,7 @@ mock.module("electron", {
 });
 mock.module("node:child_process", {
   namedExports: {
+    spawn: () => undefined,
     execFile: (_file, _args, _options, callback) => {
       if (failure) callback(new Error("Native helper unavailable"));
       else
