@@ -215,6 +215,23 @@ test("ingest stamps the drafting session from the caller's thread", async () => 
   assert.equal(item?.proposal?.sessionId, "sess-42");
 });
 
+test("an agent's draft edit stamps the drafting session from the caller's thread", async () => {
+  const w = world();
+  const { cron, item } = await seed(w);
+  const out = await call(w, {
+    method: "POST",
+    path: `/v1/crons/${cron.id}/items/${item.id}/action`,
+    body: { kind: "edit", args: { proposal: { body: "Shorter" }, expectedProposalAt: item.proposal!.at } },
+    capability: { ...CAP, threadRef: "thread-9" },
+    sessionForThread: "sess-42",
+  });
+  assert.equal(out.status, 200, JSON.stringify(out.body));
+  const after = await w.items.get(item.id);
+  assert.deepEqual(after?.proposal?.data, { body: "Shorter" });
+  assert.equal(after?.proposal?.by, "agent");
+  assert.equal(after?.proposal?.sessionId, "sess-42");
+});
+
 test("ingest rejects malformed items with a pointed message", async () => {
   const w = world();
   const cron = await inboxCron(w);

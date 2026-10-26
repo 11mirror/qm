@@ -49,6 +49,11 @@ export async function inboxLoopsEnabled(ctx: ApiCtx, principalId: string): Promi
   return (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
 }
 
+async function agentSessionId(ctx: ApiCtx): Promise<string | undefined> {
+  const threadRef = ctx.capability?.threadRef;
+  return threadRef ? ((await ctx.deps.sessions?.getByThread(threadRef))?.id ?? undefined) : undefined;
+}
+
 function sendItem(ctx: ApiCtx, item: InboxItem): void {
   sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
 }
@@ -200,9 +205,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   if (body.items.length > MAX_ITEMS_PER_INGEST) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
   }
-  const sessionId = ctx.capability.threadRef
-    ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
-    : undefined;
+  const sessionId = await agentSessionId(ctx);
   const classifyInboxEmail =
     cron.inbox?.source === "gmail" &&
     cron.ownerScopeId === scopeId("personal", cron.owner) &&
@@ -352,10 +355,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const staleDraft = (): boolean => expectedAt !== undefined && !!item.proposal && item.proposal.at !== expectedAt;
   const invalidProposal = (): void =>
     sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+  const sessionId = await agentSessionId(ctx);
   const setProposal = (data: InboxPayload) =>
     deps.items.setProposal(
       item.id,
-      { data, by: proposalAuthor },
+      { data, by: proposalAuthor, ...(sessionId ? { sessionId } : {}) },
       expectedAt !== undefined ? { expectedAt } : undefined,
     );
 
