@@ -2,6 +2,7 @@ import { swallowAs } from "../../chassis/src/errors.ts";
 
 const MAX_ANNOTATION_TEXT = 20_000;
 const MAX_ANNOTATION_BYTES = 20 * 1024 * 1024;
+const MAX_ANNOTATION_FILES = 2;
 
 export function watchAppAnnotations(
   slug: string,
@@ -40,10 +41,16 @@ export function watchAppAnnotations(
         )
       : [];
     if (!seen.has(data.id)) {
+      const notes = [
+        data.text.length > MAX_ANNOTATION_TEXT ? `[Annotation text cut at ${MAX_ANNOTATION_TEXT} characters.]` : "",
+        files.length > MAX_ANNOTATION_FILES
+          ? `[${files.length - MAX_ANNOTATION_FILES} more screenshot(s) left out; only ${MAX_ANNOTATION_FILES} are attached.]`
+          : "",
+      ].filter(Boolean);
       if (
         !(await add(
-          data.text.slice(0, MAX_ANNOTATION_TEXT),
-          files.slice(0, 2),
+          [data.text.slice(0, MAX_ANNOTATION_TEXT), ...notes].join("\n\n"),
+          files.slice(0, MAX_ANNOTATION_FILES),
           data.annotationId as string | undefined,
           data.remove === true,
         ))
