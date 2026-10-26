@@ -14,6 +14,7 @@ import {
   type ResourceSearchResponse,
 } from "./search-resources";
 import { icon } from "./icons";
+import { brandName } from "./ui";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 
 interface ChatSearchHit {
@@ -288,7 +289,7 @@ function resultRows(): TemplateResult[] {
         `chat-search-row ${selected(i)} ${hit.archived ? "archived" : ""}`,
         () => void openHit(hit),
         html`<span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}" dir="auto"
-            >${(hit.entryType === "user" ? (hit.author ?? "You") : "QM").slice(0, 1).toUpperCase()}</span
+            >${(hit.entryType === "user" ? (hit.author ?? "You") : brandName()).slice(0, 1).toUpperCase()}</span
           >
           <span class="chat-search-text">
             <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
@@ -326,8 +327,12 @@ function askRow(): TemplateResult {
     askQm,
     html`<span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
-        <span class="chat-search-snippet">Ask QM to find it: <b dir="auto">“${searchState.query.trim()}”</b></span>
-        <span class="chat-search-meta">starts a new chat where QM finds the matching resource and links it</span>
+        <span class="chat-search-snippet"
+          >Ask ${brandName()} to find it: <b dir="auto">“${searchState.query.trim()}”</b></span
+        >
+        <span class="chat-search-meta"
+          >starts a new chat where ${brandName()} finds the matching resource and links it</span
+        >
       </span>
       <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>`,
   );
@@ -354,7 +359,7 @@ function paletteTpl(): TemplateResult {
         if (e.target === e.currentTarget) closeChatSearch();
       }}
     >
-      <div class="chat-search-palette" role="dialog" aria-label="Search QM" @keydown=${onPaletteKeydown}>
+      <div class="chat-search-palette" role="dialog" aria-label="Search ${brandName()}" @keydown=${onPaletteKeydown}>
         <div class="chat-search-inputrow">
           ${icon(Search, 16)}
           <input
@@ -380,7 +385,7 @@ function paletteTpl(): TemplateResult {
         <div class="chat-search-foot">
           <span><span class="chat-search-kbd">↑↓</span> navigate</span>
           <span><span class="chat-search-kbd">↵</span> open</span>
-          <span><span class="chat-search-kbd">${isMac ? "⌘↵" : "Ctrl+↵"}</span> ask QM in a new chat</span>
+          <span><span class="chat-search-kbd">${isMac ? "⌘↵" : "Ctrl+↵"}</span> ask ${brandName()} in a new chat</span>
         </div>
       </div>
     </div>
