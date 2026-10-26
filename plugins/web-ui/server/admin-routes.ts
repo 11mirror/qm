@@ -36,7 +36,7 @@ export const ADMIN_WRITES: Record<string, string> = {
 export const ADMIN_READS = new Set(
   [
     "whoami scopes resources spend egress errors audit crons deployments skills skill-packs sessions runs files",
-    "retention users directory keychain memory slack-mirror ambient-judgments ack-emoji-picks slack-installation",
+    "retention users directory keychain memory ambient-context ambient-judgments ack-emoji-picks slack-installation",
     "slack-emoji model-providers custom-providers mcp-servers principal-links",
   ]
     .join(" ")

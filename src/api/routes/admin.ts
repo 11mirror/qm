@@ -39,9 +39,9 @@ import {
 import {
   listAckEmojiPicks,
   listAmbientJudgments,
-  listSlackMirrorContainers,
-  listSlackMirrorMessages,
-} from "./admin/slack-mirror.ts";
+  listAmbientContainers,
+  listAmbientMessages,
+} from "./admin/ambient.ts";
 import {
   deleteSlackInstallation,
   getSlackEmojiList,
@@ -132,8 +132,8 @@ const routes: Route<ApiCtx>[] = [
     route("GET", "/sessions/:id/llm", getAdminSessionLlm, PRIVATE),
     route("GET", "/sessions/:id", getAdminSession, unattended("admin.sessions.read", "read a conversation transcript")),
     route("GET", "/runs", listAdminRuns, unattended("admin.sessions.read", "read queued, in-flight, and recent runs")),
-    route("GET", "/slack-mirror/messages", listSlackMirrorMessages, PRIVATE),
-    route("GET", "/slack-mirror", listSlackMirrorContainers, PRIVATE),
+    route("GET", "/ambient-context/messages", listAmbientMessages, PRIVATE),
+    route("GET", "/ambient-context", listAmbientContainers, PRIVATE),
     route("GET", "/ambient-judgments", listAmbientJudgments, PRIVATE),
     route("GET", "/ack-emoji-picks", listAckEmojiPicks, PRIVATE),
     route("GET", "/files/read", readAdminFile, unattended("admin.files.read", "read a stored file by ?id=")),
