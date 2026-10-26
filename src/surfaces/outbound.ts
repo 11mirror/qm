@@ -6,7 +6,7 @@ import type { NewItem } from "../sessions/items.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { errMessage, reportFailure } from "../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 
 export interface OutboundPost {
   destination: Destination;
@@ -198,7 +198,9 @@ export async function appendToTranscript(
   } finally {
     await deps.sessions.releaseLease(lease);
   }
-  const participants = await deps.sessions.participantsOf(session.id).catch(() => []);
+  const participants = await deps.sessions
+    .participantsOf(session.id)
+    .catch(swallowAs("surfaces: session participants lookup", []));
   deps.sessionStates?.emit({
     threadRef: session.threadRef,
     sessionId: session.id,

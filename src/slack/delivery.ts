@@ -1,4 +1,4 @@
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
@@ -218,10 +218,10 @@ export async function onBotJoinedChannel(opts: {
       );
       ensureHeader?.(channel);
     }
-  } catch {
-    void 0;
+  } catch (err) {
+    swallow("slack: channel join welcome", err);
   }
-  await syncDirectory().catch(() => undefined);
+  await syncDirectory().catch(swallowAs("slack: directory sync after channel join", undefined));
 }
 
 export function encodeDeliveryTarget(channel: string, threadTs?: string): string {

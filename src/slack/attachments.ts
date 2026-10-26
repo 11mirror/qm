@@ -1,4 +1,5 @@
 import { sleep } from "../util/async.ts";
+import { swallow } from "../util/errors.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 
@@ -45,7 +46,8 @@ export async function hydrateSlackFiles(
       try {
         const hydrated = await lookup(file.id);
         return hydrated ? { ...file, ...hydrated, ...(file.user ? { user: file.user } : {}) } : file;
-      } catch {
+      } catch (err) {
+        swallow("slack: file info hydrate", err);
         return file;
       }
     }),
@@ -149,7 +151,8 @@ async function waitForShareCommit(client: UploadClient, channel: string, fileId:
     let info: unknown;
     try {
       info = await client.files.info({ file: fileId });
-    } catch {
+    } catch (err) {
+      swallow("slack: uploaded file share lookup", err);
       return undefined;
     }
     const ts = channelShareTs(info, channel);

@@ -7,7 +7,7 @@ import {
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { slackFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
-import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { type ActorAssertion, type ChannelMeta, groupDmDisplayName, isExternallyShared, isMpim } from "./identity.ts";
 import { renderConversationView, resolveMentions } from "./conversation.ts";
 import {
@@ -153,7 +153,8 @@ export function createTurnHandler(deps: {
       const present = threadHasBotStake(messages, ids.botUserId, ids.ownBotId);
       threads.mark(channel, threadTs, present);
       return present;
-    } catch {
+    } catch (err) {
+      swallow("slack: thread stake history read", err);
       return false;
     }
   }
@@ -641,7 +642,8 @@ export function createTurnHandler(deps: {
         reactions: reactionTallies(m.reactions),
         authorId: m.user ? String(m.user) : undefined,
       });
-    } catch {
+    } catch (err) {
+      swallow("slack: reacted message lookup", err);
       return undefined;
     }
   }
