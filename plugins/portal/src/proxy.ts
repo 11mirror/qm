@@ -1,4 +1,5 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { errMessage } from "../../chassis/src/errors.ts";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
 import { coreTenantHost } from "../../chassis/src/tenant-hosts.ts";
@@ -86,7 +87,8 @@ function relay(
       upRes.pipe(res);
     },
   );
-  up.on("error", () => {
+  up.on("error", (error) => {
+    console.warn(`[portal] upstream ${target.hostname}:${target.port ?? ""} failed: ${errMessage(error)}`);
     if (!res.headersSent) {
       res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "bad_gateway", message: "upstream unreachable" }));

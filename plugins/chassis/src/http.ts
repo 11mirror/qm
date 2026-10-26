@@ -94,9 +94,20 @@ export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string):
   return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
 }
 
+export function readCookie(header: string | undefined, name: string): string | null {
+  if (!header) return null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = header.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1] ?? "");
+  } catch {
+    return null;
+  }
+}
+
 export function cookie(req: IncomingMessage, name: string): string | null {
-  const m = (req.headers.cookie ?? "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? decodeURIComponent(m[1] ?? "") || null : null;
+  return readCookie(req.headers.cookie, name) || null;
 }
 
 export function escapeHtml(s: string): string {

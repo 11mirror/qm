@@ -36,7 +36,6 @@ process.env.CORE_SIGNING_SECRET = "playground-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_PLAYGROUND = "1";
-process.env.PORTAL_PLAYGROUND_MINTS_PER_IP = "3";
 const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 delete process.env.PORTAL_LOCAL_AUTH_BYPASS;
@@ -160,9 +159,6 @@ test("boot refuses playground configurations that leak or brick", async () => {
   delete baseEnv.PORTAL_COOKIE_DOMAIN;
   delete baseEnv.PORTAL_APPS_DOMAIN;
   delete baseEnv.DEPLOY_APPS_DOMAIN;
-  delete baseEnv.PORTAL_DEPLOYMENTS_ENABLED;
-  delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
-  delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
   const boot = (env: NodeJS.ProcessEnv) =>
     new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env });
@@ -171,17 +167,11 @@ test("boot refuses playground configurations that leak or brick", async () => {
       child.on("error", reject).on("close", (status) => resolve({ status, stderr }));
     });
   const bad: Array<[NodeJS.ProcessEnv, RegExp]> = [
-    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "0" }, /between 1 and 64/],
-    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "65" }, /between 1 and 64/],
-    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "lots" }, /between 1 and 64/],
-    [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "30" }, /between 60 and 86400/],
-    [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "172800" }, /between 60 and 86400/],
     [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/],
     [
       { DEPLOY_APPS_DOMAIN: "apps.qm.example.com" },
       /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/,
     ],
-    [{ PORTAL_DEPLOYMENTS_ENABLED: "1" }, /PORTAL_DEPLOYMENTS_ENABLED unset/],
   ];
   const [ok, ...refused] = await Promise.all([baseEnv, ...bad.map(([extra]) => ({ ...baseEnv, ...extra }))].map(boot));
   assert.equal(ok!.status, 0);
@@ -193,7 +183,7 @@ test("boot refuses playground configurations that leak or brick", async () => {
 
 test("mints beyond the per-IP budget are refused, and refusal sets no cookie", async () => {
   let last: Response | null = null;
-  for (let i = 0; i < 10; i++) last = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
+  for (let i = 0; i < 40; i++) last = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   assert.equal(last!.status, 429);
   assert.equal(last!.headers.getSetCookie().length, 0);
 

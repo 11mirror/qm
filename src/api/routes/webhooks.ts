@@ -65,6 +65,14 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
 
 async function createWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body } = ctx;
+  const v = isObj(body) ? body.verification : undefined;
+  if (isObj(body) && (!isObj(v) || typeof v.scheme !== "string"))
+    return sendJson(res, 400, { error: "unsupported_verification", message: "verification requires a scheme" });
+  if (isObj(body) && body.filters !== undefined && !isWebhookFilters(body.filters))
+    return sendJson(res, 400, {
+      error: "invalid_filters",
+      message: "every filter requires a path and at least one value",
+    });
   if (!isCreateWebhook(body))
     return sendJson(res, 400, { error: "bad_request", message: "expected a CreateWebhookInput" });
   try {

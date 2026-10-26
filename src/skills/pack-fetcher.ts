@@ -7,7 +7,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { credentialRequestHeaders, type CredentialInjection } from "../credentials/keychain.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { isPrivateNetworkIp } from "../util/network.ts";
+import { isPrivateNetworkIp } from "../../plugins/chassis/src/network.ts";
 import { isProbablyBinary } from "./seed.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
 import type { SkillPack } from "./skill-pack-store.ts";

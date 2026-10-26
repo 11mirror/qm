@@ -1,3 +1,4 @@
+import { validEmail } from "../../chassis/src/email.ts";
 import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
 import { parsePasswordHash } from "./password.ts";
 
@@ -138,9 +139,7 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export function validEmail(value: string): boolean {
-  return value.length <= 254 && /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(value);
-}
+export { validEmail };
 
 export function parsePasswordUsers(raw: string | undefined): { users: Map<string, string>; problems: string[] } {
   const users = new Map<string, string>();

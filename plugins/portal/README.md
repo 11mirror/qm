@@ -190,23 +190,17 @@ cookie; the next visit starts a fresh playground identity.
 Minting is rate-limited per client address through the core's Postgres-backed
 single-use claim store (the same one the sign-in broker uses), so restarts and
 blue-green deploys can't reset it; if the core can't record the claim the portal
-fails closed and answers 429. `PORTAL_PLAYGROUND_MINTS_PER_IP` (default 30, at
-most 64 — the core grants at most 64 claim slots per request) per
-`PORTAL_PLAYGROUND_MINT_WINDOW_S` (default 3600, at most 86400 — the core's
-claim horizon); the portal refuses to boot outside those ranges rather than
-silently serving 429 to everyone. IPv6 clients are bucketed per /64, not per
+fails closed and answers 429. Each address gets 30 mints per hour. IPv6 clients are bucketed per /64, not per
 address, so a visitor with a routed prefix can't rotate through fresh budgets.
 The client address comes from `clientIpOf` — set `PORTAL_XFF_TRUSTED_HOPS` when a reverse proxy fronts the portal,
 or every visitor (and every crawler that accepts HTML) shares the socket
 address's one bucket.
 
 Because playground authority must never leave this origin, the portal refuses
-to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`, an apps
-domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`), or an explicit
-`PORTAL_DEPLOYMENTS_ENABLED=1` — a domain-wide cookie or the deployment proxy
+to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN` or an apps
+domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`) — a domain-wide cookie
 would hand anonymous sessions to surfaces that never see the `anon` flag. The
-deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
-itself off under the playground, and anonymous sessions are refused it at
+deployment proxy (`/d/<app>/`) is on for signed-in portals and off under the playground, and anonymous sessions are refused it at
 request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
 `DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
 the apps domain sits directly under it (`apps.<portal host>`), so one core-side
@@ -235,7 +229,7 @@ Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CO
 `CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
-`PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.
+`PORTAL_SESSION_TTL_S`. A session's total life from authentication is capped at the larger of 30 days and `PORTAL_SESSION_TTL_S`.
 There is no `PORTAL_ADMIN_PRINCIPALS` — admin
 access is derived from the core (see the security model above).
 `PORTAL_API_ALLOWED_ORIGINS` (default empty) opens the chat API to other first-party origins;

@@ -143,7 +143,6 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
     OIDC_ALLOWED_EMAILS: "admin@example.com",
     PORTAL_SESSION_TTL_S: "5184000",
   };
-  delete baseEnv.PORTAL_SESSION_MAX_TTL_S;
 
   const derived = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
@@ -154,11 +153,11 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
 
   const contradictory = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
-    env: { ...baseEnv, PORTAL_SESSION_MAX_TTL_S: "86400" },
+    env: { ...baseEnv, PORTAL_SESSION_TTL_S: "0" },
     encoding: "utf8",
   });
   assert.notEqual(contradictory.status, 0);
-  assert.match(contradictory.stderr, /PORTAL_SESSION_MAX_TTL_S must be a finite number/);
+  assert.match(contradictory.stderr, /PORTAL_SESSION_TTL_S must be a positive number/);
 });
 
 test("production accepts cleartext OIDC only on private-network hosts, and only for the server-to-server endpoints", () => {

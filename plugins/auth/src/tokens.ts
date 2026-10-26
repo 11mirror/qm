@@ -1,4 +1,5 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { safeEqual } from "../../chassis/src/safe-equal.ts";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 
@@ -39,11 +40,7 @@ export interface SealedToken {
 
 const audienceFor = (purpose: TokenPurpose): string => `qm-auth:${purpose}`;
 
-export function safeEqual(a: string, b: string): boolean {
-  const left = createHash("sha256").update(a, "utf8").digest();
-  const right = createHash("sha256").update(b, "utf8").digest();
-  return timingSafeEqual(left, right);
-}
+export { safeEqual };
 
 export function pkceMatches(codeVerifier: string, codeChallenge: string): boolean {
   if (codeVerifier.length < 43 || codeVerifier.length > 128 || !/^[A-Za-z0-9\-._~]+$/.test(codeVerifier)) return false;

@@ -1,3 +1,4 @@
+import { validEmail } from "../../chassis/src/email.ts";
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
@@ -151,7 +152,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   const emailCandidate = (): string | null => {
     const email = query.trim().toLowerCase();
     if (!externalSharing) return null;
-    if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
+    if (!validEmail(email)) return null;
     const taken = [owner, ...grantees.map((g) => g.scope)].some((s) => s.toLowerCase() === `personal:${email}`);
     return taken || matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
   };
