@@ -77,35 +77,6 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true, upserted });
 }
 
-async function getChannelPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const container = url.searchParams.get("container");
-  if (!container) return sendJson(res, 400, { error: "bad_request", message: "container required" });
-  const policy = await app.getChannelPolicy(container);
-  return sendJson(res, 200, { policy });
-}
-
-async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
-  const b = isObj(body) ? body : {};
-  if (typeof b.container !== "string" || !b.container)
-    return sendJson(res, 400, { error: "bad_request", message: "container required" });
-  if (typeof b.orders !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
-  const setBy = typeof b.setBy === "string" ? b.setBy : undefined;
-  const policy = await app.setChannelPolicy(b.container, b.orders, setBy);
-  if (!policy) return sendJson(res, 404, { error: "not_found", message: "surface cache not enabled" });
-  audit(deps, {
-    principalId: setBy ?? "system",
-    action: "surface.policy.set",
-    resource: b.container,
-    scopeLabel: tenant().orgScope,
-  });
-  return sendJson(res, 200, { policy });
-}
-
 export const surfaceCacheRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/surface-cache/ingest", actor: "system", auth: "source", handle: ingestSurfaceEvents },
-  { method: "GET", path: "/v1/surface-cache/policy", auth: "source", handle: getChannelPolicy },
-  { method: "POST", path: "/v1/surface-cache/policy", actor: "system", auth: "source", handle: setChannelPolicy },
 ];

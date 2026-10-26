@@ -511,13 +511,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/admin/scopes/:scopeId",
         summary:
-          "a scope's resolved config: command policy, SOUL, egress, flags, connectors, service credentials (non-org scopes: DM or a turn a person started)",
+          "a scope's resolved config: command policy, instructions, egress, flags, connectors, service credentials (non-org scopes: DM or a turn a person started)",
       },
       {
         method: "PUT",
         path: "/v1/admin/scopes/:scopeId/:resource",
         summary:
-          "govern a scope: soul | command-policy | egress | connectors | service-credentials | runtime ({ modelId })",
+          "govern a scope: instructions | command-policy | egress | connectors | service-credentials | runtime ({ modelId })",
       },
       {
         method: "GET|POST|PATCH|DELETE",

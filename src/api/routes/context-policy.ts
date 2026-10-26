@@ -1,10 +1,10 @@
-import { parseScopeId } from "../../types.ts";
+import { parseScopeId, type ScopeId } from "../../types.ts";
+import { InstructionsVersionConflictError } from "../app-types.ts";
+import { MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-
-const MAX_ORDERS_CHARS = 20_000;
 
 async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
   const { res, deps } = ctx;
@@ -30,9 +30,11 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   );
   if (!container) return;
   const p = await deps.channelPolicy!.get(container);
+  const instructions = ctx.app.getInstructions((url.searchParams.get("scope") ?? "").trim() as ScopeId);
   return sendJson(res, 200, {
     policy: {
-      orders: p?.orders ?? "",
+      instructions: instructions.instructions ?? "",
+      instructionsVersion: instructions.instructionsVersion,
       bots: p?.bots ?? {},
       ambientEnabled: p?.ambientEnabled ?? null,
       updatedAt: p?.updatedAt ?? 0,
@@ -41,25 +43,25 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
 }
 
 export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
+  const { res, deps, body, app } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
   const container = await policyContainer(ctx, principalId, scope);
   if (!container) return;
-  if (typeof b.orders !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
-  if (b.orders.length > MAX_ORDERS_CHARS)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
-    });
   const parsed = parseBotLedger(b.bots ?? {});
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
     return sendJson(res, 400, {
       error: "bad_request",
       message: "ambientEnabled must be a boolean or null (null = default rule)",
+    });
+  if (b.instructions !== undefined && typeof b.instructions !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "instructions must be a string" });
+  if (typeof b.instructions === "string" && b.instructions.length > MAX_INSTRUCTIONS_CHARS)
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `instructions are capped at ${MAX_INSTRUCTIONS_CHARS} characters`,
     });
   const current = await deps.channelPolicy!.get(container);
   if (typeof b.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== b.baseUpdatedAt) {
@@ -68,14 +70,33 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
       message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
     });
   }
-  const p = await deps.channelPolicy!.set(container, b.orders, {
+  if (typeof b.instructions === "string" && b.instructions !== (app.getInstructions(scope as ScopeId).instructions ?? "")) {
+    try {
+      await app.updateInstructions(scope as ScopeId, b.instructions, principalId, {
+        allowSharedScope: true,
+        ...(typeof b.instructionsVersion === "number" ? { expectedVersion: b.instructionsVersion } : {}),
+      });
+    } catch (e) {
+      if (e instanceof InstructionsVersionConflictError)
+        return sendJson(res, 409, { error: "conflict", message: e.message });
+      throw e;
+    }
+  }
+  const p = await deps.channelPolicy!.set(container, {
     setBy: principalId,
     bots: parsed.bots,
     ambientEnabled: b.ambientEnabled as boolean | null | undefined,
   });
   audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
+  const saved = app.getInstructions(scope as ScopeId);
   return sendJson(res, 200, {
-    policy: { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled ?? null, updatedAt: p.updatedAt },
+    policy: {
+      instructions: saved.instructions ?? "",
+      instructionsVersion: saved.instructionsVersion,
+      bots: p.bots,
+      ambientEnabled: p.ambientEnabled ?? null,
+      updatedAt: p.updatedAt,
+    },
   });
 }
 

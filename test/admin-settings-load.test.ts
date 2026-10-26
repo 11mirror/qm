@@ -64,7 +64,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
       assert.equal(projected.branding.selfLabel, "Test assistant");
       assert.equal("orgAmbient" in projected, false);
       assert.equal("channelHeaderPinDefault" in projected, false);
-      assert.equal("soulHistory" in projected, true);
+      assert.equal("instructionsHistory" in projected, true);
       assert.equal("connectors" in projected, false);
     }
   }

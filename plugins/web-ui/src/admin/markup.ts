@@ -61,7 +61,7 @@ export const ADMIN_MARKUP = `
         ><template data-settings-card="card-runtimes"></template
         ><section class="card sv-models" id="card-custom-providers"><div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div></section
         ><template data-settings-card="card-webui-models"></template
-        ><template data-settings-card="card-soul"></template
+        ><template data-settings-card="card-instructions"></template
         ><template data-settings-card="card-branding"></template
         ><template data-settings-card="card-feature-flags"></template
         ><template data-settings-card="card-decisions"></template

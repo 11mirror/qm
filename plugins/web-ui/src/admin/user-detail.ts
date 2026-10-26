@@ -217,7 +217,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                   : table(
                       ["Setting", "Value"],
                       [
-                        ["Custom soul", { node: muted(cfg.hasSoul ? "set · v" + (cfg.soulVersion || 1) : "default") }],
+                        ["Custom instructions", { node: muted(cfg.hasInstructions ? "set · v" + (cfg.instructionsVersion || 1) : "default") }],
                         [
                           "Command policy",
                           cfg.commandPolicy

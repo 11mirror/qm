@@ -15,7 +15,7 @@ import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination, type ReachResolution } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
-import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
+import { InstructionsUpdateDeniedError, InstructionsVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
@@ -157,13 +157,17 @@ export interface ControlService {
     patch: { action: string },
     claims: CapabilityClaims,
   ): ControlOp<{ webhook: Webhook }, "bad_request">;
-  readSoul(claims: CapabilityClaims): { effectiveSoul: string; soul: string | null; soulVersion: number };
-  writeSoul(
+  readInstructions(claims: CapabilityClaims): {
+    effectiveInstructions: string;
+    instructions: string | null;
+    instructionsVersion: number;
+  };
+  writeInstructions(
     content: string,
     claims: CapabilityClaims,
     expectedVersion?: number,
   ): Promise<
-    ControlOk<{ version: number }> | ControlErr<"soul_update_denied" | "soul_version_conflict" | "soul_update_failed">
+    ControlOk<{ version: number }> | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
   >;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -637,22 +641,22 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       return editWebhookTask(app, id, patch.action, capability.actorId);
     },
 
-    readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
-      return { effectiveSoul, soul, soulVersion };
+    readInstructions(capability) {
+      const { effectiveInstructions, instructions, instructionsVersion } = app.getInstructions(capability.scopeId);
+      return { effectiveInstructions, instructions, instructionsVersion };
     },
 
-    async writeSoul(content, capability, expectedVersion) {
+    async writeInstructions(content, capability, expectedVersion) {
       try {
-        const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
+        const version = await app.updateInstructions(capability.scopeId, content, capability.actorId, {
           allowSharedScope: true,
           expectedVersion,
         });
         return { ok: true, version };
       } catch (e) {
-        if (e instanceof SoulUpdateDeniedError) return fail("soul_update_denied", errMessage(e));
-        if (e instanceof SoulVersionConflictError) return fail("soul_version_conflict", errMessage(e));
-        return fail("soul_update_failed", errMessage(e));
+        if (e instanceof InstructionsUpdateDeniedError) return fail("instructions_update_denied", errMessage(e));
+        if (e instanceof InstructionsVersionConflictError) return fail("instructions_version_conflict", errMessage(e));
+        return fail("instructions_update_failed", errMessage(e));
       }
     },
 

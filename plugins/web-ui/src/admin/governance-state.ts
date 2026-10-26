@@ -8,7 +8,7 @@ const fieldNames: Record<string, Record<string, string>> = {
     "auto-flagger-model": "modelId",
     "auto-flagger-rubric": "rubric",
   },
-  "ambient-policy": { "ambient-enabled": "ambientEnabled", "ambient-orders": "orders" },
+  "ambient-policy": { "ambient-enabled": "ambientEnabled" },
   egress: { egress: "allowedHosts", "egress-deny": "deniedHosts" },
   "command-policy": {},
 };
@@ -105,7 +105,6 @@ export class GovernanceState extends SettingState {
         bots[name] = entry;
       }
       return {
-        orders: this.draft.orders || "",
         bots,
         ambientEnabled: this.draft.ambientEnabled ?? null,
         baseUpdatedAt: this.draft.baseUpdatedAt || 0,

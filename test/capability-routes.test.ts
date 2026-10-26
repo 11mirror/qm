@@ -95,21 +95,21 @@ describe("capability-token control plane (SOUL)", () => {
     });
   const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
   it("updates only the caller's OWN personal SOUL, ignoring body scope/actor", async () => {
-    const orgVerBefore = built.config.soulVersion(scopeId("org", "default-org"));
+    const orgVerBefore = built.config.instructionsVersion(scopeId("org", "default-org"));
     const res = await post(
       "/v1/soul",
       { content: "Always answer in bullet points.", scopeId: "org:default-org", actorId: "U2" },
       { "x-agent-capability": await capFor("U1") },
     );
     assert.equal(res.status, 200);
-    assert.ok(built.config.soulVersion(scopeId("personal", "U1")) >= 1, "U1's personal SOUL was updated");
-    assert.equal(built.config.soulVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
+    assert.ok(built.config.instructionsVersion(scopeId("personal", "U1")) >= 1, "U1's personal SOUL was updated");
+    assert.equal(built.config.instructionsVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
   });
 
   it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
     const personalScope = scopeId("personal", "U8");
     const channelScope = scopeId("channel", "C");
-    const personalBefore = built.config.soulVersion(personalScope);
+    const personalBefore = built.config.instructionsVersion(personalScope);
     const res = await post(
       "/v1/soul",
       { content: "Channel C speaks in haiku.", scopeId: personalScope, actorId: "U2" },
@@ -117,15 +117,15 @@ describe("capability-token control plane (SOUL)", () => {
     );
     assert.equal(res.status, 200);
 
-    assert.equal(built.config.getSoul(channelScope), "Channel C speaks in haiku.");
-    assert.ok(built.config.soulVersion(channelScope) >= 1, "channel SOUL was updated");
-    assert.equal(built.config.soulVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
+    assert.equal(built.config.getInstructions(channelScope), "Channel C speaks in haiku.");
+    assert.ok(built.config.instructionsVersion(channelScope) >= 1, "channel SOUL was updated");
+    assert.equal(built.config.instructionsVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
   });
 
   it("does not let capability self-update org or team SOUL", async () => {
     const orgScope = scopeId("org", "default-org");
     const teamScope = scopeId("team", "T");
-    const orgBefore = built.config.soulVersion(orgScope);
+    const orgBefore = built.config.instructionsVersion(orgScope);
 
     const orgRes = await post(
       "/v1/soul",
@@ -140,13 +140,13 @@ describe("capability-token control plane (SOUL)", () => {
 
     assert.equal(orgRes.status, 403);
     assert.equal(teamRes.status, 403);
-    assert.equal(built.config.soulVersion(orgScope), orgBefore);
-    assert.equal(built.config.getSoul(teamScope), null);
+    assert.equal(built.config.instructionsVersion(orgScope), orgBefore);
+    assert.equal(built.config.getInstructions(teamScope), null);
   });
 
   it("reads the caller's in-scope SOUL under a capability", async () => {
     const personalScope = scopeId("personal", "U7");
-    await built.config.setSoul(personalScope, "Prefer precise, compact answers.");
+    await built.config.setInstructions(personalScope, "Prefer precise, compact answers.");
 
     const res = await get("/v1/soul?scopeId=personal:U2", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
@@ -154,29 +154,29 @@ describe("capability-token control plane (SOUL)", () => {
     const got = (await res.json()) as any;
     assert.equal(got.scopeId, personalScope, "query scope is ignored; the token's signed scope wins");
     assert.equal(got.soul, "Prefer precise, compact answers.");
-    assert.ok(got.soulVersion >= 1);
+    assert.ok(got.instructionsVersion >= 1);
     assert.equal(got.orgScopeId, scopeId("org", "default-org"));
-    assert.equal(typeof got.orgSoul, "string");
-    assert.ok(got.effectiveSoul.includes("Prefer precise, compact answers."));
-    assert.ok(got.effectiveSoul.includes(got.orgSoul));
+    assert.equal(typeof got.orgInstructions, "string");
+    assert.ok(got.effectiveInstructions.includes("Prefer precise, compact answers."));
+    assert.ok(got.effectiveInstructions.includes(got.orgInstructions));
   });
 
   it("effective SOUL deduplicates organization text without rewriting stored scope policy", async () => {
     const orgScope = scopeId("org", "default-org");
     const personalScope = scopeId("personal", "U7");
-    const orgSoul = built.config.getSoul(orgScope)!;
-    await built.config.setSoul(personalScope, ` ${orgSoul} `);
+    const orgInstructions = built.config.getInstructions(orgScope)!;
+    await built.config.setInstructions(personalScope, ` ${orgInstructions} `);
     const res = await get("/v1/soul", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
     const got = (await res.json()) as any;
-    assert.equal(got.soul, ` ${orgSoul} `);
-    assert.equal(got.effectiveSoul.split(orgSoul).length - 1, 1);
-    assert.equal(built.config.getSoul(personalScope), got.soul);
+    assert.equal(got.soul, ` ${orgInstructions} `);
+    assert.equal(got.effectiveInstructions.split(orgInstructions).length - 1, 1);
+    assert.equal(built.config.getInstructions(personalScope), got.soul);
   });
 
   it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
-    await built.config.setSoul(scopeId("personal", "U8"), "Private U8 instruction.");
-    await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
+    await built.config.setInstructions(scopeId("personal", "U8"), "Private U8 instruction.");
+    await built.config.setInstructions(scopeId("channel", "C"), "Channel C instruction.");
 
     const res = await get("/v1/soul?scopeId=personal:U8", { "x-agent-capability": await capChannel("U8") });
     assert.equal(res.status, 200);
@@ -184,8 +184,8 @@ describe("capability-token control plane (SOUL)", () => {
     const got = (await res.json()) as any;
     assert.equal(got.scopeId, scopeId("channel", "C"));
     assert.equal(got.soul, "Channel C instruction.");
-    assert.ok(got.effectiveSoul.includes("Channel C instruction."));
-    assert.equal(got.effectiveSoul.includes("Private U8 instruction."), false);
+    assert.ok(got.effectiveInstructions.includes("Channel C instruction."));
+    assert.equal(got.effectiveInstructions.includes("Private U8 instruction."), false);
   });
 
   it("channel-header-pin takes the actor and scope from the token and refuses non-live tokens", async () => {

@@ -719,17 +719,17 @@ export function startAdmin(host, env) {
   let loadedCommandPolicyPresent = false;
   let serviceCredDirectory = [];
   let serviceCredChannels = [];
-  settings.configureSoul({
+  settings.configureInstructions({
     formatTime: fmtTime,
     restore: async (revision) => {
       const immutable = { ...revision };
       const targetScope = scope;
       const targetGeneration = governanceReq;
-      const draftBefore = JSON.stringify(settings.collect("soul"));
-      const expectedVersion = settings.collect("soul").expectedVersion;
+      const draftBefore = JSON.stringify(settings.collect("instructions"));
+      const expectedVersion = settings.collect("instructions").expectedVersion;
       const confirmed = await reviewGovernanceChange({
-        title: "Restore SOUL version " + immutable.version + "?",
-        subtitle: "The saved instructions from this revision will replace the current SOUL.",
+        title: "Restore instructions version " + immutable.version + "?",
+        subtitle: "The saved instructions from this revision will replace the current instructions.",
         facts: [
           ["Scope", governanceScopeName(targetScope)],
           ["Current", "Version " + expectedVersion],
@@ -741,18 +741,18 @@ export function startAdmin(host, env) {
         danger: true,
       });
       if (!confirmed || scope !== targetScope || governanceReq !== targetGeneration) return;
-      setStatus("st-soul", "Restoring…", "saving", true);
-      const r = await api("PUT", scopeUrl(targetScope, "/soul"), {
+      setStatus("st-instructions", "Restoring…", "saving", true);
+      const r = await api("PUT", scopeUrl(targetScope, "/instructions"), {
         content: immutable.content,
         expectedVersion,
       });
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!r.ok) {
-        if (r.status === 409) await refreshSoulConflict();
+        if (r.status === 409) await refreshInstructionsConflict();
         return setStatus(
-          "st-soul",
+          "st-instructions",
           r.status === 409
-            ? "SOUL changed; latest revision loaded and your draft was preserved."
+            ? "Instructions changed; latest revision loaded and your draft was preserved."
             : r.data?.message || "Restore failed.",
           "err",
           true,
@@ -761,12 +761,12 @@ export function startAdmin(host, env) {
       const fresh = await api("GET", viewUrl(targetScope, "customize"));
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
-        return setStatus("st-soul", "Restored, but the latest version could not be refreshed.", "warn", true);
-      if (JSON.stringify(settings.collect("soul")) === draftBefore) settings.load(fresh.data, targetScope, "soul");
-      else settings.refreshSoul(fresh.data);
-      sectionSnapshots.set("soul", settings.states.get("soul").baseline);
-      if (!settings.states.get("soul").dirty)
-        setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
+        return setStatus("st-instructions", "Restored, but the latest version could not be refreshed.", "warn", true);
+      if (JSON.stringify(settings.collect("instructions")) === draftBefore) settings.load(fresh.data, targetScope, "instructions");
+      else settings.refreshInstructions(fresh.data);
+      sectionSnapshots.set("instructions", settings.states.get("instructions").baseline);
+      if (!settings.states.get("instructions").dirty)
+        setStatus("st-instructions", "Version " + immutable.version + " restored as a new revision", "ok", true);
     },
   });
   function renderEnvironmentNotice(data) {
@@ -817,7 +817,7 @@ export function startAdmin(host, env) {
     }
     if (requestedView === "customize") {
       savedBranding = r.data.branding || {};
-      settings.load(r.data, scope, "soul");
+      settings.load(r.data, scope, "instructions");
       settings.load(r.data, scope, "branding");
       void settings.loadFlags(r.data, scope);
       settings.loadDecisions(r.data, scope);
@@ -861,11 +861,11 @@ export function startAdmin(host, env) {
         .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
     }
   }
-  async function refreshSoulConflict() {
+  async function refreshInstructionsConflict() {
     const fresh = await api("GET", viewUrl(scope, view));
     if (!fresh.ok) return false;
-    settings.refreshSoul(fresh.data);
-    sectionSnapshots.set("soul", settings.states.get("soul").baseline);
+    settings.refreshInstructions(fresh.data);
+    sectionSnapshots.set("instructions", settings.states.get("instructions").baseline);
     return true;
   }
   async function refreshServiceCredentialConflict() {
@@ -1278,10 +1278,10 @@ export function startAdmin(host, env) {
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
     if (!r.ok) {
-      const soulConflict = key === "soul" && r.status === 409;
-      if (soulConflict) await refreshSoulConflict();
+      const instructionsConflict = key === "instructions" && r.status === 409;
+      if (instructionsConflict) await refreshInstructionsConflict();
       let message = r.data?.message || "Save failed.";
-      if (soulConflict) message = "SOUL changed; latest revision loaded and your draft was preserved.";
+      if (instructionsConflict) message = "Instructions changed; latest revision loaded and your draft was preserved.";
       else if (r.status === 403) message = "Not authorized for this scope.";
       return setStatus(statusIdOf(key), message, "err");
     }
@@ -1292,11 +1292,11 @@ export function startAdmin(host, env) {
       if (!hasGovernanceDraft()) location.reload();
       return;
     }
-    if (key === "soul") {
+    if (key === "instructions") {
       const fresh = await api("GET", viewUrl(requestedScope, "customize"));
       if (stale()) return;
       if (!fresh.ok) return governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-      settings.refreshSoul(fresh.data);
+      settings.refreshInstructions(fresh.data);
       sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
       if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
       return;

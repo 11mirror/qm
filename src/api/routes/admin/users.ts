@@ -366,8 +366,8 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   ]);
   const config = deps.config
     ? {
-        hasSoul: !!deps.config.getSoul(personal),
-        soulVersion: deps.config.soulVersion(personal),
+        hasInstructions: !!deps.config.getInstructions(personal),
+        instructionsVersion: deps.config.instructionsVersion(personal),
         commandPolicy: deps.config.getCommandPolicy(personal),
         egress: deps.config.getEgress(personal),
         baseModel: deps.config.getBaseModel(personal),

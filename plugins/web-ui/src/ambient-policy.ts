@@ -14,13 +14,20 @@ type BotMode = keyof typeof BOT_MODES;
 type BotPolicy = { mode: BotMode; rollupHours?: number };
 type BotPolicyView = BotPolicy & { name: string };
 interface PolicyWire {
-  policy: { orders: string; bots: Record<string, BotPolicy>; ambientEnabled?: boolean | null; updatedAt: number };
+  policy: {
+    instructions: string;
+    instructionsVersion: number;
+    bots: Record<string, BotPolicy>;
+    ambientEnabled?: boolean | null;
+    updatedAt: number;
+  };
 }
 
 const freshPolicyState = () => ({
   scope: null as string | null,
   loading: false,
-  orders: "",
+  instructions: "",
+  instructionsVersion: 0,
   ambientEnabled: null as boolean | null,
   bots: [] as BotPolicyView[],
   baseUpdatedAt: 0,
@@ -45,7 +52,8 @@ export function resetAmbientPolicy(): void {
 }
 
 function applyPolicy({ policy }: PolicyWire): void {
-  ambientPolicyState.orders = policy.orders;
+  ambientPolicyState.instructions = policy.instructions;
+  ambientPolicyState.instructionsVersion = policy.instructionsVersion;
   ambientPolicyState.ambientEnabled = policy.ambientEnabled ?? null;
   ambientPolicyState.bots = Object.entries(policy.bots).map(([name, p]) => ({ name, ...p }));
   ambientPolicyState.baseUpdatedAt = policy.updatedAt;
@@ -68,7 +76,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
     applyPolicy(r);
   } catch (e) {
     if (seq !== loadSeq) return;
-    note(errMessage(e, "Couldn't load this scope's standing orders."));
+    note(errMessage(e, "Couldn't load this scope's instructions."));
   } finally {
     if (seq === loadSeq) {
       ambientPolicyState.loading = false;
@@ -103,7 +111,8 @@ async function save(): Promise<void> {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scope)}/ambient-policy`, {
       method: "PUT",
       body: JSON.stringify({
-        orders: ambientPolicyState.orders,
+        instructions: ambientPolicyState.instructions,
+        instructionsVersion: ambientPolicyState.instructionsVersion,
         bots,
         ambientEnabled: ambientPolicyState.ambientEnabled,
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
@@ -215,18 +224,18 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
             markDirty();
           },
           options: [
-            html`<option value="default">Default (on when standing orders are set)</option>`,
+            html`<option value="default">Default (on when instructions are set)</option>`,
             html`<option value="on">On</option>`,
             html`<option value="off">Off</option>`,
           ],
         })}
         <p class="ambient-policy-hint" id="ambient-enabled-hint">
           When off, the agent never acts on overheard messages here; it only responds to direct @mentions. Default: on
-          only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
+          only when instructions (or an action-mode bot) are set below, otherwise mention-only.
         </p>
       </div>
       <div class="ambient-group">
-        <label class="ambient-field-label" for="ambient-orders">Standing orders</label>
+        <label class="ambient-field-label" for="ambient-orders">Instructions</label>
         <textarea
           id="ambient-orders"
           data-focus-key="ambient-orders"
@@ -234,15 +243,16 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           rows="4"
           aria-describedby="ambient-orders-hint"
           placeholder="For example: Flag anything that could delay the launch."
-          .value=${ambientPolicyState.orders}
+          .value=${ambientPolicyState.instructions}
           ?disabled=${ambientPolicyState.saving}
           @input=${(e: InputEvent) => {
-            ambientPolicyState.orders = (e.currentTarget as HTMLTextAreaElement).value;
+            ambientPolicyState.instructions = (e.currentTarget as HTMLTextAreaElement).value;
             markDirty();
           }}
         ></textarea>
         <p class="ambient-policy-hint" id="ambient-orders-hint">
-          Plain-language guidance for proactive work. Leave empty to respond only when addressed.
+          Standing instructions for this conversation, including what to act on proactively. Leave empty to respond
+          only when addressed.
         </p>
       </div>
       <div class="ambient-group">

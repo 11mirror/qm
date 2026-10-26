@@ -21,12 +21,12 @@ export function conversationScope(
   return scopeId("channel", ref);
 }
 
-export function composeSoul(orgSoul: string | null, scopeSoul: string | null): string {
+export function composeInstructions(orgInstructions: string | null, scopeInstructions: string | null): string {
   const parts: string[] = [];
-  if (orgSoul?.trim()) parts.push(`## Organization instructions\n${orgSoul}`);
-  if (scopeSoul?.trim() && scopeSoul.trim() !== orgSoul?.trim()) {
+  if (orgInstructions?.trim()) parts.push(`## Organization instructions\n${orgInstructions}`);
+  if (scopeInstructions?.trim() && scopeInstructions.trim() !== orgInstructions?.trim()) {
     parts.push(
-      `## Conversation instructions${orgSoul?.trim() ? " (organization instructions take precedence)" : ""}\n${scopeSoul}`,
+      `## Conversation instructions${orgInstructions?.trim() ? " (organization instructions take precedence)" : ""}\n${scopeInstructions}`,
     );
   }
   return parts.join("\n\n");
@@ -61,9 +61,9 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
         }
       }
 
-      const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = external ? null : config.getSoul(scope);
-      const systemPrompt = composeSoul(orgSoul, scopeSoul);
+      const orgInstructions = external ? "" : (config.getInstructions(orgScope) ?? "");
+      const scopeInstructions = external ? null : config.getInstructions(scope);
+      const systemPrompt = composeInstructions(orgInstructions, scopeInstructions);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;

@@ -797,33 +797,33 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
 
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", async () => {
   const { control } = setup();
-  const before = control.readSoul(claims("U1"));
+  const before = control.readInstructions(claims("U1"));
   assert.equal(before.soul, null);
 
-  const w = await control.writeSoul("Always greet in Spanish.", claims("U1"));
+  const w = await control.writeInstructions("Always greet in Spanish.", claims("U1"));
   assert.ok(w.ok, JSON.stringify(w));
   assert.equal(w.version, 1);
 
-  const after = control.readSoul(claims("U1"));
+  const after = control.readInstructions(claims("U1"));
   assert.equal(after.soul, "Always greet in Spanish.");
-  assert.match(after.effectiveSoul, /Always greet in Spanish\./);
+  assert.match(after.effectiveInstructions, /Always greet in Spanish\./);
 });
 
 test("soul write in a shared (channel) scope is allowed (allowSharedScope, like the agent route)", async () => {
   const { control } = setup();
-  const w = await control.writeSoul("Channel standing note.", claims("U1", scopeId("channel", "C9")));
+  const w = await control.writeInstructions("Channel standing note.", claims("U1", scopeId("channel", "C9")));
   assert.ok(w.ok, JSON.stringify(w));
-  const after = control.readSoul(claims("U1", scopeId("channel", "C9")));
+  const after = control.readInstructions(claims("U1", scopeId("channel", "C9")));
   assert.equal(after.soul, "Channel standing note.");
 });
 
 test("soul write separates a refused scope from a failed write", async () => {
   const { control } = setup();
-  const denied = await control.writeSoul("Not my scope.", claims("U1", scopeId("personal", "U2")));
-  assert.equal(denied.ok ? "" : denied.code, "soul_update_denied");
+  const denied = await control.writeInstructions("Not my scope.", claims("U1", scopeId("personal", "U2")));
+  assert.equal(denied.ok ? "" : denied.code, "instructions_update_denied");
 
-  const stale = await control.writeSoul("Stale edit.", claims("U1"), 41);
-  assert.equal(stale.ok ? "" : stale.code, "soul_version_conflict");
+  const stale = await control.writeInstructions("Stale edit.", claims("U1"), 41);
+  assert.equal(stale.ok ? "" : stale.code, "instructions_version_conflict");
 });
 
 test("noteCron stores a flattened shift-change note, overwriting the previous one, with owner authz", async () => {

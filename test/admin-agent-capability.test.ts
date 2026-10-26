@@ -777,7 +777,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
           body: JSON.stringify({ content: "Open admin configuration sentinel" }),
         });
       assert.equal((await write()).status, 200);
-      assert.equal(await s.built.config.getSoul(target), "Open admin configuration sentinel");
+      assert.equal(await s.built.config.getInstructions(target), "Open admin configuration sentinel");
       const writes = (await s.built.auditLog.events()).filter((e) => e.action === "soul.update");
       assert.equal(writes.length, 1);
       assert.equal(writes[0]!.principalId, "admin-alice");
@@ -869,7 +869,7 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
       });
       assert.equal(response.status, 404);
       assert.deepEqual(await response.json(), { error: "not_found", message: "unknown admin resource: import" });
-      assert.notEqual(await s.built.config.getSoul(ORG), "must not be imported");
+      assert.notEqual(await s.built.config.getInstructions(ORG), "must not be imported");
     } finally {
       await s.close();
     }

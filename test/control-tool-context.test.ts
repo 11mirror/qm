@@ -216,27 +216,27 @@ test("ledger replay: a FAILED create is not cached, so a retry can succeed", asy
 test("ledger replay: a soul write is CACHED — a crash-replay does NOT bump the version again", async () => {
   const { built, control } = build();
   const { ledger } = memoryLedger();
-  const run = "run-soul";
+  const run = "run-instructions";
 
-  const first = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).soulWrite("First.");
+  const first = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).instructionsWrite("First.");
   assert.ok("ok" in first && first.ok);
-  const versionAfterFirst = built.app.getSoul(scopeId("personal", "U1")).soulVersion;
+  const versionAfterFirst = built.app.getInstructions(scopeId("personal", "U1")).instructionsVersion;
 
-  const replay = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).soulWrite("First.");
+  const replay = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).instructionsWrite("First.");
   assert.deepEqual(replay, first, "replay returns the cached write result");
   assert.equal(
-    built.app.getSoul(scopeId("personal", "U1")).soulVersion,
+    built.app.getInstructions(scopeId("personal", "U1")).instructionsVersion,
     versionAfterFirst,
     "the version did NOT bump a second time",
   );
 });
 
-test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () => {
+test("createToolContext.instructionsWrite then instructionsRead reflect the new SOUL", async () => {
   const { control } = build();
   const ctx = ctxFor({ control, controlClaims: claims("U1") });
-  const w = await ctx.soulWrite("Be brief.");
+  const w = await ctx.instructionsWrite("Be brief.");
   assert.ok("ok" in w && w.ok);
-  const r = ctx.soulRead();
+  const r = ctx.instructionsRead();
   assert.ok(!("code" in r) || r.code !== "control_unavailable");
   assert.equal((r as { soul: string | null }).soul, "Be brief.");
 });
@@ -271,7 +271,7 @@ for (const scope of ["conversation", "channel"] as const) {
       defaultDestination: {},
     } as unknown as SurfaceToolsContext)!;
     const ctx = ctxFor({ control, controlClaims: claims("U1"), surface });
-    await ctx.soulWrite("First rule. Second rule.");
+    await ctx.instructionsWrite("First rule. Second rule.");
     await ctx.setStandingOrder("First rule. Second rule.");
     const entries: string[] = [];
     const tool = createAgentTools(
@@ -296,14 +296,14 @@ for (const scope of ["conversation", "channel"] as const) {
       /changed/,
     );
     const current =
-      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+      scope === "conversation" ? control.readInstructions(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
     assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
     const retry = current.includes("First updated.")
       ? await edit("Second rule.", "Second updated.")
       : await edit("First rule.", "First updated.");
     assert.doesNotMatch(retry, /\[error\]/);
     const final =
-      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+      scope === "conversation" ? control.readInstructions(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
     assert.equal(final, "First updated. Second updated.");
   });
 }
@@ -350,5 +350,5 @@ test("without control/controlClaims wired, every control method returns CONTROL_
   assert.deepEqual(await ctx.cronList(), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.cronRuns("cron-1"), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.webhookList(), CONTROL_UNAVAILABLE);
-  assert.deepEqual(ctx.soulRead(), CONTROL_UNAVAILABLE);
+  assert.deepEqual(ctx.instructionsRead(), CONTROL_UNAVAILABLE);
 });

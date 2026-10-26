@@ -57,7 +57,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
-  await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
+  await b.config.setInstructions("org:default-org", "ORG_INSTRUCTIONS_SENTINEL");
   await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
   await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
   await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
@@ -90,7 +90,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   assert.equal(prompt.status, "ok", JSON.stringify(prompt));
   assert.doesNotMatch(
     prompt.reply!,
-    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
+    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_INSTRUCTIONS_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
   );
   assert.match(prompt.reply!, /safe/);
   await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));

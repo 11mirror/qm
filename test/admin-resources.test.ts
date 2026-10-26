@@ -302,14 +302,14 @@ test("a generic resource round-trips through the registry dispatch + read loop",
     const get = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const body = (await get.json()) as {
       soul: string;
-      soulVersion: number;
-      soulHistory: Array<{ content: string; version: number; updatedBy?: string; updatedAt: number }>;
+      instructionsVersion: number;
+      instructionsHistory: Array<{ content: string; version: number; updatedBy?: string; updatedAt: number }>;
     };
     assert.equal(body.soul, "be excellent");
-    assert.equal(body.soulVersion, 2);
-    assert.equal(body.soulHistory[0]?.content, "be excellent");
-    assert.equal(body.soulHistory[0]?.updatedBy, "admin-alice");
-    assert.ok(body.soulHistory[0]?.updatedAt);
+    assert.equal(body.instructionsVersion, 2);
+    assert.equal(body.instructionsHistory[0]?.content, "be excellent");
+    assert.equal(body.instructionsHistory[0]?.updatedBy, "admin-alice");
+    assert.ok(body.instructionsHistory[0]?.updatedAt);
 
     const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
       method: "PUT",

@@ -74,7 +74,7 @@ test("saving branding merges the saved theme and reloads only when no other draf
     accent.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
     accent.dispatchEvent(new admin.window.Event("change", { bubbles: true }));
     if (otherDraft) {
-      const soul = admin.document.querySelector<HTMLTextAreaElement>("#card-soul textarea")!;
+      const soul = admin.document.querySelector<HTMLTextAreaElement>("#card-instructions textarea")!;
       soul.value = "Unsaved SOUL";
       soul.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
     }
@@ -86,7 +86,7 @@ test("saving branding merges the saved theme and reloads only when no other draf
     assert.equal(saves[0].iconUrl, "https://example.com/icon.png");
     assert.equal(admin.document.querySelector<HTMLButtonElement>('[data-save="branding"]')!.disabled, true);
     assert.equal(
-      admin.document.querySelector<HTMLTextAreaElement>("#card-soul textarea")!.value,
+      admin.document.querySelector<HTMLTextAreaElement>("#card-instructions textarea")!.value,
       otherDraft ? "Unsaved SOUL" : "Original SOUL",
     );
     assert.equal(

@@ -121,9 +121,9 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>
-          What the agent proactively acts on in this channel. The standing order is plain prose the ambient judge weighs
-          each batch of new messages against. Empty means it stays silent unless addressed. The bot ledger says how each
-          automated poster is treated: <b>ignore</b> never wakes the judge, <b>rollup</b> batches its posts (judged at
+          When the agent wakes on overheard messages in this channel. The ambient judge weighs each batch of new messages
+          against the channel's instructions (edit them under Instructions); with none set it stays silent unless
+          addressed. The bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the judge, <b>rollup</b> batches its posts (judged at
           most once per the given hours), <b>action</b> marks its posts as triggers to act on, <b>user</b> reads it like
           a person.
         </p>
@@ -144,13 +144,6 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
-        <label for="ambient-orders">Standing order</label>
-        <textarea
-          id="ambient-orders"
-          placeholder="(none, the agent stays silent here unless addressed)"
-          .value=${s.value("ambient-orders")}
-          @input=${(event: Event) => changeField(s, "ambient-orders", event)}
-        ></textarea>
         <div class="tablewrap" style="margin-top: 14px">
           <table class="rules">
             <thead>

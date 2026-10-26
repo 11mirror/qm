@@ -2107,7 +2107,7 @@
   border-radius: var(--radius);
 }
 #app-view .credential-main,
-#app-view .soul-diff section,
+#app-view .instructions-diff section,
 #app-view .governance-content,
 #app-view .setting-copy {
   min-width: 0;
@@ -2134,7 +2134,7 @@
   margin: 0 0 8px;
 }
 #app-view .sc-form-head .hint,
-#app-view .soul-revision p {
+#app-view .instructions-revision p {
   margin: 0;
 }
 #app-view .editor-grid {
@@ -2223,21 +2223,21 @@
   font-size: 11px;
   line-height: 1.4;
 }
-#app-view .soul-meta {
+#app-view .instructions-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 14px;
   margin-top: 8px;
   color: var(--muted);
 }
-#app-view .soul-diff {
+#app-view .instructions-diff {
   display: grid;
   margin-top: 14px;
 }
-#app-view .soul-diff h3 {
+#app-view .instructions-diff h3 {
   margin: 0 0 5px;
 }
-#app-view .soul-diff pre {
+#app-view .instructions-diff pre {
   min-height: 90px;
   max-height: 210px;
   margin: 0;
@@ -2247,12 +2247,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#app-view .soul-history {
+#app-view .instructions-history {
   display: grid;
   gap: 7px;
   margin-top: 14px;
 }
-#app-view .soul-revision {
+#app-view .instructions-revision {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2262,7 +2262,7 @@
   border-radius: 7px;
   background: var(--surface);
 }
-#app-view .soul-revision small {
+#app-view .instructions-revision small {
   display: block;
   color: var(--muted);
 }
@@ -2850,7 +2850,7 @@
   }
   #app-view .kpis,
   #app-view .sc-semantics,
-  #app-view .soul-diff {
+  #app-view .instructions-diff {
     grid-template-columns: 1fr;
   }
   #app-view .viewer {
@@ -3933,16 +3933,16 @@ dialog) .posture-choice small {
   margin-top: 4px;
 }
 #app-view #view-governance .card > .foot .status,
-#app-view #view-governance .soul-meta {
+#app-view #view-governance .instructions-meta {
   font-size: 12px;
   line-height: 1.4;
 }
-#app-view .soul-preview-label {
+#app-view .instructions-preview-label {
   display: block;
   margin-bottom: 4px;
 }
-#app-view #view-governance #card-soul .soul-preview,
-#app-view #view-governance .soul-workbench textarea {
+#app-view #view-governance #card-instructions .instructions-preview,
+#app-view #view-governance .instructions-workbench textarea {
   width: 100%;
   min-height: 140px;
   max-height: 360px;
@@ -3957,24 +3957,24 @@ dialog) .posture-choice small {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#app-view #view-governance .soul-diff {
+#app-view #view-governance .instructions-diff {
   grid-template-columns: 1fr;
   gap: 12px;
 }
-#app-view #view-governance .soul-diff h3,
-#app-view #view-governance .soul-history h3 {
+#app-view #view-governance .instructions-diff h3,
+#app-view #view-governance .instructions-history h3 {
   margin: 0 0 4px;
   color: var(--text);
   font-size: 13px;
   font-weight: 400;
 }
-#app-view #view-governance .soul-diff pre {
+#app-view #view-governance .instructions-diff pre {
   padding: 7px 10px;
   border-radius: 6px;
   background: transparent;
   font: inherit;
 }
-#app-view #card-soul .soul-preview {
+#app-view #card-instructions .instructions-preview {
   margin: 0;
   text-overflow: ellipsis;
 }
@@ -4074,9 +4074,9 @@ dialog) .posture-choice small {
   min-width: 0;
 }
 #app-view .policy-rule.hidden,
-#app-view #card-soul.is-editing .soul-preview-body,
-#app-view #card-soul:not(.is-editing) .soul-workbench,
-#app-view #card-soul.is-editing .soul-preview,
+#app-view #card-instructions.is-editing .instructions-preview-body,
+#app-view #card-instructions:not(.is-editing) .instructions-workbench,
+#app-view #card-instructions.is-editing .instructions-preview,
 #app-view #view-data .users-layout .status:empty,
 #app-view #shellbar.logs-shell .log-counts:empty,
 #app-view #slack-own-app-guide summary::-webkit-details-marker,

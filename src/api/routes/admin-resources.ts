@@ -1,3 +1,4 @@
+import { MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionCatalog, parseDecisionProvider, parseDecisionRule } from "../../decisions/decisions.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
@@ -142,8 +143,6 @@ const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { o
 const trimmedList = (value: unknown): string[] | undefined =>
   Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : undefined;
 
-const MAX_ORDERS_CHARS = 20_000;
-const MAX_SOUL_CHARS = 100_000;
 
 function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
@@ -258,24 +257,25 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
-    id: "soul",
+    id: "instructions",
     kind: "text",
-    readKey: "soul",
-    get: (deps, scope) => deps.config!.getSoul(scope),
+    readKey: "instructions",
+    get: (deps, scope) => deps.config!.getInstructions(scope),
     apply: async (ctx, actor, scope) => {
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
-      if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
-      if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
+      if (typeof body.content !== "string") return { error: "instructions requires { content: string }" };
+      if (body.content.length > MAX_INSTRUCTIONS_CHARS)
+        return { error: `instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters` };
       if (body.expectedVersion === undefined) {
-        await ctx.deps.config!.setSoul(scope, body.content, actor.id);
+        await ctx.deps.config!.setInstructions(scope, body.content, actor.id);
         return { ok: true };
       }
       if (typeof body.expectedVersion !== "number")
         return { error: "expectedVersion must be a number", code: "bad_version" };
-      const version = await ctx.deps.config!.setSoulIfVersion(scope, body.expectedVersion, body.content, actor.id);
+      const version = await ctx.deps.config!.setInstructionsIfVersion(scope, body.expectedVersion, body.content, actor.id);
       if (version === null) {
         return {
-          error: "SOUL changed after this draft was loaded. Reload before saving.",
+          error: "Instructions changed after this draft was loaded. Reload before saving.",
           code: "version_conflict",
           status: 409,
         };
@@ -293,7 +293,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
-        orders: p?.orders ?? "",
         bots: p?.bots ?? {},
         ambientEnabled: p?.ambientEnabled ?? null,
         updatedAt: p?.updatedAt ?? 0,
@@ -305,16 +304,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = channelContainer(scope);
       if (!ref) return { error: "ambient policy applies to channel and group scopes only" };
       const b = (ctx.body ?? {}) as {
-        orders?: unknown;
         bots?: unknown;
         ambientEnabled?: unknown;
         baseUpdatedAt?: unknown;
       };
-      if (typeof b.orders !== "string") return { error: "ambient-policy requires { orders: string }" };
-      if (b.orders.length > MAX_ORDERS_CHARS)
-        return {
-          error: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
-        };
       const parsed = parseBotLedger(b.bots);
       if ("error" in parsed) return { error: parsed.error };
       if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
@@ -327,7 +320,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           status: 409,
         };
       }
-      await deps.channelPolicy.set(ref, b.orders, {
+      await deps.channelPolicy.set(ref, {
         setBy: actor.id,
         bots: parsed.bots,
         ambientEnabled: b.ambientEnabled as boolean | null | undefined,

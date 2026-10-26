@@ -214,7 +214,7 @@ const SETTINGS_RESOURCES = {
     "egress",
     "orgAmbient",
   ],
-  customize: ["soul", "branding", "featureFlags", "decisions"],
+  customize: ["instructions", "branding", "featureFlags", "decisions"],
   "slack-settings": ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
@@ -419,7 +419,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     ...environmentMetadata,
     ...values,
     ...(includes("customize")
-      ? { soulVersion: deps.config.soulVersion(targetScope), soulHistory: deps.config.soulHistory(targetScope) }
+      ? { instructionsVersion: deps.config.instructionsVersion(targetScope), instructionsHistory: deps.config.instructionsHistory(targetScope) }
       : {}),
     ...(includes("credentials")
       ? { serviceCredentials, directoryMembers: directoryMembers ?? [], directoryChannels: directoryChannels ?? [] }
