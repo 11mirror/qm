@@ -1,7 +1,6 @@
 import { html, nothing, render } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { card, bareCard, table, renderer } from "./shared.ts";
+import { card, bareCard, table, renderer, empty, denseList as dense } from "./shared.ts";
 import { mountPacks, skillDetail, removeSkill } from "./artifacts-skills.ts";
 export type Data = Record<string, any>;
 export type Context = Record<string, any>;
@@ -14,51 +13,7 @@ type Row = {
   cls?: string;
   icon?: unknown;
 };
-const empty = (text: string) => html`<p class="empty">${text}</p>`;
-export const badge = (text: unknown, tone = "muted") => html`<span class=${"badge " + tone}>${text}</span>`;
 const queries = new Map<string, string>();
-export function dense(items: Data[], rowOf: (item: Data) => Row, open: (item: Data) => void, message: string) {
-  if (!items.length) return empty(message);
-  return html`<div class="dense-list">
-    ${repeat(
-      items,
-      (item) => item.id || item.scopeId || item,
-      (item) => {
-        const r = rowOf(item);
-        const content = html`${r.icon ? html`<span class="dense-icon">${r.icon}</span>` : nothing}<span
-            class="dense-name"
-            >${r.name}</span
-          ><span class="dense-preview">${r.preview ?? ""}</span
-          >${r.time != null ? html`<span class="dense-time">${r.time}</span>` : nothing}`;
-        const click = (e: MouseEvent) => {
-          if (r.href && (r.target || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
-          if (r.href) e.preventDefault();
-          open(item);
-        };
-        return r.href
-          ? html`<a
-              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-              href=${r.href}
-              target=${ifDefined(r.target)}
-              rel=${ifDefined(r.target ? "noopener" : undefined)}
-              @click=${click}
-              >${content}</a
-            >`
-          : html`<div
-              class=${"dense-row" + (r.cls ? " " + r.cls : "")}
-              tabindex="0"
-              role="button"
-              @click=${click}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") open(item);
-              }}
-            >
-              ${content}
-            </div>`;
-      },
-    )}
-  </div>`;
-}
 function scopeList(items: Data[], c: Context, noun: string, latest: (r: Data) => number, message: string) {
   const groups = new Map<string, Data>();
   for (const item of items) {
@@ -940,129 +895,4 @@ function cronDetail(root: HTMLElement, cron: Data | undefined, id: string, c: Co
         draw();
       }
     });
-}
-const kpis = (items: unknown[][]) =>
-  html`<div class="kpis">
-    ${items.map(
-      ([value, label]) =>
-        html`<div class="kpi">
-          <div class="n">${value}</div>
-          <div class="k">${label}</div>
-        </div>`,
-    )}
-  </div>`;
-export function retention(root: HTMLElement, d: Data) {
-  const render = renderer(root);
-  const a = d.active || {},
-    nvr = d.newVsReturning || {},
-    pu = d.perUser || {};
-  const retentionCell = (p: number) => ({
-    node: badge(
-      p + "%",
-      (() => {
-        if (p >= 40) return "ok";
-        return p >= 15 ? "warn" : "muted";
-      })(),
-    ),
-    cls: "num",
-  });
-  render(
-    html`${kpis([
-        [a.dau ?? 0, "DAU"],
-        [a.wau ?? 0, "WAU"],
-        [a.mau ?? 0, "MAU"],
-        [(a.stickiness ?? 0) + "%", "Stickiness (DAU/MAU)"],
-      ])}
-      <div class="metric-note">
-        Stickiness${badge(
-          String(a.stickiness ?? 0) + "%",
-          (() => {
-            if ((a.stickiness ?? 0) >= 30) return "ok";
-            return (a.stickiness ?? 0) >= 10 ? "warn" : "muted";
-          })(),
-        )}
-      </div>
-      ${card(
-        "New vs returning",
-        `Distinct active users in the trailing ${nvr.window || "30d"}.`,
-        table(
-          ["New", "Returning"],
-          [
-            [
-              { text: String(nvr.newUsers ?? 0), cls: "num" },
-              { text: String(nvr.returning ?? 0), cls: "num" },
-            ],
-          ],
-          "No activity yet.",
-        ),
-      )}${card(
-        "Weekly retention cohorts",
-        "Of users first active in a week, the share active in following weeks. Channel attribution is approximate.",
-        table(
-          ["Cohort (week of)", "Users", "W0", "W1", "W2", "W3", "W4"],
-          (d.cohorts || []).map((r: Data) => [
-            r.week,
-            { text: String(r.size), cls: "num" },
-            ...(r.retained || []).map(retentionCell),
-          ]),
-          "No cohorts yet.",
-        ),
-      )}${card(
-        "Per-user distribution",
-        `${d.totals?.users ?? 0} users · ${d.totals?.sessions ?? 0} sessions. ${d.attribution || ""}`,
-        table(
-          ["Metric", "p50", "p95"],
-          [
-            [
-              "Sessions / user",
-              { text: String(pu.sessions?.p50 ?? 0), cls: "num" },
-              { text: String(pu.sessions?.p95 ?? 0), cls: "num" },
-            ],
-            [
-              "Turns / user",
-              { text: String(pu.turns?.p50 ?? 0), cls: "num" },
-              { text: String(pu.turns?.p95 ?? 0), cls: "num" },
-            ],
-          ],
-          "No users yet.",
-        ),
-      )}`,
-  );
-}
-export function live(root: HTMLElement, d: Data, c: Context) {
-  const render = renderer(root);
-  const runs = d.runs || [];
-  render(
-    html`${kpis([
-      [d.active ?? 0, "Active now"],
-      [runs.length, "Recent runs"],
-      [runs.filter((r: Data) => r.status === "failed").length, "Failed"],
-      [runs.filter((r: Data) => r.status === "done").length, "Done"],
-    ])}${bareCard(
-      table(
-        ["Run", "Status", "Scope", "Type", "Attempts", "Worker", "Duration", "Lease", "Started"],
-        runs.map((r: Data) => [
-          { node: c.stacked("Run " + c.shortId(r.id), r.threadRef || "no thread"), cls: "mono" },
-          { node: c.statusBadge(r.status) },
-          r.sessionScope ? c.scopeCell(r.sessionScope) : { text: "-", cls: "mono" },
-          { node: c.typeBadge(r.sessionType) },
-          {
-            node: badge(`${r.attempts}/${r.maxAttempts}`, r.status === "failed" || r.attempts > 1 ? "warn" : "muted"),
-            cls: "num",
-          },
-          { text: r.workerId || "-", cls: "mono" },
-          { text: c.fmtDuration(r.startedAt || r.createdAt, r.finishedAt), cls: "num" },
-          {
-            text:
-              r.leaseExpiresAt && (r.status === "running" || r.status === "pending")
-                ? c.fmtTime(r.leaseExpiresAt)
-                : "-",
-            cls: "num",
-          },
-          { text: r.startedAt ? c.fmtTime(r.startedAt) : "-", cls: "num" },
-        ]),
-        "No runs.",
-      ),
-    )}`,
-  );
 }

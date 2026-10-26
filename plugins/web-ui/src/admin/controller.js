@@ -1,5 +1,5 @@
 import * as governanceUI from "./admin.ts";
-import { ADMIN_VIEWS, VIEW_TITLE } from "./sections.ts";
+import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./sections.ts";
 import { ADMIN_MARKUP } from "./markup.ts";
 
 function backArrow() {
@@ -31,17 +31,11 @@ export function startAdmin(host, env) {
   const VIEWS = [...ADMIN_VIEWS];
   function prepareParityCards() {
     const content = document.querySelector("#view-governance .governance-content");
-    const anchor = $("governance-credentials");
-    $("card-approval-grant-modes").classList.add("reference-omitted");
-
     const providers = document.createElement("section");
     providers.className = "card sv-models";
     providers.id = "card-custom-providers";
     providers.innerHTML =
       '<div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div>';
-
-    const governanceAmbient = governanceUI.createCard("card-governance-org-ambient");
-    $("card-command-policy").after(governanceAmbient);
 
     const keychains = document.createElement("section");
     keychains.className = "card sv-credentials";
@@ -49,8 +43,9 @@ export function startAdmin(host, env) {
     keychains.innerHTML =
       '<div class="head"><h2>Personal keychains</h2></div><div class="body"><div class="keychain-summary"><strong id="keychain-user-count">—</strong> users with keychain entries · <strong id="keychain-standing-count">—</strong> standing grants</div></div><div class="foot"><button type="button" class="viewlink" data-viewlink="users">View users ›</button></div>';
     $("card-feature-flags").classList.remove("hidden");
-
-    [
+    $("card-slack-installation").classList.add("sv-slack-settings");
+    content.append(
+      $("card-ambient-policy"),
       $("card-runtimes"),
       providers,
       $("card-webui-models"),
@@ -60,18 +55,17 @@ export function startAdmin(host, env) {
       $("card-decisions"),
       $("card-service-credentials"),
       keychains,
-    ].forEach((card) => content.insertBefore(card, anchor));
-    content.insertBefore(anchor, $("card-service-credentials"));
-    [
       $("card-security-posture"),
       $("card-auto-flagger"),
       $("card-sharing-posture"),
-      governanceAmbient,
-      $("card-external-slack"),
+      governanceUI.createCard("card-governance-org-ambient"),
       $("card-command-policy"),
       $("card-egress"),
-    ].forEach((card) => content.appendChild(card));
-
+      $("card-slack-installation"),
+      $("card-external-slack"),
+      $("card-channel-header-pin-default"),
+      $("card-ack-emoji"),
+    );
     const connectorView = $("view-connectors");
     const connectorTip = document.createElement("aside");
     connectorTip.className = "connector-dm-tip admin-notice hidden";
@@ -88,10 +82,6 @@ export function startAdmin(host, env) {
     builtIns.id = "card-built-in-connectors";
     builtIns.innerHTML =
       '<div class="head"><h2>Built-in connectors</h2></div><div class="body" id="built-in-connectors">Loading connectors…</div>';
-    $("card-slack-installation").classList.add("sv-slack-settings");
-    ["card-slack-installation", "card-external-slack", "card-channel-header-pin-default", "card-ack-emoji"].forEach(
-      (id) => content.appendChild($(id)),
-    );
     connectorView.appendChild(builtIns);
     document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
       link.closest("section.card").querySelector(":scope > .head").appendChild(link);
@@ -161,7 +151,6 @@ export function startAdmin(host, env) {
     "history",
     "files",
     "memory",
-    "live",
     "audit",
     "errors",
     "skills",
@@ -169,7 +158,6 @@ export function startAdmin(host, env) {
     "deployments",
   ]);
   const ORG_WIDE = new Set([
-    "retention",
     "users",
     "spend",
     "keychain",
@@ -181,7 +169,7 @@ export function startAdmin(host, env) {
     "customize",
     "slack-settings",
   ]);
-  const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
+  const ENDPOINT = { history: "sessions" };
   const HISTORY_PAGE_SIZE = 50;
   const ERRORS_PAGE_SIZE = 50;
 
@@ -361,22 +349,6 @@ export function startAdmin(host, env) {
     event.preventDefault();
     finishGovernanceReview(false);
   });
-  function setCardDirty(card, dirty, statusId, saveSelector) {
-    if (!card) return;
-    const save = saveSelector ? card.querySelector(saveSelector) : card.querySelector("[data-save], #sc-save");
-    if (save) {
-      save.classList.toggle("dirty", dirty);
-      save.disabled = !dirty;
-    }
-    card.classList.toggle("dirty", !!card.querySelector("button.dirty"));
-    const st = statusId ? $(statusId) : null;
-    if (dirty && statusId) setStatus(statusId, "Unsaved changes", "dirty", true);
-    else if (
-      st &&
-      (st.classList.contains("dirty") || st.classList.contains("saving") || st.classList.contains("muted"))
-    )
-      setStatus(statusId, "", "");
-  }
   function badge(text, kind) {
     const s = document.createElement("span");
     s.className = "badge" + (kind ? " " + kind : "");
@@ -445,12 +417,6 @@ export function startAdmin(host, env) {
   function statusBadge(status) {
     return badge(titleCase(status || "unknown"), statusKind(status));
   }
-  function typeBadge(type) {
-    let kind = "warn";
-    if (type === "dm") kind = "info";
-    else if (type) kind = "muted";
-    return badge(titleCase(type || "unknown"), kind);
-  }
   function entryIsNoise(e) {
     return ["tool_call", "tool_result", "soul", "system"].includes(e.type);
   }
@@ -478,10 +444,6 @@ export function startAdmin(host, env) {
     } catch {
       return text.trim() || fallback;
     }
-  }
-  function fmtDuration(start, end) {
-    if (start == null) return "-";
-    return fmtMs((end ?? Date.now()) - start);
   }
 
   function stateToUrl(st) {
@@ -604,38 +566,12 @@ export function startAdmin(host, env) {
     page = st.page || 1;
     historyCursor = st.cursor || null;
     historyKind = st.historyKind || "conversation";
-    root.classList.toggle("history-view", view === "history");
-    root.classList.toggle("slack-view", view === "slack");
-    root.classList.toggle("judgments-view", view === "judgments");
-    root.classList.toggle("errors-view", view === "errors");
-    root.classList.toggle("deployments-view", view === "deployments");
-    root.classList.toggle("crons-view", view === "crons");
+    for (const v of ["history", "slack", "judgments", "errors", "deployments", "crons"])
+      root.classList.toggle(v + "-view", view === v);
     root.classList.toggle("governance-view", isGovLike(view));
     root.dataset.subview = view;
     setGovernancePending(view === "governance" && governanceReadyScope !== scope);
-    root.dataset.adminKit = [
-      "crons",
-      "deployments",
-      "files",
-      "skills",
-      "memory",
-      "audit",
-      "egress",
-      "history",
-      "slack",
-      "judgments",
-      "errors",
-      "governance",
-      "models",
-      "credentials",
-      "connectors",
-      "customize",
-      "slack-settings",
-      "users",
-      "spend",
-    ].includes(view)
-      ? "true"
-      : "false";
+    root.dataset.adminKit = String(ADMIN_SECTIONS.some((section) => section.views.includes(view)));
     root.classList.toggle("context-fullpage", view === "history" && !!st.session && st.turn != null);
     if (!isGovLike(view) && !["general", "connectors", "onboarding"].includes(view) && !scopeDir)
       void loadScopeDirectory();
@@ -650,16 +586,16 @@ export function startAdmin(host, env) {
       view === "general" || view === "onboarding" || isGovLike(view) || view === "connectors",
     );
     if (view === "general") return;
-    if (view === "onboarding") return void loadOnboarding();
+    if (view === "onboarding") return void governanceUI.onboarding.load();
     if (isGovLike(view)) {
-      if (view === "slack-settings") void loadSlackInstallation();
+      if (view === "slack-settings") void governanceUI.integrations.loadSlackInstallation();
       return void loadScope();
     }
-    if (view === "connectors") return void loadConnectors();
+    if (view === "connectors") return void governanceUI.integrations.loadConnectors();
     if (view === "user") return void showUserDetail(st.principal);
     if (view === "slack") return void renderSlackMirror(st);
-    if (view === "judgments") return void renderAmbientJudgments(st);
-    if (view === "ackemoji") return void renderAckEmojiPicks(st);
+    if (view === "judgments") return void governanceUI.slackActivity.renderAmbientJudgments(st);
+    if (view === "ackemoji") return void governanceUI.slackActivity.renderAckEmojiPicks(st);
     if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
     if (view === "history" && st.session) return void showTranscript(st.session);
     renderData();
@@ -684,33 +620,34 @@ export function startAdmin(host, env) {
     history.pushState(st, "", stateToUrl(st));
     render(st);
   }
-  function go(st) {
-    const leavingDraft = hasGovernanceDraft() && (st.view !== view || st.scope !== scope);
-    if (!leavingDraft) return commitGo(st);
+  function reviewLeave(destination) {
+    const facts = [
+      ["Current scope", governanceScopeName()],
+      ["Destination", VIEW_TITLE[destination] || titleCase(destination)],
+    ];
     if (governanceSaveInFlight()) {
       void reviewGovernanceChange({
         title: "Governance save in progress",
         subtitle: "Wait for the current save to finish before leaving.",
-        facts: [
-          ["Current scope", governanceScopeName()],
-          ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
-        ],
+        facts,
         warning: "The change may already be committing and cannot be safely discarded.",
         confirmLabel: null,
       });
-      return;
+      return Promise.resolve(false);
     }
-    void reviewGovernanceChange({
+    return reviewGovernanceChange({
       title: "Discard unsaved governance changes?",
       subtitle: "This page has a draft that has not been applied.",
-      facts: [
-        ["Current scope", governanceScopeName()],
-        ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
-      ],
+      facts,
       warning: "Leaving now discards every unsaved setting on this Governance page.",
       confirmLabel: "Discard and leave",
       danger: true,
-    }).then((confirmed) => {
+    });
+  }
+  function go(st) {
+    const leavingDraft = hasGovernanceDraft() && (st.view !== view || st.scope !== scope);
+    if (!leavingDraft) return commitGo(st);
+    void reviewLeave(st.view).then((confirmed) => {
       if (confirmed) {
         if (view === "governance") governanceReadyScope = null;
         commitGo(st);
@@ -728,8 +665,8 @@ export function startAdmin(host, env) {
   document.querySelectorAll("[data-viewlink]").forEach((button) => {
     button.onclick = () => setView(button.dataset.viewlink);
   });
-  $("add-custom-provider").onclick = () => openCustomProviderEditor();
-  $("onboarding-add-custom-provider").onclick = () => openCustomProviderEditor();
+  $("add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
+  $("onboarding-add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
   function route() {
     const st = urlToState();
     if (st.view === "history" && st.session) {
@@ -760,30 +697,7 @@ export function startAdmin(host, env) {
     if (next.view === view && next.scope === scope) return;
     const current = { view, scope, session: null, page };
     history.pushState(current, "", stateToUrl(current));
-    if (governanceSaveInFlight()) {
-      void reviewGovernanceChange({
-        title: "Governance save in progress",
-        subtitle: "Wait for the current save to finish before leaving.",
-        facts: [
-          ["Current scope", governanceScopeName()],
-          ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
-        ],
-        warning: "The change may already be committing and cannot be safely discarded.",
-        confirmLabel: null,
-      });
-      return;
-    }
-    void reviewGovernanceChange({
-      title: "Discard unsaved governance changes?",
-      subtitle: "This page has a draft that has not been applied.",
-      facts: [
-        ["Current scope", governanceScopeName()],
-        ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
-      ],
-      warning: "Leaving now discards every unsaved setting on this Governance page.",
-      confirmLabel: "Discard and leave",
-      danger: true,
-    }).then((confirmed) => {
+    void reviewLeave(next.view).then((confirmed) => {
       if (!confirmed) return;
       allowGovernancePop = true;
       history.back();
@@ -1023,7 +937,7 @@ export function startAdmin(host, env) {
   window.addEventListener("focus", () => {
     if (!root.isConnected) return;
     if (view === "slack-settings") {
-      void loadSlackInstallation();
+      void governanceUI.integrations.loadSlackInstallation();
       return;
     }
     if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
@@ -1031,7 +945,7 @@ export function startAdmin(host, env) {
     if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
     if (view === "history" && urlToState().session) return;
     if (view === "onboarding") {
-      loadOnboarding();
+      governanceUI.onboarding.load();
       return;
     }
     if (view === "slack") {
@@ -1098,84 +1012,6 @@ export function startAdmin(host, env) {
         setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
     },
   });
-  function setGovernanceStatus(id, value, detail, tone) {
-    const root = $(id);
-    root.dataset.tone = tone || "neutral";
-    root.querySelector(".v").textContent = value;
-    root.querySelector(".detail").textContent = detail;
-  }
-  function renderGovernanceOverview(data) {
-    const posture = data.securityPosture || "auto";
-    let postureTone = "ok";
-    if (posture === "dangerous") postureTone = "danger";
-    else if (posture === "auto") postureTone = "warn";
-    setGovernanceStatus("governance-status-posture", titleCase(posture), "Effective security posture", postureTone);
-    const sharingPosture = data.sharingPosture || "isolated";
-    setGovernanceStatus(
-      "governance-status-sharing",
-      titleCase(sharingPosture),
-      "Effective sharing posture",
-      sharingPosture === "open" ? "danger" : "ok",
-    );
-    const allowCount = (data.egress?.allowedHosts || []).length;
-    const denyCount = (data.egress?.deniedHosts || []).length;
-    const enforcement = data.egressEnforcement || {
-      active: false,
-      fidelity: "none",
-      backend: "unknown",
-      reason: "backend_unsupported",
-    };
-    const policyCount = allowCount + denyCount;
-    const inactiveEgressDetail =
-      enforcement.reason === "control_plane_unconfigured"
-        ? "Backend supports policy; control plane inactive"
-        : "Backend cannot enforce host policy";
-    let egressDetail = inactiveEgressDetail;
-    if (enforcement.active) {
-      egressDetail = policyCount ? plural(policyCount, "effective rule") : "Policy enforced by " + enforcement.backend;
-    } else if (policyCount) {
-      egressDetail = plural(policyCount, "draft rule") + " · " + inactiveEgressDetail;
-    }
-    setGovernanceStatus(
-      "governance-status-egress",
-      enforcement.active ? titleCase(enforcement.fidelity) + " enforced" : "Unavailable",
-      egressDetail,
-      enforcement.active ? "ok" : "warn",
-    );
-    if ("externalSlackParticipants" in data) {
-      const external = !!data.externalSlackParticipants;
-      setGovernanceStatus(
-        "governance-status-audience",
-        external ? "External enabled" : "Internal only",
-        external ? "Guests may see agent output" : "Organization boundary",
-        external ? "danger" : "ok",
-      );
-    } else {
-      setGovernanceStatus("governance-status-audience", "Inherited", "Resolved at organization scope", "neutral");
-    }
-    const model = data.baseModel || data.baseModelDefault || "Deployment default";
-    const option = (data.baseModelOptions || []).find((candidate) => candidate.id === model);
-    setGovernanceStatus(
-      "governance-status-model",
-      option?.name || model,
-      data.baseModel ? "Local override" : "Effective default",
-      "neutral",
-    );
-  }
-  function syncGovernanceSectionNav() {
-    if (view !== "governance") return;
-    const links = [...document.querySelectorAll(".governance-sections a")];
-    const groups = links.map((link) => document.querySelector(link.getAttribute("href"))).filter(Boolean);
-    const threshold = Math.min(innerHeight * 0.34, 220);
-    let active = groups[0];
-    groups.forEach((group) => {
-      if (group.getBoundingClientRect().top <= threshold) active = group;
-    });
-    links.forEach((link) =>
-      link.setAttribute("aria-current", link.getAttribute("href") === "#" + active?.id ? "true" : "false"),
-    );
-  }
-  document.addEventListener("scroll", syncGovernanceSectionNav, { passive: true, capture: true });
   function renderEnvironmentNotice(data) {
     const notice = $("environment-notice");
     const attachment = data?.environmentAttachment;
@@ -1232,50 +1068,36 @@ export function startAdmin(host, env) {
       );
       return;
     }
-    const refreshModelChoices = [];
     if (requestedView === "governance") {
       renderEnvironmentNotice(r.data);
-      renderGovernanceOverview(r.data);
-      syncGovernanceSectionNav();
       loadedCommandPolicyPresent = r.data.commandPolicy != null;
       governanceUI.load(r.data, scope);
       if (scopeChanged) $("auto-flagger-test-result").hidden = true;
     }
-    if (requestedView === "customize") governanceUI.settings.load(r.data, scope, "soul");
-    if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
-
-    const opts = r.data.baseModelOptions || [];
-    if (requestedView === "models") {
-      governanceUI.settings.load(r.data, scope, "runtime");
-      governanceUI.settings.load(r.data, scope, "cron-runtime");
-      governanceUI.settings.load(r.data, scope, "subagent-runtime");
-      governanceUI.settings.load(r.data, scope, "fallback-runtime");
-      governanceUI.settings.load(r.data, scope, "webui-models");
-      governanceUI.settings.load(r.data, scope, "memory-embedding-model");
-    }
-    refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
     if (requestedView === "customize") {
       savedBranding = r.data.branding || {};
+      governanceUI.settings.load(r.data, scope, "soul");
       governanceUI.settings.load(r.data, scope, "branding");
+      void governanceUI.settings.loadFlags(r.data, scope);
+      governanceUI.settings.loadDecisions(r.data, scope);
     }
-
+    if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
+    const opts = r.data.baseModelOptions || [];
+    if (requestedView === "models") {
+      for (const key of [
+        "runtime",
+        "cron-runtime",
+        "subagent-runtime",
+        "fallback-runtime",
+        "webui-models",
+        "memory-embedding-model",
+      ])
+        governanceUI.settings.load(r.data, scope, key);
+      void governanceUI.settings.loadProviders();
+    }
     if (requestedView === "credentials") {
-      serviceCredDirectory = r.data.directoryMembers || [];
-      serviceCredChannels = r.data.directoryChannels || [];
-      const options = $("sc-people-options");
-      options.textContent = "";
-      serviceCredDirectory.forEach((member) => {
-        const option = document.createElement("option");
-        option.value = member.principalId;
-        option.label = member.displayName;
-        options.appendChild(option);
-      });
-    }
-    if (requestedView === "customize") void governanceUI.settings.loadFlags(r.data, scope);
-    if (requestedView === "customize") governanceUI.settings.loadDecisions(r.data, scope);
-    if (requestedView === "credentials") renderServiceCreds(r.data.serviceCredentials || []);
-    if (view === "models") void loadCustomProviders();
-    if (view === "credentials") {
+      loadServiceCredDirectory(r.data);
+      renderServiceCreds(r.data.serviceCredentials || []);
       void loadServiceCredentialUsage(requestedScope, requestId);
     }
     if (scopeChanged) resetScForm();
@@ -1307,7 +1129,7 @@ export function startAdmin(host, env) {
           };
           append(opts, fresh.data.baseModelOptions);
           if (requestedView === "governance") governanceUI.updateCatalog(fresh.data);
-          refreshModelChoices.forEach((refresh) => refresh());
+          governanceUI.settings.updateCatalog(r.data);
           initCustomDropdowns($("view-governance"));
         })
         .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
@@ -1326,16 +1148,7 @@ export function startAdmin(host, env) {
     const requestId = ++governanceReq;
     const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view || !fresh.ok) return false;
-    serviceCredDirectory = fresh.data.directoryMembers || [];
-    serviceCredChannels = fresh.data.directoryChannels || [];
-    const options = $("sc-people-options");
-    options.textContent = "";
-    serviceCredDirectory.forEach((member) => {
-      const option = document.createElement("option");
-      option.value = member.principalId;
-      option.label = member.displayName;
-      options.appendChild(option);
-    });
+    loadServiceCredDirectory(fresh.data);
     const credentials = fresh.data.serviceCredentials || [];
     const refreshedEditing = credentials.find((credential) => credential.slug === scEditing);
     if (refreshedEditing) {
@@ -1344,9 +1157,18 @@ export function startAdmin(host, env) {
     }
     renderServiceCreds(credentials);
     void loadServiceCredentialUsage(requestedScope, requestId);
-    renderServiceCredentialCapability();
-    updateScFormDirty();
+    governanceUI.settings.credentialState.render();
+    governanceUI.settings.credentialState.changed();
     return refreshedEditing ? "present" : "missing";
+  }
+  function loadServiceCredDirectory(data) {
+    serviceCredDirectory = data.directoryMembers || [];
+    serviceCredChannels = data.directoryChannels || [];
+    $("sc-people-options").replaceChildren(
+      ...serviceCredDirectory.map((member) =>
+        Object.assign(new Option(), { value: member.principalId, label: member.displayName }),
+      ),
+    );
   }
   let savedBranding = {};
   governanceUI.settings.configureDecisions({
@@ -1415,18 +1237,6 @@ export function startAdmin(host, env) {
     const member = serviceCredDirectory.find((candidate) => candidate.principalId === id || candidate.slackId === id);
     return member ? member.displayName + " (" + id + ")" : grantee;
   }
-  function renderServiceCredentialCapability() {
-    governanceUI.settings.credentialState.render();
-  }
-  function serviceCredentialBody() {
-    return governanceUI.settings.credentialState.collect();
-  }
-  function updateScFormDirty() {
-    governanceUI.settings.credentialState.changed();
-  }
-  function validateServiceCredential(body) {
-    return governanceUI.settings.credentialState.validate(body);
-  }
   async function deleteSc(credential) {
     const c = {
       ...credential,
@@ -1491,9 +1301,9 @@ export function startAdmin(host, env) {
     if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
   };
   $("sc-save").onclick = async () => {
-    const body = serviceCredentialBody();
+    const body = governanceUI.settings.credentialState.collect();
     const targetScope = scope;
-    const invalid = validateServiceCredential(body);
+    const invalid = governanceUI.settings.credentialState.validate(body);
     if (invalid) {
       setStatus("st-service-credentials", invalid, "err");
       return;
@@ -1505,7 +1315,7 @@ export function startAdmin(host, env) {
       r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/service-credentials", body);
     } catch {
       if (targetScope !== scope) return;
-      updateScFormDirty();
+      governanceUI.settings.credentialState.changed();
       setStatus(
         "st-service-credentials",
         "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
@@ -1526,7 +1336,7 @@ export function startAdmin(host, env) {
       try {
         conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
       } catch {
-        updateScFormDirty();
+        governanceUI.settings.credentialState.changed();
         setStatus(
           "st-service-credentials",
           "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
@@ -1535,7 +1345,7 @@ export function startAdmin(host, env) {
         );
         return;
       }
-      updateScFormDirty();
+      governanceUI.settings.credentialState.changed();
       let message = r.data?.message || "Save failed.";
       if (r.status === 403) {
         message = "Not authorized for this scope.";
@@ -1559,20 +1369,17 @@ export function startAdmin(host, env) {
     orgScope: () => orgScope(),
     connectorName: (id) => connectorName(id),
     view: () => view,
-    loadCustomProviders: () => loadCustomProviders(),
+    loadCustomProviders: () => governanceUI.settings.loadProviders(),
     loaded: () => {
       viewLoadedAt.onboarding = Date.now();
     },
     navigate: (target) => openOnboardingTarget(target),
   });
-  function loadOnboarding() {
-    return governanceUI.onboarding.load();
-  }
 
   governanceUI.settings.configureProviders({
     api,
     refresh: async () => {
-      await loadCustomProviders();
+      await governanceUI.settings.loadProviders();
       if (view !== "models") return;
       const requestedScope = scope;
       const requestedGeneration = governanceReq;
@@ -1581,12 +1388,6 @@ export function startAdmin(host, env) {
         governanceUI.settings.updateCatalog(fresh.data);
     },
   });
-  function openCustomProviderEditor(provider = null) {
-    governanceUI.settings.openProvider(provider);
-  }
-  async function loadCustomProviders() {
-    await governanceUI.settings.loadProviders();
-  }
   async function loadPersonalKeychainSummary(requestId, requestedScope) {
     governanceUI.settings.keychainSummary(null);
     const res = await api("GET", "/api/keychain?summary=1");
@@ -1610,15 +1411,6 @@ export function startAdmin(host, env) {
 
   governanceUI.integrations.configure({ api, orgScope, connectorName, fmtTime });
   governanceUI.integrations.mountBuiltIns();
-  async function loadConnectors() {
-    return governanceUI.integrations.loadConnectors();
-  }
-  async function loadSlackInstallation() {
-    return governanceUI.integrations.loadSlackInstallation();
-  }
-  function collectPolicy() {
-    return governanceUI.collect("command-policy");
-  }
   $("policy-test-open").onclick = () => {
     $("policy-test-dialog").showModal();
     $("policy-sample").focus();
@@ -1634,7 +1426,7 @@ export function startAdmin(host, env) {
     }
     let policy;
     try {
-      policy = collectPolicy();
+      policy = governanceUI.collect("command-policy");
     } catch (err) {
       result.dataset.tone = "danger";
       result.textContent = err instanceof Error ? err.message : "Policy is invalid.";
@@ -1686,40 +1478,8 @@ export function startAdmin(host, env) {
       simulatePolicy();
     }
   });
-  const SAVE = Object.fromEntries([...governanceUI.states.keys()].map((key) => [key, () => governanceUI.collect(key)]));
-  const SAVE_ST = {
-    "security-posture": "st-security-posture",
-    "auto-flagger": "st-auto-flagger",
-    "sharing-posture": "st-sharing-posture",
-    "approval-grant-modes": "st-approval-grant-modes",
-    "command-policy": "st-policy",
-    soul: "st-soul",
-    "ambient-policy": "st-ambient-policy",
-    egress: "st-egress",
-    "external-slack-participants": "st-external-slack-participants",
-    "org-ambient": "st-governance-org-ambient",
-    "channel-header-pin-default": "st-channel-header-pin-default",
-    runtime: "st-runtime",
-    "cron-runtime": "st-cron-runtime",
-    "subagent-runtime": "st-subagent-runtime",
-    "fallback-runtime": "st-fallback-runtime",
-    "webui-models": "st-webui-models",
-    "memory-embedding-model": "st-memory-embedding-model",
-    "ack-emoji": "st-ack-emoji",
-    branding: "st-branding",
-  };
-  const SAVE_RELOADS = new Set([
-    "auto-flagger",
-    "soul",
-    "external-slack-participants",
-    "runtime",
-    "cron-runtime",
-    "subagent-runtime",
-    "fallback-runtime",
-    "webui-models",
-    "ack-emoji",
-    "branding",
-  ]);
+  const statusIdOf = (key) =>
+    ({ "command-policy": "st-policy", "org-ambient": "st-governance-org-ambient" })[key] || "st-" + key;
   const sectionSnapshots = new Map();
   function autoFlaggerTestSummary(data) {
     if (!data.sampled) return data.message || "No past screenings to replay yet.";
@@ -1740,51 +1500,11 @@ export function startAdmin(host, env) {
     parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
     return parts.join(" · ");
   }
-  function sectionButton(key) {
-    return document.querySelector('[data-save="' + key + '"]');
-  }
-  function serializeSection(key) {
-    return JSON.stringify(SAVE[key]());
-  }
-  function setSectionDirty(key, dirty) {
-    if (governanceUI.owns(key)) return;
-    const btn = sectionButton(key);
-    setCardDirty(btn?.closest(".card"), dirty, SAVE_ST[key], '[data-save="' + key + '"]');
-    if (key === "egress" && $("card-egress").classList.contains("egress-disabled")) btn.disabled = true;
-  }
-  function captureSection(key) {
-    if (governanceUI.owns(key)) {
-      sectionSnapshots.set(key, JSON.stringify(governanceUI.states.get(key).collect(false)));
-      governanceUI.capture(key);
-      return;
-    }
-    if (!SAVE[key] || !sectionButton(key)) return;
-    try {
-      sectionSnapshots.set(key, serializeSection(key));
-      setSectionDirty(key, false);
-    } catch {
-      setSectionDirty(key, true);
-    }
-  }
-  function updateSectionDirty(key) {
-    if (governanceUI.owns(key)) return;
-    if (!SAVE[key] || !sectionButton(key)) return;
-    if (!sectionSnapshots.has(key)) return captureSection(key);
-    let dirty;
-    try {
-      dirty = serializeSection(key) !== sectionSnapshots.get(key);
-    } catch {
-      dirty = true;
-    }
-    setSectionDirty(key, dirty);
-  }
   function captureGovernanceSnapshots() {
-    Object.keys(SAVE_ST).forEach(captureSection);
-  }
-  function saveKeyForTarget(target) {
-    const card = target.closest(".card");
-    const btn = card?.querySelector("[data-save]");
-    return btn?.dataset.save || "";
+    governanceUI.states.forEach((state, key) => {
+      sectionSnapshots.set(key, JSON.stringify(state.collect(false)));
+      governanceUI.capture(key);
+    });
   }
   function governanceSaveReview(key, body) {
     if (key === "security-posture") {
@@ -1926,9 +1646,9 @@ export function startAdmin(host, env) {
     const requestedGeneration = governanceReq;
     let body;
     try {
-      body = SAVE[key]();
+      body = governanceUI.collect(key);
     } catch (err) {
-      setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
+      setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
       return;
     }
     if (!(await governanceSaveReview(key, body)) || requestedScope !== scope || requestedGeneration !== governanceReq)
@@ -1938,7 +1658,7 @@ export function startAdmin(host, env) {
       btn.dataset.saveRequest = saveRequest;
       btn.disabled = true;
     }
-    setStatus(SAVE_ST[key], "Saving...", "saving", true);
+    setStatus(statusIdOf(key), "Saving...", "saving", true);
     const isBranding = key === "branding";
     const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
     const r = await api(
@@ -1953,79 +1673,60 @@ export function startAdmin(host, env) {
           delete btn.dataset.saveRequest;
           btn.disabled = !btn.classList.contains("dirty");
         }
-        setStatus(SAVE_ST[key], "", "");
+        setStatus(statusIdOf(key), "", "");
       }
       return;
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
     if (r.ok) {
-      if (governanceUI.owns(key)) {
-        governanceUI.commit(key, body);
-        sectionSnapshots.set(key, JSON.stringify(body));
-        if (isBranding) {
-          savedBranding = brandingBody;
-          if (!hasGovernanceDraft()) location.reload();
-          return;
-        }
-        if (key === "soul") {
-          const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
-          if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-          if (fresh.ok) {
-            governanceUI.settings.refreshSoul(fresh.data);
-            sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-            if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-          } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-          return;
-        }
-        if (key === "command-policy") loadedCommandPolicyPresent = true;
-        if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-          const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
-          if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-          if (fresh.ok && !governanceUI.states.get(key).dirty) {
-            governanceUI.load(fresh.data, requestedScope, key);
-            sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-            governanceUI.status(key, "Saved", "ok");
-          }
-        }
+      governanceUI.commit(key, body);
+      sectionSnapshots.set(key, JSON.stringify(body));
+      if (isBranding) {
+        savedBranding = brandingBody;
+        if (!hasGovernanceDraft()) location.reload();
         return;
-      } else if (SAVE_RELOADS.has(key)) await loadScope();
-      else {
-        if (key === "command-policy") loadedCommandPolicyPresent = true;
-        captureSection(key);
       }
-      setStatus(SAVE_ST[key], "Saved", "ok");
+      if (key === "soul") {
+        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
+        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+        if (fresh.ok) {
+          governanceUI.settings.refreshSoul(fresh.data);
+          sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+          if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+        } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+        return;
+      }
+      if (key === "command-policy") loadedCommandPolicyPresent = true;
+      if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+        if (fresh.ok && !governanceUI.states.get(key).dirty) {
+          governanceUI.load(fresh.data, requestedScope, key);
+          sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+          governanceUI.status(key, "Saved", "ok");
+        }
+      }
     } else {
       if (key === "soul" && r.status === 409) await refreshSoulConflict();
-      updateSectionDirty(key);
       let message = r.data?.message || "Save failed.";
       if (key === "soul" && r.status === 409) {
         message = "SOUL changed; latest revision loaded and your draft was preserved.";
       } else if (r.status === 403) {
         message = "Not authorized for this scope.";
       }
-      setStatus(SAVE_ST[key], message, "err");
+      setStatus(statusIdOf(key), message, "err");
     }
   }
   document.querySelectorAll("[data-save]").forEach((btn) => {
     btn.onclick = () => saveSetting(btn.dataset.save, btn);
   });
   governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
-  $("view-governance").addEventListener("input", (e) => {
-    if (!(
-      e.target instanceof HTMLInputElement ||
-      e.target instanceof HTMLTextAreaElement ||
-      e.target instanceof HTMLSelectElement
-    ))
-      return;
-    if (e.target.closest("#card-service-credentials")) updateScFormDirty();
-    else updateSectionDirty(saveKeyForTarget(e.target));
-  });
-  $("view-governance").addEventListener("change", (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
-      if (e.target.closest("#card-service-credentials")) updateScFormDirty();
-      else updateSectionDirty(saveKeyForTarget(e.target));
-    }
-  });
+  const credentialEdited = (e) => {
+    if (e.target.matches("input, textarea, select") && e.target.closest("#card-service-credentials"))
+      governanceUI.settings.credentialState.changed();
+  };
+  $("view-governance").addEventListener("input", credentialEdited);
+  $("view-governance").addEventListener("change", credentialEdited);
 
   const DD_CHEVRON =
     '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
@@ -2218,49 +1919,22 @@ export function startAdmin(host, env) {
 
   const govFlatContent = document.querySelector("#view-governance .governance-content");
   function flattenGovernanceCards() {
-    if (!govFlatContent) return;
-    const setFlag = (el, cls, on) => {
-      if (el.classList.contains(cls) !== on) el.classList.toggle(cls, on);
-    };
-    let run = [];
-    const flush = () => {
-      run.forEach((card, i) => {
-        setFlag(card, "flat-first", i === 0);
-        setFlag(card, "flat-last", i === run.length - 1);
-      });
-      run = [];
-    };
-    Array.from(govFlatContent.children).forEach((el) => {
-      const visible = getComputedStyle(el).display !== "none";
-      if (el.matches("section.card")) {
-        if (visible) run.push(el);
-        else {
-          setFlag(el, "flat-first", false);
-          setFlag(el, "flat-last", false);
-        }
-      } else if (visible) {
-        flush();
-      }
-    });
-    flush();
+    const cards = [...govFlatContent.children];
+    const last = cards.findLast((el) => el.matches("section.card") && getComputedStyle(el).display !== "none");
+    cards.forEach((el) => el.classList.toggle("flat-last", el === last));
   }
   let govFlatRaf = 0;
   function scheduleGovFlatten() {
     cancelAnimationFrame(govFlatRaf);
     govFlatRaf = requestAnimationFrame(flattenGovernanceCards);
   }
-  if (govFlatContent) {
-    new MutationObserver(scheduleGovFlatten).observe(root, {
-      attributes: true,
-      attributeFilter: ["data-subview"],
-    });
-    new MutationObserver(scheduleGovFlatten).observe(govFlatContent, {
-      attributes: true,
-      attributeFilter: ["class"],
-      subtree: true,
-    });
-    flattenGovernanceCards();
-  }
+  new MutationObserver(scheduleGovFlatten).observe(root, { attributes: true, attributeFilter: ["data-subview"] });
+  new MutationObserver(scheduleGovFlatten).observe(govFlatContent, {
+    attributes: true,
+    attributeFilter: ["class"],
+    subtree: true,
+  });
+  flattenGovernanceCards();
 
   resetScForm();
 
@@ -2270,22 +1944,10 @@ export function startAdmin(host, env) {
   const dataCache = new Map();
   function paintData(root, data) {
     root.textContent = "";
-    ({
-      spend: renderSpend,
-      egress: renderEgress,
-      history: renderHistory,
-      files: renderFiles,
-      memory: renderMemory,
-      live: renderLive,
-      errors: renderErrors,
-      audit: renderAudit,
-      skills: renderSkills,
-      crons: renderCrons,
-      deployments: renderDeployments,
-      retention: renderRetention,
-      users: renderUsers,
-      keychain: renderKeychain,
-    })[view](root, data);
+    if (["files", "memory", "skills", "crons", "deployments"].includes(view))
+      return governanceUI.artifacts[view](root, data, artifactContext());
+    if (["errors", "audit", "egress"].includes(view)) return governanceUI.activity[view](root, data, activityContext());
+    ({ spend: renderSpend, history: renderHistory, users: renderUsers, keychain: renderKeychain })[view](root, data);
   }
   async function renderData() {
     const root = $("view-data");
@@ -2357,6 +2019,7 @@ export function startAdmin(host, env) {
     const { from, to, bucket } = governanceUI.spend.spendWindow(st);
     return new URLSearchParams({ from, to, bucket }).toString();
   }
+  const openUser = (principal) => go({ view: "user", scope, session: null, principal });
   function renderSpend(root, d) {
     governanceUI.spend.spend(root, d, {
       defaultShell,
@@ -2367,7 +2030,7 @@ export function startAdmin(host, env) {
       cronName,
       plural,
       window: governanceUI.spend.spendWindow(urlToState()),
-      openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+      openUser,
       openCronRuns: (cron, cronScope) =>
         go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
       setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
@@ -2383,8 +2046,8 @@ export function startAdmin(host, env) {
       },
     });
   }
-  function renderErrors(root, d) {
-    governanceUI.activity.errors(root, d, {
+  function activityContext() {
+    return {
       all: orgWideView(),
       scope,
       defaultShell,
@@ -2397,23 +2060,7 @@ export function startAdmin(host, env) {
       go,
       egressDetail,
       errorsPageSize: ERRORS_PAGE_SIZE,
-    });
-  }
-  function renderAudit(root, d) {
-    governanceUI.activity.audit(root, d, {
-      all: orgWideView(),
-      scope,
-      defaultShell,
-      plural,
-      firstLine,
-      navLink,
-      shortName,
-      fmtTime,
-      relTime,
-      go,
-      egressDetail,
-      errorsPageSize: ERRORS_PAGE_SIZE,
-    });
+    };
   }
   async function adminErrors(query) {
     const r = await api("GET", "/api/errors?" + query);
@@ -2471,22 +2118,6 @@ export function startAdmin(host, env) {
       if (r.peerIp) bits.push(r.peerIp);
     }
     return bits.join(" · ") || "None";
-  }
-  function renderEgress(root, d) {
-    governanceUI.activity.egress(root, d, {
-      all: orgWideView(),
-      scope,
-      defaultShell,
-      plural,
-      firstLine,
-      navLink,
-      shortName,
-      fmtTime,
-      relTime,
-      go,
-      egressDetail,
-      errorsPageSize: ERRORS_PAGE_SIZE,
-    });
   }
   function cronName(c, previewAction = false) {
     if (!c) return "Cron";
@@ -2658,7 +2289,6 @@ export function startAdmin(host, env) {
       fmtTime,
       fmtHistoryTime,
       fmtBytes,
-      fmtDuration,
       shortId,
       titleCase,
       firstLine,
@@ -2677,7 +2307,6 @@ export function startAdmin(host, env) {
       packRepoLabel,
       scopeCell,
       statusBadge,
-      typeBadge,
       stacked,
       scopeRows,
       buildScopeMultiSelect,
@@ -2687,12 +2316,6 @@ export function startAdmin(host, env) {
         if (current()) cronDestinationEditId = id;
       },
     };
-  }
-  function renderCrons(root, d) {
-    governanceUI.artifacts.crons(root, d, artifactContext());
-  }
-  function renderDeployments(root, d) {
-    governanceUI.artifacts.deployments(root, d, artifactContext());
   }
 
   function packRepoLabel(url) {
@@ -2715,10 +2338,6 @@ export function startAdmin(host, env) {
     if (s.pack) return { text: packRepoLabel(s.pack.url) || "pack " + shortId(s.pack.id, 8), cls: "mono" };
     if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: "built-in", cls: "subline" };
     return { text: s.createdBy || "None", cls: "mono" };
-  }
-
-  function renderSkills(root, d) {
-    governanceUI.artifacts.skills(root, d, artifactContext());
   }
 
   let openOvMenu = null;
@@ -2903,18 +2522,12 @@ export function startAdmin(host, env) {
     renderChips();
     return pick;
   }
-  function renderMemory(root, d) {
-    governanceUI.artifacts.memory(root, d, artifactContext());
-  }
-  function renderRetention(root, d) {
-    governanceUI.artifacts.retention(root, d);
-  }
   function renderKeychain(root, d) {
     governanceUI.keychain.keychain(root, d, {
       defaultShell,
       fmtTime,
       scopeKind,
-      openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+      openUser,
     });
   }
   function renderUsers(root, d) {
@@ -2929,7 +2542,7 @@ export function startAdmin(host, env) {
       openWebUiAs,
       orgScope: "org:" + orgId,
       clearCache: () => dataCache.clear(),
-      openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+      openUser,
     });
   }
 
@@ -3605,12 +3218,6 @@ export function startAdmin(host, env) {
     return { container: d.target.split(":")[0], ts: d.editRef };
   }
 
-  async function renderAmbientJudgments(st) {
-    return governanceUI.slackActivity.renderAmbientJudgments(st);
-  }
-  async function renderAckEmojiPicks(st) {
-    return governanceUI.slackActivity.renderAckEmojiPicks(st);
-  }
   function transcriptServices() {
     return {
       api,
@@ -3916,9 +3523,6 @@ export function startAdmin(host, env) {
     return a;
   }
 
-  function renderFiles(root, d) {
-    governanceUI.artifacts.files(root, d, artifactContext());
-  }
   async function downloadFile(f) {
     if (!f.openable) return;
     const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
@@ -3939,10 +3543,6 @@ export function startAdmin(host, env) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-  }
-
-  function renderLive(root, d) {
-    governanceUI.artifacts.live(root, d, artifactContext());
   }
 
   route();

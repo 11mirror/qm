@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { classMap } from "lit/directives/class-map.js";
-import { badge, renderer, node, scroller } from "./shared.ts";
+import { badge, renderer, node, scroller, empty, denseList as dense } from "./shared.ts";
 import type { Api } from "./integrations-state.ts";
 type Row = Record<string, any>;
 type Context = {
@@ -27,7 +27,6 @@ let context: Context;
 export function configure(value: Context) {
   context = value;
 }
-const empty = (text: string) => html`<p class="empty">${text}</p>`;
 const loading = (text: string) => html`<div class="loadingline">${text}</div>`;
 export const groupKey = (m: Row) =>
   (m.authorId || m.authorName || m.ts) + "|" + (m.sub && m.sub !== m.ts ? m.sub : "root");
@@ -61,29 +60,6 @@ export function groupedMessages(messages: Row[], target?: string) {
       return html`${sameDay ? nothing : html`<div class="sm-day">${day === new Date().toDateString() ? "Today" : new Date(m.createdAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</div>`}${message(m, { target: target === m.ts, cont: !!sameDay && groupKey(previous) === groupKey(m) && target !== m.ts })}`;
     },
   );
-}
-function dense(items: Row[], rowOf: (item: Row) => Row, onOpen: (item: Row) => void, emptyText: string) {
-  if (!items.length) return empty(emptyText);
-  return html`<div class="dense-list">
-    ${repeat(
-      items,
-      (it) => it.id || it.container,
-      (it) => {
-        const row = rowOf(it);
-        return html`<a
-          class="dense-row"
-          href=${row.href}
-          @click=${(event: MouseEvent) => {
-            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault();
-            onOpen(it);
-          }}
-          ><span class="dense-name">${row.name}</span><span class="dense-preview">${row.preview}</span
-          ><span class="dense-time">${row.time}</span></a
-        >`;
-      },
-    )}
-  </div>`;
 }
 function messageTag(m: Row) {
   if (m.self) return html`<span class="sm-tag sm-tag-agent">agent</span>`;

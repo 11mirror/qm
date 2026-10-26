@@ -1,4 +1,5 @@
 import { choiceGroup, settingStatus, saveFooter } from "./setting-controls.ts";
+import { badge } from "./shared.ts";
 import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { slackMark } from "../slack-mark.ts";
@@ -400,9 +401,6 @@ function openConnector(connector?: Parameters<typeof connectors.edit>[0]) {
   document
     .getElementById("card-connectors")
     ?.scrollIntoView({ behavior: "smooth", block: connector ? "nearest" : "start" });
-}
-function badge(text: string, tone: string) {
-  return html`<span class=${"badge " + tone}>${text}</span>`;
 }
 function connectorRows() {
   if (!connectors.displayed.length) return "No connectors configured. Add one below to make it linkable in the web UI.";
