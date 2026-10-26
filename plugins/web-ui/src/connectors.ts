@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { KeyRound, Link } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
@@ -157,41 +157,39 @@ function credentialCard(c: KeychainCredential): TemplateResult {
             </div>`
           : ""
       }
-      ${
-        grants.length
-          ? html`<div class="kc-access-block">
-              ${grants.map(
-                (grant) =>
-                  html` <div class="kc-access-row">
-                    <div>
-                      <span class="kc-access-label">Access</span>
-                      <bdi><strong>${scopeName(grant.audienceScopeId)}</strong></bdi>
-                      <span
-                        >· ${accessModeLabel(grant.mode)} ·
-                        ${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</span
-                      >
-                    </div>
-                    <button
-                      class="kc-text-action"
-                      type="button"
-                      data-confirm-key=${`revoke:${grant.id}`}
-                      ?disabled=${keychainOperations.mutationInFlight}
-                      @click=${() => void revokeGrant(grant)}
-                    >
-                      Revoke
-                    </button>
-                  </div>`,
-              )}
-            </div>`
-          : ""
-      }
+      ${grantsBlock(grants)}
     </article>
   `;
 }
 
-// Raw Slack IDs (C0…, G0…) mean nothing to people — always prefer a resolved
-// name, and fall back to a human description. The raw ID appears only as a
-// parenthetical of last resort, to disambiguate when no name is available.
+function grantsBlock(grants: KeychainGrant[]): TemplateResult | string {
+  if (!grants.length) return "";
+  return html`<div class="kc-access-block">
+    ${grants.map(
+      (grant) =>
+        html` <div class="kc-access-row">
+          <div>
+            <span class="kc-access-label">Access</span>
+            <bdi><strong>${scopeName(grant.audienceScopeId)}</strong></bdi>
+            <span
+              >· ${accessModeLabel(grant.mode)} ·
+              ${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</span
+            >
+          </div>
+          <button
+            class="kc-text-action"
+            type="button"
+            data-confirm-key=${`revoke:${grant.id}`}
+            ?disabled=${keychainOperations.mutationInFlight}
+            @click=${() => void revokeGrant(grant)}
+          >
+            Revoke
+          </button>
+        </div>`,
+    )}
+  </div>`;
+}
+
 function scopeName(scope: string): string {
   const resolved = keychainScopeNames[scope];
   if (resolved) return resolved;
@@ -213,8 +211,28 @@ function scopeName(scope: string): string {
   }
 }
 
+function setAdding(draft: typeof addingCredential): void {
+  addingCredential = draft;
+  secureDropUrl = null;
+  drawConnectors();
+}
+
 function addCredentialCard(): TemplateResult {
   const draft = addingCredential!;
+  const field = (key: keyof typeof draft, label: TemplateResult | string, placeholder: string, cls = "") =>
+    html`<label class="skill-field ${cls}"
+      ><span>${label}</span
+      ><input
+        class="skill-desc-input"
+        placeholder=${placeholder}
+        autocapitalize=${key === "envKey" ? "characters" : nothing}
+        autocomplete=${key === "purpose" ? nothing : "off"}
+        ?disabled=${keychainOperations.dropInFlight}
+        .value=${draft[key]}
+        @input=${(e: Event) => {
+          draft[key] = (e.target as HTMLInputElement).value;
+        }}
+    /></label>`;
   return html`<section class="kc-add-card" aria-labelledby="kc-add-title">
     <div class="kc-panel-head">
       <div>
@@ -231,68 +249,21 @@ function addCredentialCard(): TemplateResult {
             <div class="kc-form-actions">
               <a class="btn primary" href=${secureDropUrl} target="_blank" rel="noopener noreferrer"
                 >Open the one-time page</a
-              ><button
-                class="btn"
-                type="button"
-                @click=${() => {
-                  addingCredential = null;
-                  secureDropUrl = null;
-                  drawConnectors();
-                }}
-              >
-                Done
-              </button>
+              ><button class="btn" type="button" @click=${() => setAdding(null)}>Done</button>
             </div>
           `
         : html`
             <div class="kc-form-grid">
-              <label class="skill-field"
-                ><span>Service</span
-                ><input
-                  class="skill-desc-input"
-                  placeholder="Stripe"
-                  autocomplete="off"
-                  ?disabled=${keychainOperations.dropInFlight}
-                  .value=${draft.service}
-                  @input=${(e: Event) => {
-                    draft.service = (e.target as HTMLInputElement).value;
-                  }}
-              /></label>
-              <label class="skill-field"
-                ><span>Environment variable <em>optional</em></span
-                ><input
-                  class="skill-desc-input"
-                  placeholder="STRIPE_API_KEY"
-                  autocapitalize="characters"
-                  autocomplete="off"
-                  ?disabled=${keychainOperations.dropInFlight}
-                  .value=${draft.envKey}
-                  @input=${(e: Event) => {
-                    draft.envKey = (e.target as HTMLInputElement).value;
-                  }}
-              /></label>
-              <label class="skill-field kc-purpose-field"
-                ><span>Purpose</span
-                ><input
-                  class="skill-desc-input"
-                  placeholder="What may the agent use this credential for?"
-                  ?disabled=${keychainOperations.dropInFlight}
-                  .value=${draft.purpose}
-                  @input=${(e: Event) => {
-                    draft.purpose = (e.target as HTMLInputElement).value;
-                  }}
-              /></label>
+              ${field("service", "Service", "Stripe")}
+              ${field("envKey", html`Environment variable <em>optional</em>`, "STRIPE_API_KEY")}
+              ${field("purpose", "Purpose", "What may the agent use this credential for?", "kc-purpose-field")}
             </div>
             <div class="kc-form-actions">
               <button
                 class="btn"
                 type="button"
                 ?disabled=${keychainOperations.dropInFlight}
-                @click=${() => {
-                  addingCredential = null;
-                  secureDropUrl = null;
-                  drawConnectors();
-                }}
+                @click=${() => setAdding(null)}
               >
                 Cancel</button
               ><button
@@ -375,16 +346,7 @@ function drawConnectors(): void {
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);
-    const hosts = new Set(
-      (p.hosts ?? [])
-        .map((entry) => (typeof entry === "string" ? entry : entry.host))
-        .filter((host): host is string => Boolean(host)),
-    );
-    const credentials = keychainConnectorCredentials.filter((credential) => hosts.has(credential.host));
-    const credentialsById = new Map(
-      credentials.map((credential) => [credential.credentialId, { id: credential.credentialId, kind: "connector" }]),
-    );
-    const grants = keychainGrants.filter((grant) => isActiveGrant(grant, credentialsById.get(grant.credentialId)));
+    const grants = providerGrants(p);
     let connectionState: TemplateResult | string = html`<span class="kc-state neutral">Not connected</span>`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">Reconnect needed</span>`;
     else if (connected) connectionState = "";
@@ -405,34 +367,7 @@ function drawConnectors(): void {
           </div>
         </div>
         ${needsReconnect && p.refreshError ? html`<div class="kc-inline-warning" role="status">Refresh failed: ${p.refreshError}</div>` : ""}
-        ${
-          grants.length
-            ? html`<div class="kc-access-block">
-                ${grants.map(
-                  (grant) =>
-                    html` <div class="kc-access-row">
-                      <div>
-                        <span class="kc-access-label">Access</span>
-                        <bdi><strong>${scopeName(grant.audienceScopeId)}</strong></bdi>
-                        <span
-                          >· ${accessModeLabel(grant.mode)} ·
-                          ${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</span
-                        >
-                      </div>
-                      <button
-                        class="kc-text-action"
-                        type="button"
-                        data-confirm-key=${`revoke:${grant.id}`}
-                        ?disabled=${keychainOperations.mutationInFlight}
-                        @click=${() => void revokeGrant(grant)}
-                      >
-                        Revoke
-                      </button>
-                    </div>`,
-                )}
-              </div>`
-            : ""
-        }
+        ${grantsBlock(grants)}
       </article>
     `;
   });
@@ -451,15 +386,7 @@ function drawConnectors(): void {
     credentialsContent = html`<div class="kc-empty">
       ${icon(KeyRound, 20)}
       <div><strong>No stored credentials</strong><span>Add one without pasting a secret into chat.</span></div>
-      <button
-        class="btn"
-        type="button"
-        @click=${() => {
-          addingCredential = { service: "", envKey: "", purpose: "" };
-          secureDropUrl = null;
-          drawConnectors();
-        }}
-      >
+      <button class="btn" type="button" @click=${() => setAdding({ service: "", envKey: "", purpose: "" })}>
         Add credential
       </button>
     </div>`;
@@ -502,11 +429,7 @@ function drawConnectors(): void {
           title: "Keychain",
           action: {
             label: "Add credential",
-            onClick: () => {
-              addingCredential = { service: "", envKey: "", purpose: "" };
-              secureDropUrl = null;
-              drawConnectors();
-            },
+            onClick: () => setAdding({ service: "", envKey: "", purpose: "" }),
           },
           rows,
           empty: "Nothing in your keychain yet.",
@@ -590,11 +513,20 @@ async function deleteCredential(credential: KeychainCredential): Promise<void> {
   const impact = active.length
     ? ` It will immediately revoke ${active.length} active grant${active.length === 1 ? "" : "s"}: ${active.map((grant) => scopeName(grant.audienceScopeId)).join(", ")}.`
     : "";
+  askConfirmation(
+    `Delete ${credential.service}?`,
+    `${impact} Automations using it may stop working. The credential cannot be recovered.`.trim(),
+    "Delete credential",
+    (epoch) => performDeleteCredential(credential, epoch),
+  );
+}
+
+function askConfirmation(title: string, body: string, action: string, perform: (epoch: number) => Promise<void>): void {
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Delete ${credential.service}?`,
-    body: `${impact} Automations using it may stop working. The credential cannot be recovered.`.trim(),
-    action: "Delete credential",
+    title,
+    body,
+    action,
     run: async () => {
       const operation = beginKeychainMutation();
       if (!operation) return;
@@ -602,7 +534,7 @@ async function deleteCredential(credential: KeychainCredential): Promise<void> {
       confirmationOpener = null;
       drawConnectors();
       try {
-        await performDeleteCredential(credential, operation.epoch);
+        await perform(operation.epoch);
       } finally {
         if (keychainOperations.finishMutation(operation)) drawConnectors();
       }
@@ -632,25 +564,12 @@ async function performDeleteCredential(credential: KeychainCredential, stateEpoc
 }
 
 async function revokeGrant(grant: KeychainGrant): Promise<void> {
-  confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  confirmation = {
-    title: `Revoke access for ${scopeName(grant.audienceScopeId)}?`,
-    body: `This ${grant.mode === "standing" ? "standing" : "one-time"} access ends immediately. Automations using it may stop working.`,
-    action: "Revoke access",
-    run: async () => {
-      const operation = beginKeychainMutation();
-      if (!operation) return;
-      confirmation = null;
-      confirmationOpener = null;
-      drawConnectors();
-      try {
-        await performRevokeGrant(grant.id, operation.epoch);
-      } finally {
-        if (keychainOperations.finishMutation(operation)) drawConnectors();
-      }
-    },
-  };
-  drawConnectors();
+  askConfirmation(
+    `Revoke access for ${scopeName(grant.audienceScopeId)}?`,
+    `This ${grant.mode === "standing" ? "standing" : "one-time"} access ends immediately. Automations using it may stop working.`,
+    "Revoke access",
+    (epoch) => performRevokeGrant(grant.id, epoch),
+  );
 }
 
 async function performRevokeGrant(id: string, stateEpoch: number): Promise<void> {
@@ -713,45 +632,27 @@ async function startConnector(provider: string): Promise<void> {
   drawConnectors();
 }
 
+function providerGrants(p: ConnectorProvider | undefined): KeychainGrant[] {
+  const hosts = new Set((p?.hosts ?? []).map((entry) => (typeof entry === "string" ? entry : entry.host)));
+  const ids = new Set(
+    keychainConnectorCredentials.filter((c) => c.host && hosts.has(c.host)).map((c) => c.credentialId),
+  );
+  return keychainGrants.filter(
+    (grant) => ids.has(grant.credentialId) && isActiveGrant(grant, { id: grant.credentialId, kind: "connector" }),
+  );
+}
+
 async function revokeConnector(provider: string): Promise<void> {
-  const hosts = new Set(
-    (connectorProviders[provider]?.hosts ?? [])
-      .map((entry) => (typeof entry === "string" ? entry : entry.host))
-      .filter((host): host is string => Boolean(host)),
-  );
-  const providerCredentials = keychainConnectorCredentials.filter((credential) => hosts.has(credential.host));
-  const credentialIds = new Set(providerCredentials.map((credential) => credential.credentialId));
-  const credentialsById = new Map(
-    providerCredentials.map((credential) => [
-      credential.credentialId,
-      { id: credential.credentialId, kind: "connector" },
-    ]),
-  );
-  const active = keychainGrants.filter(
-    (grant) => credentialIds.has(grant.credentialId) && isActiveGrant(grant, credentialsById.get(grant.credentialId)),
-  );
+  const active = providerGrants(connectorProviders[provider]);
   const impact = active.length
     ? ` It will also stop ${active.length} active credential grant${active.length === 1 ? "" : "s"} for this account.`
     : "";
-  confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
-    body: `${impact} Automations using this account may stop working.`.trim(),
-    action: "Disconnect account",
-    run: async () => {
-      const operation = beginKeychainMutation();
-      if (!operation) return;
-      confirmation = null;
-      confirmationOpener = null;
-      drawConnectors();
-      try {
-        await performRevokeConnector(provider, operation.epoch);
-      } finally {
-        if (keychainOperations.finishMutation(operation)) drawConnectors();
-      }
-    },
-  };
-  drawConnectors();
+  askConfirmation(
+    `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    `${impact} Automations using this account may stop working.`.trim(),
+    "Disconnect account",
+    (epoch) => performRevokeConnector(provider, epoch),
+  );
 }
 
 async function performRevokeConnector(provider: string, stateEpoch: number): Promise<void> {
