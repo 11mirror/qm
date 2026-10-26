@@ -4,7 +4,11 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
-import { coreEmailAdmission, coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import {
+  coreEmailAdmission,
+  coreEmailAllowed,
+  ExternalMemberLookupUnavailableError,
+} from "../../chassis/src/external-members.ts";
 
 const secret = "app-only-session-test-secret";
 const origin = "http://portal.test";
@@ -112,7 +116,8 @@ test("core lookup preserves app-only admission and boolean broker compatibility"
     assert.deepEqual(await coreEmailAdmission(upstreamUrl, undefined, email), { allowed: false });
   }
   coreStatus = 503;
-  assert.deepEqual(await coreEmailAdmission(upstreamUrl, undefined, email), { allowed: false });
+  await assert.rejects(coreEmailAdmission(upstreamUrl, undefined, email), ExternalMemberLookupUnavailableError);
+  assert.equal(await coreEmailAllowed(upstreamUrl, undefined, email), false);
   coreStatus = 200;
 });
 

@@ -1,3 +1,4 @@
+import { errMessage } from "./errors.ts";
 import {
   createServer,
   request,
@@ -92,7 +93,8 @@ export function proxyTarget(port: number): HostTarget {
           upRes.pipe(res);
         },
       );
-      up.on("error", () => {
+      up.on("error", (error) => {
+        console.warn(`[tenant-host] worker on port ${port} unreachable: ${errMessage(error)}`);
         if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         res.end();
       });
@@ -115,7 +117,10 @@ export function proxyTarget(port: number): HostTarget {
       up.on("response", (upRes) => {
         socket.end(`HTTP/1.1 ${upRes.statusCode ?? 502} ${upRes.statusMessage ?? ""}\r\nconnection: close\r\n\r\n`);
       });
-      up.on("error", () => socket.destroy());
+      up.on("error", (error) => {
+        console.warn(`[tenant-host] worker on port ${port} refused an upgrade: ${errMessage(error)}`);
+        socket.destroy();
+      });
       up.end();
     },
   };

@@ -546,14 +546,16 @@ async function consumeCoreFeed(
             if (!data) continue;
             try {
               onEvent(JSON.parse(data));
-            } catch {
-              void 0;
+            } catch (error) {
+              console.warn(`[web-ui] ${eventName} feed: dropped a malformed frame: ${errMessage(error)}`);
             }
           }
         }
-      }
+        console.warn(`[web-ui] ${eventName} feed ended; reconnecting`);
+      } else console.warn(`[web-ui] ${eventName} feed returned HTTP ${r.status}; reconnecting`);
       dropped = true;
-    } catch {
+    } catch (error) {
+      console.warn(`[web-ui] ${eventName} feed dropped: ${errMessage(error)}; reconnecting`);
       dropped = true;
     }
     await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
@@ -700,15 +702,22 @@ async function userPermissions(): Promise<string[]> {
   if (!CORE_SIGNING_SECRET) return [];
   try {
     const cap = await mintSessionCap();
-    if (!("token" in cap)) return [];
+    if (!("token" in cap)) {
+      console.warn(`[web-ui] permission lookup: session capability refused (HTTP ${cap.status})`);
+      return [];
+    }
     const r = await fetch(`${CORE}/v1/admin/whoami`, {
       headers: { "content-type": "application/json", [CAPABILITY_HEADER]: cap.token },
       redirect: "manual",
     });
-    if (r.status !== 200) return [];
+    if (r.status !== 200) {
+      console.warn(`[web-ui] permission lookup returned HTTP ${r.status}`);
+      return [];
+    }
     const j = (await r.json()) as { permissions?: unknown };
     return Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [];
-  } catch {
+  } catch (error) {
+    console.warn(`[web-ui] permission lookup failed: ${errMessage(error)}`);
     return [];
   }
 }
@@ -1886,7 +1895,12 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
       ok = r.status >= 200 && r.status < 300;
-    } catch {
+      if (!ok)
+        console.warn(
+          `[web-ui] ${provider} OAuth callback: core returned HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`,
+        );
+    } catch (error) {
+      console.warn(`[web-ui] ${provider} OAuth callback: core unreachable: ${errMessage(error)}`);
       ok = false;
     }
     const q = `view=keychain&connector=${enc(provider)}&status=${ok ? "connected" : "error"}`;

@@ -163,9 +163,9 @@ async function fetchSurfaceConfig(): Promise<void> {
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
-    }
-  } catch {
-    void 0;
+    } else console.warn(`[portal] surface-config returned HTTP ${r.status}`);
+  } catch (error) {
+    console.warn(`[portal] surface-config fetch failed: ${errMessage(error)}`);
   }
 }
 
@@ -551,7 +551,8 @@ async function handleConsentRedeem(
         headers: { "x-consent-clicker": o.session.sub, "x-consent-clicker-org": o.session.org },
       })
     ).body;
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] consent redeem failed: ${errMessage(error)}`);
     return sendHtml(
       res,
       502,
@@ -591,7 +592,8 @@ async function handleSecretDrop(
   if (isPost) {
     try {
       rawBody = await readBody(req, 64 * 1024);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof PayloadTooLargeError)) throw error;
       return json(res, 413, { error: "too_large", message: "that value is too large" });
     }
   }
@@ -608,7 +610,8 @@ async function handleSecretDrop(
       headers,
       ...(isPost ? { body: rawBody } : {}),
     });
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] secret drop relay failed: ${errMessage(error)}`);
     if (isPost)
       return json(res, 502, {
         error: "unreachable",
@@ -771,8 +774,9 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     windowS: PLAYGROUND_MINT_WINDOW_S,
     nowMs: Date.now(),
   }).catch((e) => {
-    if (e instanceof ClaimStoreUnavailableError) return false;
-    throw e;
+    if (!(e instanceof ClaimStoreUnavailableError)) throw e;
+    console.warn(`[portal] playground mint refused: claim store unavailable: ${errMessage(e)}`);
+    return false;
   });
   if (!allowed) return null;
   const now = Math.floor(Date.now() / 1000);
@@ -920,8 +924,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           headers: portalIdentityHeaders(session.sub),
           signal: AbortSignal.timeout(4_000),
         });
-        if (!response.ok) return json(res, 503, { error: "revocation_failed" });
-      } catch {
+        if (!response.ok) {
+          console.warn(`[portal] broker session revoke returned HTTP ${response.status}`);
+          return json(res, 503, { error: "revocation_failed" });
+        }
+      } catch (error) {
+        console.warn(`[portal] broker session revoke failed: ${errMessage(error)}`);
         return json(res, 503, { error: "revocation_failed" });
       }
     }
@@ -1371,7 +1379,8 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
     setAuthenticatedSession(res, r.body.email);
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] invitation redeem failed: ${errMessage(error)}`);
     return sendHtml(res, 503, signInErrorHtml("Sign-in is temporarily unavailable. Please try again."));
   }
 }
@@ -1477,7 +1486,9 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       "cache-control": "no-store",
     });
     res.end();
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
+    reportBackendError(error, "trusted_signin_failed");
     sendHtml(
       res,
       400,

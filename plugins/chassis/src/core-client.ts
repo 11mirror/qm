@@ -154,5 +154,8 @@ export async function relayCoreStream(
     if (value) headers[name] = value;
   }
   res.writeHead(upstream.statusCode ?? 502, headers);
-  await pipeline(upstream, res).catch(() => undefined);
+  await pipeline(upstream, res).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ERR_STREAM_PREMATURE_CLOSE")
+      console.warn(`core_relay_write_failed: ${error.code ?? error.message}`);
+  });
 }
