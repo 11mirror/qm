@@ -698,6 +698,13 @@ test("apply: a healthy app still publishes — the readiness gate does not fire 
   assert.equal(endpoint.proxyHeaders?.["X-aws-proxy-port"], "8081");
 });
 
+test("apply: a version whose snapshot is missing on this instance fails instead of publishing an empty app", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>());
+  await assert.rejects(p.apply(deployment(ID), version("/nonexistent/qm-snapshot")), /ENOENT/);
+});
+
 test("destroy: terminates the body and clears its pointer", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
