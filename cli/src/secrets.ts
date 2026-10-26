@@ -1,3 +1,4 @@
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
@@ -40,6 +41,17 @@ export interface ComputedSecret {
 export const MINT_LOCALLY = "openssl rand -hex 32";
 export const MINT_JWK =
   "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
+
+export function mintSigningJwk(): string {
+  return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
+}
+
+/** A fresh value for a secret the CLI can mint locally, or undefined when an operator must supply it. */
+export function mintSecret(secret: { generate?: string }): string | undefined {
+  if (secret.generate === MINT_LOCALLY) return randomBytes(32).toString("hex");
+  if (secret.generate === MINT_JWK) return mintSigningJwk();
+  return undefined;
+}
 
 export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {

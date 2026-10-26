@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
-import { adminGrantEmails, mintSigningJwk, pendingSecrets, playbookFor, runSetup } from "../src/commands/setup.ts";
+import { adminGrantEmails, pendingSecrets, playbookFor, runSetup } from "../src/commands/setup.ts";
+import { mintSigningJwk } from "../src/secrets.ts";
 import { CliError } from "../src/log.ts";
 import { writeEnvValue } from "../src/util.ts";
 

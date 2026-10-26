@@ -1,4 +1,3 @@
-import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -6,14 +5,7 @@ import { Writable } from "node:stream";
 import { CONFIG_FILENAME, configPathInDir, loadConfigAt, validOrgId, type Target, type QmConfig } from "../config.ts";
 import { bold, die, dim, header, note, ok, warn } from "../log.ts";
 import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
-import {
-  computedSecrets,
-  emailSecretNames,
-  MINT_JWK,
-  MINT_LOCALLY,
-  serviceSecretValue,
-  type ComputedSecret,
-} from "../secrets.ts";
+import { computedSecrets, emailSecretNames, mintSecret, serviceSecretValue, type ComputedSecret } from "../secrets.ts";
 import { isInvalidSecret, isMissingOrPlaceholder, parseAdminGrants, readEnvFile, writeEnvValue } from "../util.ts";
 import { runInit } from "./init.ts";
 
@@ -21,10 +13,6 @@ export function adminGrantEmails(adminGrants: string | undefined): string {
   return parseAdminGrants(adminGrants)
     .map((grant) => grant.email)
     .join(",");
-}
-
-export function mintSigningJwk(): string {
-  return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
 }
 
 const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
@@ -231,14 +219,9 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
       note(`  ${secret.description}`);
       for (const line of playbookFor(secret.name, config)) note(`  ${dim(line)}`);
 
-      if (secret.generate === MINT_LOCALLY) {
-        collected.set(secret.name, randomBytes(32).toString("hex"));
-        ok(`  generated locally\n`);
-        continue;
-      }
-
-      if (secret.generate === MINT_JWK) {
-        collected.set(secret.name, mintSigningJwk());
+      const minted = mintSecret(secret);
+      if (minted !== undefined) {
+        collected.set(secret.name, minted);
         ok(`  generated locally\n`);
         continue;
       }
