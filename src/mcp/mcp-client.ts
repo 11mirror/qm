@@ -73,6 +73,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
       session(
         "tools/list",
         async (client) => {
+          const maxTools = opts?.maxTools ?? MAX_TOOLS;
           const tools: McpRemoteTool[] = [];
           let cursor: string | undefined;
           do {
@@ -85,8 +86,12 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
                 ...(t.annotations ? { annotations: t.annotations } : {}),
               });
             cursor = page.nextCursor;
-          } while (cursor && tools.length < (opts?.maxTools ?? MAX_TOOLS));
-          return tools.slice(0, opts?.maxTools ?? MAX_TOOLS);
+          } while (cursor && tools.length < maxTools);
+          if (tools.length > maxTools || cursor)
+            console.warn(
+              `[mcp] ${endpoint.host} lists more than ${maxTools} tools; only the first ${maxTools} are offered`,
+            );
+          return tools.slice(0, maxTools);
         },
         opts?.headers,
       ),
