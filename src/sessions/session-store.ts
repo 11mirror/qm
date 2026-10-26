@@ -606,8 +606,6 @@ export interface SessionStore {
   /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
-  scanAll(): Promise<Session[]>;
-
   countSessions(): Promise<number>;
 
   listByScope(scope: ScopeId): Promise<Session[]>;
