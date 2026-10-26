@@ -17,7 +17,7 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle, TeardownOptions } from "./sandbox.ts";
+import type { BackendSandbox, ComputerStatus, ExecResult, SandboxHandle, TeardownOptions } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const ROTATE_MARGIN_MS = 4 * 3600_000;
@@ -70,7 +70,7 @@ export function modalLegacyRecordMigration(table: string): PgMigrationDefinition
   };
 }
 
-export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandboxOptions): Sandbox {
+export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandboxOptions): BackendSandbox {
   const { client } = opts;
   const { store } = opts;
   const prefix = opts.namePrefix ?? "qm";

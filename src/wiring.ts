@@ -210,7 +210,7 @@ import {
   legacySandboxBackendForScope,
   type LegacyRoute,
 } from "./sandbox/sandbox-resource-upgrade.ts";
-import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
+import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
   credentialRequestHeaders,
@@ -800,20 +800,20 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const buildLocal = (): Sandbox =>
+  const buildLocal = (): BackendSandbox =>
     createLocalSandbox(workspace, {
       ...sandboxShared,
       ...config.localSandbox,
       store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
     });
-  const buildSprites = (): Sandbox =>
+  const buildSprites = (): BackendSandbox =>
     createSpritesSandbox(workspace, {
       ...sandboxShared,
       ...config.spritesSandbox,
       store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
       connectorSdk: loadConnectorSdk,
     });
-  const buildSmolmachines = (): Sandbox =>
+  const buildSmolmachines = (): BackendSandbox =>
     createSmolmachinesSandbox(workspace, {
       ...sandboxShared,
       ...config.smolmachinesSandbox,
@@ -834,14 +834,14 @@ export function buildApp(
         : {}),
     });
   };
-  const buildE2b = (): Sandbox =>
+  const buildE2b = (): BackendSandbox =>
     createE2bSandbox(workspace, {
       ...sandboxShared,
       client: e2bClient("computers"),
       extraTools: [...(config.e2bSandbox.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       store: e2bBodies,
     });
-  const buildManagedAgents = (): Sandbox => {
+  const buildManagedAgents = (): BackendSandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox(workspace, {
@@ -856,7 +856,7 @@ export function buildApp(
       store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
     });
   };
-  const buildModal = (): Sandbox => {
+  const buildModal = (): BackendSandbox => {
     const modal = config.modalSandbox;
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
@@ -878,14 +878,14 @@ export function buildApp(
       store: modalBodies,
     });
   };
-  const buildAgent37 = (): Sandbox =>
+  const buildAgent37 = (): BackendSandbox =>
     createAgent37Sandbox(workspace, {
       ...sandboxShared,
       ...config.agent37Sandbox,
       store: artifactMap<StoredAgent37Sandbox>("agent37_sandbox_bodies"),
     });
   const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
-  const buildSuperserve = (): Sandbox => {
+  const buildSuperserve = (): BackendSandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
@@ -912,15 +912,15 @@ export function buildApp(
       store: superserveBodies,
     });
   };
-  const buildAws = (): Sandbox =>
+  const buildAws = (): BackendSandbox =>
     createAwsSandbox(workspace, { ...sandboxShared, ...config.awsSandbox, store: awsBodies });
-  const buildPorter = (): Sandbox =>
+  const buildPorter = (): BackendSandbox =>
     createPorterSandbox(workspace, {
       ...sandboxShared,
       ...config.porterSandbox,
       store: artifactMap<StoredPorterSandbox>("porter_sandbox_bodies"),
     });
-  const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
+  const buildBackend: Record<Config["sandboxBackend"], () => BackendSandbox> = {
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
@@ -933,7 +933,7 @@ export function buildApp(
     "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
-  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
+  const sandboxBackends: Partial<Record<SandboxBackendName, BackendSandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {

@@ -21,7 +21,7 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { Sandbox } from "./sandbox.ts";
+import type { BackendSandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const IMAGE = "ghcr.io/porter-dev/qm-sandbox:latest";
@@ -39,7 +39,7 @@ export interface PorterSandboxOptions extends SandboxShared {
   client?: PorterClientLike;
 }
 
-export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandboxOptions): Sandbox {
+export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandboxOptions): BackendSandbox {
   const prefix = opts.namePrefix ?? "qm";
   const scratchPrefix = `${prefix}-scratch-`;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;

@@ -18,11 +18,11 @@ import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
+  BackendSandbox,
   ComputerStatus,
   EgressEnforcement,
   ExecResult,
   ProvisionOptions,
-  Sandbox,
   SandboxHandle,
   TeardownOptions,
   WritablePersistence,
@@ -107,7 +107,7 @@ export interface SandboxDriver {
   checkpoints?: DriverCheckpoints;
 }
 
-export type ProviderSandbox = Sandbox & {
+export type ProviderSandbox = BackendSandbox & {
   readonly scopeFor: (name: string) => string | undefined;
   readonly scopeOf: (name: string) => Promise<string | undefined>;
   readonly nameFor: (scopeId: string) => string;

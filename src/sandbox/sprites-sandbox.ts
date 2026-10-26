@@ -9,7 +9,7 @@ import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { processSessionDir } from "./exec-process-session.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
-import type { ExecPressure, ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecPressure, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/home/sprite";
 export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
@@ -103,7 +103,7 @@ interface RawExec {
   stderr: Buffer;
 }
 
-export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): Sandbox {
+export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): BackendSandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);

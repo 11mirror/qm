@@ -16,7 +16,7 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { Sandbox } from "./sandbox.ts";
+import type { BackendSandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/home/user";
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -32,7 +32,7 @@ export interface E2bSandboxOptions extends SandboxShared {
   store: DurableMap<StoredE2bSandbox>;
 }
 
-export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): Sandbox {
+export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
   const { client, store } = opts;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
   const sessions = new Map<string, E2bSession>();
