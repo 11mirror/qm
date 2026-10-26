@@ -329,7 +329,7 @@ else if (a.includes("secretsmanager get-secret-value") && a.includes("--query AR
 else if (a.includes("ecr get-login-password")) console.log("pw");
 else if (a.includes("ecr batch-get-image")) console.log(JSON.stringify({ images: [{ imageManifest: "{}", imageManifestMediaType: "application/vnd.oci.image.index.v1+json" }] }));
 else if (a.includes("ecr put-image") && ${JSON.stringify(opts.failPromotion ?? false)}) { console.error("PutImageFailure"); process.exit(1); }
-else if (a.includes("ecr put-image") && ${JSON.stringify(opts.promotionAlreadyCurrent ?? false)}) { console.error("ImageAlreadyExistsException"); process.exit(1); }
+else if (a.includes("ecr put-image") && ${JSON.stringify(opts.promotionAlreadyCurrent ?? false)}) { console.error("An error occurred (ImageAlreadyExistsException) when calling the PutImage operation"); process.exit(1); }
 else if (a.includes("ecr put-image")) console.log(JSON.stringify({ image: { imageId: { imageDigest: "sha256:${"a".repeat(64)}" } } }));
 else if (a.includes("ecr describe-images")) console.log(JSON.stringify({ imageDetails: [{ imageDigest: "sha256:${"a".repeat(64)}" }] }));
 else if (a.includes("ecs describe-services") && ${JSON.stringify(opts.failDescribe ?? false)}) { console.error("DescribeServicesFailure"); process.exit(1); }
@@ -484,7 +484,7 @@ else if (a.includes("dynamodb transact-write-items")) {
   }
   for (const write of JSON.parse(after("--transact-items"))) {
     if (write.Put) {
-      if (write.Put.ConditionExpression === "attribute_not_exists(lockKey)" && s.dynamo[write.Put.Item.lockKey.S]) { console.error("ConditionalCheckFailedException"); process.exit(1); }
+      if (write.Put.ConditionExpression === "attribute_not_exists(lockKey)" && s.dynamo[write.Put.Item.lockKey.S]) { console.error("An error occurred (ConditionalCheckFailedException) when calling the TransactWriteItems operation"); process.exit(1); }
       s.dynamo[write.Put.Item.lockKey.S] = write.Put.Item;
     }
     if (write.Delete) delete s.dynamo[write.Delete.Key.lockKey.S];
@@ -1843,7 +1843,7 @@ test("AWS deploy rejects required secret containers without an AWSCURRENT value 
     `
 if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(Object.entries(config.aws!.services).map(([name, spec]) => ({ serviceName: spec.ecsService, loadBalancers: name === "core" ? [{ targetGroupArn: targetArn, containerPort: 8000 }] : [] })))} }));
 else if (a.includes("secretsmanager get-secret-value")) {
-  console.error("ResourceNotFoundException: Secrets Manager can't find the specified secret value");
+  console.error("An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation: Secrets Manager can't find the specified secret value");
   process.exit(1);
 }
 console.log("");`,
@@ -1866,7 +1866,7 @@ test("AWS resolves optional secret ARNs without reading their plaintext values",
     `
 if (a.includes("secretsmanager get-secret-value")) {
   if (a.includes("OPENROUTER_API_KEY")) {
-    console.error("AccessDeniedException");
+    console.error("An error occurred (AccessDeniedException) when calling the GetSecretValue operation");
     process.exit(1);
   }
   console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", SecretString: ${JSON.stringify(TEST_SECRET_VALUE)} }));
@@ -3981,7 +3981,7 @@ test("AWS live check rejects downed services and classifies probe errors as live
   }
   const denied = fakeAws(
     dir,
-    `if (a.includes("get-secret-value")) { console.error("AccessDeniedException"); process.exit(1); } console.log("");`,
+    `if (a.includes("get-secret-value")) { console.error("An error occurred (AccessDeniedException) when calling the GetSecretValue operation"); process.exit(1); } console.log("");`,
   );
   try {
     await assert.rejects(

@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deflateRawSync } from "node:zlib";
-import { withAwsLease } from "../aws-lease.ts";
+import { crc32, deflateRawSync } from "node:zlib";
+import { awsErrorCode, withAwsLease } from "../aws-lease.ts";
 import { updateConfigCoreEnv, type QmConfig } from "../config.ts";
 import { CliError, ok, step } from "../log.ts";
 import { awsObjectStoreBucket } from "../terraform.ts";
@@ -45,18 +45,6 @@ interface ObjectVersion {
 
 interface ImageOperation extends ImageSummary {
   imageVersion?: string;
-}
-
-const crcTable = Array.from({ length: 256 }, (_, n) => {
-  let value = n;
-  for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-  return value >>> 0;
-});
-
-function crc32(body: Buffer): number {
-  let value = 0xffffffff;
-  for (const byte of body) value = crcTable[(value ^ byte) & 0xff]! ^ (value >>> 8);
-  return (value ^ 0xffffffff) >>> 0;
 }
 
 function zipFiles(files: Array<{ name: string; body: Buffer }>): Buffer {
@@ -496,7 +484,7 @@ async function buildAwsMicrovmImageLocked(
         step(`${existing ? "updating" : "creating"} ${imageName}`);
         break;
       } catch (error) {
-        if (!/ConflictException|conflict/i.test(error instanceof Error ? error.message : String(error))) throw error;
+        if (awsErrorCode(error) !== "ConflictException") throw error;
         if (now() >= deadline) throw new CliError(`timed out waiting to start MicroVM image build ${imageName}`);
         step(`another ${imageName} image operation started; waiting for it before retrying this build`);
         await wait(options.intervalMs ?? 10_000);

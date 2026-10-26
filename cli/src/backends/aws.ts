@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  awsErrorCode,
   acquireAwsLease as acquireLease,
   awsText,
   deployLocksTable,
@@ -943,7 +944,7 @@ export function secretArns(config: QmConfig): Record<string, string> {
         controlValues.set(secret.name, value.SecretString!);
       return [[secret.name, value.ARN] as const];
     } catch (error) {
-      if (!secret.required && /ResourceNotFoundException/.test(errMessage(error))) return [];
+      if (!secret.required && awsErrorCode(error) === "ResourceNotFoundException") return [];
       throw error;
     }
   });
@@ -2082,7 +2083,7 @@ function promoteStagedImage(config: QmConfig, service: string, image: string, la
       ...(staged.imageManifestMediaType ? ["--image-manifest-media-type", staged.imageManifestMediaType] : []),
     ]);
   } catch (error) {
-    if (!/ImageAlreadyExistsException/.test(errMessage(error))) throw error;
+    if (awsErrorCode(error) !== "ImageAlreadyExistsException") throw error;
   }
 }
 
@@ -2629,7 +2630,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
           `imageTag=${stagingLabel}`,
         ]);
       } catch (error) {
-        if (!/ImageNotFoundException/.test(errMessage(error)))
+        if (awsErrorCode(error) !== "ImageNotFoundException")
           warn(`could not clean staging image ${service}:${stagingLabel}: ${errMessage(error)}`);
       }
     }
@@ -3470,7 +3471,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
             `file://${secret.file}`,
           ]);
         } catch (error) {
-          if (/ResourceNotFoundException/.test(errMessage(error))) {
+          if (awsErrorCode(error) === "ResourceNotFoundException") {
             throw new CliError(
               `AWS secret container ${secret.id} is missing; apply the rendered Terraform before pushing secrets`,
             );
@@ -4367,7 +4368,7 @@ export function probeAwsSecretStore(
       if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
       step(secret.required ? `${label}: ok` : `${label}: configured`);
     } catch (error) {
-      if (/ResourceNotFoundException/.test(errMessage(error))) {
+      if (awsErrorCode(error) === "ResourceNotFoundException") {
         if (secret.required) {
           pending.push(secret.name);
           step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
@@ -4591,8 +4592,9 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         inspect();
         step(`optional secret ${secret.name}: configured`);
       } catch (error) {
-        if (/ResourceNotFoundException|AccessDeniedException/.test(errMessage(error)))
-          warn(`optional secret ${secret.name}: not configured or not readable`);
+        const code = awsErrorCode(error);
+        if (code === "ResourceNotFoundException") warn(`optional secret ${secret.name}: not configured`);
+        else if (code === "AccessDeniedException") warn(`optional secret ${secret.name}: not readable by this role`);
         else {
           failures.push(`optional secret ${secret.name}: ${errMessage(error)}`);
           warn(`optional secret ${secret.name}: failed`);
