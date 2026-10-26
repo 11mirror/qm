@@ -11,6 +11,8 @@ import {
   MAX_ATTACHMENTS_PER_TURN,
   type SlackFile,
 } from "../src/slack/attachments.ts";
+import { BlobTooLargeError } from "../src/persistence/blob-transfer.ts";
+import { collectBytes, type ByteSource } from "../src/util/bytes.ts";
 
 function fakeFetch(opts: {
   ok?: boolean;
@@ -29,7 +31,12 @@ function fakeFetch(opts: {
         return null;
       },
     },
-    arrayBuffer: async () => (opts.bytes ?? new Uint8Array()).buffer,
+    body: (async function* () {
+      yield opts.bytes ?? new Uint8Array();
+    })(),
+    arrayBuffer: async () => {
+      throw new Error("buffered the whole download");
+    },
   })) as unknown as typeof fetch;
 }
 
@@ -43,7 +50,7 @@ test("isOversize trips above the cap; processInboundFiles references the staged 
   } = await processInboundFiles(
     [{ id: "F1", name: "n.txt", mimetype: "text/plain" }],
     async () => new Uint8Array(Buffer.from("hi")),
-    async () => ({ blobId: "blob123" }),
+    async () => ({ blobId: "blob123", sizeBytes: 2 }),
   );
   assert.equal(a!.name, "n.txt");
   assert.equal(a!.mimetype, "text/plain");
@@ -59,7 +66,7 @@ test("processInboundFiles carries the author when one is provided", async () => 
   } = await processInboundFiles(
     [{ name: "n.txt" }],
     async () => new Uint8Array(Buffer.from("hi")),
-    async () => ({ blobId: "blob1" }),
+    async () => ({ blobId: "blob1", sizeBytes: 2 }),
     () => "eve",
   );
   assert.equal(a!.author, "eve");
@@ -115,14 +122,14 @@ test("downloadSlackFile rejects by Content-Length before buffering", async () =>
         { url_private: SLACK_URL },
         { token: "t", fetchImpl: fakeFetch({ contentLength: MAX_ATTACHMENT_BYTES + 1 }) },
       ),
-    /too large/,
+    BlobTooLargeError,
   );
 });
 
-test("downloadSlackFile returns bytes on success", async () => {
+test("downloadSlackFile streams the body on success without buffering it", async () => {
   const bytes = new Uint8Array(Buffer.from("hello"));
   const out = await downloadSlackFile({ url_private: SLACK_URL }, { token: "t", fetchImpl: fakeFetch({ bytes }) });
-  assert.equal(Buffer.from(out).toString("utf8"), "hello");
+  assert.equal((await collectBytes(out)).data.toString("utf8"), "hello");
 });
 
 test("downloadSlackFile throws when the file has no url", async () => {
@@ -146,7 +153,7 @@ test("downloadSlackFile refuses a redirect instead of following it off-Slack", a
 
 const fakeStage = (() => {
   let n = 0;
-  return async (_bytes: Uint8Array) => ({ blobId: `blob${++n}` });
+  return async (source: ByteSource) => ({ blobId: `blob${++n}`, sizeBytes: (await collectBytes(source)).sizeBytes });
 })();
 
 test("processInboundFiles forwards good files (staging each) and notes the failed ones", async () => {
@@ -370,4 +377,65 @@ test("uploadFailureNote blames files:write only for permission-class errors", ()
   });
   assert.doesNotMatch(scopeWording, /files:write/);
   assert.doesNotMatch(uploadFailureNote(new Error("missing scope files:write")), /upload permission/);
+});
+
+const read = (file: SlackFile, fetchImpl: typeof fetch) => downloadSlackFile(file, { token: "t", fetchImpl });
+
+test("processInboundFiles blames file access only when Slack refused the download", async () => {
+  const responses: Record<string, Parameters<typeof fakeFetch>[0]> = {
+    "denied.txt": { ok: false, status: 403 },
+    "signin.txt": { contentType: "text/html" },
+    "flaky.txt": { ok: false, status: 503 },
+  };
+  const r = await processInboundFiles(
+    [
+      { name: "denied.txt", url_private: SLACK_URL },
+      { name: "signin.txt", url_private: SLACK_URL },
+      { name: "flaky.txt", url_private: SLACK_URL },
+    ],
+    (f) => read(f, fakeFetch(responses[f.name!]!)),
+    fakeStage,
+  );
+  assert.deepEqual(r.issues, [
+    'I couldn\'t read "denied.txt" — check my file-access permission (files:read) (HTTP 403)',
+    'I couldn\'t read "signin.txt" — check my file-access permission (files:read) (got an HTML page (check files:read scope))',
+    'I couldn\'t read "flaky.txt" (HTTP 503)',
+  ]);
+});
+
+test("processInboundFiles reports a staging failure as itself", async () => {
+  const r = await processInboundFiles(
+    [{ name: "a.txt", url_private: SLACK_URL }],
+    (f) => read(f, fakeFetch({ bytes: new Uint8Array(Buffer.from("a")) })),
+    async () => {
+      throw new Error("blob store unavailable");
+    },
+  );
+  assert.deepEqual(r.issues, ['I couldn\'t read "a.txt" (blob store unavailable)']);
+});
+
+test("processInboundFiles reports a file that outgrows the cap while staging as oversize", async () => {
+  const r = await processInboundFiles(
+    [{ name: "grew.bin", url_private: SLACK_URL }],
+    (f) => read(f, fakeFetch({ bytes: new Uint8Array(Buffer.from("a")) })),
+    async () => {
+      throw new BlobTooLargeError();
+    },
+  );
+  assert.equal(r.issues.length, 1);
+  assert.match(r.issues[0]!, /"grew\.bin" is too large/);
+});
+
+test("processInboundFiles keeps a file whose author lookup fails", async () => {
+  const r = await processInboundFiles(
+    [{ name: "x.png", user: "U1" }],
+    async () => new Uint8Array(Buffer.from("x")),
+    fakeStage,
+    async () => {
+      throw new Error("users.info ratelimited");
+    },
+  );
+  assert.deepEqual(r.issues, []);
+  assert.equal(r.attachments.length, 1);
+  assert.equal(r.attachments[0]!.author, undefined);
 });
