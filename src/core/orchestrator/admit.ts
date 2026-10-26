@@ -1,0 +1,242 @@
+import { scopeTeamsToTurn } from "../../teams/teams.ts";
+import { externalSlackRequestAllowed } from "../../resolution/external-slack.ts";
+import { delegatedAuthorizationOrigin, isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
+import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
+import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
+import { isSessionTurn } from "../turn-origin.ts";
+import { stepMessage, type Item } from "../../sessions/items.ts";
+import { scopeId as toScopeId, type ScopeId, type TurnResult } from "../../types.ts";
+import { swallowAs } from "../../util/errors.ts";
+import { tenant } from "../../tenant.ts";
+import type { Session } from "../../types.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+
+export class ProjectRosterChanged extends Error {}
+
+export function rosterChangedRefusal(sessionId?: string): TurnResult {
+  return {
+    status: "refused",
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    reason: "project membership changed; retry from the current project",
+  };
+}
+
+const ACTIVITY_KINDS = new Set<Item["kind"]>([
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+  "SteeringMessage",
+]);
+
+export interface AdmittedTurn {
+  input: OrchestratorInput;
+  actor: OrchestratorInput["actor"];
+  conversation: OrchestratorInput["conversation"];
+  external: boolean;
+  serviceAllowed: (slug: string) => boolean;
+  automatedTurn: boolean;
+  ambientTurn: boolean;
+  sessionTurn: boolean;
+  humanInput: boolean;
+  allInternal: boolean;
+  delegationEnabled: boolean;
+  authorizationOrigin: OrchestratorInput["origin"];
+  liveTurn: boolean;
+  liveAuthorTurn: boolean;
+  messageTs: string | undefined;
+  entryTs: string | undefined;
+  coreReceivedAt: number;
+  turnTimezone: string | undefined;
+  delegatedSession: Session | null;
+  withManagedRosterVersion: <T>(fn: () => Promise<T>) => Promise<T>;
+  mirrorRunActivity: (appended: Item) => Promise<void>;
+}
+
+export async function admitTurn(
+  deps: OrchestratorDeps,
+  requested: OrchestratorInput,
+): Promise<{ admitted: AdmittedTurn } | { refused: TurnResult }> {
+  if (
+    !externalSlackRequestAllowed(
+      { ...requested, surface: requested.surface ?? "" },
+      deps.externalSlackPolicies,
+      Object.keys(deps.externalSlackPolicies ?? {}).length > 0 &&
+        (await deps.sessions.getByThread(requested.conversation.threadRef))?.surface === "slack",
+    )
+  )
+    return {
+      refused: { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." },
+    };
+  const external = requested.externalSlack !== undefined;
+  const externalServices = new Set(requested.externalSlack?.serviceCredentials ?? []);
+  const serviceAllowed = (slug: string): boolean =>
+    !external ||
+    (externalServices.has(slug) &&
+      (deps.externalSlackPolicies?.[requested.externalSlack!.accountId]?.serviceCredentials.includes(slug) ?? false));
+  await deps.refreshModels?.();
+  const input = await scopeTeamsToTurn(requested, deps, external);
+  const { actor, conversation } = input;
+  const automatedTurn = input.origin.kind === "automation";
+  const ambientTurn = input.origin.kind === "ambient";
+  const humanTurn = input.origin.kind === "human";
+  const sessionTurn = isSessionTurn(input);
+  const humanInput = humanTurn && !sessionTurn;
+  const allInternal =
+    deps.identity.audienceIsAllInternal(conversation.audience) &&
+    (conversation.kind === "dm" ||
+      (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
+  const authoredDetection = input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
+  const delegationEnabled =
+    !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
+  const delegatedOrigin =
+    !external && deps.runs
+      ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
+      : undefined;
+  const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
+  const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
+  const liveAuthorTurn =
+    !external && ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) && allInternal;
+  const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
+  const entryTs =
+    !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
+      ? input.origin.entryTs
+      : undefined;
+  const coreReceivedAt = Date.now();
+  const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
+
+  if (!deps.identity.isInternal(actor)) {
+    return {
+      refused: {
+        status: "refused",
+        refusalKind: "internal_only",
+        reason: "internal-only: non-internal principals cannot interact",
+      },
+    };
+  }
+  const subagentThread = isSubagentThreadRef(conversation.threadRef);
+  const delegatedSession = subagentThread ? await deps.sessions.getByThread(conversation.threadRef) : null;
+  if (subagentThread) {
+    const canWrite = createCanWriteScope({
+      managedGroups: deps.managedGroups
+        ? {
+            recognizes: (ref) => deps.managedGroups!.recognizes(ref),
+            members: (ref) => deps.managedGroups!.members(ref),
+            membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
+          }
+        : undefined,
+      directory: deps.directory,
+      identity: deps.identity,
+    });
+    if (
+      !delegatedSession?.spawnMeta ||
+      delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
+      !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
+      !(await canWrite(actor.id, delegatedSession.scopeId))
+    )
+      return { refused: { status: "refused", reason: "subagent session access is no longer current" } };
+  }
+  const managedGroupRef =
+    conversation.kind === "group" && conversation.channelRef && deps.managedGroups?.recognizes(conversation.channelRef)
+      ? conversation.channelRef
+      : undefined;
+  const managedRosterIsCurrent = async (): Promise<boolean> => {
+    if (!managedGroupRef) return true;
+    const expected = new Set(input.sessionParticipantIds ?? []);
+    const [current, version] = await Promise.all([
+      deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
+      deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
+    ]);
+    return (
+      !!current &&
+      version === input.scopeVersion &&
+      rosterAdmits(current, actor.id, toScopeId("group", managedGroupRef)) &&
+      current.length === expected.size &&
+      current.every((id) => expected.has(id))
+    );
+  };
+  const withManagedRosterVersion = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (!managedGroupRef) return fn();
+    const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
+    if (result === undefined) throw new ProjectRosterChanged();
+    return result;
+  };
+  const mirrorRunActivity = async (appended: Item): Promise<void> => {
+    if (!input.runId || !deps.runActivity) return;
+    const append = (item: Item) =>
+      deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
+    if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
+      await append(appended);
+    } else if (appended.kind === "Reasoning") {
+      const id = stepMessage(appended)?.id;
+      const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
+      if (appended.body.redacted !== true && appended.text?.trim())
+        await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
+      if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+    }
+  };
+  if (!(await managedRosterIsCurrent())) return { refused: rosterChangedRefusal() };
+  if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
+    const externalAllowed =
+      external ||
+      (input.surface === "slack" &&
+        (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenant().orgScope) : false));
+    if (!externalAllowed) {
+      return {
+        refused: {
+          status: "refused",
+          refusalKind: "internal_only",
+          reason: "internal-only: shared audience includes a non-internal participant",
+        },
+      };
+    }
+  }
+
+  const rl = await deps.rateLimiter.check(actor.id);
+  if (!rl.allowed) {
+    return {
+      refused: {
+        status: "refused",
+        reason: `rate limit exceeded — try again in ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)}s`,
+      },
+    };
+  }
+
+  if (deps.budget) {
+    const b = await deps.budget.check(actor.id);
+    if (!b.allowed) {
+      return {
+        refused: {
+          status: "refused",
+          reason: `budget exceeded ($${b.spentUsd.toFixed(2)} of $${b.limitUsd}); try again later`,
+        },
+      };
+    }
+  }
+
+  return {
+    admitted: {
+      input,
+      actor,
+      conversation,
+      external,
+      serviceAllowed,
+      automatedTurn,
+      ambientTurn,
+      sessionTurn,
+      humanInput,
+      allInternal,
+      delegationEnabled,
+      authorizationOrigin,
+      liveTurn,
+      liveAuthorTurn,
+      messageTs,
+      entryTs,
+      coreReceivedAt,
+      turnTimezone,
+      delegatedSession,
+      withManagedRosterVersion,
+      mirrorRunActivity,
+    },
+  };
+}

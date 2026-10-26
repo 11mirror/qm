@@ -1,8 +1,7 @@
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
-import { scopeTeamsToTurn } from "../teams/teams.ts";
-import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
+import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
@@ -11,7 +10,7 @@ import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import { requiresDelegation } from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type ExtractedDocumentText,
@@ -20,7 +19,7 @@ import {
 } from "./document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../harness/goal.ts";
 import {
@@ -35,7 +34,7 @@ import {
   turnSource,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -52,7 +51,7 @@ import type { GapPhase, Lease, LeaseAttempt } from "../sessions/session-store.ts
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { acquireLeaseWithin } from "../sessions/session-store.ts";
-import { isOverheard, isReply, isUserMessage, stepMessage, type Item, type NewItem } from "../sessions/items.ts";
+import { isOverheard, isReply, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -87,7 +86,6 @@ import {
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
-  isValidCapabilityTimezone,
   type BrokeredConnector,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
@@ -173,6 +171,7 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
+import { admitTurn, ProjectRosterChanged, rosterChangedRefusal } from "./orchestrator/admit.ts";
 import {
   consumeApprovalDecision,
   loadActorGrants,
@@ -220,16 +219,6 @@ import { tenant } from "../tenant.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
-
-class ProjectRosterChanged extends Error {}
-
-const ACTIVITY_KINDS = new Set<Item["kind"]>([
-  "ToolCall",
-  "ToolResult",
-  "Elicitation",
-  "ElicitationResponse",
-  "SteeringMessage",
-]);
 
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
@@ -505,167 +494,32 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       return { title: title ?? (participantIds ? null : (session.title ?? null)) };
     },
 
-    async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
-      if (
-        !externalSlackRequestAllowed(
-          { ...input, surface: input.surface ?? "" },
-          deps.externalSlackPolicies,
-          Object.keys(deps.externalSlackPolicies ?? {}).length > 0 &&
-            (await deps.sessions.getByThread(input.conversation.threadRef))?.surface === "slack",
-        )
-      )
-        return { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." };
-      const external = input.externalSlack !== undefined;
-      const externalServices = new Set(input.externalSlack?.serviceCredentials ?? []);
-      const serviceAllowed = (slug: string): boolean =>
-        !external ||
-        (externalServices.has(slug) &&
-          (deps.externalSlackPolicies?.[input.externalSlack!.accountId]?.serviceCredentials.includes(slug) ?? false));
-      await deps.refreshModels?.();
-      input = await scopeTeamsToTurn(input, deps, external);
-      const { actor, conversation } = input;
-      const automatedTurn = input.origin.kind === "automation";
-      const ambientTurn = input.origin.kind === "ambient";
-      const humanTurn = input.origin.kind === "human";
-      const sessionTurn = isSessionTurn(input);
-      const humanInput = humanTurn && !sessionTurn;
-      const allInternal =
-        deps.identity.audienceIsAllInternal(conversation.audience) &&
-        (conversation.kind === "dm" ||
-          (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
-      const authoredDetection =
-        input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-      const delegationEnabled =
-        !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
-      const delegatedOrigin =
-        !external && deps.runs
-          ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
-          : undefined;
-      const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
-      const liveAuthorTurn =
-        !external &&
-        ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
-        allInternal;
-      const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
-      const entryTs =
-        !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
-          ? input.origin.entryTs
-          : undefined;
-      const coreReceivedAt = Date.now();
-      const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
-
-      if (!deps.identity.isInternal(actor)) {
-        return {
-          status: "refused",
-          refusalKind: "internal_only",
-          reason: "internal-only: non-internal principals cannot interact",
-        };
-      }
-      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
-        ? await deps.sessions.getByThread(conversation.threadRef)
-        : null;
-      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
-        const canWrite = createCanWriteScope({
-          managedGroups: deps.managedGroups
-            ? {
-                recognizes: (ref) => deps.managedGroups!.recognizes(ref),
-                members: (ref) => deps.managedGroups!.members(ref),
-                membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
-              }
-            : undefined,
-          directory: deps.directory,
-          identity: deps.identity,
-        });
-        if (
-          !delegatedSession?.spawnMeta ||
-          delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
-          !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
-          !(await canWrite(actor.id, delegatedSession.scopeId))
-        )
-          return { status: "refused", reason: "subagent session access is no longer current" };
-      }
-      const managedGroupRef =
-        conversation.kind === "group" &&
-        conversation.channelRef &&
-        deps.managedGroups?.recognizes(conversation.channelRef)
-          ? conversation.channelRef
-          : undefined;
-      const managedRosterIsCurrent = async (): Promise<boolean> => {
-        if (!managedGroupRef) return true;
-        const expected = new Set(input.sessionParticipantIds ?? []);
-        const [current, version] = await Promise.all([
-          deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
-          deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
-        ]);
-        return (
-          !!current &&
-          version === input.scopeVersion &&
-          rosterAdmits(current, actor.id, toScopeId("group", managedGroupRef)) &&
-          current.length === expected.size &&
-          current.every((id) => expected.has(id))
-        );
-      };
-      const withManagedRosterVersion = async <T>(fn: () => Promise<T>): Promise<T> => {
-        if (!managedGroupRef) return fn();
-        const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
-        if (result === undefined) throw new ProjectRosterChanged();
-        return result;
-      };
-      const mirrorRunActivity = async (appended: Item): Promise<void> => {
-        if (!input.runId || !deps.runActivity) return;
-        const append = (item: Item) =>
-          deps
-            .runActivity!.append(input.runId!, { item })
-            .catch(swallowAs("orchestrator: run-activity append", undefined));
-        if (
-          ACTIVITY_KINDS.has(appended.kind) ||
-          (appended.kind === "AgentMessage" && appended.variant === "narration")
-        ) {
-          await append(appended);
-        } else if (appended.kind === "Reasoning") {
-          const id = stepMessage(appended)?.id;
-          const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
-          if (appended.body.redacted !== true && appended.text?.trim())
-            await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
-          if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
-        }
-      };
-      if (!(await managedRosterIsCurrent())) {
-        return { status: "refused", reason: "project membership changed; retry from the current project" };
-      }
-      if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
-        const externalAllowed =
-          external ||
-          (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenant().orgScope) : false));
-        if (!externalAllowed) {
-          return {
-            status: "refused",
-            refusalKind: "internal_only",
-            reason: "internal-only: shared audience includes a non-internal participant",
-          };
-        }
-      }
-
-      const rl = await deps.rateLimiter.check(actor.id);
-      if (!rl.allowed) {
-        return {
-          status: "refused",
-          reason: `rate limit exceeded — try again in ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)}s`,
-        };
-      }
-
-      if (deps.budget) {
-        const b = await deps.budget.check(actor.id);
-        if (!b.allowed) {
-          return {
-            status: "refused",
-            reason: `budget exceeded ($${b.spentUsd.toFixed(2)} of $${b.limitUsd}); try again later`,
-          };
-        }
-      }
-
+    async handleTurn(requested: OrchestratorInput): Promise<TurnResult> {
+      const admission = await admitTurn(deps, requested);
+      if ("refused" in admission) return admission.refused;
+      const {
+        input,
+        actor,
+        conversation,
+        external,
+        serviceAllowed,
+        automatedTurn,
+        ambientTurn,
+        sessionTurn,
+        humanInput,
+        allInternal,
+        delegationEnabled,
+        authorizationOrigin,
+        liveTurn,
+        liveAuthorTurn,
+        messageTs,
+        entryTs,
+        coreReceivedAt,
+        turnTimezone,
+        delegatedSession,
+        withManagedRosterVersion,
+        mirrorRunActivity,
+      } = admission.admitted;
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const actorGrants = loadActorGrants(approvalGrants, actor.id);
       const approvalOwner = (sessionId: string) => ({
@@ -950,11 +804,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         } catch (err) {
           if (err instanceof ProjectRosterChanged) {
-            return {
-              status: "refused",
-              sessionId: session.id,
-              reason: "project membership changed; retry from the current project",
-            };
+            return rosterChangedRefusal(session.id);
           }
           throw err;
         } finally {
@@ -3645,11 +3495,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return finalResult;
       } catch (err) {
         if (err instanceof ProjectRosterChanged) {
-          return {
-            status: "refused",
-            sessionId: session.id,
-            reason: "project membership changed; retry from the current project",
-          };
+          return rosterChangedRefusal(session.id);
         }
         if (err instanceof NeedsApproval) {
           const summary = await summarizeApproval(deps, scopeId, err.command, err.approvalReason);
@@ -3672,11 +3518,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return { status: "pending_approval", sessionId: session.id, pendingApprovals };
           } catch (writeErr) {
             if (writeErr instanceof ProjectRosterChanged) {
-              return {
-                status: "refused",
-                sessionId: session.id,
-                reason: "project membership changed; retry from the current project",
-              };
+              return rosterChangedRefusal(session.id);
             }
             throw writeErr;
           }
