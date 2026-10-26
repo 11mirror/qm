@@ -24,7 +24,7 @@ import { swarmCall, type SwarmInput, type SwarmResult } from "../swarms/swarm.ts
 
 const CHILD_DONE_RECHECK_MS = 60_000;
 
-const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
+export const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
 export function isSubagentThreadRef(threadRef: string): boolean {
   return threadRef.startsWith(SUBAGENT_THREAD_PREFIX);

@@ -123,7 +123,6 @@ export interface ServerDeps {
   brokerFetch?: BrokerFetch;
   credentialHttpFetch?: CredentialHttpFetch;
   baseModelDefault?: string;
-  modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
