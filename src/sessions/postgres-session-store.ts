@@ -264,6 +264,7 @@ const SPEND_FIELDS = [
   ["spend_cache_write", "cacheWrite", "bigint"],
 ] as const;
 const SPEND_BACKFILL_BATCH = 20_000;
+const ATTRIBUTION_BATCH = 200;
 const spendValue = (usage: string, key: string, type: string): string =>
   `COALESCE((${usage} ->> '${key}')::${type}, 0)`;
 
@@ -1131,6 +1132,31 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `SET LOCAL lock_timeout = '3s'`,
           `DROP INDEX IF EXISTS session_llm_requests_spend`,
           `DROP INDEX IF EXISTS session_llm_requests_spend_wide`,
+        ],
+      },
+      {
+        id: "sessions/store/0048-attributed-turns",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE TABLE attributed_turns(
+             session_id TEXT NOT NULL, principal_id TEXT NOT NULL, day BIGINT NOT NULL,
+             turns BIGINT NOT NULL, first_at BIGINT NOT NULL, last_at BIGINT NOT NULL,
+             PRIMARY KEY(session_id, principal_id, day)
+           )`,
+          `CREATE TABLE attributed_turns_dirty(session_id TEXT PRIMARY KEY)`,
+          `CREATE OR REPLACE FUNCTION mark_attribution_dirty() RETURNS trigger LANGUAGE plpgsql AS $mark_attribution_dirty$
+           BEGIN
+             INSERT INTO attributed_turns_dirty(session_id) VALUES (COALESCE(NEW.session_id, OLD.session_id))
+             ON CONFLICT DO NOTHING;
+             RETURN NULL;
+           END $mark_attribution_dirty$`,
+          // Items are append-only and leave only with their session, whose participants go too.
+          `CREATE TRIGGER items_attribution_dirty AFTER INSERT ON items
+           FOR EACH ROW WHEN (NEW.kind IN ${USER_KINDS}) EXECUTE FUNCTION mark_attribution_dirty()`,
+          `CREATE TRIGGER participants_attribution_dirty AFTER INSERT OR UPDATE OR DELETE ON participants
+           FOR EACH ROW EXECUTE FUNCTION mark_attribution_dirty()`,
+          `INSERT INTO attributed_turns_dirty(session_id) SELECT DISTINCT session_id FROM participants
+           ON CONFLICT DO NOTHING`,
         ],
       },
     ],
@@ -2020,15 +2046,35 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async attributedTurns(): Promise<AttributedTurn[]> {
-      const rows = await q(
-        `SELECT p.principal_id, e.session_id, (${msOf("e.created_at")} / 86400000)::bigint AS day,
-                COUNT(*) AS turns, ${msOf("MIN(e.created_at)")} AS first_at, ${msOf("MAX(e.created_at)")} AS last_at
-           FROM participants p
-           JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = p.session_id
-          WHERE ${userTurn("e")}
-            AND ${withinParticipantWindow("e", "p")}
-          GROUP BY p.principal_id, e.session_id, day`,
-      );
+      // Sessions whose user items or participant windows changed are recomputed in small batches,
+      // so a message append waits on at most one batch; everything else is read from the cache.
+      for (;;) {
+        const recomputed = await withPgTransaction(await pool(), async (client) => {
+          const dirty = await client.query(
+            `DELETE FROM attributed_turns_dirty WHERE session_id IN (
+               SELECT session_id FROM attributed_turns_dirty LIMIT ${ATTRIBUTION_BATCH} FOR UPDATE SKIP LOCKED)
+             RETURNING session_id`,
+          );
+          if (!dirty.rowCount) return false;
+          const ids = dirty.rows.map((r) => r.session_id as string);
+          await client.query("DELETE FROM attributed_turns WHERE session_id = ANY($1::text[])", [ids]);
+          await client.query(
+            `INSERT INTO attributed_turns(session_id, principal_id, day, turns, first_at, last_at)
+             SELECT e.session_id, p.principal_id, (${msOf("e.created_at")} / 86400000)::bigint AS day,
+                    COUNT(*), ${msOf("MIN(e.created_at)")}, ${msOf("MAX(e.created_at)")}
+               FROM participants p
+               JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = p.session_id
+              WHERE p.session_id = ANY($1::text[])
+                AND ${userTurn("e")}
+                AND ${withinParticipantWindow("e", "p")}
+              GROUP BY p.principal_id, e.session_id, day`,
+            [ids],
+          );
+          return true;
+        });
+        if (!recomputed) break;
+      }
+      const rows = await q("SELECT principal_id, session_id, day, turns, first_at, last_at FROM attributed_turns");
       return rows.map((r) => ({
         principalId: r.principal_id as string,
         sessionId: r.session_id as string,
