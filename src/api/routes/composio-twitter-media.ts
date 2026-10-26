@@ -1,9 +1,17 @@
-import { ACCOUNT_ID, activeRun, composioUserIds, credential, ownedAccount, request } from "./composio.ts";
+import {
+  ACCOUNT_ID,
+  activeAccount,
+  activeRun,
+  credential,
+  ownedAccount,
+  reportComposioFailure,
+  request,
+  stillAuthorized,
+} from "./composio.ts";
 import { sendJson } from "../http.ts";
 import { sniffImageDimensions } from "../../core/image-downscale.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -77,25 +85,19 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
   const mediaType = `image/${format}`;
   const accountId = body.accountId;
   const resource = `${accountId}/media`;
-  const mask = createExactSecretValueMasker([access.key]);
-  try {
-    const owned = await ownedAccount(ctx, access, accountId);
-    if (
-      !owned ||
-      owned.toolkit !== "twitter" ||
-      owned.account.status !== "ACTIVE" ||
-      owned.account.is_disabled === true
-    )
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(String(owned.account.user_id)))
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+  const scopeLabel = ctx.capability.scopeId;
+  const auditUpload = (outcome: string, uploaded = resource) =>
     audit(ctx.deps, {
       principalId: access.principal,
-      action: "composio.twitter_media.started",
-      resource,
-      scopeLabel: ctx.capability.scopeId,
+      action: `composio.twitter_media.${outcome}`,
+      resource: uploaded,
+      scopeLabel,
     });
+  try {
+    const owned = await ownedAccount(ctx, access, accountId);
+    if (!activeAccount(owned, "twitter")) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    if (!(await stillAuthorized(ctx, access.principal, owned.account))) return;
+    auditUpload("started");
     const started = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/initialize`, {
       media_type: mediaType,
       total_bytes: bytes.length,
@@ -113,12 +115,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     if (!(await activeRun(ctx))) return;
     const finished = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/${mediaId}/finalize`);
     if (finished.id !== mediaId) throw new Error("Media id changed during upload");
-    audit(ctx.deps, {
-      principalId: access.principal,
-      action: "composio.twitter_media.completed",
-      resource: `${resource}/${mediaId}`,
-      scopeLabel: ctx.capability.scopeId,
-    });
+    auditUpload("completed", `${resource}/${mediaId}`);
     return sendJson(ctx.res, 200, {
       mediaId,
       mediaType,
@@ -126,15 +123,13 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
       expiresAfterSecs: typeof finished.expires_after_secs === "number" ? finished.expires_after_secs : null,
     });
   } catch (error) {
-    audit(ctx.deps, {
-      principalId: access.principal,
-      action: "composio.twitter_media.failed",
-      resource,
-      scopeLabel: ctx.capability.scopeId,
-    });
-    reportFailure("composio: twitter media", new Error(mask(redactSecrets(errMessage(error)))), resource);
+    auditUpload("failed");
+    reportComposioFailure("composio: twitter media", access.key, error, resource);
     const status = error instanceof XMediaError ? error.status : undefined;
-    const detail = error instanceof XMediaError && error.detail ? mask(redactSecrets(error.detail)).slice(0, 300) : "";
+    const detail =
+      error instanceof XMediaError && error.detail
+        ? createExactSecretValueMasker([access.key])(redactSecrets(error.detail)).slice(0, 300)
+        : "";
     return sendJson(ctx.res, 502, {
       error: "media_upload_failed",
       ...(status ? { providerStatus: status } : {}),
