@@ -720,25 +720,10 @@ export function startAdmin(host, env) {
   function defaultShell(extras = {}) {
     extras = { actions: view === "credentials" ? [scAddButton] : [], ...extras };
     const title = VIEW_TITLE[view] || titleCase(view);
-    if (SCOPED.has(view) && !orgWideView()) {
-      pageShell({
-        back: {
-          label: "← " + title,
-          onClick: () =>
-            go({
-              view,
-              scope: "org:" + orgId,
-              session: null,
-              page: 1,
-              ...(view === "history" ? { historyKind } : {}),
-            }),
-        },
-        title: shortName(scope),
-        ...extras,
-      });
-    } else {
-      pageShell({ title, ...extras });
-    }
+    if (!SCOPED.has(view) || orgWideView()) return pageShell({ title, ...extras });
+    const back = () =>
+      go({ view, scope: "org:" + orgId, session: null, page: 1, ...(view === "history" && { historyKind }) });
+    pageShell({ back: { label: "← " + title, onClick: back }, title: shortName(scope), ...extras });
   }
 
   const orgOwnView = () => orgWideView() && urlToState().own === "1";
@@ -979,7 +964,7 @@ export function startAdmin(host, env) {
     settings.loadCredentials(list, serviceCredDirectory, serviceCredChannels, scopeDir || [], scope);
   }
   function loadScForm(c) {
-    scEditing = c.slug;
+    if (c) scEditing = c.slug;
     credentialState.begin(c);
     openScDialog();
     $("sc-name").focus();
@@ -1057,13 +1042,9 @@ export function startAdmin(host, env) {
   }
   scAddButton.onclick = () => {
     resetScForm();
-    credentialState.begin(null);
-    openScDialog();
-    $("sc-name").focus();
+    loadScForm(null);
   };
-  $("sc-reset").onclick = () => {
-    if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
-  };
+  $("sc-reset").onclick = dismiss;
   $("sc-save").onclick = async () => {
     const status = (message, kind, sticky) => setStatus("st-service-credentials", message, kind, sticky);
     const unreachable = () => {
@@ -1284,24 +1265,19 @@ export function startAdmin(host, env) {
   $("sharing-posture-inherit").onclick = async () => {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
+    const stale = () => requestedScope !== scope || requestedGeneration !== governanceReq;
     const draftBefore = JSON.stringify(governanceUI.collect("sharing-posture"));
-    if (
-      !(await reviewGovernanceChange({
-        title: "Follow organization sharing?",
-        subtitle: "Remove this scope's sharing override.",
-        facts: [["Scope", governanceScopeName()]],
-        warning:
-          "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
-        confirmLabel: "Follow organization",
-      })) ||
-      requestedScope !== scope ||
-      requestedGeneration !== governanceReq
-    )
-      return;
-    const result = await api("PUT", scopeUrl(requestedScope, "/sharing-posture"), {
-      inherit: true,
+    const confirmed = await reviewGovernanceChange({
+      title: "Follow organization sharing?",
+      subtitle: "Remove this scope's sharing override.",
+      facts: [["Scope", governanceScopeName()]],
+      warning:
+        "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
+      confirmLabel: "Follow organization",
     });
-    if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+    if (!confirmed || stale()) return;
+    const result = await api("PUT", scopeUrl(requestedScope, "/sharing-posture"), { inherit: true });
+    if (stale()) return;
     if (result.ok)
       await refreshPolicySetting("sharing-posture", requestedScope, requestedGeneration, draftBefore, "Saved");
     else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
@@ -1325,11 +1301,9 @@ export function startAdmin(host, env) {
     const requestedScope = scope;
     const button = $("auto-flagger-test");
     $("auto-flagger-test-result").hidden = false;
-    const windowField = $("auto-flagger-window");
-    const requested = Number(windowField.value);
-    if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
+    const requested = Number($("auto-flagger-window").value);
+    if (!Number.isInteger(requested) || requested < 1 || requested > 500)
       return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
-    }
     setStatus("st-auto-flagger-test", "Replaying the last " + requested + " screenings through this rubric…", "", true);
     button.disabled = true;
     try {
@@ -1340,9 +1314,7 @@ export function startAdmin(host, env) {
         rubric: $("auto-flagger-rubric").value,
       });
       if (requestedScope !== scope) return;
-      if (!r.ok) {
-        return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
-      }
+      if (!r.ok) return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
       setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
     } finally {
       button.disabled = false;
