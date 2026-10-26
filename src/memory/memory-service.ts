@@ -18,6 +18,7 @@ export const MEMORY_FILE = "memory/MEMORY.md";
 
 export interface MemoryRecallContext {
   query?: string;
+  disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
   sessionId?: string;
   maxChars?: number;

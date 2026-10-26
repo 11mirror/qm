@@ -164,7 +164,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const context = await resolveTurnWorkspace(ctx, { useMemory, memoryPolicy });
       const { sharingSources, memoryScopeId } = context;
       resolution.grantedHandles = context.listFiles();
-      let memoryView = await context.memorySnapshot(false);
       const framed = await frameTurnPrompt(ctx, {
         screenTrace,
         useMemory,
@@ -265,7 +264,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
 
-        memoryView = await context.memorySnapshot();
+        const memoryView = await context.memorySnapshot();
         const captureDependencies = () => [
           ...memoryView.facts,
           ...(!memoryView.complete ||
@@ -356,6 +355,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           screenTrace,
           strictReadOnly,
           context,
+          memoryView,
           framed,
           session,
           isRetry,

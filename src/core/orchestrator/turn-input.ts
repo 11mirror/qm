@@ -49,6 +49,7 @@ export async function prepareTurnInput(
     screenTrace: ScreenTrace;
     strictReadOnly: boolean;
     context: Awaited<ReturnType<typeof resolveTurnContext>>;
+    memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
     framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
     session: Session;
     isRetry: boolean;
@@ -83,6 +84,7 @@ export async function prepareTurnInput(
     screenTrace,
     strictReadOnly,
     context,
+    memoryView,
     session,
     isRetry,
     recordedTurn,
@@ -161,7 +163,7 @@ export async function prepareTurnInput(
   const rawEntries = (await historyWindow()).items;
   const priorTurns = input.priorTurns;
   let visibleHistory = filterHistory(forModelContext(rawEntries));
-  const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
+  const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
   const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
   let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
   if (partial && resumePlan?.kind === "settle") {
