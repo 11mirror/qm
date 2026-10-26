@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { DirectiveResult } from "lit/directive.js";
-import { Send } from "lucide";
+import { ChevronDown, Send } from "lucide";
 import { markdown } from "./message-markdown";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
@@ -24,31 +24,43 @@ export function assistantPrompts(context: AssistantSidebarContext): readonly str
   return ["Summarize this thread", "Help me write a reply"];
 }
 
-export function assistantMessage(options: {
-  role: "human" | "agent" | "system";
-  text?: string;
-  content?: Content;
-  before?: Content;
-  after?: Content;
-  meta?: Content;
-  index?: number;
-  entrySeqs?: string;
-  streaming?: boolean;
-}): TemplateResult {
-  const human = options.role === "human";
-  return html`<article
-    class="inbox-chat-msg ${options.role} ${options.meta && options.meta !== nothing ? "message-row" : ""} ${options.streaming ? "streaming" : ""}"
-    data-index=${options.index ?? nothing}
-    data-entry-seqs=${options.entrySeqs ?? nothing}
-  >
-    ${options.before ?? nothing}
-    ${
-      human || options.role === "system"
-        ? html`<span class="inbox-chat-text" ?hidden=${human && !options.text?.trim()}>${options.text ?? ""}</span>`
-        : html`<div class="assistant-body">${options.content ?? markdown(options.text ?? "")}</div>`
-    }
-    ${options.after ?? nothing} ${options.meta ?? nothing}
+export function messageRow(cls: string, index: number, seqs: number[], body: TemplateResult): TemplateResult {
+  return html`<article class="message-row ${cls}" data-index=${index} data-entry-seqs=${seqs.join(" ")}>
+    ${body}
   </article>`;
+}
+
+export function userBubble(
+  content: Content,
+  opts: { hidden?: boolean; deleted?: boolean; revision?: string } = {},
+): TemplateResult {
+  return html`<div
+    class="message-bubble user-bubble ${opts.deleted ? "deleted-bubble" : ""}"
+    ?hidden=${Boolean(opts.hidden)}
+  >
+    <div class="pin-content">
+      ${content} ${opts.revision ? html`<span class="revision-badge">(${opts.revision})</span>` : nothing}
+    </div>
+    <button class="pin-toggle" type="button" hidden aria-expanded="false">
+      <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+    </button>
+  </div>`;
+}
+
+export function threadMessage(
+  message: { role: "human" | "agent" | "system"; text: string },
+  index: number,
+): TemplateResult {
+  if (message.role === "human")
+    return messageRow("user-row", index, [], userBubble(markdown(message.text), { hidden: !message.text.trim() }));
+  if (message.role === "system")
+    return messageRow(
+      "system-note-row",
+      index,
+      [],
+      html`<div class="system-note"><span class="system-note-text">${message.text}</span></div>`,
+    );
+  return messageRow("assistant-row", index, [], html`<div class="assistant-body">${markdown(message.text)}</div>`);
 }
 
 export function assistantSidebar(options: {

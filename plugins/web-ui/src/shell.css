@@ -8131,9 +8131,16 @@ h3.ambient-field-label {
 .inbox-chat .message-row {
   --meta-lane: 20px;
 }
-.inbox-chat-msg.human .message-meta {
-  left: auto;
-  right: 0;
+.inbox-chat .message-row:not(:has(> .message-meta, > .assistant-body > .message-meta)) {
+  padding-bottom: 0;
+}
+.inbox-chat .assistant-row + .user-row {
+  margin-top: 0;
+}
+.inbox-chat .user-bubble {
+  max-width: 85%;
+  padding: 8px 13px;
+  border-radius: 16px;
 }
 .assistant-sidebar {
   --chat-font-size: 13.5px;
@@ -9031,25 +9038,6 @@ h3.ambient-field-label {
 .inbox-chat-log::-webkit-scrollbar {
   display: none;
 }
-.inbox-chat-msg {
-  display: flex;
-  flex-direction: column;
-  font-size: var(--font-13-5);
-}
-.inbox-chat-msg.human {
-  align-items: flex-end;
-}
-.inbox-chat-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.55;
-}
-.inbox-chat-msg.human .inbox-chat-text {
-  max-width: 85%;
-  padding: 8px 13px;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
-}
 .slack-mention {
   padding: 0 3px;
   border-radius: 4px;
@@ -9080,10 +9068,6 @@ h3.ambient-field-label {
 .dark .slack-mention.self {
   color: var(--foreground);
   background: color-mix(in srgb, oklch(0.85 0.16 90) 28%, transparent);
-}
-.inbox-chat-msg.system .inbox-chat-text {
-  color: var(--muted-foreground);
-  font-style: italic;
 }
 .inbox-chat-working {
   display: flex;

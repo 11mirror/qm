@@ -53,7 +53,7 @@ import { tip } from "./tooltip";
 import { brandName, menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
-import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
+import { assistantSidebar, threadMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 import { readStorage, writeStorage } from "./drafts";
 
@@ -1123,7 +1123,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
       sent: Boolean(item.sentChat),
       resolved: Boolean(item.probablyResolved),
     },
-    messages: html`${item.thread.map((message) => assistantMessage({ role: message.role, text: message.text }))}`,
+    messages: html`${item.thread.map(threadMessage)}`,
     busy,
     status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
     showPrompts: item.status === "open" && item.thread.length === 0,
