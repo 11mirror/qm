@@ -471,10 +471,10 @@ export interface BuiltApp {
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
   featureFlags: FeatureFlagStore;
-  teams?: TeamStore;
-  decisions?: DecisionStore;
+  teams: TeamStore;
+  decisions: DecisionStore;
   replayDedupe: ReplayDedupe;
-  brokerSessions?: BrokerSessionStore;
+  brokerSessions: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
   environments: EnvironmentStore;
@@ -483,8 +483,8 @@ export interface BuiltApp {
   monitors: MonitorStore;
   browserSessionStore?: BrowserSessionStore;
   monitorPoller?: MonitorPoller;
-  ambientJudgments?: AmbientJudgmentStore;
-  ackEmojiPicks?: AckEmojiPickStore;
+  ambientJudgments: AmbientJudgmentStore;
+  ackEmojiPicks: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
@@ -1238,7 +1238,7 @@ export function buildApp(
   const decide = createDecisionHooks(
     decisions,
     createDecisionBackend({
-      providers: async (ids) => (await decisions?.providers(ids)) ?? [],
+      providers: (ids) => decisions.providers(ids),
       ...(config.modelGateway?.apiKey
         ? {
             gateway: {
@@ -1376,10 +1376,7 @@ export function buildApp(
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
   const ledger = runStore.ledger;
 
-  let processes: ProcessRegistry | undefined;
-  if (supportsProcessSessions(sandbox)) {
-    processes = createPostgresProcessRegistry(databaseUrl);
-  }
+  const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
 
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
@@ -2442,7 +2439,7 @@ export function buildApp(
       }
     : undefined;
   const instanceRegistry: InstanceRegistry =
-    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
+    !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
           buildSha: config.buildSha,
@@ -2803,9 +2800,9 @@ export function buildApp(
     ...(fileUploads ? { fileUploads } : {}),
     featureFlags,
     teams,
-    ...(decisions ? { decisions } : {}),
+    decisions,
     replayDedupe,
-    ...(brokerSessions ? { brokerSessions } : {}),
+    brokerSessions,
     directory,
     projects,
     environments,
@@ -2814,8 +2811,8 @@ export function buildApp(
     monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
     ...(monitorPoller ? { monitorPoller } : {}),
-    ...(ambientJudgments ? { ambientJudgments } : {}),
-    ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
+    ambientJudgments,
+    ackEmojiPicks,
     channelPolicy,
     ...(config.suggestedActivitiesEnabled && (config.backgroundWorkEnabled || config.backgroundDeploymentId)
       ? { suggestedActivities }
@@ -2864,7 +2861,7 @@ export function serverDeps(
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     replayDedupe: built.replayDedupe,
-    ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
+    brokerSessions: built.brokerSessions,
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
@@ -2904,8 +2901,8 @@ export function serverDeps(
     acl: built.acl,
     credentialUsage: built.credentialUsage,
     featureFlags: built.featureFlags,
-    ...(built.decisions ? { decisions: built.decisions } : {}),
-    ...(built.teams ? { teams: built.teams } : {}),
+    decisions: built.decisions,
+    teams: built.teams,
     egressAudit: built.egressAudit,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -2951,8 +2948,8 @@ export function serverDeps(
     ...(built.processes ? { processes: built.processes } : {}),
     ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
     directory: built.directory,
-    ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
-    ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
+    ambientJudgments: built.ambientJudgments,
+    ackEmojiPicks: built.ackEmojiPicks,
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
