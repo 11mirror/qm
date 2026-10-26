@@ -161,7 +161,7 @@ test("reads relay with their query intact", async () => {
     "crons?scope=org%3Aacme",
     "skill-packs",
     "spend?from=2026-08-26&to=2026-09-25",
-    "slack-mirror/messages?container=C1",
+    "ambient-context/messages?container=C1",
     "principal-links",
   ]) {
     const { response, hops } = await call("GET", `/api/admin/${path}`);

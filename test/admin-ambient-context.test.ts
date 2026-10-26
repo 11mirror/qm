@@ -74,11 +74,11 @@ async function seed(built: ReturnType<typeof start>["built"]) {
   ]);
 }
 
-test("the mirror index lists containers with name, members, watermark, and message count", async () => {
+test("the ambient context index lists containers with name, members, watermark, and message count", async () => {
   const s = start();
   try {
     await seed(s.built);
-    const d = await getJson(s.base, "/v1/admin/slack-mirror");
+    const d = await getJson(s.base, "/v1/admin/ambient-context");
     assert.equal(d.containers.length, 2);
     const c1 = d.containers.find((c: any) => c.container === "C1");
     assert.equal(c1.name, "eng");
@@ -88,7 +88,7 @@ test("the mirror index lists containers with name, members, watermark, and messa
     assert.equal(c1.messageCount, 3, "deleted tombstones don't count as mirrored");
     assert.equal(d.hasMore, false);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.read"),
+      (await s.built.auditLog.events()).some((e) => e.action === "ambient_context.read"),
       "read is audited",
     );
   } finally {
@@ -100,8 +100,7 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
   const s = start();
   try {
     await seed(s.built);
-    const d = await getJson(s.base, "/v1/admin/slack-mirror/messages?container=C1");
-    assert.equal(d.mode, "timeline");
+    const d = await getJson(s.base, "/v1/admin/ambient-context/messages?container=C1");
     assert.deepEqual(
       d.messages.map((m: any) => m.ts),
       ["100.000100", "101.000100", "102.000100", "103.000100"],
@@ -115,13 +114,13 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
     assert.equal(gone.deleted, true);
     assert.ok(!d.messages.some((m: any) => m.container === "C2"), "scoped to the requested container");
 
-    const page = await getJson(s.base, "/v1/admin/slack-mirror/messages?container=C1&limit=2");
+    const page = await getJson(s.base, "/v1/admin/ambient-context/messages?container=C1&limit=2");
     assert.deepEqual(
       page.messages.map((m: any) => m.ts),
       ["102.000100", "103.000100"],
     );
     assert.equal(page.hasMore, true);
-    const older = await getJson(s.base, "/v1/admin/slack-mirror/messages?container=C1&limit=2&before=102.000100");
+    const older = await getJson(s.base, "/v1/admin/ambient-context/messages?container=C1&limit=2&before=102.000100");
     assert.deepEqual(
       older.messages.map((m: any) => m.ts),
       ["100.000100", "101.000100"],
@@ -129,57 +128,11 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
     assert.equal(older.hasMore, false);
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.messages.read" && e.resource === "C1"),
+      (await s.built.auditLog.events()).some(
+        (e) => e.action === "ambient_context.messages.read" && e.resource === "C1",
+      ),
       "message read is audited per container",
     );
-  } finally {
-    await s.close();
-  }
-});
-
-test("q= searches mirrored bodies, org-wide or narrowed to a container", async () => {
-  const s = start();
-  try {
-    await seed(s.built);
-    const all = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=" + encodeURIComponent("channel"));
-    assert.equal(all.mode, "search");
-    assert.ok(all.messages.some((m: any) => m.container === "C2"));
-    const narrowed = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=deploys&container=C1");
-    assert.deepEqual(
-      narrowed.messages.map((m: any) => m.ts),
-      ["102.000100"],
-    );
-    assert.equal(narrowed.hasMore, false);
-  } finally {
-    await s.close();
-  }
-});
-
-test("search reports hasMore and the applied limit when matches exceed the page", async () => {
-  const s = start();
-  try {
-    await s.built.app.ingestSurfaceEvents(
-      [1, 2, 3].map((n) => ({
-        container: "C1",
-        ts: `10${n}.000100`,
-        authorId: "U1",
-        text: `needle number ${n}`,
-        createdAt: n * 1000,
-      })),
-    );
-    const capped = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=2");
-    assert.equal(capped.mode, "search");
-    assert.deepEqual(
-      capped.messages.map((m: any) => m.ts),
-      ["103.000100", "102.000100"],
-      "the slice keeps the best-ranked front of the result, not the tail",
-    );
-    assert.equal(capped.hasMore, true);
-    assert.equal(capped.limit, 2);
-    const exact = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=3");
-    assert.equal(exact.messages.length, 3);
-    assert.equal(exact.hasMore, false);
-    assert.equal(exact.limit, 3);
   } finally {
     await s.close();
   }
@@ -196,7 +149,7 @@ const seedContainers = (built: ReturnType<typeof start>["built"], count: number)
     })),
   );
 
-test("the mirror index reports hasMore when more containers exist than the page cap", async () => {
+test("the ambient context index reports hasMore when more containers exist than the page cap", async () => {
   const s = start();
   try {
     await seedContainers(s.built, 401);
@@ -204,7 +157,7 @@ test("the mirror index reports hasMore when more containers exist than the page 
     await s.built.app.ingestSurfaceEvents([
       { container: "FRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
     ]);
-    const d = await getJson(s.base, "/v1/admin/slack-mirror");
+    const d = await getJson(s.base, "/v1/admin/ambient-context");
     assert.equal(d.containers.length, 400);
     assert.equal(d.hasMore, true);
     assert.equal(d.limit, 400);
@@ -232,11 +185,11 @@ test("ambient rows with no stored name resolve U…/C… ids from the directory 
     ]);
     await s.built.directory.replaceChannels([{ channelId: "C9", name: "watercooler" }]);
 
-    const idx = await getJson(s.base, "/v1/admin/slack-mirror");
+    const idx = await getJson(s.base, "/v1/admin/ambient-context");
     const c9 = idx.containers.find((c: any) => c.container === "C9");
     assert.equal(c9.name, "watercooler", "channel id resolved to its directory name");
 
-    const msgs = await getJson(s.base, "/v1/admin/slack-mirror/messages?container=C9");
+    const msgs = await getJson(s.base, "/v1/admin/ambient-context/messages?container=C9");
     assert.equal(msgs.messages[0].authorName, "Taylor", "author id resolved to a display name");
     assert.equal(msgs.messages[0].mentions.U8, "Ada", "body mention id resolved from the directory");
     assert.equal(msgs.messages[0].mentions.UX, undefined, "unknown mention id left unresolved");
@@ -245,15 +198,15 @@ test("ambient rows with no stored name resolve U…/C… ids from the directory 
   }
 });
 
-test("the mirror is org-admin only and requires a container or query", async () => {
+test("ambient context is org-admin only and requires a container", async () => {
   const s = start();
   try {
     await seed(s.built);
-    for (const path of ["/v1/admin/slack-mirror", "/v1/admin/slack-mirror/messages?container=C1"]) {
+    for (const path of ["/v1/admin/ambient-context", "/v1/admin/ambient-context/messages?container=C1"]) {
       const r = await fetch(s.base + path, { headers: { "x-admin-actor": "stranger@default-org" } });
       assert.equal(r.status, 403, path);
     }
-    const bad = await fetch(s.base + "/v1/admin/slack-mirror/messages", { headers: ALICE });
+    const bad = await fetch(s.base + "/v1/admin/ambient-context/messages", { headers: ALICE });
     assert.equal(bad.status, 400);
   } finally {
     await s.close();

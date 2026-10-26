@@ -1208,10 +1208,6 @@
   display: flex;
   border-radius: 6px;
 }
-#app-view .sm-msg.sm-cont {
-  padding-top: 1px;
-  padding-bottom: 1px;
-}
 #app-view .sm-msg.sm-self {
   background: color-mix(in srgb, var(--accent, #4a7dff) 6%, transparent);
 }
@@ -1223,7 +1219,6 @@
   background: color-mix(in srgb, #f2c744 22%, transparent);
 }
 #app-view tr.openable,
-#app-view .sm-msg.sm-openable,
 #app-view .tool-line {
   cursor: pointer;
 }
@@ -1239,16 +1234,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-#app-view .sm-guttertime {
-  color: var(--muted);
-  font-size: 10.5px;
-  line-height: 20px;
-  opacity: 0;
-  white-space: nowrap;
-}
-#app-view .sm-msg.sm-cont:hover .sm-guttertime {
-  opacity: 1;
 }
 #app-view .sm-body {
   min-width: 0;
@@ -1309,10 +1294,6 @@
 #app-view .sm-msg.sm-deleted .sm-text {
   color: var(--muted);
   text-decoration: line-through;
-}
-#app-view .sm-day {
-  margin: 14px 0 4px;
-  color: var(--muted);
 }
 #app-view .judg-split {
   display: grid;
@@ -4708,12 +4689,12 @@
   }
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-inner {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-inner {
   max-width: 960px;
   margin-inline: auto;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 24px;
@@ -4721,14 +4702,12 @@
   white-space: normal;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
   font-weight: 500;
   line-height: 1.4;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #shellbar
-  .back {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar .back {
   flex-basis: 100%;
   justify-content: flex-start;
   min-height: 24px;
@@ -4738,34 +4717,27 @@
   color: var(--muted);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #shellbar
-  .back:hover {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar .back:hover {
   color: var(--text);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  :is(.shell-tab) {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) :is(.shell-tab) {
   min-height: 32px;
   padding: 6px 12px;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  :is(.shell-tab.active) {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) :is(.shell-tab.active) {
   color: var(--text);
   background: var(--subtle);
   border-color: color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  .shell-tab:hover {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-tab:hover {
   color: var(--text);
   background: var(--subtle);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #view-data
-  > .card {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #view-data > .card {
   margin: 0 0 12px;
   padding: 0;
   border: 0;
@@ -4773,7 +4745,7 @@
   background: transparent;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
   #view-data
   > .card
   > :is(.body, .head) {
@@ -4782,18 +4754,15 @@
   border: 0;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #view-data
-  > .card
-  > .head {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #view-data > .card > .head {
   margin-bottom: 8px;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-list {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-list {
   border-top: 1px solid var(--border);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
   display: grid;
   grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) 112px;
   gap: 12px;
@@ -4803,63 +4772,60 @@
   border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-name {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-name {
   grid-column: 1;
   grid-row: 1;
   max-width: none;
   font-weight: 400;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
   grid-column: 2;
   grid-row: 1;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  .dense-preview:empty {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview:empty {
   display: none;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
   grid-column: 3;
   grid-row: 1;
   align-self: center;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-tag {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-tag {
   padding: 0;
   background: transparent;
   font-size: 12px;
   font-weight: 400;
 }
 @media (max-width: 640px) {
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
     gap: 10px;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-sort {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-sort {
     flex-basis: 100%;
     flex-wrap: wrap;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-    .shell-spacer {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-spacer {
     display: none;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 2px 8px;
     padding: 5px 0;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-    .dense-preview {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
     grid-column: 2;
     margin-left: 0;
   }
@@ -4868,95 +4834,25 @@
 #app-view.history-view #view-data > .card:not(:last-child) {
   margin-bottom: 32px;
 }
-
-#app-view.slack-view .shell-search {
-  flex: 0 1 320px;
-  min-width: 0;
-}
-#app-view.slack-view .shell-search input {
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-}
-#app-view.slack-view .dense-row {
-  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr) 112px;
-}
-#app-view.slack-view #shellbar:has(.sm-channel-heading) {
-  position: sticky;
-  top: var(--header-total-h);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
-  gap: 12px 24px;
-  max-width: 840px;
-  margin: 0 auto 20px;
-  padding: 12px 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-}
-#app-view.slack-view .sm-toolbar {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-#app-view.slack-view #shellbar .sm-toolbar .back {
-  flex: none;
-}
-#app-view.slack-view .sm-toolbar a {
-  padding: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  text-decoration: none;
-}
-#app-view.slack-view .sm-toolbar a:hover {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-#app-view.slack-view .sm-channel-heading {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-#app-view.slack-view .sm-channel-heading .shell-title {
-  overflow-wrap: anywhere;
-}
-#app-view.slack-view .sm-channel-heading .shell-context {
-  font-size: 11px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-#app-view.slack-view .sm-stream {
-  width: 100%;
-  max-width: 840px;
-  margin-inline: auto;
-}
 #app-view.judgments-view .sm-stream {
   max-width: none;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-msg {
+#app-view:is(.judgments-view) .sm-msg {
   margin: 16px 0 0;
   padding: 8px 10px;
   gap: 12px;
   border: 0;
   scroll-margin-block: 190px 32px;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-cont {
-  margin-top: 0;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-reply {
+#app-view:is(.judgments-view) .sm-msg.sm-reply {
   margin-left: 0;
   border-left: 0;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-gutter {
+#app-view:is(.judgments-view) .sm-gutter {
   flex-basis: 28px;
   width: 28px;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-avatar {
+#app-view:is(.judgments-view) .sm-avatar {
   width: 28px;
   height: 28px;
   border: 1px solid var(--border);
@@ -4966,82 +4862,46 @@
   font-size: 12px;
   font-weight: 500;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-author {
+#app-view:is(.judgments-view) .sm-author {
   font-size: 13px;
   font-weight: 500;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-text {
+#app-view:is(.judgments-view) .sm-text {
   font-size: 13px;
   line-height: 1.6;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-head {
+#app-view:is(.judgments-view) .sm-head {
   flex-wrap: wrap;
   gap: 4px 8px;
   margin-bottom: 6px;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-when {
+#app-view:is(.judgments-view) .sm-when {
   margin-left: auto;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-tag {
+#app-view:is(.judgments-view) .sm-tag {
   font-size: 11px;
   font-weight: 400;
   color: var(--muted);
 }
-#app-view:is(.slack-view, .judgments-view) .sm-text a {
+#app-view:is(.judgments-view) .sm-text a {
   color: var(--text);
   text-decoration: underline;
   text-decoration-color: var(--border);
   text-underline-offset: 3px;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-text a:hover {
+#app-view:is(.judgments-view) .sm-text a:hover {
   text-decoration-color: currentColor;
 }
-#app-view:is(.slack-view, .judgments-view) .sm-text blockquote {
+#app-view:is(.judgments-view) .sm-text blockquote {
   margin: 6px 0;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--border);
   color: var(--muted);
 }
-#app-view:is(.slack-view, .judgments-view) .sm-day {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 16px 0 0;
-  padding: 0;
-  border: 0;
-  font-size: 11px;
-  font-weight: 400;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-day::before,
-#app-view:is(.slack-view, .judgments-view) .sm-day::after {
-  content: "";
-  height: 1px;
-  flex: 1;
-  background: var(--border);
-}
-@media (max-width: 900px) {
-  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
-    position: static;
-  }
-}
 @media (max-width: 640px) {
-  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  #app-view.slack-view .sm-toolbar {
-    flex-wrap: wrap;
-    gap: 8px 12px;
-  }
-  #app-view.slack-view .shell-search {
-    flex-basis: 100%;
-  }
-  #app-view.slack-view .dense-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  #app-view:is(.slack-view, .judgments-view) .sm-msg {
+  #app-view:is(.judgments-view) .sm-msg {
     gap: 8px;
     padding-inline: 0;
   }
@@ -5152,7 +5012,7 @@
 #app-view.errors-view .error-message summary:hover {
   color: var(--muted);
 }
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
   :is(.dense-row, .back, .shell-tab):focus-visible,
 #app-view.errors-view .error-message summary:focus-visible {
   outline: 2px solid var(--cta);

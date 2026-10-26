@@ -218,14 +218,6 @@ export const adminOperations = {
     "/scopes/:scope/auto-flagger/test",
     { ...scope, value: object },
   ),
-  slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
-  slack_messages: operation("Read a page of mirrored Slack messages.", "GET", "/slack-mirror/messages", {
-    ...scope,
-    container: string,
-    q: optionalString,
-    before: optionalString,
-    limit,
-  }),
   ambient_judgments: operation("Read ambient message judgments.", "GET", "/ambient-judgments", {
     ...scope,
     container: optionalString,
