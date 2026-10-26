@@ -140,5 +140,10 @@ test("one row can be looked up by id or thread, and only by someone who can see 
     assert.equal("spawnMeta" in byId.session, false);
     assert.equal((await get(`/v1/sessions/row?principalId=U2&id=${session.id}`)).status, 404);
     assert.equal((await get("/v1/sessions/row?principalId=U1")).status, 400);
+    const unused = await get("/v1/sessions/row?principalId=U2&threadRef=web%3AU2%3Ainbox");
+    assert.equal(unused.status, 200, "a thread with no conversation yet is an empty row, not a 404");
+    assert.deepEqual(unused.body, { session: null });
+    const hidden = await get("/v1/sessions/row?principalId=U2&threadRef=web%3AU1%3Ainbox");
+    assert.deepEqual(hidden.body, { session: null }, "someone else's thread reads as empty too");
   });
 });
