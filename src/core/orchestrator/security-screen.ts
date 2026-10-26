@@ -10,11 +10,11 @@ import {
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
+import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
-const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
 
@@ -67,7 +67,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     const model = deps.harness.models.screenSecurity;
     const observe = context.mode === "observe";
     if (!screener && !model) return observe ? { decision: "auto" } : undefined;
-    const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;
+    const timeoutMs = deps.securityScreenTimeoutMs ?? CONFIG_DEFAULTS.securityScreenTimeoutMs;
     const hook = context.hook ?? "user_input";
     let request: { origin: string; text: string; truncated: boolean } | undefined;
     if (hook === "tool_response" && context.request?.trim()) {

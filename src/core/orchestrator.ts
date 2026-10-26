@@ -175,6 +175,7 @@ import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import {
   consumeApprovalDecision,
+  loadActorGrants,
   loadApprovalLedger,
   parkApprovals,
   summarizeApproval,
@@ -656,6 +657,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
+      const actorGrants = loadActorGrants(approvalGrants, actor.id);
       const approvalOwner = (sessionId: string) => ({
         sessionId,
         request: replayableRequest(input),
@@ -876,8 +878,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (flaggedScreenedInput) {
         const existing = await deps.sessions.getByThread(conversation.threadRef);
         const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
-        for (const grant of await approvalGrants.all()) {
-          if (!samePerson(grant.actorId, actor.id)) continue;
+        for (const grant of await actorGrants()) {
           if (!resolution.approvalGrantModes[grant.scope]) continue;
           if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
           if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
@@ -1279,12 +1280,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
-      const approvalLedger = await loadApprovalLedger(
-        approvalGrants,
-        actor.id,
-        session.id,
-        resolution.approvalGrantModes,
-      );
+      const approvalLedger = loadApprovalLedger(await actorGrants(), session.id, resolution.approvalGrantModes);
       const { consume: consumeApproval, authorizeToolCall, authorizeCommand } = approvalLedger;
       const quarantineReleaseApprovals: Array<{
         command: string;
