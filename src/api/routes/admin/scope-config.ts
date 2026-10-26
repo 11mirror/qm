@@ -25,7 +25,8 @@ import {
   adminResourceManifest,
   defaultAutoFlaggerConfig,
 } from "../admin-resources.ts";
-import { type ApiCtx } from "../route.ts";
+import { isConfigured, type ApiCtx } from "../route.ts";
+import type { ConfiguredDeps } from "../../deps.ts";
 import {
   composePolicy,
   defaultOrgPolicy,
@@ -38,8 +39,8 @@ import { scopeActivity } from "./scope-activity.ts";
 import { tenant } from "../../../tenant.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
+  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
   const { res, deps, params, body } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const targetScope = params.scope!;
   const resource = params.resource!;
   const authz = await adminAt(ctx, targetScope);
@@ -89,7 +90,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       if ("error" in result)
         return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
     } catch (err) {
-      await deps.config!.refreshScope(targetScope);
+      await deps.config.refreshScope(targetScope);
       throw err;
     }
     authz.audit(`${resource}.update`, resource);
@@ -266,7 +267,7 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { summaries });
 }
 
-async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
+async function scopeEgress(deps: ConfiguredDeps, targetScope: string) {
   const scopeProfile = (await deps.sandbox?.profileFor?.(targetScope)) ?? deps.sandbox?.profile;
   const declaredEgress =
     scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
@@ -275,8 +276,8 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config!.getEgress(tenant().orgScope);
-  const targetEgress = deps.config!.getEgress(targetScope);
+  const orgEgress = deps.config.getEgress(tenant().orgScope);
+  const targetEgress = deps.config.getEgress(targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
     allowedHosts: [] as string[],
@@ -351,8 +352,8 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
 }
 
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
+  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
   const { res, deps, params, url } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const targetScope = params.scope!;
   if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
   const requestedView = url.searchParams.get("view");
@@ -375,7 +376,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const needsModels = includes("models", "governance", "onboarding");
   const needsConfig = view !== "credentials" && view !== "connectors";
   await Promise.all([
-    needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
+    needsConfig ? read("config", () => deps.config.refreshScope(targetScope)) : undefined,
     needsModels ? read("models", () => deps.refreshModels?.()) : undefined,
   ]);
   auditAs(deps, actor.id, "config.read", "config", targetScope);
