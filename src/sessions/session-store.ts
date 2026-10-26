@@ -579,7 +579,7 @@ export interface SessionStore {
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
-  purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
+  purgeLlmCaptures(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
@@ -630,7 +630,7 @@ export interface SessionStore {
 
   spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
 
-  refreshSpendRollup?(): Promise<void>;
+  refreshSpendRollup(): Promise<void>;
 
   listParticipants(): Promise<ParticipantWindow[]>;
 
