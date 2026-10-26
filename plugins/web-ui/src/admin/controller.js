@@ -136,15 +136,11 @@ export function startAdmin(host, env) {
         headers: { accept: "application/json" },
       });
       if (!res.ok) {
-        let msg = "Failed (" + res.status + ")";
         const j = await res.json().catch(() => null);
-        if (j && j.message) msg = j.message;
-        alert("Couldn't start impersonation: " + msg);
-        return;
+        return alert("Couldn't start impersonation: " + ((j && j.message) || "Failed (" + res.status + ")"));
       }
     } catch (e) {
-      alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
-      return;
+      return alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
     }
     window.open("/web-ui/", "_blank", "noopener");
   }
@@ -189,7 +185,7 @@ export function startAdmin(host, env) {
   const statusTimers = new Map();
   function setStatus(id, msg, kind, sticky = false) {
     if (id === "st-service-credentials") {
-      governanceUI.settings.credentialStatus(msg, kind || "");
+      settings.credentialStatus(msg, kind || "");
       return;
     }
     const governanceKey = governanceUI.statusKey(id);
@@ -262,7 +258,8 @@ export function startAdmin(host, env) {
     return node;
   }
   const pick = (map, key, fallback) => (Object.hasOwn(map, key) ? map[key] : fallback);
-  const credentialState = governanceUI.settings.credentialState;
+  const settings = governanceUI.settings;
+  const credentialState = settings.credentialState;
   const badge = (text, kind) => el("span", { className: "badge" + (kind ? " " + kind : ""), textContent: text });
   function deliveryFileBadges(filesPayload) {
     const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
@@ -517,8 +514,8 @@ export function startAdmin(host, env) {
   document.querySelectorAll("[data-viewlink]").forEach((button) => {
     button.onclick = () => setView(button.dataset.viewlink);
   });
-  $("add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
-  $("onboarding-add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
+  $("add-custom-provider").onclick = () => settings.openProvider(null);
+  $("onboarding-add-custom-provider").onclick = () => settings.openProvider(null);
   function route() {
     const st = urlToState();
     if (st.view === "history" && st.session) {
@@ -768,14 +765,14 @@ export function startAdmin(host, env) {
   let loadedCommandPolicyPresent = false;
   let serviceCredDirectory = [];
   let serviceCredChannels = [];
-  governanceUI.settings.configureSoul({
+  settings.configureSoul({
     formatTime: fmtTime,
     restore: async (revision) => {
       const immutable = { ...revision };
       const targetScope = scope;
       const targetGeneration = governanceReq;
-      const draftBefore = JSON.stringify(governanceUI.settings.collect("soul"));
-      const expectedVersion = governanceUI.settings.collect("soul").expectedVersion;
+      const draftBefore = JSON.stringify(settings.collect("soul"));
+      const expectedVersion = settings.collect("soul").expectedVersion;
       const confirmed = await reviewGovernanceChange({
         title: "Restore SOUL version " + immutable.version + "?",
         subtitle: "The saved instructions from this revision will replace the current SOUL.",
@@ -811,11 +808,10 @@ export function startAdmin(host, env) {
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
         return setStatus("st-soul", "Restored, but the latest version could not be refreshed.", "warn", true);
-      if (JSON.stringify(governanceUI.settings.collect("soul")) === draftBefore)
-        governanceUI.settings.load(fresh.data, targetScope, "soul");
-      else governanceUI.settings.refreshSoul(fresh.data);
-      sectionSnapshots.set("soul", governanceUI.settings.states.get("soul").baseline);
-      if (!governanceUI.settings.states.get("soul").dirty)
+      if (JSON.stringify(settings.collect("soul")) === draftBefore) settings.load(fresh.data, targetScope, "soul");
+      else settings.refreshSoul(fresh.data);
+      sectionSnapshots.set("soul", settings.states.get("soul").baseline);
+      if (!settings.states.get("soul").dirty)
         setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
     },
   });
@@ -847,14 +843,14 @@ export function startAdmin(host, env) {
     const scopeChanged = scope !== loadedGovernanceScope;
     if (requestedView === "credentials") {
       serviceCredList = [];
-      governanceUI.settings.credentialLoading();
+      settings.credentialLoading();
       void loadPersonalKeychainSummary(requestId, requestedScope);
     }
     const r = await api("GET", viewUrl(scope, requestedView));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
     if (!r.ok) {
       if (requestedView === "credentials") {
-        governanceUI.settings.credentialLoading(
+        settings.credentialLoading(
           r.status === 403 ? "You don't administer this scope." : "Could not load credentials.",
           true,
         );
@@ -880,10 +876,10 @@ export function startAdmin(host, env) {
     }
     if (requestedView === "customize") {
       savedBranding = r.data.branding || {};
-      governanceUI.settings.load(r.data, scope, "soul");
-      governanceUI.settings.load(r.data, scope, "branding");
-      void governanceUI.settings.loadFlags(r.data, scope);
-      governanceUI.settings.loadDecisions(r.data, scope);
+      settings.load(r.data, scope, "soul");
+      settings.load(r.data, scope, "branding");
+      void settings.loadFlags(r.data, scope);
+      settings.loadDecisions(r.data, scope);
     }
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
     const opts = r.data.baseModelOptions || [];
@@ -891,8 +887,8 @@ export function startAdmin(host, env) {
       for (const key of "runtime cron-runtime subagent-runtime fallback-runtime webui-models memory-embedding-model".split(
         " ",
       ))
-        governanceUI.settings.load(r.data, scope, key);
-      void governanceUI.settings.loadProviders();
+        settings.load(r.data, scope, key);
+      void settings.loadProviders();
     }
     if (requestedView === "credentials") {
       loadServiceCredDirectory(r.data);
@@ -921,7 +917,7 @@ export function startAdmin(host, env) {
           };
           append(opts, fresh.data.baseModelOptions);
           if (requestedView === "governance") governanceUI.updateCatalog(fresh.data);
-          governanceUI.settings.updateCatalog(r.data);
+          settings.updateCatalog(r.data);
           initCustomDropdowns($("view-governance"));
         })
         .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
@@ -930,8 +926,8 @@ export function startAdmin(host, env) {
   async function refreshSoulConflict() {
     const fresh = await api("GET", viewUrl(scope, view));
     if (!fresh.ok) return false;
-    governanceUI.settings.refreshSoul(fresh.data);
-    sectionSnapshots.set("soul", governanceUI.settings.states.get("soul").baseline);
+    settings.refreshSoul(fresh.data);
+    sectionSnapshots.set("soul", settings.states.get("soul").baseline);
     return true;
   }
   async function refreshServiceCredentialConflict() {
@@ -943,10 +939,7 @@ export function startAdmin(host, env) {
     loadServiceCredDirectory(fresh.data);
     const credentials = fresh.data.serviceCredentials || [];
     const refreshedEditing = credentials.find((credential) => credential.slug === scEditing);
-    if (refreshedEditing) {
-      scEditVersion = refreshedEditing.updatedAt;
-      credentialState.version = scEditVersion;
-    }
+    if (refreshedEditing) credentialState.version = refreshedEditing.updatedAt;
     renderServiceCreds(credentials);
     void loadServiceCredentialUsage(requestedScope, requestId);
     credentialState.render();
@@ -963,10 +956,10 @@ export function startAdmin(host, env) {
     );
   }
   let savedBranding = {};
-  governanceUI.settings.configureDecisions({
+  settings.configureDecisions({
     save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/decisions"), body),
   });
-  governanceUI.settings.configureFlags({
+  settings.configureFlags({
     buildSelector: buildScopeMultiSelect,
     loadChoices: async () => {
       if (!scopeDir) await loadScopeDirectory();
@@ -976,7 +969,6 @@ export function startAdmin(host, env) {
   });
 
   let scEditing = null;
-  let scEditVersion = null;
   let serviceCredList = [];
   async function loadServiceCredentialUsage(requestedScope, requestId) {
     if (!serviceCredList.length) return;
@@ -991,7 +983,7 @@ export function startAdmin(host, env) {
       })),
     );
   }
-  governanceUI.settings.configureCredentials({
+  settings.configureCredentials({
     label: serviceCredentialPrincipalLabel,
     formatTime: fmtTime,
     edit: loadScForm,
@@ -1000,11 +992,10 @@ export function startAdmin(host, env) {
   });
   function renderServiceCreds(list) {
     serviceCredList = list;
-    governanceUI.settings.loadCredentials(list, serviceCredDirectory, serviceCredChannels, scopeDir || [], scope);
+    settings.loadCredentials(list, serviceCredDirectory, serviceCredChannels, scopeDir || [], scope);
   }
   function loadScForm(c) {
     scEditing = c.slug;
-    scEditVersion = c.updatedAt;
     credentialState.begin(c);
     openScDialog();
     $("sc-name").focus();
@@ -1015,7 +1006,6 @@ export function startAdmin(host, env) {
     if (wasOpen) dialog.close();
     scStatusHome.appendChild($("st-service-credentials"));
     scEditing = null;
-    scEditVersion = null;
     credentialState.reset();
     if (wasOpen) scAddButton.focus();
   }
@@ -1148,30 +1138,30 @@ export function startAdmin(host, env) {
     orgScope: () => orgScope(),
     connectorName: (id) => connectorName(id),
     view: () => view,
-    loadCustomProviders: () => governanceUI.settings.loadProviders(),
+    loadCustomProviders: () => settings.loadProviders(),
     loaded: () => {
       viewLoadedAt.onboarding = Date.now();
     },
     navigate: (target) => openOnboardingTarget(target),
   });
 
-  governanceUI.settings.configureProviders({
+  settings.configureProviders({
     api,
     refresh: async () => {
-      await governanceUI.settings.loadProviders();
+      await settings.loadProviders();
       if (view !== "models") return;
       const requestedScope = scope;
       const requestedGeneration = governanceReq;
       const fresh = await api("GET", viewUrl(requestedScope, "models"));
       if (fresh.ok && scope === requestedScope && view === "models" && governanceReq === requestedGeneration)
-        governanceUI.settings.updateCatalog(fresh.data);
+        settings.updateCatalog(fresh.data);
     },
   });
   async function loadPersonalKeychainSummary(requestId, requestedScope) {
-    governanceUI.settings.keychainSummary(null);
+    settings.keychainSummary(null);
     const res = await api("GET", "/api/keychain?summary=1");
     if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
-    governanceUI.settings.keychainSummary(res.ok ? res.data : null);
+    settings.keychainSummary(res.ok ? res.data : null);
   }
   function openOnboardingTarget(target) {
     setView(target === "slack" ? "slack-settings" : "connectors");
@@ -1261,17 +1251,21 @@ export function startAdmin(host, env) {
     });
   }
   function governanceSaveReview(key, body) {
-    if (key === "security-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "auto";
-      const dangerous = body.posture === "dangerous";
-      return reviewGovernanceChange({
-        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
-        subtitle: "Review the immutable change below before it is applied.",
+    const before = () => JSON.parse(sectionSnapshots.get(key) || "{}");
+    const review = (current, proposed, options) =>
+      reviewGovernanceChange({
         facts: [
           ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
+          ["Current", current],
+          ["Proposed", proposed],
         ],
+        ...options,
+      });
+    if (key === "security-posture") {
+      const dangerous = body.posture === "dangerous";
+      return review(titleCase(before().posture || "auto"), titleCase(body.posture), {
+        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
+        subtitle: "Review the immutable change below before it is applied.",
         warning: dangerous
           ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
           : "This changes the effective tools and approval behavior for future turns in this scope.",
@@ -1280,16 +1274,10 @@ export function startAdmin(host, env) {
       });
     }
     if (key === "sharing-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "isolated";
       const open = body.posture === "open";
-      return reviewGovernanceChange({
+      return review(titleCase(before().posture || "isolated"), titleCase(body.posture), {
         title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
         subtitle: "This applies to future live human turns in the selected scope.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
-        ],
         warning: open
           ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
           : "Cross-context resources will again require explicit shares or grants.",
@@ -1298,15 +1286,10 @@ export function startAdmin(host, env) {
       });
     }
     if (key === "external-slack-participants") {
-      const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
-      return reviewGovernanceChange({
+      const label = (on) => (on ? "External audiences enabled" : "Internal only");
+      return review(label(!!before().on), label(body.on), {
         title: body.on ? "Allow external Slack audiences?" : "Return Slack to internal-only?",
         subtitle: "This organization-wide audience boundary applies to future Slack turns.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", before ? "External audiences enabled" : "Internal only"],
-          ["Proposed", body.on ? "External audiences enabled" : "Internal only"],
-        ],
         warning: body.on
           ? "Agent replies and anything read in a mixed Slack room can be visible to guests or Slack Connect participants. External users still cannot drive the agent."
           : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
@@ -1440,7 +1423,7 @@ export function startAdmin(host, env) {
         const fresh = await api("GET", viewUrl(requestedScope, "customize"));
         if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
         if (fresh.ok) {
-          governanceUI.settings.refreshSoul(fresh.data);
+          settings.refreshSoul(fresh.data);
           sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
           if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
         } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
@@ -1470,7 +1453,7 @@ export function startAdmin(host, env) {
   document.querySelectorAll("[data-save]").forEach((btn) => {
     btn.onclick = () => saveSetting(btn.dataset.save, btn);
   });
-  governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
+  settings.configureRuntimes({ save: (key) => saveSetting(key) });
   const credentialEdited = (e) => {
     if (e.target.matches("input, textarea, select") && e.target.closest("#card-service-credentials"))
       credentialState.changed();
@@ -1623,18 +1606,12 @@ export function startAdmin(host, env) {
   function initCustomDropdowns(root) {
     if (!(root instanceof Element)) return;
     if (root instanceof HTMLSelectElement) upgradeCustomDropdown(root);
-    root.querySelectorAll("select").forEach((sel) => upgradeCustomDropdown(sel));
+    root.querySelectorAll("select").forEach(upgradeCustomDropdown);
   }
   initCustomDropdowns($("app-view"));
-  new MutationObserver((muts) => {
-    muts.forEach((m) => {
-      m.addedNodes.forEach((n) => {
-        if (!(n instanceof HTMLElement)) return;
-        if (n instanceof HTMLSelectElement) upgradeCustomDropdown(n);
-        else initCustomDropdowns(n);
-      });
-    });
-  }).observe($("app-view"), { childList: true, subtree: true });
+  new MutationObserver((muts) =>
+    muts.forEach((m) => m.addedNodes.forEach((n) => n instanceof HTMLElement && initCustomDropdowns(n))),
+  ).observe($("app-view"), { childList: true, subtree: true });
 
   const govFlatContent = document.querySelector("#view-governance .governance-content");
   function flattenGovernanceCards() {
@@ -1878,13 +1855,8 @@ export function startAdmin(host, env) {
       return label.startsWith("cron ") ? sch.cron : label;
     }
     if (sch.everyMs != null) {
-      const units = [
-        [86400000, "d"],
-        [3600000, "h"],
-        [60000, "m"],
-        [1000, "s"],
-      ];
-      for (const [n, u] of units) if (sch.everyMs >= n && sch.everyMs % n === 0) return "every " + sch.everyMs / n + u;
+      for (const [u, n] of Object.entries({ d: 86400000, h: 3600000, m: 60000, s: 1000 }))
+        if (sch.everyMs >= n && sch.everyMs % n === 0) return "every " + sch.everyMs / n + u;
       return "every " + sch.everyMs + " ms";
     }
     return sch.firstFireAt ? "once" : "Never";
@@ -1954,16 +1926,6 @@ export function startAdmin(host, env) {
     return { text: s.createdBy || "None", cls: "mono" };
   }
 
-  let openOvMenu = null;
-  const closeOvMenus = () => {
-    if (!openOvMenu) return;
-    openOvMenu.menu.classList.add("hidden");
-    openOvMenu.btn.setAttribute("aria-expanded", "false");
-    openOvMenu = null;
-  };
-  document.addEventListener("click", closeOvMenus);
-  document.addEventListener("scroll", closeOvMenus, true);
-  window.addEventListener("resize", closeOvMenus);
   function buildScopeMultiSelect(choices, selected, onChange) {
     const row = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
     const pick = el("div.scopepick", { style: row });
@@ -2338,8 +2300,7 @@ export function startAdmin(host, env) {
     } catch {
       void 0;
     }
-    const ta = el("textarea", { value: text, style: "position: fixed; opacity: 0;" });
-    document.body.appendChild(ta);
+    const ta = document.body.appendChild(el("textarea", { value: text, style: "position: fixed; opacity: 0;" }));
     ta.select();
     let ok;
     try {
@@ -2347,7 +2308,7 @@ export function startAdmin(host, env) {
     } catch {
       ok = false;
     }
-    document.body.removeChild(ta);
+    ta.remove();
     return ok;
   }
   function copyButton(label, getText) {
