@@ -42,11 +42,7 @@ export function createIdempotencyStore(
     lastPruneAt = t;
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    void (async () => {
-      for (const r of await backing.all()) {
-        if (r.at < cutoff) await backing.delete(r.key);
-      }
-    })().catch((e: unknown) => {
+    void backing.deleteBelow("at", cutoff).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }

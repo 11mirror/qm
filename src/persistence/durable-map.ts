@@ -24,6 +24,8 @@ export interface DurableMap<T> {
   update(id: string, fn: (value: T) => T): Promise<T | null>;
   mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
   deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
+  /** Delete every row whose numeric `field` is below `value`; returns how many went. */
+  deleteBelow(field: Extract<keyof T, string>, value: number): Promise<number>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
 }
@@ -316,6 +318,13 @@ export function createPostgresMap<T>(
         await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
         return true;
       });
+    },
+    async deleteBelow(field, value) {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid field: ${field}`);
+      const res = await withBump((client) =>
+        client.query(`DELETE FROM ${table} WHERE (json->>'${field}')::float8 < $1`, [value]),
+      );
+      return res.rowCount ?? 0;
     },
     async delete(id) {
       await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));

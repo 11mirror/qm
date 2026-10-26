@@ -257,6 +257,9 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
     async deleteIf() {
       throw new Error("unused in connector token test");
     },
+    async deleteBelow() {
+      throw new Error("unused in connector token test");
+    },
     async all() {
       return [...store.values()];
     },
