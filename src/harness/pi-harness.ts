@@ -1730,7 +1730,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
       const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
-      const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
+      const turn = resumed ? { ...dispatched, history: resumed } : dispatched;
       const entry = await createTurnSession(
         withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
         turn.session.id,
