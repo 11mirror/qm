@@ -2930,7 +2930,6 @@ export function serverDeps(
     serviceCreds: built.serviceCreds,
     outbound: built.outbound,
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
-    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,
