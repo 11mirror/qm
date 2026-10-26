@@ -28,7 +28,6 @@ function bodyHash(rawBody: string): string {
   return createHash("sha256").update(rawBody).digest("hex");
 }
 
-
 function signedBodyId(rawBody: string, field: string): string {
   try {
     const b = JSON.parse(rawBody);

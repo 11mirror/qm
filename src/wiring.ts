@@ -135,7 +135,8 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createAbsurdCronQueue } from "./cron/job-queue.ts";
+import { cronJobQueue } from "./cron/job-queue.ts";
+import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
@@ -448,6 +449,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
+  jobs: JobWorker;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -2259,6 +2261,7 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  const jobs = createJobWorker(databaseUrl);
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
@@ -2268,7 +2271,7 @@ export function buildApp(
     crons,
     ...scopedTriggerDeps,
     leaderLease,
-    jobQueue: createAbsurdCronQueue(databaseUrl, config.cronFireConcurrency),
+    jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
     ...(sweepAsks ? { sweepAsks } : {}),
   });
   const suggestedActivities = createSuggestedActivityService({
@@ -2333,6 +2336,7 @@ export function buildApp(
   const webhookReceiver = createWebhookReceiver({
     webhooks,
     ...triggerDeps,
+    jobs,
     currentScopeMembers,
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
@@ -2684,6 +2688,7 @@ export function buildApp(
     scheduler,
     inbox,
     webhookReceiver,
+    jobs,
     admin,
     rateLimiter,
     errors,

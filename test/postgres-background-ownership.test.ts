@@ -60,8 +60,9 @@ test(
   "cron job queue resumes polling without terminating a prior generation callback",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
-    const { createAbsurdCronQueue } = await import("../src/cron/job-queue.ts");
-    const queue = createAbsurdCronQueue(databaseUrl!);
+    const { cronJobQueue } = await import("../src/cron/job-queue.ts");
+    const { createJobWorker } = await import("../src/jobs/job-worker.ts");
+    const queue = cronJobQueue(createJobWorker(databaseUrl!), 1);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
     const newEntered = Promise.withResolvers<void>();

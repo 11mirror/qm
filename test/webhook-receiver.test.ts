@@ -8,6 +8,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import type { JobHandler, JobWorker } from "../src/jobs/job-worker.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -36,6 +37,23 @@ type AssertNo413 = DeliverResult["status"] extends 202 | 200 | 401 | 404 ? true 
 const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
+/** In-process stand-in for the Absurd job worker: a spawn runs its handler once per key, in the background. */
+function inlineJobs(): Pick<JobWorker, "handle" | "spawn"> {
+  const handlers = new Map<string, JobHandler>();
+  const keys = new Set<string>();
+  return {
+    handle: (name, handler) => void handlers.set(name, handler),
+    async spawn(name, params, key) {
+      if (keys.has(key)) return;
+      keys.add(key);
+      inFlight++;
+      void handlers
+        .get(name)!(params)
+        .finally(() => inFlight--);
+    },
+  };
+}
+
 function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
   const webhooks = tracked(createWebhookStore(testMap(), testMap()));
   const outbound = recordingOutbound();
@@ -47,6 +65,7 @@ function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }
   };
   const receiver = createWebhookReceiver({
     webhooks,
+    jobs: inlineJobs(),
     outbound,
     idempotency: tracked(createIdempotencyStore(testMap())),
     identity,

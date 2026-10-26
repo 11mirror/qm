@@ -1,7 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { createAbsurdCronQueue } from "../src/cron/job-queue.ts";
+import { cronJobQueue } from "../src/cron/job-queue.ts";
+import { createJobWorker } from "../src/jobs/job-worker.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore } from "../src/cron/fire-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
@@ -52,7 +53,7 @@ function instance(
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
-    jobQueue: createAbsurdCronQueue(URL ?? ""),
+    jobQueue: cronJobQueue(createJobWorker(URL ?? ""), 4),
   });
   return { scheduler, crons };
 }
@@ -163,7 +164,7 @@ test(
   "cron job queue: a released slot is re-armed by the next enqueue, a consumed one is not",
   { skip, timeout: 60_000 },
   async () => {
-    const queue = createAbsurdCronQueue(URL!);
+    const queue = cronJobQueue(createJobWorker(URL!), 4);
     const seen: number[] = [];
     const job = { cronId: `rearm-${Date.now()}`, scheduledAt: Date.now() };
     await queue.start({
