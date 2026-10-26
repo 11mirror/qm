@@ -430,7 +430,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
     { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
   ]);
   f.deps.slackEnvBotToken = "bot-test";
-  f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
+  f.deps.slackWebClient = () => ({ apiCall: async () => ({ ok: true, team_id: "T123" }) });
   try {
     f.replies.push(
       { session_id: "trs_test" },
@@ -486,7 +486,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
     ]);
     f.deps.slackEnvBotToken = "bot-test";
-    f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
+    f.deps.slackWebClient = () => ({ apiCall: async () => ({ ok: true, team_id: "T123" }) });
     const ticket = await mintSignedPayload(
       {
         purpose: "slack-account-link",
