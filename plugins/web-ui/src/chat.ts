@@ -1179,6 +1179,7 @@ export function createChatSurface(
     }
     if (!sameSession) {
       chatState.inheritedExpanded = false;
+      chatState.loadingEarlier = false;
       chatState.pins = [];
       chatState.goal = null;
       chatState.turnRuntime = null;
@@ -1226,56 +1227,7 @@ export function createChatSurface(
               ${pinnedStrip()}
               <div class="message-stack">
                 ${inheritedHeader()}
-                ${
-                  earlierCount > 0
-                    ? html`<div class="earlier-messages">
-                        <button
-                          class="earlier-messages-btn"
-                          @click=${async (e: Event) => {
-                            const btn = e.currentTarget as HTMLButtonElement;
-                            btn.disabled = true;
-                            btn.textContent = "Loading earlier messages\u2026";
-                            try {
-                              const page = await fetchTranscript(
-                                s.id,
-                                anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
-                              );
-                              if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
-                              const rawRemaining = page.earlierItems ?? 0;
-                              const remaining = currentEarlierCount(s, rawRemaining);
-                              const split = inheritedTranscript(s, page.items ?? []);
-                              mountReadOnly(
-                                s,
-                                [...itemsToMessages(split.current, transcriptModel()), ...messages],
-                                remaining,
-                                rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null,
-                                [
-                                  ...itemsToMessages(split.inherited, transcriptModel()),
-                                  ...chatState.inheritedMessages,
-                                ],
-                              );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
-                              });
-                            } catch {
-                              btn.disabled = false;
-                              btn.textContent = "Show earlier messages";
-                            }
-                          }}
-                        >
-                          Show earlier messages
-                        </button>
-                      </div>`
-                    : nothing
-                }
+                ${earlierCount > 0 ? earlierNotice(() => loadEarlierReadOnly(s, messages, anchorSeq)) : nothing}
                 ${
                   shownMessages.length
                     ? shownMessages.map((m, i) => chatMessage(m, i))
@@ -1381,16 +1333,65 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat(chatState.agent);
   }
 
-  function earlierNotice(): TemplateResult {
+  function earlierNotice(load: () => Promise<void> = loadEarlierMessages): TemplateResult {
     return html`<div class="earlier-messages">
-      <button
-        class="earlier-messages-btn"
-        ?disabled=${chatState.loadingEarlier}
-        @click=${() => void loadEarlierMessages()}
-      >
+      <button class="earlier-messages-btn" ?disabled=${chatState.loadingEarlier} @click=${() => void load()}>
         ${chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages"}
       </button>
     </div>`;
+  }
+
+  function keepScrollAfterPrepend(
+    scroller: () => HTMLElement | null | undefined,
+    prepend: () => void,
+    current: (scroller: HTMLElement) => boolean = () => true,
+  ): void {
+    const before = scroller();
+    const priorHeight = before?.scrollHeight ?? 0;
+    const priorTop = before?.scrollTop ?? 0;
+    prepend();
+    requestAnimationFrame(() => {
+      const now = scroller();
+      if (!now || !current(now)) return;
+      const prev = now.style.scrollBehavior;
+      now.style.scrollBehavior = "auto";
+      now.scrollTop = priorTop + (now.scrollHeight - priorHeight);
+      now.style.scrollBehavior = prev;
+    });
+  }
+
+  async function loadEarlierReadOnly(
+    s: CoreSession,
+    messages: ReturnType<typeof itemsToMessages>,
+    anchorSeq: number | null,
+  ): Promise<void> {
+    if (chatState.loadingEarlier) return;
+    chatState.loadingEarlier = true;
+    readonlyRedraw?.();
+    try {
+      const page = await fetchTranscript(
+        s.id,
+        anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
+      );
+      if (chatState.sessionId !== s.id) return;
+      const rawRemaining = page.earlierItems ?? 0;
+      const split = inheritedTranscript(s, page.items ?? []);
+      chatState.loadingEarlier = false;
+      keepScrollAfterPrepend(
+        () => ctx.container()?.querySelector<HTMLElement>(".chat-scroll"),
+        () =>
+          mountReadOnly(
+            s,
+            [...itemsToMessages(split.current, transcriptModel()), ...messages],
+            currentEarlierCount(s, rawRemaining),
+            rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null,
+            [...itemsToMessages(split.inherited, transcriptModel()), ...chatState.inheritedMessages],
+          ),
+      );
+    } catch {
+      chatState.loadingEarlier = false;
+      readonlyRedraw?.();
+    }
   }
 
   async function loadEarlierMessages(): Promise<void> {
@@ -1412,24 +1413,20 @@ export function createChatSurface(
           ...itemsToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
-      agent.state.messages = [...earlierMessages, ...agent.state.messages];
-      const rawRemaining = page.earlierItems ?? 0;
-      chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
-      chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
-      chatState.loadingEarlier = false;
-      drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (agent !== chatState.agent || sessionId !== chatState.sessionId || scrollerNow !== scroller || !scrollerNow)
-          return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
-      });
+      const scroller = (): HTMLElement | null | undefined => chatState.host?.querySelector<HTMLElement>(".chat-scroll");
+      const before = scroller();
+      keepScrollAfterPrepend(
+        scroller,
+        () => {
+          agent.state.messages = [...earlierMessages, ...agent.state.messages];
+          const rawRemaining = page.earlierItems ?? 0;
+          chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
+          chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
+          chatState.loadingEarlier = false;
+          drawActiveChat(agent);
+        },
+        (now) => agent === chatState.agent && sessionId === chatState.sessionId && now === before,
+      );
     } catch (error) {
       reportHandledError("web:load_earlier", error);
     } finally {
