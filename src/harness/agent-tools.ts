@@ -9,6 +9,7 @@ import { memoryTools } from "./agent-tools/memory.ts";
 import { workspaceTools } from "./agent-tools/workspace.ts";
 import { computerTools } from "./agent-tools/computer.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
+export { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./agent-tools/kit.ts";
 import {
   withRetrySafety,
   withToolApprovalGate,
@@ -116,10 +117,6 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     scratchExec: config.scratchExecEnabled,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
-    execTimeoutMs: config.execTimeoutDefaultMs,
-    execTimeoutCeilingMs: config.execTimeoutMaxMs,
-    backgroundJobTtlMs: config.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
   };
 }
 
