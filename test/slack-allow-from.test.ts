@@ -50,7 +50,6 @@ test("slackAccountConfigsFromEnv parses accounts as non-singleton email-keyed co
         botToken: "xoxb-b",
         eventsMode: "http",
         signingSecret: "sig",
-        eventsPort: 3111,
         apiUrl: "https://twin.example/api",
         allowFrom: "acme.test",
       },
@@ -67,7 +66,6 @@ test("slackAccountConfigsFromEnv parses accounts as non-singleton email-keyed co
   assert.equal(accounts[0]!.denyMessage, "Staff only.");
   assert.equal(accounts[1]!.denyMessage, undefined);
   assert.equal(accounts[1]!.eventsMode, "http");
-  assert.equal(accounts[1]!.eventsPort, 3111);
 });
 
 test("slackAccountConfigsFromEnv is empty without SLACK_ACCOUNTS and fails closed on bad input", () => {

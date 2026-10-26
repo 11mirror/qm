@@ -127,7 +127,6 @@ interface DeploymentConfig {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
-  slackEventsPort?: number;
   runStore: "memory" | "postgres";
   seedSkills: boolean;
   skillsSeedDir: string;
@@ -950,14 +949,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     );
   }
   const modelGateway = modelGatewayFromEnv(env);
-  const slackEventsPort =
-    env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
-  if (
-    slackEventsPort !== undefined &&
-    (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
-  ) {
-    throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
-  }
   const publicPort = numEnvStrict("PUBLIC_PORT", env.PUBLIC_PORT);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
@@ -1041,7 +1032,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
       boolEnvStrict("CAPABILITY_TOKEN_COMPRESSION", env.CAPABILITY_TOKEN_COMPRESSION) ?? false,
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
-    ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     layerEnv: { ...env },
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,

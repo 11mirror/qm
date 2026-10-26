@@ -66,8 +66,9 @@ async function buildEnv(): Promise<Env> {
 
 function maybeStartEventPump(env: Env): import("./arga.ts").EventPump | undefined {
   if (!env.twin) return undefined;
-  const port = process.env.SLACK_EVENTS_PORT ?? "8182";
-  const targetUrl = process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${port}/slack/events`;
+  const targetUrl =
+    process.env.SLACK_EVENTS_TARGET_URL ??
+    `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`;
   const signingSecret = requireEnv("SLACK_SIGNING_SECRET");
   const pump = startEventPump({
     admin: env.twin,

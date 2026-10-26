@@ -5,7 +5,7 @@ import { redeliverChannelMessage, type TwinAdmin } from "./arga.ts";
 function pumpTarget(): { signingSecret: string; targetUrl: string } {
   return {
     signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-    targetUrl: `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`,
+    targetUrl: `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`,
   };
 }
 

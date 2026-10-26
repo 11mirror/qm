@@ -52,10 +52,8 @@ export async function startSlackPlugin(
   if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
   if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
     throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort))
-    throw new Error(
-      "Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) and eventsPort (SLACK_EVENTS_PORT) in http events mode",
-    );
+  if (!cfg.receiverFactory && EVENTS_MODE === "http" && !cfg.signingSecret)
+    throw new Error("Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) in http events mode");
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -131,9 +129,9 @@ export async function startSlackPlugin(
     return EVENTS_MODE === "http"
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
-          port: cfg.eventsPort!,
           capMs: cfg.ackCapMs,
           staging,
+          serve: (handler) => core.slack.serveEvents(cfg.accountId ?? "", handler),
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,
