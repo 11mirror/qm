@@ -2,7 +2,6 @@ import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
-import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
@@ -532,7 +531,6 @@ export function buildApp(
   config: Config,
   overrides: {
     securityScreener?: SecurityScreener;
-    decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     harness?: Harness;
@@ -1297,25 +1295,24 @@ export function buildApp(
   };
   const decide = createDecisionHooks(
     decisions,
-    overrides.decisionBackend ??
-      createDecisionBackend({
-        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway?.apiKey
-          ? {
-              gateway: {
-                url: config.modelGateway.url,
-                apiKey: config.modelGateway.apiKey,
-                ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-              },
-            }
-          : {}),
-        credential: async (slug) => {
-          const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
-            : null;
-          return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
-        },
-      }),
+    createDecisionBackend({
+      providers: async (ids) => (await decisions?.providers(ids)) ?? [],
+      ...(config.modelGateway?.apiKey
+        ? {
+            gateway: {
+              url: config.modelGateway.url,
+              apiKey: config.modelGateway.apiKey,
+              ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
+            },
+          }
+        : {}),
+      credential: async (slug) => {
+        const rec = keychain
+          ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
+          : null;
+        return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
+      },
+    }),
     auditLog,
   );
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);

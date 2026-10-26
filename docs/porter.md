@@ -390,7 +390,6 @@ grep for that line rather than assuming the container's own metadata block is in
 | `PORTER_DEPLOY_URL`          | Porter API host, when it isn't `https://dashboard.porter.run`                                     |
 | `PORTER_DEPLOY_RUNNER_IMAGE` | Image published apps boot from (defaults to `ghcr.io/porter-dev/qm-app-runner:latest`)            |
 | `PORTER_DEPLOY_VISIBILITY`   | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress  |
-| `PORTER_DEPLOY_TTL_SEC`      | Reap app bodies after this long                                                                   |
 | `SANDBOX_EGRESS_PROXY_URL`   | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see above)    |
 | `SANDBOX_NAME_PREFIX`        | Prefix for sandbox and app names on the cluster                                                   |
 | `SANDBOX_MAX_LIFETIME_SEC`   | Porter retires an agent computer's body after this long (default 8h); `$HOME` stays on its volume |
