@@ -1,3 +1,12 @@
+import type { TurnCtx } from "./turn-context.ts";
+import type { InboundScreen } from "./inbound-screen.ts";
+import type { frameTurnPrompt } from "./turn-prompt.ts";
+import type { ApprovalLedger, QuarantineReleaseApproval } from "./approvals.ts";
+import type { buildTurnTools } from "./turn-tools.ts";
+import type { prepareTurnInput } from "./turn-input.ts";
+import type { selectTurnRuntime } from "./turn-runtime.ts";
+import type { SecurityClassifier } from "./security-screen.ts";
+import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
 import { SECURITY_TOOL_RESULT_QUARANTINE } from "../../audit/audit-log.ts";
 import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -5,13 +14,16 @@ import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
 import { goalView } from "../../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
-import { type TurnRuntime } from "../../types.ts";
+import { type Destination, type TurnRuntime } from "../../types.ts";
+import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
+import { reachPost } from "../../reach/reach.ts";
 import type { GapPhase, Lease } from "../../sessions/session-store.ts";
 import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
+import { forModelContext } from "../../harness/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -31,22 +43,18 @@ import {
   materializeInbound,
   safeAttachmentName,
 } from "../attachments.ts";
-import { reportFailure, swallowAs } from "../../util/errors.ts";
+import { runtimeSwitchNote } from "../turn-resume.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { absoluteAppLinks } from "../../util/markdown.ts";
+import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
-import { isScreenableTextAttachment } from "./turn-helpers.ts";
+import { isScreenableTextAttachment, stripAckPrefix } from "./turn-helpers.ts";
+import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
-import type { TurnCtx } from "./turn-context.ts";
-import type { InboundScreen } from "./inbound-screen.ts";
-import type { frameTurnPrompt } from "./turn-prompt.ts";
-import type { ApprovalLedger, QuarantineReleaseApproval } from "./approvals.ts";
-import type { buildTurnTools } from "./turn-tools.ts";
-import type { prepareTurnInput } from "./turn-input.ts";
-import type { selectTurnRuntime } from "./turn-runtime.ts";
-import type { SecurityClassifier } from "./security-screen.ts";
-
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
+const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 export interface TurnRunState {
   toolCalls: number;
@@ -55,6 +63,7 @@ export interface TurnRunState {
   firstTokenMarked: boolean;
   turnRuntime?: TurnRuntime;
   runtimeHandoffs: number;
+  contextRecovered: boolean;
   remainingDocumentBytes: number;
   remainingDocumentCount: number;
   remainingDocumentTokens: number;
@@ -627,4 +636,121 @@ export function createHarnessSegment(
     return turnResult;
   };
   return runHarnessSegment;
+}
+
+export async function runSegments(
+  ctx: TurnCtx,
+  turn: {
+    framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
+    turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
+    prepared: Awaited<ReturnType<typeof prepareTurnInput>>;
+    selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
+    strictReadOnly: boolean;
+    session: Session;
+    run: TurnRunState;
+    lease: Lease;
+    turnAbort: AbortController;
+    historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
+    turnStart: number;
+    runHarnessSegment: ReturnType<typeof createHarnessSegment>;
+    compactRecent: ReturnType<typeof createCompaction>["compactRecent"];
+  },
+) {
+  const { deps, input, actor, withManagedRosterVersion, resolution, scopeId, filterHistory } = ctx;
+  const { defaultDestination } = turn.framed;
+  const { surfaceToolDeps, spine, spineFirst, postKeys, postProvenance } = turn.turnTools;
+  const { inbound, importedOverheard, priorTurns, baseText, turnInput, isPollFire } = turn.prepared;
+  const { effectiveTurnWallClockMs, adoptRuntime, runtimeState } = turn.selected;
+  const { strictReadOnly, session, run, lease, turnAbort, historyWindow, turnStart, runHarnessSegment, compactRecent } =
+    turn;
+  const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
+    let segment = await runHarnessSegment(...args);
+    while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
+      if (++run.runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
+      if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
+        throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
+      const recovery = "context" in segment.runtimeHandoff;
+      if ("choice" in segment.runtimeHandoff) {
+        await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
+      }
+      let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
+      if (recovery)
+        resumedHistory = await withManagedRosterVersion(() =>
+          compactRecent({
+            session,
+            lease,
+            visibleHistory: resumedHistory,
+            scopeId,
+            orgScopeId: resolution.orgScopeId,
+            actorId: actor.id,
+            ...(runtimeState.requestedRuntime.modelId ? { model: runtimeState.requestedRuntime.modelId } : {}),
+            cancel: turnAbort.signal,
+          }),
+        );
+      run.contextRecovered ||= recovery;
+      turnAbort.signal.throwIfAborted();
+      segment = await runHarnessSegment(
+        runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
+          (recovery && !resumedHistory.some((entry) => isUserMessage(entry) && !!entry.text?.startsWith(baseText))
+            ? `\nCurrent request:\n${baseText}`
+            : ""),
+        inbound.images.length ? { images: inbound.images } : {},
+        { history: resumedHistory },
+      );
+    }
+    return {
+      ...segment,
+      ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
+    };
+  };
+  const postToDefault = async (outbound: Outbound, destination: Destination, text: string): Promise<void> => {
+    const key = postKeys.key(destination, postKeys.take());
+    await reachPost({ outbound, destination, text, idempotencyKey: key, provenance: postProvenance(key) });
+    spine.surfaceOutboundCount += 1;
+    if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+  };
+  let result = await runHarnessTurn(turnInput, {
+    ...(priorTurns?.length ? { priorTurns } : {}),
+    ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
+    ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
+    ...(inbound.images.length ? { images: inbound.images } : {}),
+  });
+  if (
+    input.addressed &&
+    !strictReadOnly &&
+    input.surfaceTools &&
+    surfaceToolDeps &&
+    !input.cancel?.aborted &&
+    spine.surfaceOutboundCount === 0 &&
+    !result.silent &&
+    !result.stopped
+  ) {
+    const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
+    if (primaryReply && defaultDestination && deps.outbound) {
+      try {
+        await postToDefault(deps.outbound, defaultDestination, primaryReply);
+      } catch (e) {
+        reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
+      }
+    }
+    if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
+      const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
+      result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {
+        history: nudgeHistory,
+      });
+      if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
+        const fallback = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
+        if (fallback && defaultDestination && deps.outbound) {
+          try {
+            await postToDefault(deps.outbound, defaultDestination, fallback);
+          } catch (e) {
+            console.error(`[orchestrator] shed-reply fallback delivery failed session=${session.id}:`, errMessage(e));
+          }
+        } else {
+          console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
+        }
+      }
+    }
+  }
+  return result;
 }

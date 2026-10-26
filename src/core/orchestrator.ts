@@ -2,7 +2,6 @@ import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../types.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
-import { loadProtocolFile } from "../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachPost } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
@@ -12,17 +11,15 @@ import { isOverheard, isUserMessage, type Item } from "../sessions/items.ts";
 import { renderComputerBlock, renderSandboxProfiles } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import type { GapWork, HarnessDetectResult } from "../harness/harness.ts";
-import { forModelContext } from "../harness/context-compaction.ts";
 import { securityScreenPayload, UNSCREENED_REASON } from "../security/security-posture.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { environmentNote, inboundIssuesNote } from "./attachments.ts";
-import { findTrailingPartialTurn, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
+import { findTrailingPartialTurn, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
-import { NonRetryableTurnError } from "./turn-error.ts";
 import { personKey } from "../directory/person.ts";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -37,7 +34,7 @@ import { finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { buildTurnTools } from "./orchestrator/turn-tools.ts";
 import { prepareTurnInput } from "./orchestrator/turn-input.ts";
 import { selectTurnRuntime } from "./orchestrator/turn-runtime.ts";
-import { createHarnessSegment, type TurnRunState } from "./orchestrator/turn-segment.ts";
+import { createHarnessSegment, runSegments, type TurnRunState } from "./orchestrator/turn-segment.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
@@ -53,8 +50,6 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
-
-const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 const DETECT_HISTORY_TAIL = 400;
 
@@ -399,6 +394,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnProgress: 0,
         firstTokenMarked: false,
         runtimeHandoffs: 0,
+        contextRecovered: false,
         remainingDocumentBytes: 0,
         remainingDocumentCount: 0,
         remainingDocumentTokens: 0,
@@ -492,7 +488,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       let tailOwnsCleanup = false;
       let leaseReleased = false;
-      let contextRecovered = false;
       const turnAbort = new AbortController();
       if (input.cancel?.aborted) turnAbort.abort();
       else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
@@ -647,7 +642,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           captureDependencies,
           blobTransfer,
         });
-        const { spine, postKeys, spineFirst, postProvenance, turnKey, surfaceToolDeps, attachStaging } = turnTools;
+        const { spine, spineFirst, postProvenance, turnKey, surfaceToolDeps, attachStaging } = turnTools;
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
@@ -697,22 +692,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           compactContextIfNeeded,
           classifySecurityData,
         });
-        contextRecovered = prepared.contextRecovered;
+        run.contextRecovered = prepared.contextRecovered;
         run.remainingDocumentBytes = prepared.remainingDocumentBytes;
         run.remainingDocumentCount = prepared.remainingDocumentCount;
         run.remainingDocumentTokens = prepared.remainingDocumentTokens;
-        const {
-          inbound,
-          inboundIssues,
-          importedOverheard,
-          priorTurns,
-          partial,
-          baseText,
-          approvalReplay,
-          resume,
-          turnInput,
-          isPollFire,
-        } = prepared;
+        const { inboundIssues, partial, approvalReplay, resume, turnInput, isPollFire } = prepared;
         const turnStart = Date.now();
         const emittedEntries: Item[] = [];
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
@@ -732,7 +716,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : undefined;
         const selected = await selectTurnRuntime(ctx, { session, isRetry, controlClaims, scopeAttestation });
-        const { effectiveTurnWallClockMs, restoredRuntime, adoptRuntime, runtimeState } = selected;
+        const { restoredRuntime } = selected;
         const runHarnessSegment = createHarnessSegment(ctx, {
           screen: screened.screen,
           framed,
@@ -761,113 +745,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           classifySecurityData,
         });
         run.runtimeHandoffs = restoredRuntime ? 1 : 0;
-        const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
-          let segment = await runHarnessSegment(...args);
-          while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
-            if (++run.runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
-            if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
-              throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
-            const recovery = "context" in segment.runtimeHandoff;
-            if ("choice" in segment.runtimeHandoff) {
-              await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-            }
-            let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
-            if (recovery)
-              resumedHistory = await withManagedRosterVersion(() =>
-                compactRecent({
-                  session,
-                  lease,
-                  visibleHistory: resumedHistory,
-                  scopeId,
-                  orgScopeId: resolution.orgScopeId,
-                  actorId: actor.id,
-                  ...(runtimeState.requestedRuntime.modelId ? { model: runtimeState.requestedRuntime.modelId } : {}),
-                  cancel: turnAbort.signal,
-                }),
-              );
-            contextRecovered ||= recovery;
-            turnAbort.signal.throwIfAborted();
-            segment = await runHarnessSegment(
-              runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
-                (recovery && !resumedHistory.some((entry) => isUserMessage(entry) && !!entry.text?.startsWith(baseText))
-                  ? `\nCurrent request:\n${baseText}`
-                  : ""),
-              inbound.images.length ? { images: inbound.images } : {},
-              { history: resumedHistory },
-            );
-          }
-          return {
-            ...segment,
-            ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
-          };
-        };
-        let result = await runHarnessTurn(turnInput, {
-          ...(priorTurns?.length ? { priorTurns } : {}),
-          ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
-          ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
-          ...(inbound.images.length ? { images: inbound.images } : {}),
+        const result = await runSegments(ctx, {
+          framed,
+          turnTools,
+          prepared,
+          selected,
+          strictReadOnly,
+          session,
+          run,
+          lease,
+          turnAbort,
+          historyWindow,
+          turnStart,
+          runHarnessSegment,
+          compactRecent,
         });
-        if (
-          input.addressed &&
-          !strictReadOnly &&
-          input.surfaceTools &&
-          surfaceToolDeps &&
-          !input.cancel?.aborted &&
-          spine.surfaceOutboundCount === 0 &&
-          !result.silent &&
-          !result.stopped
-        ) {
-          // The model already wrote a reply as plain assistant text — deliver that text
-          // directly instead of nudging it to re-post (a nudge here re-sends near-identical
-          // text, which surfaces that render assistant entries show twice).
-          const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
-          if (primaryReply && defaultDestination && deps.outbound) {
-            try {
-              const directKey = postKeys.key(defaultDestination, postKeys.take());
-              await reachPost({
-                outbound: deps.outbound,
-                destination: defaultDestination,
-                text: primaryReply,
-                idempotencyKey: directKey,
-                provenance: postProvenance(directKey),
-              });
-              spine.surfaceOutboundCount += 1;
-              if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-            } catch (e) {
-              reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
-            }
-          }
-          if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
-            const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
-            result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {
-              history: nudgeHistory,
-            });
-            if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-              const fallback = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
-              if (fallback && defaultDestination && deps.outbound) {
-                try {
-                  const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
-                  await reachPost({
-                    outbound: deps.outbound,
-                    destination: defaultDestination,
-                    text: fallback,
-                    idempotencyKey: fallbackKey,
-                    provenance: postProvenance(fallbackKey),
-                  });
-                  spine.surfaceOutboundCount += 1;
-                  if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-                } catch (e) {
-                  console.error(
-                    `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
-                    errMessage(e),
-                  );
-                }
-              } else {
-                console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
-              }
-            }
-          }
-        }
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
@@ -975,7 +867,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
-        if (!contextRecovered && !turnAbort.signal.aborted)
+        if (!run.contextRecovered && !turnAbort.signal.aborted)
           scheduleBackgroundCompaction({
             sessionId: session.id,
             scopeId,
