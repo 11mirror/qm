@@ -494,6 +494,9 @@ export function decomposeGapPhases(
 ): GapPhases | undefined {
   if (!gapWindow || gapWindow.gapStart === undefined || gap === null) return undefined;
   const { gapStart, gapEnd } = gapWindow;
+  const tagged = intervals
+    .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
+    .map((w) => ({ start: w.start, end: w.end }));
   const byPhase = new Map<GapPhase, Array<{ start: number; end: number }>>();
   for (const w of intervals) {
     if (w.end <= gapStart || w.start >= gapEnd) continue;
@@ -512,13 +515,7 @@ export function decomposeGapPhases(
     }
   }
   if (marks?.onPayload !== undefined && marks.onPayload > gapStart) {
-    const toolBefore = unionMs(
-      intervals
-        .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-        .map((w) => ({ start: w.start, end: w.end })),
-      gapStart,
-      marks.onPayload,
-    );
+    const toolBefore = unionMs(tagged, gapStart, marks.onPayload);
     const glue = Math.max(0, marks.onPayload - gapStart - toolBefore);
     if (glue > 0) {
       phases.dispatch_glue = glue;
@@ -526,13 +523,7 @@ export function decomposeGapPhases(
       const inWindow = (t: number | undefined): boolean => t !== undefined && t >= gapStart && t <= marks.onPayload!;
       let loopReentry = 0;
       if (inWindow(marks.prepareNextTurn)) {
-        const toolBeforeReentry = unionMs(
-          intervals
-            .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-            .map((w) => ({ start: w.start, end: w.end })),
-          gapStart,
-          marks.prepareNextTurn!,
-        );
+        const toolBeforeReentry = unionMs(tagged, gapStart, marks.prepareNextTurn!);
         loopReentry = Math.min(glue, Math.max(0, marks.prepareNextTurn! - gapStart - toolBeforeReentry));
       }
       let contextAssemble = 0;
@@ -553,13 +544,7 @@ export function decomposeGapPhases(
           const firstEntry = Math.min(...bodySpans.map((w) => w.start));
           const lastExit = Math.max(...bodySpans.map((w) => w.end));
           const bodyUnion = unionMs(bodySpans, gapStart, reentryEnd);
-          const taggedInside = unionMs(
-            intervals
-              .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-              .map((w) => ({ start: w.start, end: w.end })),
-            firstEntry,
-            lastExit,
-          );
+          const taggedInside = unionMs(tagged, firstEntry, lastExit);
           const preTool = Math.min(loopReentry, Math.max(0, firstEntry - gapStart));
           const inToolUntagged = Math.min(loopReentry - preTool, Math.max(0, bodyUnion - taggedInside));
           const postTool = Math.min(loopReentry - preTool - inToolUntagged, Math.max(0, reentryEnd - lastExit));
@@ -1710,12 +1695,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       const ref: TurnSession["ref"] = {
         current: dispatched.tools,
         documents: dispatched.documents,
-        runtimeHandoff: undefined,
         runtimeMutationPending: false,
         runtimeInFlight: new Set(),
         runtimeActorId: dispatched.runtimeActorId,
         pendingApprovals: [],
-        pausedOnApproval: undefined,
         silentRequested: false,
         pollFire: !!dispatched.pollFire,
         screenToolResult: dispatched.screenToolResult,
