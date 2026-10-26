@@ -59,10 +59,8 @@ export async function bootTenant(
       })
     : null;
 
-  await built.config.hydrate?.();
+  await built.start();
   await built.refreshCustomProviders();
-  await built.identity.hydrate();
-  await built.deploymentLayerReady;
   built.deploymentLayerRefresh.start();
   built.runtime.start();
 

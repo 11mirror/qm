@@ -157,9 +157,7 @@ import {
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   rosterAdmits,
-  type CanReadScope,
   type CanManageScope,
-  type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
@@ -405,6 +403,8 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
+  /** Startup I/O (store hydration, deployment layer, skill seeding); buildApp itself only constructs. */
+  start: () => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
@@ -412,7 +412,6 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
@@ -540,17 +539,6 @@ export function buildApp(
   }
   mkdirSync(config.dataDir, { recursive: true });
 
-  const membership: {
-    canReadScope?: CanReadScope;
-    canManageScope?: CanManageScope;
-    canUseSandboxScope?: CanManageScope;
-    managesArtifactHome?: ManagesArtifactHome;
-  } = {};
-  const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
-    manages: (principalId, scopeId, authoredBy) =>
-      membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
-    resolveFiles: (refs) => files.resolveByIds(refs),
-  });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   registerAbsurdSchema(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
@@ -594,7 +582,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -602,7 +589,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     advisoryLock,
@@ -611,6 +597,32 @@ export function buildApp(
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
+  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
+    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+  });
+  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const directory = createPostgresDirectoryStore(databaseUrl);
+  const projects = createProjectStore(artifactMap<Project>("projects"), {
+    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
+    advisoryLock,
+  });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
+  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const managesArtifactHome = createManagesArtifactHome(
+    { managedGroups: projects, directory, identity, teams },
+    canManageScope,
+  );
+  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const canUseSandboxScope: CanManageScope = async (actorId, scopeId) =>
+    identity.isInternal(identity.classify(actorId)) &&
+    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
+    manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const decisions = createPostgresDecisionStore(databaseUrl);
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
@@ -652,35 +664,46 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
   const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
-  let skillsReady: Promise<void>;
-  if (config.seedSkills) {
-    const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-          respectArchived: true,
-        });
-      }
-    };
-    skillsReady = Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-    ]).then(() => undefined);
-  } else {
-    skillsReady = deploymentLayerReady.then(
+  const installCatalogs = async (): Promise<void> => {
+    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+    for (const dir of config.pluginSkillDirs) {
+      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
+      await installSeedSkills(skills, {
+        dir,
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+        respectArchived: true,
+      });
+    }
+  };
+  let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
+  // Startup I/O: hydrate stores, load the deployment layer, seed skill catalogs. Runs once, on the first call.
+  const startOnce = () => {
+    if (started) return started;
+    const layerReady = deploymentLayerStore.hydrate();
+    const layerSettled = layerReady.then(
       () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+      (e: unknown) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
-  }
+    const skillsReady = config.seedSkills
+      ? Promise.all([
+          installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+          layerSettled,
+        ]).then(() => undefined)
+      : layerSettled;
+    if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
+    started = {
+      ready: Promise.all([configStore.hydrate?.(), identity.hydrate(), layerReady]).then(() => {}),
+      skillsReady,
+    };
+    started.ready.catch(reportFailureAs("startup: hydrate stores", undefined));
+    return started;
+  };
+  const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
   const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
@@ -733,16 +756,11 @@ export function buildApp(
     leaderLease,
     createSweeper,
   });
-  // Session storage is built further down; trace-derived providers only read it after the first turn.
-  const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionItems: (sessionId) => {
-        if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
-      },
+      sessionItems: (sessionId) => sessions.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW }),
     }),
     (scope) => memoryTidy.ensure(scope),
   );
@@ -983,7 +1001,7 @@ export function buildApp(
       );
       return { egressToken };
     },
-    canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
+    canUseScope: canUseSandboxScope,
   });
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
@@ -1063,8 +1081,8 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
-  if (config.brokerCredentials?.length) {
-    const reserved = new Set(config.brokerCredentials.map((c) => c.slug));
+  const warnShadowedBrokerCredentials = (brokerCredentials: NonNullable<Config["brokerCredentials"]>) => {
+    const reserved = new Set(brokerCredentials.map((c) => c.slug));
     void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
       (stored) => {
         const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
@@ -1074,7 +1092,7 @@ export function buildApp(
       (error) =>
         console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
     );
-  }
+  };
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
@@ -1095,8 +1113,6 @@ export function buildApp(
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
   const modelGateway = createModelGateway();
 
-  const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
-  memorySessions.store = sessions;
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) =>
@@ -1467,10 +1483,6 @@ export function buildApp(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
     );
   }
-  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
-    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
-  });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     harness: harness.models,
     memory: baseMemory,
@@ -1478,26 +1490,6 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = createPostgresDirectoryStore(databaseUrl);
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
-    advisoryLock,
-  });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
-  const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams },
-    canManageScope,
-  );
-  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
-  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
-  membership.canReadScope = canReadScope;
-  membership.canManageScope = canManageScope;
-  membership.canUseSandboxScope = async (actorId, scopeId) =>
-    identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
-  membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
@@ -1621,7 +1613,6 @@ export function buildApp(
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
   };
-  const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
     staleRunningMs: config.runMaxAgeMs,
@@ -1631,17 +1622,17 @@ export function buildApp(
     ...cronsBase,
     async create(input) {
       const cron = await cronsBase.create(input);
-      cronChanged.notify?.(cron.id);
+      scheduler.notifyChanged(cron.id);
       return cron;
     },
     async update(id, patch) {
       const cron = await cronsBase.update(id, patch);
-      cronChanged.notify?.(id);
+      scheduler.notifyChanged(id);
       return cron;
     },
     async setEnabled(id, enabled) {
       await cronsBase.setEnabled(id, enabled);
-      cronChanged.notify?.(id);
+      scheduler.notifyChanged(id);
     },
     async delete(id) {
       await cronsBase.delete(id);
@@ -1803,7 +1794,39 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const liveFallback = async (
+    container: string,
+    opts?: { limit?: number },
+  ): Promise<Array<{
+    container: string;
+    ts: string;
+    authorId?: string;
+    authorName?: string;
+    text: string;
+    createdAt: number;
+  }> | null> => {
+    const puller = orchestratorDeps.surfaceContext;
+    if (!puller) return null;
+    const result = await puller.pull("slack", {
+      conversationTarget: container,
+      ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
+    });
+    if (!result) return null;
+    return (result.messages as Array<Record<string, unknown>>).map((m) => ({
+      container,
+      ts: String(m.ts ?? ""),
+      ...(m.authorId ? { authorId: String(m.authorId) } : {}),
+      ...((m.author ?? m.authorName) ? { authorName: String(m.author ?? m.authorName) } : {}),
+      text: String(m.text ?? ""),
+      createdAt: Date.now(),
+    }));
+  };
+  const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
+  const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
   const orchestratorDeps: OrchestratorDeps = {
+    channelPolicy,
+    surfaceCache,
+    slackContextSource: config.slackContextSource ?? "live",
     surfaceLabel: chatSurfaces.label,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
@@ -1962,35 +1985,6 @@ export function buildApp(
         lastReapAt = Date.now();
       });
   };
-  const liveFallback = async (
-    container: string,
-    opts?: { limit?: number },
-  ): Promise<Array<{
-    container: string;
-    ts: string;
-    authorId?: string;
-    authorName?: string;
-    text: string;
-    createdAt: number;
-  }> | null> => {
-    const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
-    const result = await puller.pull("slack", {
-      conversationTarget: container,
-      ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
-    });
-    if (!result) return null;
-    return (result.messages as Array<Record<string, unknown>>).map((m) => ({
-      container,
-      ts: String(m.ts ?? ""),
-      ...(m.authorId ? { authorId: String(m.authorId) } : {}),
-      ...((m.author ?? m.authorName) ? { authorName: String(m.author ?? m.authorName) } : {}),
-      text: String(m.text ?? ""),
-      createdAt: Date.now(),
-    }));
-  };
-  const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
-  const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
@@ -2278,9 +2272,6 @@ export function buildApp(
         }
       : {},
   );
-  orchestratorDeps.channelPolicy = channelPolicy;
-  orchestratorDeps.surfaceCache = surfaceCache;
-  orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
@@ -2364,7 +2355,6 @@ export function buildApp(
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError(
@@ -2743,7 +2733,7 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    deploymentLayerReady,
+    start: () => startOnce().ready,
     deploymentLayerRefresh,
     sessions,
     runs,

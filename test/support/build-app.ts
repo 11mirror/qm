@@ -12,10 +12,10 @@ export function stopAtEnd(app: BuiltApp): BuiltApp {
 }
 
 export function buildApp(config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}): BuiltApp {
-  return stopAtEnd(
-    buildProductionApp(
-      { anthropicApiKey: "test-anthropic-key", ...config },
-      { harness: createMockHarness(), ...overrides },
-    ),
+  const app = buildProductionApp(
+    { anthropicApiKey: "test-anthropic-key", ...config },
+    { harness: createMockHarness(), ...overrides },
   );
+  void app.start().catch(() => {}); // start() reports its own failures
+  return stopAtEnd(app);
 }
