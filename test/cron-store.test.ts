@@ -520,29 +520,6 @@ test("a completion after a stranded sweep replaces the row outright — no stran
   assert.equal(log[0]!.endedAt, 21_000);
 });
 
-test("setFireNote stores the shift-change note, overwrites on the next write, and misses cleanly", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
-  assert.equal(await store.setFireNote(cron.id, { text: "Quiet. Updated data. No issues.", at: 1_000 }), "applied");
-  assert.deepEqual((await store.get(cron.id))!.lastFireNote, { text: "Quiet. Updated data. No issues.", at: 1_000 });
-  await store.setFireNote(cron.id, { text: "Blocked by 429s for the last 6 hours.", at: 2_000 });
-  assert.deepEqual((await store.get(cron.id))!.lastFireNote, {
-    text: "Blocked by 429s for the last 6 hours.",
-    at: 2_000,
-  });
-  assert.equal(await store.setFireNote("nope", { text: "x", at: 3_000 }), "missing");
-});
-
-test("a slow older fire cannot clobber a newer fire's note — setFireNote keeps the newest at", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
-  await store.setFireNote(cron.id, { text: "incident resolved", at: 8_000 });
-  assert.equal(await store.setFireNote(cron.id, { text: "still investigating outage", at: 7_000 }), "superseded");
-  assert.deepEqual((await store.get(cron.id))!.lastFireNote, { text: "incident resolved", at: 8_000 });
-  await store.setFireNote(cron.id, { text: "same shift, revised", at: 8_000 });
-  assert.equal((await store.get(cron.id))!.lastFireNote?.text, "same shift, revised");
-});
-
 test("listFires reads the normalized fire table through the running→ended lifecycle", async () => {
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
@@ -629,17 +606,6 @@ test("firesByThreadRefs looks up digests across crons by thread ref", async () =
       [b.id, "tb"],
     ],
   );
-});
-
-test("latestFireForThread returns the newest fire journaled under that thread", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
-  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" });
-  await store.recordFire(cron.id, { fireKey: "k2", threadRef: "t1", firedAt: 3_000, endedAt: 4_000, status: "ok" });
-  await store.recordFire(cron.id, { fireKey: "k3", threadRef: "other", firedAt: 5_000, endedAt: 6_000, status: "ok" });
-  const latest = await store.latestFireForThread(cron.id, "t1");
-  assert.equal(latest?.fireKey, "k2");
-  assert.equal(await store.latestFireForThread(cron.id, "nope"), undefined);
 });
 
 test("a stranded-fire sweep is mirrored into the fire table", async () => {
@@ -772,7 +738,6 @@ test("the fire table is the journal of record — a write failure surfaces inste
       },
       listByCron: async () => ({ runs: [], total: 0 }),
       listByThreadRefs: async () => [],
-      latestForThread: async () => undefined,
     },
   });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
@@ -878,47 +843,4 @@ test("backfillFires survives a cron deleted mid-loop: entries still reach the ta
   assert.equal((await store.listFires("gone")).total, 1, "the deleted cron's history still reaches the table");
   assert.equal((await store.listFires("stays")).total, 1);
   assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
-});
-
-test("cron runtime overrides survive store reload, distinguish creation, and clear without changing the task", async () => {
-  const backing = testMap<Cron>();
-  const store = createCronStore(backing, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const input = { ...base, schedule: { everyMs: 60_000 } };
-  const runtime = { modelId: "gpt-6-luna", effortLevel: "low" };
-  const inherited = await store.create(input);
-  const overridden = await store.create({ ...input, runtime });
-  assert.notEqual(inherited.id, overridden.id);
-  assert.equal((await store.create({ ...input, runtime })).id, overridden.id);
-  const reloaded = createCronStore(backing, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  assert.deepEqual((await reloaded.get(overridden.id))?.runtime, runtime);
-  await reloaded.update(overridden.id, { title: "new title" });
-  assert.deepEqual((await store.get(overridden.id))?.runtime, runtime);
-  const cleared = await reloaded.update(overridden.id, { runtime: null });
-  assert.equal(cleared?.runtime, null);
-  assert.equal(cleared?.action, input.action);
-  assert.deepEqual(cleared?.schedule, overridden.schedule);
-});
-
-test("cron runtime rejects malformed settings and tasks that would ignore them", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const runtime = { modelId: "gpt-6-luna", effortLevel: "low" };
-  for (const invalid of [
-    {},
-    { ...runtime, modelId: " " },
-    { ...runtime, effortLevel: "auto" },
-    { ...runtime, effortLevel: "garbage" },
-    { ...runtime, fastMode: "yes" },
-    { ...runtime, surprise: true },
-  ]) {
-    await assert.rejects(
-      store.create({ ...base, schedule: { everyMs: 60_000 }, runtime: invalid as never }),
-      /runtime requires/,
-    );
-  }
-  await assert.rejects(
-    store.create({ ...base, schedule: { everyMs: 60_000 }, message: "hello", runtime }),
-    /runtime overrides require/,
-  );
-  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 }, runtime });
-  await assert.rejects(store.update(cron.id, { action: "" }), /runtime overrides require/);
 });

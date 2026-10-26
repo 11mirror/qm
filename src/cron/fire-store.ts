@@ -19,7 +19,6 @@ export interface CronFireStore {
   backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
-  latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
 }
 
 interface FireColumn {
@@ -250,16 +249,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         [[...threadRefs]],
       );
       return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
-    },
-    async latestForThread(cronId, threadRef) {
-      const rows = await q(
-        `SELECT ${FIRE_COLUMNS} FROM cron_fires
-          WHERE cron_id = $1 AND thread_ref = $2
-          ORDER BY fired_at DESC, fire_key DESC
-          LIMIT 1`,
-        [cronId, threadRef],
-      );
-      return rows[0] ? rowToEntry(rows[0]) : undefined;
     },
   };
 }
