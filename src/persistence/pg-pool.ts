@@ -173,7 +173,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
 }
 
 function guardedPool(pool: Pool): Pool {
-  pool.on("error", () => {});
+  pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
   pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
   return pool;
 }
@@ -261,7 +261,7 @@ export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) 
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback transaction", undefined));
     throw error;
   } finally {
     client.release();
