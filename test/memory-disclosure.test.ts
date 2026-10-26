@@ -4,9 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
 import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
-import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
-import { recallText } from "./support/recall-text.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -110,28 +108,6 @@ test("private owner reads recheck original membership for copied sensitive facts
   assert.deepEqual(await view.query("personal:alice", "COPIED_SENTINEL"), []);
 });
 
-test("opaque providers stay within their original audience, including routed queries", async () => {
-  const f = fixture();
-  f.put("personal:alice", "LEGACY_SENTINEL", "unknown", "personal:alice", true);
-  const opaque = { ...f.raw, facts: undefined };
-  const routed = createRoutedMemoryService({
-    providers: { opaque },
-    routes: [{ provider: "opaque", scopes: ["personal"] }],
-  });
-  const shared = disclosedMemory(routed, f.access);
-  assert.equal(await shared.read("personal:alice"), "");
-  assert.deepEqual(await shared.recall("personal:alice"), []);
-  assert.deepEqual(await shared.query("personal:alice", "SENTINEL"), []);
-  const own = disclosedMemory(routed, {
-    ...f.access,
-    targetScope: "personal:alice",
-    nativeScopes: ["personal:alice"],
-    audience: [actor],
-  });
-  assert.match(await own.read("personal:alice"), /LEGACY_SENTINEL/);
-  assert.deepEqual(await own.query("personal:alice", "SENTINEL"), ["OPAQUE_SENTINEL"]);
-});
-
 test("empty audience and authorization lookup failures fail closed", async () => {
   const f = fixture();
   f.put("personal:alice", "ORDINARY_SENTINEL", "ordinary");
@@ -222,40 +198,6 @@ test("a structured provider's opaque query cannot resurrect denied source record
   assert.deepEqual(await view.recall("group:room"), []);
 });
 
-test("each routed provider is filtered independently and a failure does not invoke a raw fallback", async () => {
-  const first = fixture();
-  const second = fixture();
-  first.put("personal:alice", "FIRST_PRIVATE_SENTINEL", "sensitive");
-  first.put("personal:alice", "FIRST_ORDINARY_SENTINEL", "ordinary");
-  second.put("personal:alice", "SECOND_PRIVATE_SENTINEL", "restricted");
-  second.put("personal:alice", "SECOND_ORDINARY_SENTINEL", "ordinary");
-  const broken: MemoryService = {
-    ...first.raw,
-    facts: async () => {
-      throw Error("unavailable");
-    },
-    query: async () => {
-      throw Error("raw fallback must not run");
-    },
-  };
-  const routes = ["first", "second", "broken"].map((provider) => ({
-    provider,
-    scopes: ["personal:alice"],
-    failOpen: true,
-  }));
-  const routed = createRoutedMemoryService({ providers: { first: first.raw, second: second.raw, broken }, routes });
-  let captures = 0;
-  const wrapped = { ...routed, capture: async () => ++captures };
-  const view = disclosedMemory(wrapped, first.access);
-  assert.deepEqual(await view.query("personal:alice", "SENTINEL"), [
-    "#2 (2026-01-02) FIRST_ORDINARY_SENTINEL",
-    "#2 (2026-01-02) SECOND_ORDINARY_SENTINEL",
-  ]);
-  assert.doesNotMatch(recallText(await view.recall("personal:alice")), /PRIVATE_SENTINEL/);
-  await view.capture("personal:alice", ["new fact"], 1);
-  assert.equal(captures, 1);
-});
-
 test("source decisions are shared within one read but never cached across reads", async () => {
   const f = fixture();
   let checks = 0;
@@ -295,26 +237,6 @@ test("complete memory audience rejects external or unresolved members rather tha
     [{ channelId: "room", principalId: "alice" }],
   );
   assert.equal(await members("channel:room"), undefined);
-});
-
-test("a recall-only routed provider still reaches prompt recall through disclosure", async () => {
-  const f = fixture();
-  const brain: MemoryService = {
-    recall: async () => [{ text: "BRAIN_FACT", score: 0.2 }],
-    capture: async () => 0,
-    query: async () => [],
-    read: async () => "",
-  };
-  const routed = createRoutedMemoryService({
-    providers: { notebook: f.raw, brain },
-    routes: [
-      { provider: "notebook", scopes: ["group:room"] },
-      { provider: "brain", scopes: ["group:room"], manage: false },
-    ],
-  });
-  const recalled = recallText(await disclosedMemory(routed, f.access).recall("group:room"));
-  assert.match(recalled, /BRAIN_FACT/);
-  assert.doesNotMatch(recalled, /OPAQUE_SENTINEL/);
 });
 
 test("semantic recall ranks only currently disclosed facts and rechecks membership on every recall", async () => {

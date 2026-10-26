@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
-import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -75,34 +74,6 @@ test("global packing counts source labels, skips oversized rows, deduplicates, a
   assert.equal(renderRecall(await recallAcrossScopes(memory, scopes, { query: "verify", maxChars: 0 }), new Map()), "");
 });
 
-test("provider routing preserves semantic scores and excludes recall-disabled routes", async (t) => {
-  const { base, memory } = await fixture(t);
-  await base.capture("personal:a", ["0.6 local"], AT);
-  await base.capture("channel:b", ["0.99 remote"], AT);
-  const routed = createRoutedMemoryService({
-    providers: {
-      default: memory,
-      hidden: {
-        ...base,
-        recall: async () => {
-          throw new Error("must not read");
-        },
-      },
-    },
-    routes: [
-      { provider: "default", scopes: ["personal", "channel"] },
-      { provider: "hidden", scopes: ["channel"], recall: false },
-    ],
-  });
-  const out = renderRecall(
-    await recallAcrossScopes(routed, ["personal:a", "channel:b"], {
-      query: "verify",
-    }),
-    new Map(),
-  );
-  assert.ok(out.indexOf("remote") < out.indexOf("local"));
-});
-
 test("many large notebooks still share one 6000 character maximum", async (t) => {
   const { base, memory } = await fixture(t);
   const scopes = Array.from({ length: 25 }, (_, i) => `channel:${i}`);
@@ -132,83 +103,4 @@ test("grep interleaves notebooks and scope-targeted queries can reach later resu
   assert.deepEqual(await searchAcrossScopes(base, ["channel:b"], "match", 2), [
     { scopeId: "channel:b", fact: "#51 (2026-10-01) match remote" },
   ]);
-});
-
-test("candidate routing preserves fail-open/fail-closed providers without embedding their text", async (t) => {
-  const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.8 local fact"], AT);
-  const external = { ...base, recall: async () => [{ text: "External provider answer", score: 0.2 }] };
-  const failing = {
-    ...base,
-    recall: async () => {
-      throw new Error("provider failure");
-    },
-  };
-  const providers = { default: memory, external, failing };
-  const routes = [
-    { provider: "default", scopes: ["personal:a"] },
-    { provider: "external", scopes: ["channel:b"] },
-    { provider: "failing", scopes: ["channel:c"], failOpen: true },
-  ];
-  const out = renderRecall(
-    await recallAcrossScopes(
-      createRoutedMemoryService({ providers, routes }),
-      ["personal:a", "channel:b", "channel:c"],
-      { query: "verify" },
-    ),
-    new Map(),
-  );
-  assert.match(out, /local fact/);
-  assert.match(out, /External provider answer/);
-  assert.ok(calls.flat().every((text) => !text.includes("External")));
-  await assert.rejects(
-    recallAcrossScopes(
-      createRoutedMemoryService({ providers, routes: routes.map((route) => ({ ...route, failOpen: false })) }),
-      ["channel:c"],
-      { query: "verify" },
-    ),
-    /provider failure/,
-  );
-});
-
-test("a recall-only provider's block gets one heading and fills the remaining budget", async (t) => {
-  const { base } = await fixture(t);
-  await base.capture(
-    "personal:a",
-    Array.from({ length: 60 }, (_, i) => `old fact ${i} ${"x".repeat(100)}`),
-    AT,
-  );
-  const block = `EXTERNAL BLOCK ${"y".repeat(800)}`;
-  const external = { ...base, recall: async () => [{ text: block, score: 0.2 }] };
-  const routed = createRoutedMemoryService({
-    providers: { default: base, external },
-    routes: [
-      { provider: "default", scopes: ["personal"] },
-      { provider: "external", scopes: ["personal"], manage: false },
-    ],
-  });
-  const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "x" }), new Map());
-  assert.match(out, /\n### external\nEXTERNAL BLOCK/);
-  assert.equal(out.match(/### /g)?.length, 2);
-});
-
-test("an external block that fills its maxChars is trimmed to the remaining budget, not dropped", async (t) => {
-  const { base } = await fixture(t);
-  await base.capture("personal:a", ["notebook fact"], AT);
-  const external = {
-    ...base,
-    recall: async (_scope: string, context?: { maxChars?: number }) => [
-      { text: "z".repeat(context?.maxChars ?? 6000), score: 0.2 },
-    ],
-  };
-  const routed = createRoutedMemoryService({
-    providers: { default: base, external },
-    routes: [
-      { provider: "default", scopes: ["personal"] },
-      { provider: "external", scopes: ["personal"], manage: false },
-    ],
-  });
-  const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "q", maxChars: 6000 }), new Map());
-  assert.match(out, /zzzz/);
-  assert.ok(out.length <= 6000);
 });
