@@ -803,13 +803,6 @@ async function setWebhookEnabledViaCore(
   return relayCore(res, "POST", `/v1/webhooks/${enc(id)}/${verb}?principalId=${enc(user)}`);
 }
 
-interface CoreAttachment {
-  name: string;
-  mimetype: string;
-  sizeBytes: number;
-  blobId: string;
-}
-
 interface CoreApprovalRecord {
   requestId: string;
   sessionId?: unknown;
@@ -1790,7 +1783,7 @@ const apiRoutes: readonly WebRoute[] = [
       let timezone: string | undefined;
       let scope: string | undefined;
       let channelName: string | undefined;
-      const attachments: CoreAttachment[] = [];
+      const attachments: Array<{ name: string; mimetype: string; sizeBytes: number; blobId: string }> = [];
       let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
       let desktopClientId: string | undefined;
       let proactiveOpener = false;
