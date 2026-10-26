@@ -19,7 +19,7 @@ import {
 import { createRefreshCoalescer } from "./message-gating.ts";
 import { isReservedMentionName, setMentionIndex } from "./mrkdwn.ts";
 import { sleep } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export interface BotIdentity {
@@ -408,7 +408,8 @@ export function createDirectory(deps: {
       const classified = { actor: classify(user), ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
-    } catch {
+    } catch (err) {
+      swallow("slack: users.info classify", err);
       return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
     }
   }
@@ -416,7 +417,8 @@ export function createDirectory(deps: {
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
     try {
       return (await client.conversations.info({ channel })).channel as ChannelMeta;
-    } catch {
+    } catch (err) {
+      swallow("slack: conversations.info", err);
       return undefined;
     }
   }
@@ -439,7 +441,8 @@ export function createDirectory(deps: {
         info,
         classify: (id) => classifyUserCached(client, id),
       });
-    } catch {
+    } catch (err) {
+      swallow("slack: channel membership", err);
       return { audience: [actor, externalMarker()] };
     }
     if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {

@@ -11,7 +11,7 @@ import {
 } from "../slack/deferred-ack.ts";
 import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { httpFailure, swallow, swallowAs } from "../util/errors.ts";
 
 export function createManagedSlack(opts: {
   serviceUrl: string;
@@ -39,7 +39,7 @@ export function createManagedSlack(opts: {
         redirect: "error",
       });
       if (response.status === 404) return undefined;
-      if (!response.ok) throw new Error("Slack setup status is unavailable");
+      if (!response.ok) throw new Error(`Slack setup status is unavailable: ${await httpFailure(response)}`);
       const data = (await response.json()) as Record<string, unknown>;
       if ([data.companyOwned, data.appReady, data.connected].some((v) => typeof v !== "boolean"))
         throw new Error("Invalid Slack setup status");
@@ -59,7 +59,7 @@ export function createManagedSlack(opts: {
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       });
-      if (!response.ok) throw new Error("Slack installation service is unavailable");
+      if (!response.ok) throw new Error(`Slack installation service is unavailable: ${await httpFailure(response)}`);
       const data = (await response.json()) as { url?: unknown };
       if (typeof data.url !== "string" || new URL(data.url).origin !== serviceUrl.origin) {
         throw new Error("Slack installation service returned an invalid URL");
