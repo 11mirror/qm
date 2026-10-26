@@ -4,15 +4,14 @@ import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-import { sleep } from "../../util/async.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
 const FULFILL_WAIT_MS = 25_000;
-const FULFILL_POLL_MS = 100;
+const FULFILL_POLL_MS = 1_000;
 const PENDING_WAIT_CAP_MS = 20_000;
-const PENDING_POLL_MS = 100;
+const PENDING_POLL_MS = 1_000;
 const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
 const FILE_FULFILL_WAIT_MS = 120_000;
 
@@ -193,7 +192,7 @@ async function listPendingContextRequests(ctx: ApiCtx): Promise<void> {
   const deadline = Date.now() + waitMs;
   let requests = await app.pendingContextRequests(source);
   while (!requests.length && Date.now() < deadline) {
-    await sleep(PENDING_POLL_MS);
+    await app.awaitContextRequestEvent("created", null, Math.min(PENDING_POLL_MS, deadline - Date.now()));
     requests = await app.pendingContextRequests(source);
   }
   return sendJson(res, 200, { requests: requests.map((r) => ({ id: r.id, query: r.query })) });

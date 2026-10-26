@@ -360,6 +360,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import type { ContextRequestEvent } from "./api/app-types.ts";
 
 export interface Runtime {
   start(): void;
@@ -1400,9 +1401,9 @@ export function buildApp(
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
   const egressAudit = createPostgresEgressAuditSink(databaseUrl);
   const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
-  const contextRequestCreated = createPostgresNotifyBus<string>(
+  const contextRequestEvents = createPostgresNotifyBus<ContextRequestEvent>(
     databaseUrl,
-    "context_request_created",
+    "context_request_events",
     "context requests",
   );
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
@@ -2065,7 +2066,7 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
-    contextRequestCreated,
+    contextRequestEvents,
     contextViewerTokenKey: deriveConnectorKey(
       keychainKeyMaterial ?? config.signingSecret ?? randomBytes(32),
       "context-viewer-tokens",
@@ -2643,7 +2644,7 @@ export function buildApp(
           runSignals.close?.(),
           turnLedger?.close(),
           turnReady?.close?.(),
-          contextRequestCreated.close?.(),
+          contextRequestEvents.close?.(),
           turnCancels?.close?.(),
           turnYields?.close?.(),
           sessionStateBus.close?.(),

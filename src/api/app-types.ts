@@ -464,6 +464,8 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
+  /** Resolves when a context request is created (id null: any) or settles, or after ms, whichever is first. */
+  awaitContextRequestEvent(kind: ContextRequestEvent["kind"], id: string | null, ms: number): Promise<void>;
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,
@@ -585,6 +587,11 @@ export interface App {
   attachScope(input: { scopeId: ScopeId; environmentId: string; actorId: string }): Promise<void>;
 }
 
+export interface ContextRequestEvent {
+  kind: "created" | "settled";
+  id: string;
+}
+
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
@@ -638,7 +645,7 @@ export interface AppDeps {
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
   contextRequests: DurableMap<SurfaceContextRequest>;
-  contextRequestCreated?: EventBus<string>;
+  contextRequestEvents?: EventBus<ContextRequestEvent>;
   contextViewerTokenKey?: SecretKey;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
