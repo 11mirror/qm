@@ -19,7 +19,7 @@ export async function discoverCanaryChannel(
   const channels: CanaryChannelCandidate[] = [];
   let cursor = "";
   try {
-    for (let page = 0; page < 5; page++) {
+    for (;;) {
       const url =
         `${apiBase.replace(/\/+$/, "")}/users.conversations?types=public_channel,private_channel&exclude_archived=true&limit=200` +
         (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
@@ -29,10 +29,12 @@ export async function discoverCanaryChannel(
       });
       const body = (await res.json()) as {
         ok?: boolean;
+        error?: string;
         channels?: CanaryChannelCandidate[];
         response_metadata?: { next_cursor?: string };
       };
-      if (!body.ok || !Array.isArray(body.channels)) return channels.length ? pickCanaryChannel(channels) : null;
+      if (!body.ok || !Array.isArray(body.channels))
+        throw new Error(`users.conversations: ${body.error ?? "malformed response"}`);
       channels.push(...body.channels);
       const dedicated = channels.find((c) => c.name === "dev-canary" && !c.is_archived);
       if (dedicated) return dedicated;
@@ -40,7 +42,10 @@ export async function discoverCanaryChannel(
       if (!cursor) break;
     }
     return pickCanaryChannel(channels);
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[dev] canary channel discovery stopped early: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return channels.length ? pickCanaryChannel(channels) : null;
   }
 }

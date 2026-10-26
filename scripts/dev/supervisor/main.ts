@@ -619,7 +619,13 @@ function serveApi(): Server {
         req.on("close", () => subscribers.delete(sub));
         return;
       }
-      const body = await readBody(req);
+      let body: Record<string, unknown>;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        respond(400, { ok: false, reason: `malformed JSON body: ${errMessage(err)}` });
+        return;
+      }
       if (req.method === "POST" && req.url === "/reload") {
         lastControlAt = nowEpoch();
         respond(200, await reload(body));
@@ -666,11 +672,7 @@ async function readBody(req: import("node:http").IncomingMessage): Promise<Recor
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
 async function reload(body: Record<string, unknown>): Promise<Record<string, unknown>> {
