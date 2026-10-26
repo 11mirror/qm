@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
-import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { isUserMessage } from "../src/sessions/items.ts";

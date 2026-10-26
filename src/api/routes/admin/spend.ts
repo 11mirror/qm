@@ -1,6 +1,7 @@
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
-import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
+import type { SpendRow } from "../../../sessions/session-store.ts";
+import type { SessionOrigin } from "../../../sessions/thread-ref.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";

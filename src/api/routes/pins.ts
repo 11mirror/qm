@@ -1,4 +1,5 @@
-import { isSubagentThreadRef, sessionTreeRoot } from "../../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
+import { sessionTreeRoot } from "../../subagents/tree.ts";
 import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";

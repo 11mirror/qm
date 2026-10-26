@@ -25,7 +25,7 @@ import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { OutboundPost, PostReceipt } from "../surfaces/outbound.ts";
 import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
-import { cronIdOf } from "../sessions/session-store.ts";
+import { cronIdOf } from "../sessions/thread-ref.ts";
 import { slackErrorCode } from "./payloads.ts";
 
 const PERMANENT_POST_ERRORS = new Set([

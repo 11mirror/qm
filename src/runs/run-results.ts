@@ -1,4 +1,4 @@
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { type Destination, sourceDestination, turnSource } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
 import type { Run, RunStore } from "./run-store.ts";

@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
@@ -217,7 +218,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
                 return wake?.status === "pending" && wake.attempts === 0 && wake.turnUserSeq === null;
               })()) &&
             run.id > afterId &&
-            run.sessionId.startsWith("agent:main:subagent:"),
+            isSubagentThreadRef(run.sessionId),
         )
         .sort((a, b) => a.id.localeCompare(b.id))
         .slice(0, limit);

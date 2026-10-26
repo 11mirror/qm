@@ -28,7 +28,6 @@ import type {
   NewLlmRequest,
   ParticipantWindow,
   ScreenSample,
-  SessionOrigin,
   SessionOriginFilter,
   SessionPage,
   SessionRef,
@@ -39,18 +38,16 @@ import type {
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./item-search.ts";
 import { ITEMS_CUTOVER_MIGRATIONS, LEGACY_TAPE_MIGRATIONS } from "./legacy-history-migrations.ts";
+import { promptEnvelopeBody, userMessagePreview, isWebThread, DuplicateCallError } from "./session-store.ts";
 import {
+  agentOriginPattern,
   cronIdOf,
-  legacyOriginPattern,
+  fireOriginPattern,
   ORIGIN_ALTERNATION,
-  promptEnvelopeBody,
   sessionOrigin,
-  stableOriginPattern,
   threadRefCronIdExpr,
-  userMessagePreview,
-  isWebThread,
-  DuplicateCallError,
-} from "./session-store.ts";
+  type SessionOrigin,
+} from "./thread-ref.ts";
 import {
   ITEM_COLUMNS,
   isOverheard,
@@ -71,9 +68,9 @@ const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
 
 const threadRefOriginExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
+  `COALESCE(substring(${threadRef} FROM '${agentOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${fireOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
 
-const LOOP_OR_SWARM_REF = legacyOriginPattern("(loop|swarm)");
+const LOOP_OR_SWARM_REF = fireOriginPattern("(loop|swarm)");
 
 const sessionOriginBackfillLoop = (candidates: string, keepSpendMarkers: boolean): string => `
   after := '';

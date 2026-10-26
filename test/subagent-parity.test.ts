@@ -22,7 +22,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";

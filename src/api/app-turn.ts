@@ -1,7 +1,8 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody, userRuntimeConfigBody } from "./runtime-config.ts";
 import { type Run, isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
-import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
+import { stopSessionTree } from "../subagents/tree.ts";
 import { type Conversation, type Principal, type TurnRequest, type TurnResult, turnSource, scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";

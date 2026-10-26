@@ -7,7 +7,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
-import { cronIdOf } from "../sessions/session-store.ts";
+import { cronIdOf } from "../sessions/thread-ref.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
