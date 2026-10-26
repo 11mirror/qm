@@ -253,8 +253,19 @@ function rowToSpendRow(r: Record<string, unknown>): SpendRow {
 
 const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
 const SEARCH_TIMEOUT_MS = 10_000;
+/** Only migration 0021 (already applied) still names this; its checksum covers the text. */
 const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
+const SPEND_FIELDS = [
+  ["spend_cost_usd", "costUsd", "double precision"],
+  ["spend_input", "input", "bigint"],
+  ["spend_output", "output", "bigint"],
+  ["spend_cache_read", "cacheRead", "bigint"],
+  ["spend_cache_write", "cacheWrite", "bigint"],
+] as const;
+const SPEND_BACKFILL_BATCH = 20_000;
+const spendValue = (usage: string, key: string, type: string): string =>
+  `COALESCE((${usage} ->> '${key}')::${type}, 0)`;
 
 const ADMIN_READ_TIMEOUT_MS = 10_000;
 const FIRST_PREVIEW_LEN = 160;
@@ -443,31 +454,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                 COALESCE(o.origin, s.origin) AS origin,
                 COALESCE(o.cron_id, s.origin_id) AS cron_id, r.model,
                 COUNT(*) AS calls,
-                COALESCE(SUM(cost_usd), 0)::text AS cost_usd,
-                COALESCE(SUM(input), 0) AS input,
-                COALESCE(SUM(output), 0) AS output,
-                COALESCE(SUM(cache_read), 0) AS cache_read,
-                COALESCE(SUM(cache_write), 0) AS cache_write
-           FROM (SELECT created_at, session_id, model,
-                        (spend_usage_json(usage_json) ->> 'costUsd')::double precision AS cost_usd,
-                        (spend_usage_json(usage_json) ->> 'input')::bigint AS input,
-                        (spend_usage_json(usage_json) ->> 'output')::bigint AS output,
-                        (spend_usage_json(usage_json) ->> 'cacheRead')::bigint AS cache_read,
-                        (spend_usage_json(usage_json) ->> 'cacheWrite')::bigint AS cache_write
-                   FROM session_llm_requests
-                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
-                    AND ${SPEND_INDEXABLE}
-                 UNION ALL
-                 SELECT created_at, session_id, model,
-                        (usage_json::jsonb ->> 'costUsd')::double precision AS cost_usd,
-                        (usage_json::jsonb ->> 'input')::bigint AS input,
-                        (usage_json::jsonb ->> 'output')::bigint AS output,
-                        (usage_json::jsonb ->> 'cacheRead')::bigint AS cache_read,
-                        (usage_json::jsonb ->> 'cacheWrite')::bigint AS cache_write
-                   FROM session_llm_requests
-                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
-                    AND NOT ${SPEND_INDEXABLE}
-                    AND EXISTS (SELECT 1 FROM sessions WHERE id = session_llm_requests.session_id)
+                COALESCE(SUM(spend_cost_usd), 0)::text AS cost_usd,
+                COALESCE(SUM(spend_input), 0) AS input,
+                COALESCE(SUM(spend_output), 0) AS output,
+                COALESCE(SUM(spend_cache_read), 0) AS cache_read,
+                COALESCE(SUM(spend_cache_write), 0) AS cache_write
+           FROM (SELECT r.created_at, r.session_id, r.model,
+                        ${SPEND_FIELDS.map(
+                          ([column, key, type]) =>
+                            `COALESCE(r.${column}, ${spendValue("legacy.usage", key, type)}) AS ${column}`,
+                        ).join(",\n                        ")}
+                   FROM session_llm_requests r
+                   LEFT JOIN LATERAL (SELECT llm_spend_usage(r.usage_json) AS usage
+                                       WHERE r.spend_cost_usd IS NULL) legacy ON TRUE
+                  WHERE r.created_at >= $1 AND r.created_at < $2 AND r.usage_json IS NOT NULL
                  OFFSET 0) r
            JOIN sessions s ON s.id = r.session_id
            LEFT JOIN origins o ON o.session_id = s.id
@@ -1073,6 +1073,65 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         id: "sessions/store/0044-last-user-activity-backfill",
         prepare: [LAST_USER_ACTIVITY_BACKFILL_SQL],
         statements: [],
+      },
+      {
+        id: "sessions/store/0045-llm-request-spend-columns",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          ...SPEND_FIELDS.map(
+            ([column, , type]) => `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ${column} ${type}`,
+          ),
+          // Usage JSON as jsonb when it parses and every number field casts, else NULL (never an error).
+          `CREATE OR REPLACE FUNCTION llm_spend_usage(t text) RETURNS jsonb
+             LANGUAGE plpgsql IMMUTABLE PARALLEL RESTRICTED AS $llm_spend_usage$
+             DECLARE j jsonb;
+             BEGIN
+               IF t IS NULL OR NOT pg_input_is_valid(t, 'jsonb') THEN RETURN NULL; END IF;
+               j := t::jsonb;
+               IF pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
+                  AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN
+                 RETURN j;
+               END IF;
+               RETURN NULL;
+             EXCEPTION WHEN statement_too_complex OR program_limit_exceeded THEN
+               RETURN NULL;
+             END
+             $llm_spend_usage$`,
+          // Spend reads these columns; a call with malformed usage still counts, at zero.
+          `CREATE OR REPLACE FUNCTION llm_request_spend_columns() RETURNS trigger
+             LANGUAGE plpgsql AS $llm_request_spend_columns$
+             DECLARE u jsonb := llm_spend_usage(NEW.usage_json);
+             BEGIN
+               IF NEW.usage_json IS NULL THEN
+                 ${SPEND_FIELDS.map(([column]) => `NEW.${column} := NULL;`).join(" ")}
+               ELSE
+                 ${SPEND_FIELDS.map(([column, key, type]) => `NEW.${column} := ${spendValue("u", key, type)};`).join(" ")}
+               END IF;
+               RETURN NEW;
+             END
+             $llm_request_spend_columns$`,
+          `CREATE TRIGGER session_llm_requests_spend_columns
+             BEFORE INSERT OR UPDATE OF usage_json ON session_llm_requests
+             FOR EACH ROW EXECUTE FUNCTION llm_request_spend_columns()`,
+        ],
+      },
+      {
+        id: "sessions/store/0046-llm-request-spend-unparsed",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_unparsed
+             ON session_llm_requests(id) WHERE usage_json IS NOT NULL AND spend_cost_usd IS NULL`,
+        ],
+      },
+      {
+        id: "sessions/store/0047-drop-spend-json-indexes",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `DROP INDEX IF EXISTS session_llm_requests_spend`,
+          `DROP INDEX IF EXISTS session_llm_requests_spend_wide`,
+        ],
       },
     ],
     [
@@ -2011,6 +2070,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async refreshSpendRollup() {
       const started = Date.now();
+      await q(
+        `UPDATE session_llm_requests r
+            SET ${SPEND_FIELDS.map(([column, key, type]) => `${column} = ${spendValue("legacy.usage", key, type)}`).join(", ")}
+           FROM (SELECT id, llm_spend_usage(usage_json) AS usage FROM session_llm_requests
+                  WHERE usage_json IS NOT NULL AND spend_cost_usd IS NULL LIMIT $1) legacy
+          WHERE r.id = legacy.id`,
+        [SPEND_BACKFILL_BATCH],
+      ).catch((error) => reportFailure("spend: parse legacy usage", error));
       await withPgTransaction(await pool(), async (client) => {
         const changed = await client.query(
           "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
