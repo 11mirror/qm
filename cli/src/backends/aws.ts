@@ -79,6 +79,7 @@ import {
   assertTerraformScaffoldSupportsConfig,
   awsObjectStoreBucket,
   declaredVariables,
+  hclString,
   terraformVarsDrift,
 } from "../terraform.ts";
 import {
@@ -1722,18 +1723,14 @@ function manifestTransaction(aws: AwsConfig, manifest: DeploymentManifest | unde
       },
     },
   });
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      awsText(aws, ["dynamodb", "transact-write-items", "--transact-items", JSON.stringify(writes)]);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
+  try {
+    awsText(aws, ["dynamodb", "transact-write-items", "--transact-items", JSON.stringify(writes)]);
+  } catch (error) {
+    throw new CliError(
+      `AWS deployment manifest write failed: ${errMessage(error)}; run \`qm check --live\` to establish the current manifest before deploying again`,
+      { cause: error },
+    );
   }
-  throw new CliError(
-    `AWS deployment manifest write failed: ${errMessage(lastError)}; run \`qm check --live\` to establish the current manifest before deploying again`,
-  );
 }
 
 function deploymentManifestForTarget(aws: AwsConfig, target: string): DeploymentManifest {
@@ -3604,10 +3601,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
 export function githubTrustSubject(configDir: string, deployBranch?: string, deployEnvironment?: string): string {
   const tfvars = join(configDir, "infra", "terraform.tfvars");
   const source = existsSync(tfvars) ? readFileSync(tfvars, "utf8") : undefined;
-  const tfValue = (name: string): string | undefined => {
-    const raw = source?.match(new RegExp(`^${name}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*$`, "m"))?.[1];
-    return raw ? (JSON.parse(raw) as string) : undefined;
-  };
+  const tfValue = (name: string): string | undefined => (source === undefined ? undefined : hclString(source, name));
   let repo = process.env.GITHUB_REPOSITORY;
   if (!repo && source !== undefined) {
     repo = tfValue("github_repository");
@@ -4279,20 +4273,29 @@ async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = fal
   const originHostname = awsPublicOrigin(config).hostname.toLowerCase().replace(/\.$/, "");
   const albHostname = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
   if (originHostname !== albHostname) {
+    const failures: string[] = [];
+    const noted =
+      (what: string) =>
+      (error: unknown): string[] => {
+        failures.push(`${what}: ${errMessage(error)}`);
+        return [];
+      };
     const [cnames, publicAddresses, albAddresses] = await Promise.all([
-      resolveCname(originHostname).catch(() => []),
+      resolveCname(originHostname).catch(noted(`CNAME ${originHostname}`)),
       lookup(originHostname, { all: true })
         .then((values) => values.map((value) => value.address))
-        .catch(() => []),
+        .catch(noted(`lookup ${originHostname}`)),
       lookup(albHostname, { all: true })
         .then((values) => values.map((value) => value.address))
-        .catch(() => []),
+        .catch(noted(`lookup ${albHostname}`)),
     ]);
     const cnameMatch = cnames.some((name) => name.toLowerCase().replace(/\.$/, "") === albHostname);
     const albSet = new Set(albAddresses);
     const addressMatch = publicAddresses.some((address) => albSet.has(address));
     if (!cnameMatch && !addressMatch) {
-      throw new CliError(`AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}`);
+      throw new CliError(
+        `AWS public origin ${originHostname} does not resolve to this stack's ALB ${albHostname}${failures.length ? ` (${failures.join("; ")})` : ""}`,
+      );
     }
   }
   const controller = new AbortController();

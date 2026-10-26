@@ -66,7 +66,7 @@ function hclAssignment(source: string, name: string): string | undefined {
   return undefined;
 }
 
-function hclString(source: string, name: string): string | undefined {
+export function hclString(source: string, name: string): string | undefined {
   const assignment = hclAssignment(source, name);
   const value = assignment?.match(/=\s*("(?:[^"\\]|\\.)*")\s*$/)?.[1];
   if (value === undefined) return undefined;
