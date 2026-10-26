@@ -4,6 +4,8 @@ import type { ApiCtx } from "../route.ts";
 import { errMessage, reportFailure, swallow } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
+import { slackWebClient } from "../../../slack/web-client.ts";
+import { slackErrorCode } from "../../../slack/payloads.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
 
@@ -78,7 +80,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
     const workspace = await validateSlackInstallation(
       botToken,
       appToken,
-      ctx.deps.slackInstallationFetch,
+      ctx.deps.slackWebClient,
       ctx.deps.slackInstallationSocketAppId,
     );
     const status = await ctx.deps.slackInstallation.set({ botToken, appToken, ...workspace, updatedBy: actor.id });
@@ -111,14 +113,10 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 200, { emoji: cached.emoji, standard: standardEmoji() });
     return sendJson(ctx.res, 404, { error: "not_configured" });
   }
-  const doFetch = ctx.deps.slackInstallationFetch ?? fetch;
   try {
-    const res = await doFetch("https://slack.com/api/emoji.list", {
-      method: "POST",
-      headers: { authorization: `Bearer ${botToken}`, "content-type": "application/x-www-form-urlencoded" },
-    });
-    const data = (await res.json()) as { ok?: boolean; error?: string; emoji?: Record<string, string> };
-    if (!data.ok) return sendJson(ctx.res, 502, { error: "slack_error", message: data.error ?? "unknown" });
+    const data = (await slackWebClient(botToken, ctx.deps.slackWebClient).apiCall("emoji.list")) as {
+      emoji?: Record<string, string>;
+    };
     const emoji: Record<string, string> = {};
     for (const [name, url] of Object.entries(data.emoji ?? {})) {
       if (typeof url === "string" && url.startsWith("alias:")) continue;
@@ -126,6 +124,8 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
     }
     return sendJson(ctx.res, 200, { emoji, standard: standardEmoji() });
   } catch (error) {
+    const code = slackErrorCode(error);
+    if (code) return sendJson(ctx.res, 502, { error: "slack_error", message: code });
     return sendJson(ctx.res, 502, { error: "slack_unreachable", message: errMessage(error) });
   }
 }

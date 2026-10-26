@@ -15,6 +15,8 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
+import { slackWebClient } from "../../slack/web-client.ts";
+import { slackErrorCode } from "../../slack/payloads.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { tenant } from "../../tenant.ts";
@@ -727,14 +729,13 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     let teamId = installation?.teamId;
     const botToken = installation?.botToken ?? deps.slackEnvBotToken;
     if (!teamId && botToken) {
-      const response = await (deps.slackInstallationFetch ?? fetch)("https://slack.com/api/auth.test", {
-        method: "POST",
-        headers: { authorization: `Bearer ${botToken}` },
-        signal: AbortSignal.timeout(10_000),
-        redirect: "error",
-      });
-      const bot = (await response.json()) as { ok?: boolean; team_id?: string };
-      if (response.ok && bot.ok) teamId = bot.team_id;
+      const bot = (await slackWebClient(botToken, deps.slackWebClient, 10_000)
+        .apiCall("auth.test")
+        .catch((error: unknown) => {
+          if (slackErrorCode(error)) return undefined;
+          throw error;
+        })) as { team_id?: string } | undefined;
+      teamId = bot?.team_id;
     }
     if (!teamId)
       return sendJson(res, 409, {
