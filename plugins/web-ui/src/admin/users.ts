@@ -184,9 +184,7 @@ export class UsersView {
             spellcheck="false"
             autocapitalize="none"
             .value=${this.email}
-            @input=${(e: Event) => {
-              this.email = (e.target as HTMLInputElement).value;
-            }}
+            @input=${(e: Event) => (this.email = (e.target as HTMLInputElement).value)}
           />`,
           "grow",
         )}${field(
@@ -194,9 +192,7 @@ export class UsersView {
           html`<select
             id="users-role"
             .value=${this.role}
-            @change=${(e: Event) => {
-              this.role = (e.target as HTMLSelectElement).value;
-            }}
+            @change=${(e: Event) => (this.role = (e.target as HTMLSelectElement).value)}
           >
             <option value="member">Member</option>
             <option value="org_admin">Admin</option>
@@ -239,10 +235,7 @@ export class UsersView {
           : { text: "-", cls: "num" },
         { text: String(u.sessionCount), cls: "num" },
         { text: String(u.turnCount), cls: "num" },
-        ...[0, 1].map((i) => ({
-          text: this.counts.has(u.principalId) ? String(this.counts.get(u.principalId)![i]) : "-",
-          cls: "num",
-        })),
+        ...(this.counts.get(u.principalId)?.map(String) || ["-", "-"]).map((text) => ({ text, cls: "num" })),
         {
           action: {
             label: "Impersonate ↗",

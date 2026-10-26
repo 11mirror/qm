@@ -154,9 +154,7 @@ export function denseList(items: any[], rowOf: (item: any) => any, open: (item: 
               tabindex="0"
               role="button"
               @click=${click}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") open(item);
-              }}
+              @keydown=${(e: KeyboardEvent) => e.key === "Enter" && open(item)}
             >
               ${content}
             </div>`;

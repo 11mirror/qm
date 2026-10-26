@@ -65,9 +65,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   );
   const environment = (s.environments || []).find((e: any) => e.id === s.scope);
   const attached = environment?.attachedScopes || [];
-  let errors: any[] = [];
-  let errorCount = 0;
-  let errorsOpen = false;
+  let [errors, errorCount, errorsOpen] = [[] as any[], 0, false];
   const draw = () =>
     paint(
       html`${
@@ -102,9 +100,10 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
             let preview = "";
             if (background && !cron) {
               const kind = row.kind || row.type;
-              let typeLabel = s.titleCase(String(kind).replaceAll("_", " "));
-              if (kind === "dm") typeLabel = "DM";
-              if (["cron_monologue", "cron_wake", "cron"].includes(kind)) typeLabel = "Cron";
+              const typeLabel =
+                (kind === "dm" && "DM") ||
+                (/^cron(_monologue|_wake)?$/.test(kind) && "Cron") ||
+                s.titleCase(String(kind).replaceAll("_", " "));
               name = origin ? s.cronName(origin, true) : row.origin?.label || typeLabel;
               preview = row.result || row.lastMessage || row.firstMessage || "";
             } else if (background && row.result) {
@@ -129,13 +128,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
               ${
                 errorCount && errors.length
                   ? html`<div class="statline">
-                        <a
-                          href="#"
-                          @click=${(e: Event) => {
-                            e.preventDefault();
-                            errorsOpen = !errorsOpen;
-                            draw();
-                          }}
+                        <a href="#" @click=${(e: Event) => (e.preventDefault(), (errorsOpen = !errorsOpen), draw())}
                           >${s.plural(errorCount, "error")} logged in this scope</a
                         >
                       </div>

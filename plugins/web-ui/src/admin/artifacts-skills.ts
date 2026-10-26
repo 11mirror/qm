@@ -42,6 +42,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
     (k.pack && "from " + (c.packRepoLabel(k.pack.url) || "pack " + c.shortId(k.pack.id, 8))) ||
     (k.createdBy?.startsWith("system:") ? "built-in" : "by " + (k.createdBy || "None"));
   const org = (g: Data) => c.scopeKind(g.ownerScopeId) === "org";
+  const granted = k.grantedCapabilities || [];
   paint(
     card(
       k.name || k.id,
@@ -81,11 +82,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
             ["Capability", "Status"],
             (k.requiredCapabilities || []).map((cap: string) => [
               { text: cap, cls: "mono" },
-              {
-                node: (k.grantedCapabilities || []).includes(cap)
-                  ? badge("granted", "ok")
-                  : badge("not granted", "warn"),
-              },
+              { node: granted.includes(cap) ? badge("granted", "ok") : badge("not granted", "warn") },
             ]),
             "Requires no capabilities.",
           ),
@@ -145,17 +142,12 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
     if (registering) return;
     if (!draft.url.trim()) {
       [message, tone] = ["A repo URL is required.", "err"];
-      draw();
-      return;
+      return draw();
     }
     const submitted = JSON.stringify(draft);
-    registering = true;
-    [message, tone] = ["Registering…", ""];
+    [registering, message, tone] = [true, "Registering…", ""];
     draw();
-    const excluded = draft.exclude
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
+    const excluded = draft.exclude.split(",").flatMap((x) => x.trim() || []);
     try {
       const response = await c.api("POST", "/api/skill-packs", {
         url: draft.url.trim(),
@@ -164,14 +156,11 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         ...(draft.slug.trim() ? { authCredentialSlug: draft.slug.trim() } : {}),
         ...(draft.tier !== "third-party" ? { trustTier: draft.tier } : {}),
       });
-      if (!response.ok) {
-        [message, tone] = [response.data?.message || "Failed (" + response.status + ").", "err"];
-      } else {
+      if (!response.ok) [message, tone] = [response.data?.message || "Failed (" + response.status + ").", "err"];
+      else {
         c.invalidate();
         if (JSON.stringify(draft) === submitted) await c.reload();
-        else {
-          [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
-        }
+        else [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
       }
     } catch {
       [message, tone] = ["Registration failed.", "err"];
@@ -256,10 +245,7 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
               type="button"
               class=${"linkish" + (advanced ? " open" : "")}
               aria-expanded=${String(advanced)}
-              @click=${() => {
-                advanced = !advanced;
-                draw();
-              }}
+              @click=${() => ((advanced = !advanced), draw())}
             >
               ${"Advanced" + (!advanced && (draft.ref.trim() || draft.exclude.trim() || draft.slug.trim() || draft.tier !== "third-party") ? " •" : "")}</button
             ><button type="button" class="primary" ?disabled=${registering} @click=${register}>Register</button
@@ -448,15 +434,11 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
   const importSelected = async () => {
     if (busy) return;
     if (!selectedScopes.size || !selected.size) {
-      [message, tone] = [
-        !selectedScopes.size ? "Pick at least one scope to add skills to." : "Select at least one skill.",
-        "err",
-      ];
-      draw();
-      return;
+      tone = "err";
+      message = !selectedScopes.size ? "Pick at least one scope to add skills to." : "Select at least one skill.";
+      return draw();
     }
-    busy = true;
-    [message, tone] = ["Importing…", ""];
+    [busy, message, tone] = [true, "Importing…", ""];
     draw();
     const scopes = [...selectedScopes],
       names = [...selected];
@@ -465,9 +447,8 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
         selected: names.length === candidates.filter(eligible).length ? "all" : names,
         scopeIds: scopes,
       });
-      if (!result.ok) {
-        [message, tone] = [result.data?.message || "Import failed (" + result.status + ").", "err"];
-      } else {
+      if (!result.ok) [message, tone] = [result.data?.message || "Import failed (" + result.status + ").", "err"];
+      else {
         const added = result.data.imported?.length ?? 0;
         const across = scopes.length > 1 ? " across " + scopes.length + " scopes" : "";
         [message, tone] = [`✓ ${added} skill${added === 1 ? "" : "s"} added${across}`, "ok"];
@@ -542,10 +523,7 @@ ${plan.bundlePaths.join("\n")}</pre>
                         class=${"badge " + reason.tone}
                         style=${"cursor:pointer;" + (filter === key ? "background:var(--text);color:#fff;border-color:var(--text)" : "")}
                         title=${reason.help + " " + (key === "all" ? "" : "Click to show only these.")}
-                        @click=${() => {
-                          filter = key;
-                          draw();
-                        }}
+                        @click=${() => ((filter = key), draw())}
                         >${(tally[key] ?? (counts[key] || 0)) + " " + reason.label}</span
                       >`,
                   )}
@@ -576,10 +554,7 @@ ${plan.bundlePaths.join("\n")}</pre>
                       data-name=${row.upstreamName}
                       .checked=${selected.has(row.upstreamName)}
                       ?disabled=${!eligible(row)}
-                      @change=${(e: Event) => {
-                        selected[(e.target as HTMLInputElement).checked ? "add" : "delete"](row.upstreamName);
-                        draw();
-                      }}
+                      @change=${(e: Event) => (selected[(e.target as HTMLInputElement).checked ? "add" : "delete"](row.upstreamName), draw())}
                     />`,
                   },
                   { node: stacked(row.upstreamName, row.normalized?.manifest?.description || "") },
@@ -600,10 +575,7 @@ ${plan.bundlePaths.join("\n")}</pre>
           style="position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px"
           @mouseenter=${(e: Event) => ((e.target as HTMLElement).style.opacity = "1")}
           @mouseleave=${(e: Event) => ((e.target as HTMLElement).style.opacity = "0.55")}
-          @click=${() => {
-            closed = true;
-            paint(nothing);
-          }}
+          @click=${() => ((closed = true), paint(nothing))}
         >
           ✕
         </button>

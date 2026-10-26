@@ -254,10 +254,7 @@ class SpendView {
                     type="button"
                     aria-pressed=${this.chartBreakdown === mode}
                     ?disabled=${mode !== "category" && !series.every((p: any) => Array.isArray(p[mode === "person" ? "people" : "models"]))}
-                    @click=${() => {
-                      this.chartBreakdown = mode;
-                      this.draw();
-                    }}
+                    @click=${() => ((this.chartBreakdown = mode), this.draw())}
                   >
                     ${{ category: "Category", model: "Model", person: "Person" }[mode]}
                   </button>`,

@@ -61,14 +61,12 @@ function searchShell(c: Context, key: string, shell: Data, nouns: string, draw: 
   return q.trim().toLowerCase();
 }
 const listShell = (c: Context, title: string, count: string) => ({
-  ...(c.index
-    ? {}
+  back: c.index
+    ? undefined
     : {
-        back: {
-          label: "← " + title,
-          onClick: () => c.go({ view: c.view, scope: "org:" + c.orgId, own: null, session: null, page: 1 }),
-        },
-      }),
+        label: "← " + title,
+        onClick: () => c.go({ view: c.view, scope: "org:" + c.orgId, own: null, session: null, page: 1 }),
+      },
   title: c.index ? title : c.shortName(c.scope),
   count,
 });
@@ -95,10 +93,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
                 decoding="async"
                 alt=""
                 src=${c.apiBase + "/files/download?id=" + encodeURIComponent(f.id)}
-                @error=${() => {
-                  failedImages.add(f.id);
-                  draw();
-                }}
+                @error=${() => (failedImages.add(f.id), draw())}
               />`
             : nothing
         }</span
@@ -159,17 +154,13 @@ export function uploadBox(c: Context) {
   const upload = async (files: FileList | File[]) => {
     const picked = [...files].filter((f) => f && f.size >= 0);
     if (!picked.length || busy) return;
-    busy = true;
-    [message, tone] = ["Uploading " + c.plural(picked.length, "file") + "...", "saving"];
+    [busy, message, tone] = [true, "Uploading " + c.plural(picked.length, "file") + "...", "saving"];
     draw();
     let uploaded = 0;
     try {
       for (const file of picked) {
-        const query = new URLSearchParams({
-          scope: c.scope,
-          sha: await c.fileSha256(file),
-          name: file.name || "file",
-        });
+        const sha = await c.fileSha256(file);
+        const query = new URLSearchParams({ scope: c.scope, sha, name: file.name || "file" });
         const response = await fetch(c.apiBase + "/files/upload?" + query.toString(), {
           method: "POST",
           headers: { "content-type": file.type || "application/octet-stream" },
@@ -192,8 +183,7 @@ export function uploadBox(c: Context) {
         await c.reload();
       }
     } finally {
-      busy = false;
-      dragging = false;
+      [busy, dragging] = [false, false];
       input.value = "";
       draw();
     }
@@ -210,9 +200,7 @@ export function uploadBox(c: Context) {
             draw();
           }
         }}
-        @dragover=${(e: DragEvent) => {
-          if (hasFiles(e)) e.preventDefault();
-        }}
+        @dragover=${(e: DragEvent) => hasFiles(e) && e.preventDefault()}
         @dragleave=${(e: DragEvent) => {
           if (!(e.relatedTarget instanceof Node) || !(e.currentTarget as Node).contains(e.relatedTarget)) {
             dragging = false;
@@ -377,10 +365,7 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
               aria-label="New fact"
               placeholder="Add a fact"
               .value=${draft}
-              @input=${(e: Event) => {
-                draft = (e.target as HTMLTextAreaElement).value;
-                draw();
-              }}
+              @input=${(e: Event) => ((draft = (e.target as HTMLTextAreaElement).value), draw())}
             ></textarea>
             <button
               class="primary"
@@ -726,10 +711,7 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
                       ? html`<button
                           type="button"
                           class="prompt-toggle"
-                          @click=${() => {
-                            expanded = !expanded;
-                            draw();
-                          }}
+                          @click=${() => ((expanded = !expanded), draw())}
                         >
                           ${expanded ? "Show less" : "Show more"}
                         </button>`
