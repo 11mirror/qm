@@ -1408,13 +1408,11 @@ export function createKeychain(deps: {
     },
 
     async setServiceCredentialIfAbsent(orgScopeId, input) {
-      if (!deps.creds.insertIfAbsent) throw new Error("credential store does not support atomic inserts");
       const rec = serviceCredentialRecord(orgScopeId, input, null);
       return (await deps.creds.insertIfAbsent(rec.id, rec)) ? rec.updatedAt : null;
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
-      if (!deps.creds.update) throw new Error("credential store does not support atomic updates");
       let updatedAt: number | null = null;
       await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
         if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
@@ -1437,7 +1435,6 @@ export function createKeychain(deps: {
     },
 
     async deleteServiceCredentialIfCurrent(orgScopeId, slug, expectedUpdatedAt) {
-      if (!deps.creds.deleteIf) throw new Error("credential store does not support atomic deletes");
       return deps.creds.deleteIf(
         brokerId(orgScopeId, slug),
         (prior) => prior.kind === "broker" && prior.ownerId === orgScopeId && prior.updatedAt === expectedUpdatedAt,

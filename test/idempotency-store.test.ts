@@ -89,3 +89,39 @@ test("retention: an expired record stops deduping even before the sweep runs", a
   assert.equal(await store.once("k", async () => void ran++), true, "an expired key is replayable again");
   assert.equal(ran, 1);
 });
+
+test("an in-flight claim is shared across processes: a second store skips while the first runs", async () => {
+  const backing = testMap<IdempotencyRecord>();
+  const a = createIdempotencyStore(backing);
+  const b = createIdempotencyStore(backing);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let runs = 0;
+  const first = a.once("k", async () => {
+    runs++;
+    await gate;
+  });
+  while (!(await backing.get("k"))) await new Promise((r) => setImmediate(r));
+  assert.equal(await b.once("k", async () => void runs++), false, "the other process sees the live claim");
+  assert.equal(await b.committed("k"), false, "a claim is not a commit");
+  release();
+  assert.equal(await first, true);
+  assert.equal(await b.committed("k"), true);
+  assert.equal(runs, 1);
+});
+
+test("a failed run releases its claim; a crashed holder's claim expires after the lease", async () => {
+  const backing = testMap<IdempotencyRecord>();
+  let t = 1_000;
+  const store = createIdempotencyStore(backing, { claimLeaseMs: 100, now: () => t });
+  await assert.rejects(store.once("k", async () => Promise.reject(new Error("boom"))));
+  assert.equal(await backing.get("k"), null, "the failed claim is gone");
+
+  await backing.put("crashed", { key: "crashed", at: t, claim: "dead-holder" });
+  assert.equal(await store.once("crashed", async () => {}), false, "a fresh foreign claim blocks");
+  t += 101;
+  let ran = false;
+  assert.equal(await store.once("crashed", async () => void (ran = true)), true, "an expired claim is taken over");
+  assert.equal(ran, true);
+  assert.equal((await backing.get("crashed"))?.claim, undefined);
+});
