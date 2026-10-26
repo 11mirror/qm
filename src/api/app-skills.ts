@@ -1,5 +1,4 @@
-import type { ScopeId } from "../types.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { type ScopeId, parseScopeId, scopeId, type Principal } from "../types.ts";
 import type { SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
@@ -11,7 +10,6 @@ import { triggerBlocksSharedSkill } from "./artifact-share.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
-import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { tenant } from "../tenant.ts";
 
@@ -50,6 +48,33 @@ function requireRegistry(deps: AppDeps): { packs: SkillPackStore; fetcher: Skill
   return { packs: deps.skillPacks, fetcher: deps.skillFetcher };
 }
 
+async function requirePack(deps: AppDeps, id: string) {
+  const registry = requireRegistry(deps);
+  const pack = await registry.packs.get(id);
+  if (!pack) throw new Error(`unknown skill pack: ${id}`);
+  return { ...registry, pack };
+}
+
+function recordImportError(packs: SkillPackStore, pack: SkillPack, e: unknown): Promise<unknown> {
+  return packs.recordImport(pack.id, {
+    at: Date.now(),
+    commit: pack.ref,
+    status: "error",
+    error: e instanceof Error ? e.message : String(e),
+  });
+}
+
+async function planPack(deps: AppDeps, repo: Parameters<typeof planIngest>[0], pack: SkillPack) {
+  const nativeNames = await nativeNamesFor(deps, pack.id, pack.targetScopeId);
+  return planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
+}
+
+function groupBy<K, V>(entries: Iterable<[K, V]>): Map<K, V[]> {
+  const groups = new Map<K, V[]>();
+  for (const [key, value] of entries) groups.set(key, [...(groups.get(key) ?? []), value]);
+  return groups;
+}
+
 async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Promise<Set<string>> {
   const all = await deps.skills.list();
   return new Set(
@@ -59,13 +84,10 @@ async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Pr
   );
 }
 
-async function importedPackSkills(
-  deps: AppDeps,
-  packId: string,
-): Promise<Array<{ scopeId: ScopeId; upstreamName: string }>> {
+async function importedPackSkills(deps: AppDeps, packId: string): Promise<Array<[ScopeId, string]>> {
   return (await deps.skills.list()).flatMap((s) =>
     s.status === "published" && s.pack?.packId === packId
-      ? [{ scopeId: s.scopeId, upstreamName: s.pack.upstreamName }]
+      ? [[s.scopeId, s.pack.upstreamName] as [ScopeId, string]]
       : [],
   );
 }
@@ -123,29 +145,13 @@ function skillPackSourceIdentity(pack: SkillPack): string {
   ]);
 }
 
-function withSkillMutationLock<T>(deps: AppDeps, fn: () => Promise<T>): Promise<T> {
-  return deps.advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
-}
-
-async function reconcilePack(
-  deps: AppDeps,
-  packs: SkillPackStore,
-  fetcher: SkillPackFetcher,
-  id: string,
-  targets: ReconcileTarget[],
-): Promise<ImportResult> {
-  const pack = await packs.get(id);
-  if (!pack) throw new Error(`unknown skill pack: ${id}`);
+async function reconcilePack(deps: AppDeps, id: string, targets: ReconcileTarget[]): Promise<ImportResult> {
+  const { packs, fetcher, pack } = await requirePack(deps, id);
   let repo: Awaited<ReturnType<SkillPackFetcher["fetch"]>>;
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
-    await packs.recordImport(id, {
-      at: Date.now(),
-      commit: pack.ref,
-      status: "error",
-      error: e instanceof Error ? e.message : String(e),
-    });
+    await recordImportError(packs, pack, e);
     throw e;
   }
   const applyFetched = async (): Promise<ImportResult> => {
@@ -156,10 +162,7 @@ async function reconcilePack(
     }
     try {
       const bundleFiles = collectSharedBundle(repo, pack.config);
-      const canonPlan = planIngest(repo, {
-        ...(pack.config ? { config: pack.config } : {}),
-        nativeNames: await nativeNamesFor(deps, id, pack.targetScopeId),
-      });
+      const canonPlan = await planPack(deps, repo, pack);
       const imported: string[] = [];
       const updated: string[] = [];
       const skipped: string[] = [];
@@ -206,52 +209,18 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
-      await packs.recordImport(id, {
-        at: Date.now(),
-        commit: pack.ref,
-        status: "error",
-        error: e instanceof Error ? e.message : String(e),
-      });
+      await recordImportError(packs, pack, e);
       throw e;
     }
   };
-  return withSkillMutationLock(deps, applyFetched);
+  return deps.advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, applyFetched);
 }
 
-export function createSkillMethods(
-  deps: AppDeps,
-  h: AppHelpers,
-): Pick<
-  App,
-  | "listSkills"
-  | "getSkill"
-  | "archiveSkill"
-  | "listVisibleSkills"
-  | "canManageSkill"
-  | "updateOwnedSkill"
-  | "restoreOwnedSkill"
-  | "listSkillPacks"
-  | "getSkillPack"
-  | "registerSkillPack"
-  | "updateSkillPack"
-  | "skillPackCatalog"
-  | "importSkillPack"
-  | "syncSkillPack"
-  | "removeSkillPack"
-  | "createOwnedSkill"
-  | "deleteOwnedSkill"
-> {
-  const { canManageSkill, republishIfShared } = h;
+export function createSkillMethods(deps: AppDeps, h: AppHelpers) {
   return {
-    listSkills() {
-      return deps.skills.list();
-    },
-    getSkill(id) {
-      return deps.skills.get(id);
-    },
-    archiveSkill(id) {
-      return deps.skills.archive(id);
-    },
+    listSkills: () => deps.skills.list(),
+    getSkill: (id) => deps.skills.get(id),
+    archiveSkill: (id) => deps.skills.archive(id),
     async listVisibleSkills(principalId) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
@@ -261,12 +230,10 @@ export function createSkillMethods(
       );
       return deps.skills.visibleFor(ordered, granted);
     },
-    canManageSkill(skill, principalId) {
-      return canManageSkill(skill, principalId);
-    },
+    canManageSkill: (skill, principalId) => h.canManageSkill(skill, principalId),
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId))) return null;
+      if (!skill || !(await h.canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       if (skill.status === "archived") return null;
       const manifest = {
@@ -275,72 +242,43 @@ export function createSkillMethods(
         body: patch.body ?? skill.manifest.body,
       };
       const updated = await deps.skills.update(id, manifest);
-      const live = await republishIfShared(updated, principalId);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId,
-        action: "skill_update",
-        resource: id,
-        scopeLabel: skill.scopeId,
-      });
+      const live = await h.republishIfShared(updated, principalId);
+      h.audit(principalId, "skill_update", id, skill.scopeId);
       return live;
     },
     async restoreOwnedSkill(id, principalId) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
+      if (!skill || skill.status !== "archived" || !(await h.canManageSkill(skill, principalId))) return null;
       await deps.skills.review(id, principalId, skill.manifest.requiredCapabilities);
       const restored = await deps.skills.publish(id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId,
-        action: "skill_restore",
-        resource: id,
-        scopeLabel: skill.scopeId,
-      });
+      h.audit(principalId, "skill_restore", id, skill.scopeId);
       return restored;
     },
-    listSkillPacks() {
-      return deps.skillPacks ? deps.skillPacks.list() : Promise.resolve([]);
-    },
-    getSkillPack(id) {
-      return deps.skillPacks ? deps.skillPacks.get(id) : Promise.resolve(null);
-    },
+    listSkillPacks: () => (deps.skillPacks ? deps.skillPacks.list() : Promise.resolve([])),
+    getSkillPack: (id) => (deps.skillPacks ? deps.skillPacks.get(id) : Promise.resolve(null)),
     async registerSkillPack(input) {
       const { packs, fetcher } = requireRegistry(deps);
       const pack = await packs.create(input);
       try {
-        const repo = await fetcher.fetch(pack);
-        const nativeNames = await nativeNamesFor(deps, pack.id, pack.targetScopeId);
-        const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
+        const plan = await planPack(deps, await fetcher.fetch(pack), pack);
         return await packs.update(pack.id, { available: plan.counts.eligible });
       } catch (e) {
-        await packs.recordImport(pack.id, {
-          at: Date.now(),
-          commit: pack.ref,
-          status: "error",
-          error: e instanceof Error ? e.message : String(e),
-        });
+        await recordImportError(packs, pack, e);
         return (await packs.get(pack.id)) ?? pack;
       }
     },
     async updateSkillPack(id, patch) {
       const { packs } = requireRegistry(deps);
-      return withSkillMutationLock(deps, () => packs.update(id, patch));
+      return deps.advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, () => packs.update(id, patch));
     },
     async skillPackCatalog(id) {
-      const { packs, fetcher } = requireRegistry(deps);
-      const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
+      const { fetcher, pack } = await requirePack(deps, id);
       const repo = await fetcher.fetch(pack);
-      const nativeNames = await nativeNamesFor(deps, id, pack.targetScopeId);
-      const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
+      const plan = await planPack(deps, repo, pack);
       const bundlePaths = collectSharedBundle(repo, pack.config).map((file) => file.path);
-      const importedScopesByUpstream = new Map<string, ScopeId[]>();
-      for (const { scopeId, upstreamName } of await importedPackSkills(deps, id)) {
-        const arr = importedScopesByUpstream.get(upstreamName) ?? [];
-        arr.push(scopeId);
-        importedScopesByUpstream.set(upstreamName, arr);
-      }
+      const importedScopesByUpstream = groupBy(
+        (await importedPackSkills(deps, id)).map(([scope, upstreamName]) => [upstreamName, scope] as const),
+      );
       return {
         ...plan,
         bundlePaths,
@@ -351,35 +289,26 @@ export function createSkillMethods(
       };
     },
     async importSkillPack(id, selected, scopeIds) {
-      const { packs, fetcher } = requireRegistry(deps);
-      const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
+      const { pack } = await requirePack(deps, id);
       const scopes = scopeIds && scopeIds.length ? scopeIds : [pack.targetScopeId];
       return reconcilePack(
         deps,
-        packs,
-        fetcher,
         id,
         scopes.map((scopeId) => ({ scopeId, selected })),
       );
     },
     async syncSkillPack(id) {
-      const { packs, fetcher } = requireRegistry(deps);
-      const pack = await packs.get(id);
-      if (!pack) throw new Error(`unknown skill pack: ${id}`);
-      const importedByScope = new Map<ScopeId, string[]>();
-      for (const { scopeId, upstreamName } of await importedPackSkills(deps, id)) {
-        const arr = importedByScope.get(scopeId) ?? [];
-        arr.push(upstreamName);
-        importedByScope.set(scopeId, arr);
-      }
-      const targets = [...importedByScope].map(([scopeId, selected]) => ({ scopeId, selected }));
+      const { pack } = await requirePack(deps, id);
+      const targets = [...groupBy(await importedPackSkills(deps, id))].map(([scopeId, selected]) => ({
+        scopeId,
+        selected,
+      }));
       if (!targets.length) targets.push({ scopeId: pack.targetScopeId, selected: [] });
-      return reconcilePack(deps, packs, fetcher, id, targets);
+      return reconcilePack(deps, id, targets);
     },
     async removeSkillPack(id) {
       const { packs } = requireRegistry(deps);
-      return withSkillMutationLock(deps, async () => {
+      return deps.advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, async () => {
         const mine = (await deps.skills.list()).filter((s) => s.pack?.packId === id);
         for (const s of mine) await deps.skills.delete(s.id);
         await deps.skillBundles?.delete(id);
@@ -411,29 +340,17 @@ export function createSkillMethods(
       const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
       await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
       const published = await deps.skills.publish(skill.id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.principalId,
-        action: "skill_create",
-        resource: skill.id,
-        scopeLabel: homeScope,
-      });
+      h.audit(input.principalId, "skill_create", skill.id, homeScope);
       return published;
     },
     async deleteOwnedSkill({ principalId, id, liveActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId))) return "forbidden";
+      if (!(await h.canManageSkill(skill, principalId))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId,
-        action: "skill_archive",
-        resource: id,
-        scopeLabel: skill.scopeId,
-      });
+      h.audit(principalId, "skill_archive", id, skill.scopeId);
       return "deleted";
     },
-  };
+  } satisfies Partial<App>;
 }
