@@ -1,27 +1,47 @@
-import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
-import { fileArtifactId } from "../../../files/file-artifact-store.ts";
+import { fileArtifactId, type FileArtifact } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
+import { badRequest, discoverScopes, notFound, scopedAdmin } from "./common.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
+const FILES_PAGE_SIZE = 200;
 const FILES_LIST_MAX = 2000;
 
-export async function readAdminFile(ctx: ApiCtx): Promise<void> {
+const fileRow = (a: FileArtifact) => ({
+  id: a.id,
+  scopeId: a.ownerScopeId,
+  name: a.name,
+  path: a.path,
+  mimetype: a.mimetype,
+  size: a.sizeBytes,
+  direction: a.direction,
+  createdAt: a.createdAt,
+  openable: a.blobKey != null,
+});
+
+async function adminFile(ctx: ApiCtx) {
   const { res, deps, url } = ctx;
   const id = url.searchParams.get("id") ?? "";
-  if (!id) return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (!deps.files) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return badRequest(res, "id required");
+  if (!deps.files) return notFound(res);
   const art = await deps.files.get(id);
-  if (!art) return sendJson(res, 404, { error: "not_found" });
+  if (!art) return notFound(res);
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
   if (!actor) return;
+  return { files: deps.files, id, art, actor };
+}
+
+export async function readAdminFile(ctx: ApiCtx): Promise<void> {
+  const { res, deps } = ctx;
+  const found = await adminFile(ctx);
+  if (!found) return;
+  const { files, id, art, actor } = found;
   audit(deps, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
-  const opened = await deps.files.open(id);
-  if (!opened) return sendJson(res, 404, { error: "not_found" });
+  const opened = await files.open(id);
+  if (!opened) return notFound(res);
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;
@@ -37,36 +57,21 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
     total += b.length;
   }
   const content = Buffer.concat(chunks).toString("utf8");
-  return sendJson(res, 200, {
-    id: art.id,
-    scopeId: art.ownerScopeId,
-    path: art.path,
-    name: art.name,
-    mimetype: art.mimetype,
-    content,
-    truncated,
-  });
+  const { ownerScopeId: scopeId, path, name, mimetype } = art;
+  return sendJson(res, 200, { id: art.id, scopeId, path, name, mimetype, content, truncated });
 }
 
 export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const id = url.searchParams.get("id") ?? "";
-  if (!id) return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (!deps.files) return sendJson(res, 404, { error: "not_found" });
-  const art = await deps.files.get(id);
-  if (!art) return sendJson(res, 404, { error: "not_found" });
-  const actor = await authorizeAdmin(ctx, art.ownerScopeId);
-  if (!actor) return;
+  const { res, deps } = ctx;
+  const found = await adminFile(ctx);
+  if (!found) return;
+  const { files, id, art, actor } = found;
   const mime = art.mimetype.split(";")[0]!.trim().toLowerCase();
   const inline = /^(image\/(png|jpeg|gif|webp|avif|bmp)|application\/pdf|text\/plain)$/.test(mime);
-  audit(deps, {
-    principalId: actor.id,
-    action: inline ? "file.view" : "file.download",
-    resource: art.path,
-    scopeLabel: art.ownerScopeId,
-  });
-  const opened = await deps.files.open(id);
-  if (!opened) return sendJson(res, 404, { error: "not_found" });
+  const action = inline ? "file.view" : "file.download";
+  audit(deps, { principalId: actor.id, action, resource: art.path, scopeLabel: art.ownerScopeId });
+  const opened = await files.open(id);
+  if (!opened) return notFound(res);
   res.writeHead(200, {
     "content-type": inline ? contentTypeWithUtf8Charset(art.mimetype) : "application/octet-stream",
     "content-length": String(opened.sizeBytes),
@@ -75,30 +80,18 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
     ...(inline ? { "cache-control": "private, max-age=300", "content-security-policy": "sandbox" } : {}),
   });
   pipeToResponse(res, opened.stream, "file read failed");
-  return;
 }
 
 export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx);
   if (!authz) return;
-  const { actor, scope } = authz;
+  const { scope, orgWide } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
-  audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
+  authz.audit("files.read", "files");
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
-  const orgWide = parseScopeId(scope).kind === "org";
   const scopes = orgWide ? [...(await discoverScopes(app, deps)).keys()] : [scope];
-  const files: Array<{
-    id: string;
-    scopeId: string;
-    name: string;
-    path: string;
-    mimetype: string;
-    size: number;
-    direction: string;
-    createdAt: number;
-    openable: boolean;
-  }> = [];
+  const files: ReturnType<typeof fileRow>[] = [];
   let cursor: string | undefined;
   do {
     const page = await deps.files.listOwnedByScopes(scopes, {
@@ -106,19 +99,7 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
       ...(nameQuery ? { nameQuery } : {}),
       ...(cursor ? { cursor } : {}),
     });
-    for (const a of page.files) {
-      files.push({
-        id: a.id,
-        scopeId: a.ownerScopeId,
-        name: a.name,
-        path: a.path,
-        mimetype: a.mimetype,
-        size: a.sizeBytes,
-        direction: a.direction,
-        createdAt: a.createdAt,
-        openable: a.blobKey != null,
-      });
-    }
+    files.push(...page.files.map(fileRow));
     cursor = page.nextCursor;
   } while (cursor && files.length < FILES_LIST_MAX);
   return sendJson(res, 200, { scopeId: scope, files });
@@ -126,7 +107,7 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
 
 export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx);
   if (!authz) return;
   if (!deps.files) return sendJson(res, 404, { error: "not_found", message: "file store not wired" });
   if (!deps.blobTransfer)
@@ -140,7 +121,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       .split(";")[0]!
       .trim()
       .toLowerCase() || mimeFromName(name);
-  if (!blobId) return sendJson(res, 400, { error: "bad_request", message: "blobId required" });
+  if (!blobId) return badRequest(res, "blobId required");
   const opened = await deps.blobTransfer.open(blobId);
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
   const id = fileArtifactId(`admin-upload:${actor.id}:${scope}:${Date.now()}:${blobId}`, "in", 0);
@@ -158,20 +139,8 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       createdInScope: scope,
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    audit(deps, { principalId: actor.id, action: "file.upload", resource: path, scopeLabel: scope });
-    return sendJson(res, 200, {
-      file: {
-        id: artifact.id,
-        scopeId: artifact.ownerScopeId,
-        name: artifact.name,
-        path: artifact.path,
-        mimetype: artifact.mimetype,
-        size: artifact.sizeBytes,
-        direction: artifact.direction,
-        createdAt: artifact.createdAt,
-        openable: artifact.blobKey != null,
-      },
-    });
+    authz.audit("file.upload", path);
+    return sendJson(res, 200, { file: fileRow(artifact) });
   } catch (e) {
     if (e instanceof ByteSourceTooLargeError)
       return sendJson(res, 413, { error: "payload_too_large", message: e.message });

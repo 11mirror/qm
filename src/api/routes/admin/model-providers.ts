@@ -2,63 +2,34 @@ import { isModelProvider, type ModelProvider } from "../../../model/model-creden
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin } from "../shared.ts";
-import { tenant } from "../../../tenant.ts";
+import { badRequest, notFound, orgAdmin } from "./common.ts";
 
-const VALIDATION_REQUESTS: Record<
-  ModelProvider,
-  { baseUrl: string; path: string; headers: (apiKey: string) => Record<string, string> }
-> = {
-  anthropic: {
-    baseUrl: "https://api.anthropic.com",
-    path: "/v1/models",
-    headers: (apiKey) => ({ "x-api-key": apiKey, "anthropic-version": "2023-06-01" }),
-  },
-  openai: {
-    baseUrl: "https://api.openai.com/v1",
-    path: "/models",
-    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-  },
-  openrouter: {
-    baseUrl: "https://openrouter.ai/api/v1",
-    path: "/key",
-    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-  },
+const VALIDATION_URLS: Record<ModelProvider, string> = {
+  anthropic: "https://api.anthropic.com/v1/models",
+  openai: "https://api.openai.com/v1/models",
+  openrouter: "https://openrouter.ai/api/v1/key",
 };
 
-function validationUrl(provider: ModelProvider): string {
-  const request = VALIDATION_REQUESTS[provider];
-  return `${request.baseUrl}${request.path}`;
-}
-
-async function actor(ctx: ApiCtx) {
-  const scope = tenant().orgScope;
-  return authorizeAdmin(ctx, scope);
-}
-
-export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+export async function apiKeyAccepted(ctx: ApiCtx, url: string, anthropic: boolean, apiKey: string): Promise<boolean> {
+  const headers: Record<string, string> = anthropic
+    ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+    : { authorization: `Bearer ${apiKey}` };
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
-      headers: VALIDATION_REQUESTS[provider].headers(apiKey),
-      signal: AbortSignal.timeout(5_000),
-    });
-    return response.ok;
+    return (await (ctx.deps.modelCredentialFetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(5_000) })).ok;
   } catch {
     return false;
   }
 }
 
+export const validateProviderApiKey = (ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> =>
+  apiKeyAccepted(ctx, VALIDATION_URLS[provider], provider === "anthropic", apiKey);
+
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
-  const authorized = await actor(ctx);
-  if (!authorized) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   await ctx.deps.refreshModels?.();
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  audit(ctx.deps, {
-    principalId: authorized.id,
-    action: "model-providers.read",
-    resource: "model-providers",
-    scopeLabel: tenant().orgScope,
-  });
+  if (!ctx.deps.modelCredentials) return notFound(ctx.res);
+  authz.audit("model-providers.read", "model-providers");
   const cached =
     ctx.url.searchParams.get("catalog") === "cached" ? cachedModelCatalog(ctx.deps.modelCredentialFetch) : undefined;
   const [providers, models] = await Promise.all([
@@ -74,41 +45,28 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
 }
 
 export async function putModelProvider(ctx: ApiCtx): Promise<void> {
-  const authorized = await actor(ctx);
-  if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const store = ctx.deps.modelCredentials;
   const provider = ctx.params.provider;
-  if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!store || !isModelProvider(provider)) return notFound(ctx.res);
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
-  if (typeof apiKey !== "string" || !apiKey.trim()) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
-  }
+  if (typeof apiKey !== "string" || !apiKey.trim()) return badRequest(ctx.res, "API key is required");
   if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
-  await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
-  audit(ctx.deps, {
-    principalId: authorized.id,
-    action: "model-providers.update",
-    resource: provider,
-    scopeLabel: tenant().orgScope,
-  });
-  const status = (await ctx.deps.modelCredentials.statuses()).find((item) => item.provider === provider);
+  await store.set(provider, apiKey.trim(), authz.actor.id);
+  authz.audit("model-providers.update", provider);
+  const status = (await store.statuses()).find((item) => item.provider === provider);
   return sendJson(ctx.res, 200, { ok: true, status });
 }
 
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
-  const authorized = await actor(ctx);
-  if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const provider = ctx.params.provider;
-  if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
-  await ctx.deps.modelCredentials.delete(provider, authorized.id);
-  audit(ctx.deps, {
-    principalId: authorized.id,
-    action: "model-providers.delete",
-    resource: provider,
-    scopeLabel: tenant().orgScope,
-  });
+  if (!ctx.deps.modelCredentials || !isModelProvider(provider)) return notFound(ctx.res);
+  await ctx.deps.modelCredentials.delete(provider, authz.actor.id);
+  authz.audit("model-providers.delete", provider);
   return sendJson(ctx.res, 200, { ok: true });
 }

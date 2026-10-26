@@ -1,5 +1,5 @@
 import type { TeamChange } from "../../teams/teams.ts";
-import { decisionsResource } from "./decisions-resource.ts";
+import { decisionCatalog, parseDecisionProvider, parseDecisionRule } from "../../decisions/decisions.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
@@ -15,7 +15,6 @@ import {
   embeddingModelCatalog,
   thinkingLevelsFor,
   selectableBaseModels,
-  ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoiceDurable } from "../../harness/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
@@ -48,6 +47,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { tenant } from "../../tenant.ts";
+import { modelKeys } from "./admin/common.ts";
 
 export interface AutoFlaggerDraft {
   modelId: string;
@@ -56,18 +56,10 @@ export interface AutoFlaggerDraft {
 
 const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
 
-/** The flagger a deployment falls back to when nothing is configured. */
 export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "baseModelDefault">): AutoFlaggerDraft {
-  return {
-    modelId: defaultModel(deps.baseModelDefault),
-    rubric: DEFAULT_SECURITY_SCREEN_RUBRIC,
-  };
+  return { modelId: defaultModel(deps.baseModelDefault), rubric: DEFAULT_SECURITY_SCREEN_RUBRIC };
 }
 
-/**
- * Validate an Auto flagger configuration — shared by the governance save and the test run, so a
- * rubric that tests cleanly is exactly the one that can be applied.
- */
 export async function parseAutoFlaggerDraft(
   deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
   body: { modelId?: unknown; rubric?: unknown },
@@ -84,9 +76,7 @@ export async function parseAutoFlaggerDraft(
       error: `auto-flagger requires a non-empty rubric of at most ${AUTO_FLAGGER_MAX_RUBRIC_CHARS} characters`,
     };
   }
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  if (!modelServiceable(modelId, managedKeys)) {
+  if (!modelServiceable(modelId, await modelKeys(deps))) {
     return { error: `model ${modelId} isn't serviceable on this deployment` };
   }
   return { value: { modelId, rubric: body.rubric.trim() } };
@@ -107,7 +97,6 @@ export interface AdminResource {
   target?: "org" | "any";
   secret?: boolean;
   clearable?: boolean;
-  authz?: "scope-admin" | "org-admin";
   label?: string;
   enumValues?: readonly unknown[];
   refreshesModels?: true;
@@ -131,7 +120,42 @@ function generic<V>(
 const orgOnly = (scope: string, label: string): { error: string } | null =>
   parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
 
+const orgWide =
+  (label: string, apply: AdminResource["apply"]): AdminResource["apply"] =>
+  async (ctx, actor, scope) =>
+    orgOnly(scope, label) ?? apply(ctx, actor, scope);
+
+const unserviceable = async (deps: ServerDeps, modelId: string): Promise<{ error: string } | null> =>
+  modelServiceable(modelId, await modelKeys(deps))
+    ? null
+    : { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
+
+const orgSwitch = (
+  id: string,
+  readKey: string,
+  label: string,
+  scopeLabel: string,
+  get: AdminResource["get"],
+  set: (deps: ServerDeps, scope: string, on: boolean) => Promise<void>,
+): AdminResource => ({
+  id,
+  kind: "boolean",
+  target: "org",
+  label,
+  readKey,
+  get,
+  apply: orgWide(scopeLabel, generic(boolBody, set)),
+});
+
+const orgScopeOnly =
+  <T>(get: (deps: ServerDeps, scope: string) => T) =>
+  (deps: ServerDeps, scope: string) =>
+    parseScopeId(scope).kind === "org" ? get(deps, scope) : undefined;
+
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
+
+const trimmedList = (value: unknown): string[] | undefined =>
+  Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : undefined;
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -191,21 +215,72 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "The model and classification rubric used to screen external content when the deployment enables model screening.",
     readKey: "autoFlagger",
     get: (deps) => deps.config!.getAutoFlaggerConfig(),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the Auto flagger is org-wide");
-      if (bad) return bad;
-      const body = ctx.body as { reset?: unknown };
-      if (body.reset === true) {
-        await ctx.deps.config!.setAutoFlaggerConfig(null);
-        return { ok: true };
+    apply: orgWide("the Auto flagger is org-wide", async (ctx) => {
+      let value: AutoFlaggerDraft | null = null;
+      if ((ctx.body as { reset?: unknown }).reset !== true) {
+        const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
+        if ("error" in parsed) return parsed;
+        value = parsed.value;
       }
-      const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
-      if ("error" in parsed) return parsed;
-      await ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
+      await ctx.deps.config!.setAutoFlaggerConfig(value);
       return { ok: true };
-    },
+    }),
   },
-  decisionsResource,
+  {
+    id: "decisions",
+    kind: "custom",
+    target: "org",
+    label:
+      "Decision providers and rules. Send { provider }, { removeProvider: id }, { rule } or { removeRule: id }. A provider names a wire protocol (chat-completions, decisions or systemone); leave baseUrl unset to use the model gateway, or set baseUrl plus an org service credential. A rule asks a classifier a question at a hook and applies the chosen option's action. Rule mode is off, observe or enforce.",
+    readKey: "decisions",
+    get: async (deps, scope) =>
+      deps.decisions && {
+        ...decisionCatalog(),
+        models: selectableBaseModels().map((m) => m.id),
+        credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? [])
+          .filter((c) => c.source !== "deployment")
+          .map((c) => c.slug),
+        providers: await deps.decisions.providers(),
+        rules: await deps.decisions.rules(),
+      },
+    apply: orgWide("decisions are org-wide", async (ctx, actor, scope) => {
+      const store = ctx.deps.decisions;
+      if (!store) return { error: "not available on this deployment", status: 404 };
+      const body = (ctx.body ?? {}) as Record<string, unknown>;
+      const by = { actorId: actor.id };
+      let change: [string, string];
+      try {
+        if (typeof body.removeProvider === "string") {
+          await store.removeProvider(body.removeProvider);
+          change = ["decision.provider.remove", body.removeProvider];
+        } else if (typeof body.removeRule === "string") {
+          await store.removeRule(body.removeRule);
+          change = ["decision.rule.remove", body.removeRule];
+        } else if (body.provider !== undefined) {
+          const parsed = parseDecisionProvider(body.provider);
+          if ("error" in parsed) return parsed;
+          const credential = parsed.provider.credential;
+          const credentials = credential ? ((await ctx.deps.serviceCreds?.listServiceCredentials(scope)) ?? []) : [];
+          if (credentials.some((c) => c.slug === credential && c.source === "deployment"))
+            return { error: `credential ${credential} is supplied by this deployment for the broker only` };
+          await store.saveProvider(parsed.provider, by);
+          change = ["decision.provider.save", parsed.provider.id];
+        } else if (body.rule !== undefined) {
+          const models = new Set(selectableBaseModels().map((m) => m.id));
+          const named = (body.rule as { model?: { provider?: unknown } } | null)?.model?.provider;
+          const providers = typeof named === "string" ? await store.providers([named]) : [];
+          const parsed = parseDecisionRule(body.rule, providers, models);
+          if ("error" in parsed) return parsed;
+          await store.saveRule(parsed.rule, by);
+          change = ["decision.rule.save", `${parsed.rule.id}:${parsed.rule.mode}`];
+        } else return { error: "send provider, removeProvider, rule or removeRule" };
+      } catch (error) {
+        return { error: errMessage(error) };
+      }
+      audit(ctx.deps, { principalId: actor.id, action: change[0], resource: change[1], scopeLabel: scope });
+      return { ok: true };
+    }),
+  },
   {
     id: "approval-grant-modes",
     kind: "custom",
@@ -398,91 +473,46 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: (deps, scope) => deps.config!.getUnfulfilledInsights(scope),
     apply: generic(boolBody, (deps, scope, on) => deps.config!.setUnfulfilledInsights(scope, on)),
   },
-  {
-    id: "external-slack-participants",
-    kind: "boolean",
-    target: "org",
-    label:
-      "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
-    readKey: "externalSlackParticipants",
-    get: (deps, scope) => deps.config!.getExternalSlackParticipants(scope),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the external-Slack-participants toggle is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, scope, on) => deps.config!.setExternalSlackParticipants(scope, on),
-    ),
-  },
-  {
-    id: "channel-header-pin-default",
-    kind: "boolean",
-    target: "org",
-    label:
-      "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
-    readKey: "channelHeaderPinDefault",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getChannelHeaderPin(scope) : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the channel pinned-header default is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, scope, on) => deps.config!.setChannelHeaderPin(scope, on),
-    ),
-  },
-  {
-    id: "org-ambient",
-    kind: "boolean",
-    target: "org",
-    label:
-      "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
-    readKey: "orgAmbient",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getOrgAmbient() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the ambient switch here is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setOrgAmbient(on),
-    ),
-  },
-  {
-    id: "interactive-fast-mode",
-    kind: "boolean",
-    target: "org",
-    label:
-      "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
-    readKey: "interactiveFastMode",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getInteractiveFastMode() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the interactive fast-mode switch is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setInteractiveFastMode(on),
-    ),
-  },
-  {
-    id: "individual-model-auth",
-    kind: "boolean",
-    target: "org",
-    label:
-      "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
-    readKey: "individualModelAuth",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getIndividualModelAuth() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the individual-authorization switch is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
-    ),
-  },
+  orgSwitch(
+    "external-slack-participants",
+    "externalSlackParticipants",
+    "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
+    "the external-Slack-participants toggle is org-wide",
+    (deps, scope) => deps.config!.getExternalSlackParticipants(scope),
+    (deps, scope, on) => deps.config!.setExternalSlackParticipants(scope, on),
+  ),
+  orgSwitch(
+    "channel-header-pin-default",
+    "channelHeaderPinDefault",
+    "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
+    "the channel pinned-header default is org-wide",
+    orgScopeOnly((deps, scope) => deps.config!.getChannelHeaderPin(scope)),
+    (deps, scope, on) => deps.config!.setChannelHeaderPin(scope, on),
+  ),
+  orgSwitch(
+    "org-ambient",
+    "orgAmbient",
+    "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
+    "the ambient switch here is org-wide",
+    orgScopeOnly((deps) => deps.config!.getOrgAmbient()),
+    (deps, _scope, on) => deps.config!.setOrgAmbient(on),
+  ),
+  orgSwitch(
+    "interactive-fast-mode",
+    "interactiveFastMode",
+    "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
+    "the interactive fast-mode switch is org-wide",
+    orgScopeOnly((deps) => deps.config!.getInteractiveFastMode()),
+    (deps, _scope, on) => deps.config!.setInteractiveFastMode(on),
+  ),
+  orgSwitch(
+    "individual-model-auth",
+    "individualModelAuth",
+    "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
+    "the individual-authorization switch is org-wide",
+    orgScopeOnly((deps) => deps.config!.getIndividualModelAuth()),
+    (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
+  ),
   {
     id: "memory-embedding-model",
     refreshesModels: true,
@@ -494,16 +524,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return embeddingModelCatalog();
     },
     get: (deps) => deps.config!.getEmbeddingModelDurable(),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the memory embedding model is org-wide");
-      if (bad) return bad;
+    apply: orgWide("the memory embedding model is org-wide", async (ctx) => {
       const { modelId } = ctx.body as { modelId?: unknown };
       if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
         return { error: "Provide an embedding modelId, or null to disable semantic recall" };
       if (modelId !== null && !resolveEmbeddingModel(modelId)) return { error: "Unknown embedding model" };
       await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
       return { ok: true };
-    },
+    }),
   },
   {
     id: "base-model",
@@ -522,16 +550,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
       if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
       else {
         if (!modelSupported(modelId)) return { error: `model ${modelId} is not supported` };
-        if (!modelServiceable(modelId, managedKeys))
-          return {
-            error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
-          };
+        const unavailable = await unserviceable(ctx.deps, modelId);
+        if (unavailable) return unavailable;
         const current =
           runtime ??
           (await resolveRuntimeChoiceDurable(ctx.deps.config!, tenant().orgScope, scope, {
@@ -560,10 +584,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ? ((await deps.config!.getPurposeRuntimeDurable(purpose)) ?? null)
         : deps.config!.getRuntimeSelection(scope),
     apply: async (ctx, _actor, scope) => {
-      if (purpose) {
-        const bad = orgOnly(scope, `${purpose} runtime defaults are org-wide`);
-        if (bad) return bad;
-      }
+      const bad = purpose && orgOnly(scope, `${purpose} runtime defaults are org-wide`);
+      if (bad) return bad;
       if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
         if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
         else await ctx.deps.config!.setRuntimeSelection(scope, null);
@@ -581,12 +603,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "runtime requires fastMode (boolean)" };
       if (purpose && fastMode === true && !fastModeModelIds().includes(modelId))
         return { error: `fast mode is not supported by ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (!modelServiceable(modelId, managedKeys))
-        return {
-          error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
-        };
+      const unavailable = await unserviceable(ctx.deps, modelId);
+      if (unavailable) return unavailable;
       const choice = {
         modelId,
         ...(typeof effortLevel === "string" ? { effortLevel } : {}),
@@ -610,21 +628,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return selectableBaseModels();
     },
     get: (deps, scope) => deps.config!.getWebuiModels(scope),
-    apply: generic<string[] | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the web UI model picker is org-wide");
-        if (bad) return bad;
-        const raw = (body as { ids?: unknown }).ids;
-        if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-          return { error: "webui-models requires { ids: string[] } (empty list restores the default picker)" };
-        }
-        const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
-        for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
-        const seen = new Set<string>();
-        const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
-        return { value: unique.length ? unique : null };
-      },
-      (deps, scope, ids) => deps.config!.setWebuiModels(scope, ids),
+    apply: orgWide(
+      "the web UI model picker is org-wide",
+      generic<string[] | null>(
+        (body) => {
+          const raw = (body as { ids?: unknown }).ids;
+          if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+            return { error: "webui-models requires { ids: string[] } (empty list restores the default picker)" };
+          }
+          const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
+          for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
+          const seen = new Set<string>();
+          const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+          return { value: unique.length ? unique : null };
+        },
+        (deps, scope, ids) => deps.config!.setWebuiModels(scope, ids),
+      ),
     ),
   },
   {
@@ -636,23 +655,24 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Slack ack emoji (names the bot may react with to acknowledge a message). Empty restores the built-in rotation.",
     readKey: "ackEmoji",
     get: (deps, scope) => deps.config!.getAckEmoji(scope),
-    apply: generic<string[] | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the ack emoji set is org-wide");
-        if (bad) return bad;
-        const raw = (body as { names?: unknown }).names;
-        if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-          return { error: "ack-emoji requires { names: string[] } (empty list restores the default rotation)" };
-        }
-        const input = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v : "")).join(",") : "";
-        const names = parseAckEmoji(input);
-        const supplied = Array.isArray(raw) ? raw.filter((v) => typeof v === "string" && v.trim()).length : 0;
-        if (supplied && names.length !== supplied) {
-          return { error: "ack-emoji names must be Slack emoji names (lowercase letters, digits, _ + -)" };
-        }
-        return { value: names.length ? names : null };
-      },
-      (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
+    apply: orgWide(
+      "the ack emoji set is org-wide",
+      generic<string[] | null>(
+        (body) => {
+          const raw = (body as { names?: unknown }).names;
+          if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
+            return { error: "ack-emoji requires { names: string[] } (empty list restores the default rotation)" };
+          }
+          const input = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v : "")).join(",") : "";
+          const names = parseAckEmoji(input);
+          const supplied = Array.isArray(raw) ? raw.filter((v) => typeof v === "string" && v.trim()).length : 0;
+          if (supplied && names.length !== supplied) {
+            return { error: "ack-emoji names must be Slack emoji names (lowercase letters, digits, _ + -)" };
+          }
+          return { value: names.length ? names : null };
+        },
+        (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
+      ),
     ),
   },
   {
@@ -662,9 +682,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     readKey: "branding",
     get: (deps, scope) => deps.config!.getBranding(scope),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "branding is org-wide");
-      if (bad) return bad;
+    apply: orgWide("branding is org-wide", async (ctx, _actor, scope) => {
       const body = (ctx.body ?? {}) as {
         accent?: unknown;
         mark?: unknown;
@@ -683,7 +701,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       await ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
-    },
+    }),
   },
   {
     id: "browse-model",
@@ -698,23 +716,18 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return selectableBaseModels();
     },
     get: (deps, scope) => deps.config!.getBrowseModel(scope),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the browse model is org-wide");
-      if (bad) return bad;
+    apply: orgWide("the browse model is org-wide", async (ctx, _actor, scope) => {
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string") {
         return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (modelId && !modelServiceable(modelId, managedKeys)) {
-        return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
-      }
+      const unavailable = modelId ? await unserviceable(ctx.deps, modelId) : null;
+      if (unavailable) return unavailable;
       await ctx.deps.config!.setBrowseModel(scope, modelId || null);
       return { ok: true };
-    },
+    }),
   },
   {
     id: "browse-max-steps",
@@ -724,21 +737,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label: "Max browser steps per browse task (empty restores the default of 50).",
     readKey: "browseMaxSteps",
     get: (deps, scope) => deps.config!.getBrowseMaxSteps(scope),
-    apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the browse step limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { steps?: unknown }).steps;
-        if (raw === undefined || raw === null || raw === "") return { value: null };
-        let steps = NaN;
-        if (typeof raw === "number") steps = raw;
-        else if (typeof raw === "string") steps = Number(raw.trim());
-        if (!Number.isInteger(steps) || steps < 1 || steps > 500) {
-          return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
-        }
-        return { value: steps };
-      },
-      (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+    apply: orgWide(
+      "the browse step limit is org-wide",
+      generic<number | null>(
+        (body) => {
+          const raw = (body as { steps?: unknown }).steps;
+          if (raw === undefined || raw === null || raw === "") return { value: null };
+          let steps = NaN;
+          if (typeof raw === "number") steps = raw;
+          else if (typeof raw === "string") steps = Number(raw.trim());
+          if (!Number.isInteger(steps) || steps < 1 || steps > 500) {
+            return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
+          }
+          return { value: steps };
+        },
+        (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+      ),
     ),
   },
   {
@@ -967,6 +981,21 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             scopeLabel: change.grantee,
           });
       };
+      const writeGrants = async (replacement: Grant[], operation: string): Promise<ApplyResult> => {
+        grantsWritten = replacement;
+        try {
+          if (!(await deps.acl!.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
+            return mutationFailed(operation);
+          auditGrantChanges(grantChanges(replacement));
+          return { ok: true };
+        } catch (e) {
+          reportFailure(
+            `admin: credential ${operation === "delete" ? "delete" : "update"} after conditional mutation`,
+            e,
+          );
+          return mutationFailed(operation);
+        }
+      };
       if (b.delete === true) {
         if (
           !existing ||
@@ -974,17 +1003,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         )
           return conflict();
         deletedCredential = true;
-        const replacement: Grant[] = [];
-        grantsWritten = replacement;
-        try {
-          if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
-            return mutationFailed("delete");
-          auditGrantChanges(grantChanges(replacement));
-          return { ok: true };
-        } catch (e) {
-          reportFailure("admin: credential delete after conditional mutation", e);
-          return mutationFailed("delete");
-        }
+        return writeGrants([], "delete");
       }
       const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : "";
       const deliveryRaw = b.delivery === undefined ? (existing?.delivery ?? "broker") : b.delivery;
@@ -1011,20 +1030,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (!existing && (typeof b.secret !== "string" || !b.secret)) {
         return { error: "a new credential requires a secret" };
       }
-      const methods = Array.isArray(b.allowedMethods)
-        ? b.allowedMethods
-            .map(String)
-            .map((method) => method.trim().toUpperCase())
-            .filter(Boolean)
-        : undefined;
+      const methods = trimmedList(b.allowedMethods)?.map((method) => method.toUpperCase());
       if (methods?.some((method) => !isValidBrokerMethod(method)))
         return { error: "allowed methods must be comma-separated HTTP method names" };
-      const paths = Array.isArray(b.allowedPathPrefixes)
-        ? b.allowedPathPrefixes
-            .map(String)
-            .map((path) => path.trim())
-            .filter(Boolean)
-        : undefined;
+      const paths = trimmedList(b.allowedPathPrefixes);
       if (paths?.some((path) => !isValidBrokerPathPrefix(path)))
         return { error: "each allowed path prefix must be one line starting with /" };
       const desired = Array.isArray(b.grantees) ? [...new Set(b.grantees.map(String))] : undefined;
@@ -1045,12 +1054,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (injectionError) return { error: injectionError };
       const injection = b.injection as CredentialInjection | undefined;
       const effectiveInjection = b.injection === undefined ? existing?.injection : injection;
-      let brokerMethods: { allowedMethods?: string[] } = {};
-      if (methods) brokerMethods = { allowedMethods: methods };
-      else if (existing?.allowedMethods) brokerMethods = { allowedMethods: existing.allowedMethods };
-      let brokerPaths: { allowedPathPrefixes?: string[] } = {};
-      if (paths) brokerPaths = { allowedPathPrefixes: paths };
-      else if (existing?.allowedPathPrefixes) brokerPaths = { allowedPathPrefixes: existing.allowedPathPrefixes };
+      const allowedMethods = methods ?? existing?.allowedMethods;
+      const allowedPathPrefixes = paths ?? existing?.allowedPathPrefixes;
       const input = {
         slug,
         name,
@@ -1061,61 +1066,34 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "broker" && effectiveInjection && Object.keys(effectiveInjection).length
           ? { injection: effectiveInjection }
           : {}),
-        ...(delivery === "broker" ? brokerMethods : {}),
-        ...(delivery === "broker" ? brokerPaths : {}),
+        ...(delivery === "broker" && allowedMethods ? { allowedMethods } : {}),
+        ...(delivery === "broker" && allowedPathPrefixes ? { allowedPathPrefixes } : {}),
         deployments: typeof b.deployments === "boolean" ? b.deployments : (existing?.deployments ?? true),
         enabled: typeof b.enabled === "boolean" ? b.enabled : (existing?.enabled ?? true),
         updatedBy: actor.id,
       };
-      if (existing) {
-        mutationVersion = await deps.serviceCreds.setServiceCredentialIfCurrent(
-          scope,
-          input,
-          b.expectedUpdatedAt as number,
-        );
-        if (mutationVersion === null) return conflict();
-      } else {
-        mutationVersion = await deps.serviceCreds.setServiceCredentialIfAbsent(scope, input);
-        if (mutationVersion === null) return conflict();
-      }
-      const replacement = desiredGrants(
-        desired ?? (existing ? grantsBefore.map((grant) => grant.granteeScopeId) : [scope]),
-      );
-      grantsWritten = replacement;
-      try {
-        if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
-          return mutationFailed(existing ? "update" : "create");
-        auditGrantChanges(grantChanges(replacement));
-        return { ok: true };
-      } catch (e) {
-        reportFailure("admin: credential update after conditional mutation", e);
-        return mutationFailed(existing ? "update" : "create");
-      }
+      mutationVersion = existing
+        ? await deps.serviceCreds.setServiceCredentialIfCurrent(scope, input, b.expectedUpdatedAt as number)
+        : await deps.serviceCreds.setServiceCredentialIfAbsent(scope, input);
+      if (mutationVersion === null) return conflict();
+      const keep = existing ? grantsBefore.map((grant) => grant.granteeScopeId) : [scope];
+      return writeGrants(desiredGrants(desired ?? keep), existing ? "update" : "create");
     },
   },
 ];
 
 export const ADMIN_RESOURCE_BY_ID = new Map(ADMIN_RESOURCES.map((r) => [r.id, r]));
 
-export interface AdminResourceManifestEntry {
-  id: string;
-  kind: AdminResourceKind;
-  target?: "org" | "any";
-  secret?: boolean;
-  clearable?: boolean;
-  authz?: "scope-admin" | "org-admin";
-  label?: string;
-  enumValues?: readonly unknown[];
-}
-
-export function adminResourceManifest(): AdminResourceManifestEntry[] {
+export function adminResourceManifest(): Pick<
+  AdminResource,
+  "id" | "kind" | "target" | "secret" | "clearable" | "label" | "enumValues"
+>[] {
   return ADMIN_RESOURCES.map((r) => ({
     id: r.id,
     kind: r.kind,
     ...(r.target ? { target: r.target } : {}),
     ...(r.secret ? { secret: true } : {}),
     ...(r.clearable ? { clearable: true } : {}),
-    ...(r.authz ? { authz: r.authz } : {}),
     ...(r.label ? { label: r.label } : {}),
     ...(r.enumValues ? { enumValues: r.enumValues } : {}),
   }));

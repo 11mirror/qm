@@ -1,9 +1,8 @@
 import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin } from "../shared.ts";
+import { badRequest, limitParam, notFound, orgAdmin } from "./common.ts";
 import { type ApiCtx } from "../route.ts";
 import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
-import { tenant } from "../../../tenant.ts";
 
 const SLACK_MIRROR_PAGE_MAX = 400;
 const SLACK_MIRROR_PAGE_DEFAULT = 200;
@@ -31,11 +30,11 @@ async function mirrorNames(deps: ApiCtx["deps"]) {
 }
 
 export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
+  const { res, app } = ctx;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { scope } = authz;
+  authz.audit("slack_mirror.read", "slack-mirror");
   const raw = await app.listSurfaceContainers({ limit: SLACK_MIRROR_PAGE_MAX + 1 });
   const hasMore = raw.length > SLACK_MIRROR_PAGE_MAX;
   const channelsById = new Map((await app.directoryChannels()).map((c) => [c.channelId.toLowerCase(), c.name]));
@@ -48,22 +47,14 @@ export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
 
 export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { scope } = authz;
   const container = (url.searchParams.get("container") ?? "").trim();
   const q = (url.searchParams.get("q") ?? "").trim();
-  if (!container && !q) return sendJson(res, 400, { error: "bad_request", message: "container or q required" });
-  const limit = Math.min(
-    SLACK_MIRROR_PAGE_MAX,
-    Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SLACK_MIRROR_PAGE_DEFAULT),
-  );
-  audit(deps, {
-    principalId: actor.id,
-    action: "slack_mirror.messages.read",
-    resource: container || `search:${q}`,
-    scopeLabel: scope,
-  });
+  if (!container && !q) return badRequest(res, "container or q required");
+  const limit = limitParam(url, SLACK_MIRROR_PAGE_DEFAULT, SLACK_MIRROR_PAGE_MAX);
+  authz.audit("slack_mirror.messages.read", container || `search:${q}`);
   const names = await mirrorNames(deps);
   const withNames = (rows: Awaited<ReturnType<App["readSurfaceMessages"]>>) =>
     rows.map((m) => ({
@@ -89,87 +80,85 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, mode: "timeline", container, messages, hasMore, limit });
 }
 
-export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
+interface DecisionLog {
+  get(id: number): Promise<object | null>;
+  list(opts: { limit: number }): Promise<object[]>;
+  counts(opts?: { container?: string; channel?: string }): Promise<object>;
+}
+
+async function listDecisionLog(
+  ctx: ApiCtx,
+  store: DecisionLog | undefined,
+  log: {
+    action: string;
+    filter: string;
+    param: string;
+    values: readonly string[];
+    one: string;
+    many: string;
+    empty: object;
+  },
+): Promise<void> {
   const { res, deps, url } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  const store = deps.ambientJudgments;
-  if (!store) return sendJson(res, 200, { scopeId: scope, judgments: [], counts: { act: 0, ignore: 0, fastlane: 0 } });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { scope } = authz;
+  if (!store) return sendJson(res, 200, { scopeId: scope, [log.many]: [], counts: log.empty });
   const container = (url.searchParams.get("container") ?? "").trim() || undefined;
   const id = Number(url.searchParams.get("id"));
-  audit(deps, {
-    principalId: actor.id,
-    action: "ambient_judgments.read",
-    resource: container ?? "all",
-    scopeLabel: scope,
-  });
+  authz.audit(`${log.action}.read`, container ?? "all");
   if (id) {
-    const judgment = await store.get(id);
-    if (!judgment) return sendJson(res, 404, { error: "not_found" });
+    const row = await store.get(id);
+    if (!row) return notFound(res);
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
-    return sendJson(res, 200, { scopeId: scope, judgment, workspaceUrl });
+    return sendJson(res, 200, { scopeId: scope, [log.one]: row, workspaceUrl });
   }
-  const decision = (url.searchParams.get("decision") ?? "")
+  const values = (url.searchParams.get(log.param) ?? "")
     .split(",")
     .map((d) => d.trim())
-    .filter((d): d is "act" | "ignore" | "fastlane" => d === "act" || d === "ignore" || d === "fastlane");
+    .filter((d) => log.values.includes(d));
   const before = Math.floor(Number(url.searchParams.get("before"))) || undefined;
   const beforeId = Math.floor(Number(url.searchParams.get("beforeId"))) || undefined;
-  const limit = Math.min(200, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || 100));
-  const [judgments, counts] = await Promise.all([
+  const limit = limitParam(url, 100, 200);
+  const where = container ? { [log.filter]: container } : {};
+  const [rows, counts] = await Promise.all([
     store.list({
-      ...(container ? { container } : {}),
-      ...(decision.length ? { decision } : {}),
+      ...where,
+      ...(values.length ? { [log.param]: values } : {}),
       ...(before ? { before } : {}),
       ...(beforeId ? { beforeId } : {}),
       limit: limit + 1,
     }),
-    store.counts(container ? { container } : {}),
+    store.counts(where),
   ]);
-  const hasMore = judgments.length > limit;
+  const hasMore = rows.length > limit;
   return sendJson(res, 200, {
     scopeId: scope,
-    judgments: hasMore ? judgments.slice(0, limit) : judgments,
+    [log.many]: hasMore ? rows.slice(0, limit) : rows,
     counts,
     hasMore,
     limit,
   });
 }
 
-export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  const store = deps.ackEmojiPicks;
-  if (!store) return sendJson(res, 200, { scopeId: scope, picks: [], counts: { picked: 0, declined: 0 } });
-  const channel = (url.searchParams.get("container") ?? "").trim() || undefined;
-  const id = Number(url.searchParams.get("id"));
-  audit(deps, { principalId: actor.id, action: "ack_emoji_picks.read", resource: channel ?? "all", scopeLabel: scope });
-  if (id) {
-    const pick = await store.get(id);
-    if (!pick) return sendJson(res, 404, { error: "not_found" });
-    const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
-    return sendJson(res, 200, { scopeId: scope, pick, workspaceUrl });
-  }
-  const outcome = (url.searchParams.get("outcome") ?? "")
-    .split(",")
-    .map((d) => d.trim())
-    .filter((d): d is "picked" | "declined" => d === "picked" || d === "declined");
-  const before = Math.floor(Number(url.searchParams.get("before"))) || undefined;
-  const beforeId = Math.floor(Number(url.searchParams.get("beforeId"))) || undefined;
-  const limit = Math.min(200, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || 100));
-  const [picks, counts] = await Promise.all([
-    store.list({
-      ...(channel ? { channel } : {}),
-      ...(outcome.length ? { outcome } : {}),
-      ...(before ? { before } : {}),
-      ...(beforeId ? { beforeId } : {}),
-      limit: limit + 1,
-    }),
-    store.counts(channel ? { channel } : {}),
-  ]);
-  const hasMore = picks.length > limit;
-  return sendJson(res, 200, { scopeId: scope, picks: hasMore ? picks.slice(0, limit) : picks, counts, hasMore, limit });
-}
+export const listAmbientJudgments = (ctx: ApiCtx): Promise<void> =>
+  listDecisionLog(ctx, ctx.deps.ambientJudgments, {
+    action: "ambient_judgments",
+    filter: "container",
+    param: "decision",
+    values: ["act", "ignore", "fastlane"],
+    one: "judgment",
+    many: "judgments",
+    empty: { act: 0, ignore: 0, fastlane: 0 },
+  });
+
+export const listAckEmojiPicks = (ctx: ApiCtx): Promise<void> =>
+  listDecisionLog(ctx, ctx.deps.ackEmojiPicks, {
+    action: "ack_emoji_picks",
+    filter: "channel",
+    param: "outcome",
+    values: ["picked", "declined"],
+    one: "pick",
+    many: "picks",
+    empty: { picked: 0, declined: 0 },
+  });

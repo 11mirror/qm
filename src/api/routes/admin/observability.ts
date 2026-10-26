@@ -1,7 +1,7 @@
-import { parseScopeId, type ScopeId } from "../../../types.ts";
+import { type ScopeId } from "../../../types.ts";
 import { sendJson } from "../../http.ts";
-import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { badRequest, scopedAdmin } from "./common.ts";
 
 const EGRESS_LIST_LIMIT = 1000;
 const RUNS_LIST_LIMIT = 200;
@@ -11,11 +11,9 @@ const AUDIT_FILTERED_LIMIT = 2000;
 
 export async function egress(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, "egress");
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "egress.read", resource: "egress", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   const q = orgWide ? { limit: EGRESS_LIST_LIMIT } : { scopeId: scope, limit: EGRESS_LIST_LIMIT };
   const brokerRows = ((await deps.credentialUsage?.list(q)) ?? []).map((s) => ({
     ts: s.ts,
@@ -49,11 +47,9 @@ export async function egress(ctx: ApiCtx): Promise<void> {
 
 export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, "runs");
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "runs.read", resource: "runs", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   const rawRuns = (await deps.runs?.list({ limit: RUNS_LIST_LIMIT })) ?? [];
   const byThread = new Map(
     ((await deps.sessions?.sessionsByThreadRefs(rawRuns.map((r) => r.sessionId))) ?? []).map((s) => [s.threadRef, s]),
@@ -84,11 +80,9 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
 
 export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, "errors");
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "errors.read", resource: "errors", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   const sessionId = url.searchParams.get("sessionId") || undefined;
   const filters = {
     ...(orgWide ? {} : { scopeId: scope }),
@@ -97,10 +91,7 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
   if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "limit must be a positive integer and offset a non-negative integer.",
-    });
+    return badRequest(res, "limit must be a positive integer and offset a non-negative integer.");
   }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
   const total = (await deps.errors?.count(filters)) ?? 0;
@@ -113,11 +104,9 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
 
 export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
+  const authz = await scopedAdmin(ctx, "audit");
   if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "audit.read", resource: "audit", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
+  const { scope, orgWide } = authz;
   const action = ctx.url.searchParams.get("action") ?? undefined;
   const resourceContains = ctx.url.searchParams.get("resource") ?? undefined;
   const filtered = action !== undefined || resourceContains !== undefined;
