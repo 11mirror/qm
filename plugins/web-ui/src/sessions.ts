@@ -45,7 +45,6 @@ import {
   slackThreadUrl,
   TAIL_TURNS,
   type TranscriptPage,
-  updateSession,
   type PendingApproval,
   type CoreProject,
   type CoreSession,
@@ -110,6 +109,14 @@ import {
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import {
+  bumpSessionPatchEpoch,
+  queueSessionPatch,
+  resetSessionPatches,
+  sessionPatchEpoch,
+  sessionPatchGeneration,
+  type SessionPatch,
+} from "./session-patches";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
 const WEB_ONLY_KEY = "web-ui:web-only";
@@ -130,18 +137,8 @@ export const sessionsState = {
 };
 
 let selection: SessionSelection = emptySelection();
-type SessionPatch = {
-  title?: string | null;
-  archived?: boolean;
-  pinned?: boolean;
-  color?: string | null;
-  unread?: boolean;
-};
 let keptUnreadId: string | null = null;
-const sessionPatchTails = new Map<string, Promise<void>>();
-const sessionPatchVersions = new Map<string, number>();
-let sessionPatchGeneration = 0;
-let sessionPatchEpoch = 0;
+const SAVE_FAILED_NOTICE = "Couldn't save that change.";
 
 export function clearSessionSelection(): boolean {
   if (!selection.ids.size && !selection.anchor) return false;
@@ -201,10 +198,7 @@ let chatsPage = freshChatsPage();
 export function resetSessionsState(): void {
   selection = emptySelection();
   selectColorOpen = false;
-  sessionPatchGeneration++;
-  sessionPatchEpoch++;
-  sessionPatchTails.clear();
-  sessionPatchVersions.clear();
+  resetSessionPatches();
   Object.assign(sessionsState, freshSessionsState());
   listCurrent = false;
   listRequestedAt = 0;
@@ -793,7 +787,7 @@ export function addPendingSession(
 }
 
 export function replacePendingSession(threadRef: string, session: CoreSession): void {
-  sessionPatchEpoch++;
+  bumpSessionPatchEpoch();
   pendingForkThreads.delete(threadRef);
   sessionsState.list = withPendingSession(withoutUnsentPending(sessionsState.list, threadRef), session);
   renderList();
@@ -1228,7 +1222,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
   const before = archived ? paging.archivedCursor : paging.activeCursor;
   if (!archived && !before) return;
   paging.loading = kind;
-  const epoch = sessionPatchEpoch;
+  const epoch = sessionPatchEpoch();
   renderList();
   try {
     const page = await fetchSessionPage({
@@ -1237,7 +1231,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
       status: kind,
       ...(sessionsState.webOnly ? { surface: "web" } : {}),
     });
-    if (epoch !== sessionPatchEpoch) return;
+    if (epoch !== sessionPatchEpoch()) return;
     sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
     Object.assign(
       paging,
@@ -1436,17 +1430,19 @@ function colorPopover(): TemplateResult {
 }
 
 async function bulkPatch(patch: SessionPatch): Promise<void> {
-  const generation = sessionPatchGeneration;
+  const generation = sessionPatchGeneration();
   const ids = [...selection.ids];
   selectColorOpen = false;
   if (patch.archived !== undefined) selection = emptySelection();
   if (patch.archived) for (const id of ids) closeSessionSurfaces(id);
   sessionsState.list = sessionsState.list.map((s) => (ids.includes(s.id) ? { ...s, ...patch } : s));
   redrawSelection();
-  const patches = ids.map((id) => queueSessionPatch(id, patch));
+  const patches = ids.map((id) => queueSessionPatch(id, patch, applyResolvedSession));
   const results = await Promise.allSettled(patches);
-  if (sessionPatchGeneration === generation && results.some((r) => r.status === "rejected"))
-    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
+  if (sessionPatchGeneration() === generation && results.some((r) => r.status === "rejected")) {
+    canvasToast(SAVE_FAILED_NOTICE);
+    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch() });
+  }
   redrawSelection();
 }
 
@@ -1533,38 +1529,19 @@ async function refreshSessionTitle(s: CoreSession): Promise<void> {
 }
 
 async function persistSessionPatch(id: string, patch: SessionPatch): Promise<void> {
-  const generation = sessionPatchGeneration;
+  const generation = sessionPatchGeneration();
   sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
   renderList();
-  const request = queueSessionPatch(id, patch);
+  const request = queueSessionPatch(id, patch, applyResolvedSession);
   try {
     await request;
     renderList();
   } catch (e) {
     swallow("web-ui: save session change", e);
-    if (sessionPatchGeneration === generation) await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
+    if (sessionPatchGeneration() !== generation) return;
+    canvasToast(SAVE_FAILED_NOTICE);
+    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch() });
   }
-}
-
-function queueSessionPatch(id: string, patch: SessionPatch): Promise<CoreSession> {
-  sessionPatchEpoch++;
-  const version = (sessionPatchVersions.get(id) ?? 0) + 1;
-  const generation = sessionPatchGeneration;
-  sessionPatchVersions.set(id, version);
-  const prior = sessionPatchTails.get(id) ?? Promise.resolve();
-  const request = prior
-    .catch(() => undefined)
-    .then(async () => {
-      const { session } = await updateSession(id, patch);
-      if (sessionPatchGeneration === generation && sessionPatchVersions.get(id) === version)
-        applyResolvedSession(session);
-      return session;
-    });
-  const settle = (): void => {
-    if (sessionPatchGeneration === generation) sessionPatchEpoch++;
-  };
-  sessionPatchTails.set(id, request.then(settle, settle));
-  return request;
 }
 
 let listSettled: (() => void) | null = null;
@@ -1648,7 +1625,7 @@ async function runSessionsRefresh(
 ): Promise<boolean> {
   loadRecentContexts(opts.refreshContexts === true);
   const seq = ++sessionRefreshSeq;
-  const patchEpoch = opts.patchEpoch ?? sessionPatchEpoch;
+  const patchEpoch = opts.patchEpoch ?? sessionPatchEpoch();
   if (opts.showLoading) {
     sessionsLoading = true;
     sessionsNotice = "";
@@ -1669,7 +1646,7 @@ async function runSessionsRefresh(
       Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
-    if (patchEpoch !== sessionPatchEpoch) {
+    if (patchEpoch !== sessionPatchEpoch()) {
       listDiscards++;
       return false;
     }

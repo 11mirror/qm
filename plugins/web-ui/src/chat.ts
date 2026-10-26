@@ -122,30 +122,12 @@ installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
 const settledRowCache = new WeakMap<object, { key: unknown[]; tpl: TemplateResult | typeof nothing }>();
-const CHAT_CTAS = [
-  "What can I help with?",
-  "Ahoy, what are we after?",
-  "What are we charting today?",
-  "Where shall we set sail?",
-  "What's the heading, captain?",
-];
-const CTA_INDEX_KEY = "web-ui:chat-cta";
+const CHAT_CTA = "What can I help with?";
 const APPROVED_LABELS: Record<string, string> = {
   once: "Approved once",
   session: "Approved for this session",
   always: "Approved always",
 };
-function nextChatCta(): string {
-  let index = 0;
-  try {
-    const stored = Number(localStorage.getItem(CTA_INDEX_KEY));
-    index = (Number.isInteger(stored) ? stored + 1 : 0) % CHAT_CTAS.length;
-    localStorage.setItem(CTA_INDEX_KEY, String(index));
-  } catch {
-    void 0;
-  }
-  return CHAT_CTAS[index]!;
-}
 const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
@@ -249,8 +231,6 @@ export function createChatSurface(
     }
   }
 
-  let ctaThreadRef: string | null | undefined;
-  let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
 
   function notePendingSessionOnSend(): void {
@@ -1028,14 +1008,6 @@ export function createChatSurface(
     redrawTranscript();
   }
 
-  function chatCta(): string {
-    if (chatState.threadRef !== ctaThreadRef) {
-      ctaThreadRef = chatState.threadRef;
-      ctaText = nextChatCta();
-    }
-    return ctaText;
-  }
-
   function setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier = earlierCount > 0): void {
     chatState.transcriptAnchorSeq = hasEarlier ? anchorSeq : null;
     chatState.earlierCount = earlierCount;
@@ -1300,7 +1272,7 @@ export function createChatSurface(
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent}
               ${waitingSteerRows(agent)} ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${CHAT_CTA}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>

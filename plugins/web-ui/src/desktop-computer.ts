@@ -18,6 +18,10 @@ export type DesktopRun = {
   activity?: RunActivityEntry[];
 };
 
+const CALL_PICKUP_WINDOW_MS = 55_000;
+const CALL_RUN_DEADLINE_MS = 50_000;
+const EXPIRED_CALL = "The desktop call expired before this computer picked it up.";
+
 function desktop(): Desk | undefined {
   const bridge = (globalThis as { window?: { qmDesktop?: { computer?: Desk; platform?: string } } }).window?.qmDesktop;
   return bridge?.platform === "darwin" ? bridge.computer : undefined;
@@ -49,10 +53,13 @@ export function createDesktopExecutor(
       )
         continue;
       handled.add(callId);
-      if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
+      if (!item.createdAt || Date.now() - item.createdAt > CALL_PICKUP_WINDOW_MS) {
+        await send(callId, { content: EXPIRED_CALL, isError: true });
+        continue;
+      }
       let result: Result;
       try {
-        result = await desk.call(item.body.args, undefined, item.createdAt + 50_000);
+        result = await desk.call(item.body.args, undefined, item.createdAt + CALL_RUN_DEADLINE_MS);
       } catch (error) {
         result = { content: errMessage(error), isError: true };
       }

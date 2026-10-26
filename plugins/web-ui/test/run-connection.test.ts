@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { continuableMessages, messagesWithStreaming, resumeAnchor } from "../src/transcript-messages.ts";
-import { makeCoreStreamFn, makeRunResumeStreamFn, RUN_IDLE_MS, setClock } from "../src/run-stream.ts";
+import { makeCoreStreamFn, makeRunResumeStreamFn, RUN_IDLE_MS } from "../src/run-stream.ts";
 import { userSendMessage } from "../src/core-bridge.ts";
 import type { Api, Context, Model } from "@earendil-works/pi-ai";
 
@@ -15,8 +15,7 @@ const flush = async () => {
 for (const withAttachments of [false, true]) {
   test(`a timed-out send reconnects to its original input${withAttachments ? " with attachments" : ""}`, async (t) => {
     let time = 0;
-    setClock(() => time);
-    t.after(() => setClock(() => Date.now()));
+    t.mock.method(Date, "now", () => time);
     const attachments = withAttachments
       ? [{ id: "notes", type: "document", fileName: "notes.txt", mimeType: "text/plain", size: 5, content: "bm90ZXM=" }]
       : undefined;

@@ -51,11 +51,6 @@ const SSE_OPEN_TIMEOUT_MS = 4_000;
 const SSE_SILENCE_MS = 30_000;
 const RUN_REQUEST_TIMEOUT_MS = 15_000;
 
-let now: () => number = () => Date.now();
-export function setClock(fn: () => number): void {
-  now = fn;
-}
-
 export function runIsTerminal(run: Pick<RunPoll, "status" | "result" | "replyComplete">): boolean {
   return run.status === "done" || run.status === "failed" || run.result != null || run.replyComplete === true;
 }
@@ -386,7 +381,7 @@ async function drive(
       }
       const message = agent.state.messages.find((message) => idempotencyKey && sendKeyOf(message) === idempotencyKey);
       if (message) (message as unknown as HistoryUserMessage).runId = submit.runId;
-      d.st.lastProgressAt = now();
+      d.st.lastProgressAt = Date.now();
       await followRun(d, submit.runId, slot);
       return;
     }
@@ -445,7 +440,7 @@ export interface Acc {
 }
 
 function freshAcc(): Acc {
-  return { acc: "", startOffset: 0, lastProgressAt: now() };
+  return { acc: "", startOffset: 0, lastProgressAt: Date.now() };
 }
 
 function isWorkItem(item: Item): boolean {
@@ -489,7 +484,7 @@ function applyRun(live: Live, run: RunPoll): "open" | "terminal" {
   const work = (partial as AssistantWork).work;
   const beforeActivity = work?.activity.length ?? 0;
   if (mergeWork(work, run)) {
-    if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
+    if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = Date.now();
     notify?.();
   }
   if (work && typeof run.attempt === "number" && work.attempt !== run.attempt) {
@@ -510,7 +505,7 @@ function applyRun(live: Live, run: RunPoll): "open" | "terminal" {
   const p = typeof run.partial === "string" ? run.partial : "";
   const startOffset = run.partialStartOffset ?? 0;
   if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
-    if (startOffset + p.length > st.startOffset + st.acc.length) st.lastProgressAt = now();
+    if (startOffset + p.length > st.startOffset + st.acc.length) st.lastProgressAt = Date.now();
     if (startOffset !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
     st.startOffset = startOffset;
     if (work) work.streamStartOffset = startOffset;
@@ -576,16 +571,16 @@ export async function pollRun(live: Live, runId: string): Promise<void> {
       if (signal?.aborted) return abortStream(live);
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(live, e.message);
       consecutiveFailures++;
-      if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
+      if (Date.now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
     if (applyRun(live, run) === "terminal") return;
-    if (run.stale === true) st.staleSince ??= now();
+    if (run.stale === true) st.staleSince ??= Date.now();
     else st.staleSince = undefined;
-    if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
-      st.lastProgressAt = now();
-    if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
+    if (run.alive === true || (st.staleSince !== undefined && Date.now() - st.staleSince < STALE_GRACE_MS))
+      st.lastProgressAt = Date.now();
+    if (Date.now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
     await sleep(POLL_MS);
   }
 }
@@ -657,14 +652,14 @@ async function streamRunViaSse(live: Live, runId: string): Promise<"done" | "fal
         const value = event.value as { step: string; index: number; offset: number; delta: string };
         const work = (live.partial as AssistantWork).work;
         if (mergeReasoning(work, { step: value.step, index: value.index, text: value.delta }, value.offset)) {
-          st.lastProgressAt = now();
+          st.lastProgressAt = Date.now();
           live.notify?.();
         }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(live, { ...run, replyComplete: terminal }) === "terminal") return "done";
-        if (run.alive) st.lastProgressAt = now();
+        if (run.alive) st.lastProgressAt = Date.now();
       }
     }
     return "fallback";
@@ -724,7 +719,7 @@ function applyStreamText(live: Live, text: string, offset: number, startOffset: 
   if (work) work.streamStartOffset = start;
   if (start !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
   st.acc = offset > end ? "" : st.acc.slice(start - st.startOffset);
-  st.lastProgressAt = now();
+  st.lastProgressAt = Date.now();
   pushDelta(live, next.slice(start - nextStart));
   st.startOffset = start;
 }

@@ -1,10 +1,10 @@
 import type { Item } from "../src/items.ts";
 import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, test, mock } from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { itemsToMessages, hasRecordedRunReply, type AssistantWork } from "../src/transcript-messages.ts";
-import { pollRun, RUN_IDLE_MS, setClock } from "../src/run-stream.ts";
+import { pollRun, RUN_IDLE_MS } from "../src/run-stream.ts";
 
 const user = (runId: string): Item =>
   item("UserMessage", { seq: 1, createdAt: 100, text: "Compute the result", turnId: runId });
@@ -12,11 +12,11 @@ const answer: Item = item("AgentMessage", { seq: 2, createdAt: 200, text: "The r
 const fetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = fetch;
-  setClock(() => Date.now());
+  mock.restoreAll();
 });
 
 test("a poll timeout retains the exact run identity needed to recover its saved answer", async () => {
-  setClock(() => RUN_IDLE_MS + 1);
+  mock.method(Date, "now", () => RUN_IDLE_MS + 1);
   globalThis.fetch = async () => {
     throw new TypeError("connection interrupted");
   };
@@ -31,7 +31,7 @@ test("a poll timeout retains the exact run identity needed to recover its saved 
 });
 
 test("an idle running snapshot timeout also retains the run identity", async () => {
-  setClock(() => RUN_IDLE_MS + 1);
+  mock.method(Date, "now", () => RUN_IDLE_MS + 1);
   globalThis.fetch = async () => new Response(JSON.stringify({ status: "running", result: null }));
   const stream = createAssistantMessageEventStream();
   const partial = itemsToMessages([answer])[0] as AssistantWork;

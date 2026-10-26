@@ -36,15 +36,18 @@ test("only the submitting desktop executes an active call, once despite duplicat
   assert.deepEqual(results, ["click"]);
 });
 
-test("completed or expired calls never execute", async () => {
+test("completed or expired calls never execute, and an expired call is answered with an error", async () => {
   let actions = 0;
+  const results: Array<[string, { content: string; isError?: boolean }]> = [];
   const execute = createDesktopExecutor(
     "mine",
     desk(async () => {
       actions++;
       return { content: "done" };
     }),
-    async () => {},
+    async (id, result) => {
+      results.push([id, result]);
+    },
   );
   await execute({
     desktopClientId: "mine",
@@ -53,6 +56,9 @@ test("completed or expired calls never execute", async () => {
     activity: [entry("old", Date.now() - 60_000), entry("done"), { item: item("ToolResult", { callId: "done" }) }],
   });
   assert.equal(actions, 0);
+  assert.deepEqual(results, [
+    ["old", { content: "The desktop call expired before this computer picked it up.", isError: true }],
+  ]);
 });
 
 test("a failed result submission does not replay the physical action", async () => {
