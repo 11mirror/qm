@@ -25,6 +25,7 @@ import type {
   LeasePeek,
   LlmRequestRecord,
   NewEntry,
+  TranscriptImportResult,
   NewLlmRequest,
   ParticipantWindow,
   ScreenSample,
@@ -1101,7 +1102,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const insertEntries = async (
     client: PoolClient,
     sessionId: string,
-    entries: readonly NewEntry[],
+    entries: readonly (NewEntry & { createdAt?: number })[],
     turnId?: string,
   ): Promise<SessionEntry[]> => {
     if (!entries.length) return [];
@@ -1112,7 +1113,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       [sessionId],
     );
     const startSeq = Number(max.rows[0]!.n);
-    const createdAt = now();
+    const stampedAt = now();
     const items = entries.map((entry, index) => {
       const seq = startSeq + index;
       const item = itemFromEntry(entry.type, JSON.parse(jsonbSafeStringify(entry.payload ?? null)), {
@@ -1123,8 +1124,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...item,
         seq,
         scopeLabel: entry.scopeLabel as ScopeId,
+        createdAt: entry.createdAt ?? stampedAt,
       };
     });
+    const createdAt = Math.max(...items.map((item) => item.createdAt));
     for (const item of items) {
       if (item.kind !== "Retraction" || typeof item.body.ts !== "string") continue;
       const inBatch = items.findLast(
@@ -1138,17 +1141,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       );
       item.targetSeq = inBatch?.seq ?? (prior.seq == null ? null : Number(prior.seq));
     }
-    const full = items.map((item) => entryFromItem({ sessionId, createdAt, ...item }));
+    const full = items.map((item) => entryFromItem({ sessionId, ...item }));
     const userTurns = full.filter((entry) => entry.type === "user" && !isOverheardEntry(entry));
     const firstUser = userTurns[0];
     const lastUser = userTurns[userTurns.length - 1];
     await client
       .query(
         `INSERT INTO items(tenant_id, session_id, seq, ${ITEM_COLUMNS.map(([column]) => column).join(",")}, created_at)
-       SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf("$3::bigint")}
-       FROM jsonb_to_recordset($2::jsonb) AS i(seq bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
+       SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf('i."createdAt"')}
+       FROM jsonb_to_recordset($2::jsonb) AS i(seq bigint, "createdAt" bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
        ORDER BY i.seq`,
-        [sessionId, jsonbStringify(items), createdAt],
+        [sessionId, jsonbStringify(items)],
       )
       .catch((err: unknown) => {
         const e = err as { code?: unknown; constraint?: unknown };
@@ -1665,6 +1668,52 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         return true;
+      });
+    },
+
+    async importTranscript(spec): Promise<TranscriptImportResult> {
+      return withPgTransaction(await pool(), async (client) => {
+        const createdAt = spec.entries[0]?.createdAt ?? now();
+        await client.query(
+          "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,$5,0,0,$7,$8) ON CONFLICT (thread_ref) DO NOTHING",
+          [
+            randomUUID(),
+            spec.type,
+            spec.scopeId,
+            spec.threadRef,
+            createdAt,
+            spec.surface,
+            sessionOrigin(spec.threadRef),
+            cronIdOf(spec.threadRef),
+          ],
+        );
+        const found = await client.query("SELECT id, scope_id FROM sessions WHERE thread_ref = $1", [spec.threadRef]);
+        const sessionId = found.rows[0]!.id as string;
+        if (found.rows[0]!.scope_id !== spec.scopeId)
+          throw new Error(`importTranscript: ${spec.threadRef} belongs to a different scope`);
+        await lockSession(client, sessionId);
+        await client.query(
+          `INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq)
+           VALUES ($1, $2, 0, NULL, 0, NULL) ON CONFLICT (session_id, principal_id) DO NOTHING`,
+          [sessionId, spec.principalId],
+        );
+        const latest = await client.query(
+          `SELECT (EXTRACT(EPOCH FROM MAX(created_at)) * 1000)::bigint AS at FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,
+          [sessionId],
+        );
+        const after = latest.rows[0]?.at == null ? -Infinity : Number(latest.rows[0].at);
+        const appended = await insertEntries(
+          client,
+          sessionId,
+          spec.entries.filter((entry) => entry.createdAt > after),
+        );
+        if (spec.title?.trim())
+          await client.query("UPDATE sessions SET title = COALESCE(title, $2) WHERE id = $1", [
+            sessionId,
+            spec.title.trim(),
+          ]);
+        const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
+        return { session: rowToSession(row.rows[0]!), appended: appended.length };
       });
     },
 

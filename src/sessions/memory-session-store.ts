@@ -125,6 +125,58 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     };
   };
 
+  const record = (
+    sessionId: string,
+    batch: readonly (NewEntry & { createdAt?: number })[],
+    turnId?: string,
+  ): SessionEntry[] => {
+    const log = entries.get(sessionId);
+    if (!log) throw new Error(`unknown session: ${sessionId}`);
+    const copied = structuredClone(batch);
+    const scopeLabel = sessions.get(sessionId)?.scopeId ?? (copied[0]?.scopeLabel as ScopeId);
+    const items = copied.map((entry) => itemFromEntry(entry.type, entry.payload, { turnId, author: entry.author }));
+    const calls = new Set(
+      log.flatMap((e) => {
+        const id = (e.payload as { callId?: unknown } | null)?.callId;
+        return (e.type === "tool_call" || e.type === "tool_result") && typeof id === "string"
+          ? [`${e.type}:${id}`]
+          : [];
+      }),
+    );
+    for (const [index, item] of items.entries()) {
+      if (!item.callId) continue;
+      const key = `${copied[index]!.type}:${item.callId}`;
+      if (calls.has(key)) throw new DuplicateCallError(sessionId, [item.callId]);
+      calls.add(key);
+    }
+    return items.map((item, position) => {
+      const seq = log.length;
+      const full = entryFromItem({
+        sessionId,
+        seq,
+        ...item,
+        scopeLabel,
+        createdAt: copied[position]!.createdAt ?? now(),
+      });
+      log.push(full);
+      const searchType = searchEntryType(full);
+      const text = searchType ? entrySearchText(full.payload) : null;
+      if (searchType && text?.trim()) {
+        const index = searchIndex.get(full.sessionId) ?? [];
+        const author = entrySearchAuthor(full);
+        index.push({
+          seq: full.seq,
+          type: searchType,
+          text,
+          createdAt: full.createdAt,
+          ...(author ? { author } : {}),
+        });
+        searchIndex.set(full.sessionId, index);
+      }
+      return full;
+    });
+  };
+
   return {
     leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools) {
@@ -243,6 +295,35 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       pins.delete(sessionId);
     },
 
+    async importTranscript(spec) {
+      const existing = byThread.get(spec.threadRef);
+      let session = existing ? sessions.get(existing) : undefined;
+      if (session && session.scopeId !== spec.scopeId)
+        throw new Error(`importTranscript: ${spec.threadRef} belongs to a different scope`);
+      if (!session) {
+        session = {
+          id: randomUUID(),
+          type: spec.type,
+          scopeId: spec.scopeId,
+          threadRef: spec.threadRef,
+          createdAt: spec.entries[0]?.createdAt ?? now(),
+          surface: spec.surface,
+        };
+        sessions.set(session.id, session);
+        entries.set(session.id, []);
+        byThread.set(spec.threadRef, session.id);
+      }
+      if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
+      if (!windows.get(session.id)?.has(spec.principalId))
+        await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
+      const after = Math.max(-Infinity, ...(entries.get(session.id) ?? []).map((entry) => entry.createdAt));
+      const appended = record(
+        session.id,
+        spec.entries.filter((entry) => entry.createdAt > after),
+      );
+      return { session, appended: appended.length };
+    },
+
     async deleteSessionIfEmpty(sessionId) {
       if (!sessions.has(sessionId)) return false;
       if ((entries.get(sessionId)?.length ?? 0) > 0) return false;
@@ -266,53 +347,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         throw new Error("append without a valid session lease");
       }
       held.expiresAt = now() + leaseTtlMs;
-      const log = entries.get(lease.sessionId);
-      if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
-      const copied = structuredClone(batch);
-      const scopeLabel = sessions.get(lease.sessionId)?.scopeId ?? (copied[0]?.scopeLabel as ScopeId);
-      const items = copied.map((entry) =>
-        itemFromEntry(entry.type, entry.payload, { turnId: lease.turnId, author: entry.author }),
-      );
-      const calls = new Set(
-        log.flatMap((e) => {
-          const id = (e.payload as { callId?: unknown } | null)?.callId;
-          return (e.type === "tool_call" || e.type === "tool_result") && typeof id === "string"
-            ? [`${e.type}:${id}`]
-            : [];
-        }),
-      );
-      for (const [index, item] of items.entries()) {
-        if (!item.callId) continue;
-        const key = `${copied[index]!.type}:${item.callId}`;
-        if (calls.has(key)) throw new DuplicateCallError(lease.sessionId, [item.callId]);
-        calls.add(key);
-      }
-      return items.map((item) => {
-        const seq = log.length;
-        const full = entryFromItem({
-          sessionId: lease.sessionId,
-          seq,
-          ...item,
-          scopeLabel,
-          createdAt: now(),
-        });
-        log.push(full);
-        const searchType = searchEntryType(full);
-        const text = searchType ? entrySearchText(full.payload) : null;
-        if (searchType && text?.trim()) {
-          const index = searchIndex.get(full.sessionId) ?? [];
-          const author = entrySearchAuthor(full);
-          index.push({
-            seq: full.seq,
-            type: searchType,
-            text,
-            createdAt: full.createdAt,
-            ...(author ? { author } : {}),
-          });
-          searchIndex.set(full.sessionId, index);
-        }
-        return full;
-      });
+      return record(lease.sessionId, batch, lease.turnId);
     },
 
     async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {

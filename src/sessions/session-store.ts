@@ -122,6 +122,25 @@ export interface NewEntry {
   author?: string;
 }
 
+export interface ImportedEntry extends NewEntry {
+  createdAt: number;
+}
+
+export interface TranscriptImport {
+  threadRef: string;
+  type: SessionType;
+  scopeId: ScopeId;
+  surface: string;
+  principalId: string;
+  title?: string;
+  entries: readonly ImportedEntry[];
+}
+
+export interface TranscriptImportResult {
+  session: Session;
+  appended: number;
+}
+
 interface ParticipantViewPatch {
   title?: string | null;
   archived?: boolean;
@@ -616,6 +635,8 @@ export interface SessionStore {
 
   deleteSession(sessionId: string): Promise<void>;
   deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
+
+  importTranscript(spec: TranscriptImport): Promise<TranscriptImportResult>;
 
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;
 
