@@ -189,7 +189,8 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
+/** The backend core runs: env.core.SANDBOX_BACKEND when set, else sandbox.backend. Every caller reads it here. */
+export const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 
 export const localSandboxActive = (config: QmConfig): boolean =>
@@ -313,34 +314,45 @@ function objectProps(s: string, objStart: number): { props: PropSpan[]; openBrac
   }
 }
 
+type TextEdit = { start: number; end: number; text: string };
+
+function applyEdits(raw: string, edits: TextEdit[]): string {
+  let out = raw;
+  for (const edit of edits.sort((a, b) => b.start - a.start))
+    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  return out;
+}
+
+const stringEntry = ([key, value]: [string, string]): string => `${JSON.stringify(key)}: ${JSON.stringify(value)}`;
+
+/** Set each key of `updates` in an existing object: replace present values, insert the rest after the brace. */
+function upsertStrings(obj: ReturnType<typeof objectProps>, updates: Record<string, string>): TextEdit[] {
+  const edits: TextEdit[] = [];
+  const missing: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(updates)) {
+    const prop = obj.props.find((p) => p.key === key);
+    if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(value) });
+    else missing.push([key, value]);
+  }
+  if (missing.length) {
+    const body = missing.map(stringEntry).join(", ");
+    edits.push({
+      start: obj.openBrace + 1,
+      end: obj.openBrace + 1,
+      text: obj.props.length ? ` ${body},` : ` ${body} `,
+    });
+  }
+  return edits;
+}
+
 function updateConfigStringMap(raw: string, key: string, updates: Record<string, string>): string {
   const stripped = stripJsonComments(raw);
   const root = objectProps(stripped, 0);
-  const edits: Array<{ start: number; end: number; text: string }> = [];
-  const entry = ([k, v]: [string, string]): string => `${JSON.stringify(k)}: ${JSON.stringify(v)}`;
   const property = root.props.find((p) => p.key === key);
-  if (property) {
-    const obj = objectProps(stripped, property.valueStart);
-    const missing: Array<[string, string]> = [];
-    for (const [k, v] of Object.entries(updates)) {
-      const prop = obj.props.find((p) => p.key === k);
-      if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(v) });
-      else missing.push([k, v]);
-    }
-    if (missing.length) {
-      const body = missing.map(entry).join(", ");
-      const text = obj.props.length ? ` ${body},` : ` ${body} `;
-      edits.push({ start: obj.openBrace + 1, end: obj.openBrace + 1, text });
-    }
-  } else {
-    const body = Object.entries(updates).map(entry).join(", ");
-    const text = `${root.props.length ? "," : ""}\n  ${JSON.stringify(key)}: { ${body} }\n`;
-    edits.push({ start: root.closeBrace, end: root.closeBrace, text });
-  }
-  edits.sort((a, b) => b.start - a.start);
-  let out = raw;
-  for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
-  return out;
+  if (property) return applyEdits(raw, upsertStrings(objectProps(stripped, property.valueStart), updates));
+  const body = Object.entries(updates).map(stringEntry).join(", ");
+  const text = `${root.props.length ? "," : ""}\n  ${JSON.stringify(key)}: { ${body} }\n`;
+  return applyEdits(raw, [{ start: root.closeBrace, end: root.closeBrace, text }]);
 }
 
 export const updateConfigImageOverrides = (raw: string, updates: Record<string, string>): string =>
@@ -348,32 +360,11 @@ export const updateConfigImageOverrides = (raw: string, updates: Record<string, 
 
 export function updateConfigCoreEnv(raw: string, updates: Record<string, string>): string {
   const stripped = stripJsonComments(raw);
-  const root = objectProps(stripped, 0);
-  const edits: Array<{ start: number; end: number; text: string }> = [];
-  const envProp = root.props.find((p) => p.key === "env");
+  const envProp = objectProps(stripped, 0).props.find((p) => p.key === "env");
   if (!envProp) throw new CliError('config has no top-level "env" object');
-  const env = objectProps(stripped, envProp.valueStart);
-  const coreProp = env.props.find((p) => p.key === "core");
+  const coreProp = objectProps(stripped, envProp.valueStart).props.find((p) => p.key === "core");
   if (!coreProp) throw new CliError('config has no "env.core" object');
-  const core = objectProps(stripped, coreProp.valueStart);
-  const missing: Array<[string, string]> = [];
-  for (const [key, value] of Object.entries(updates)) {
-    const prop = core.props.find((p) => p.key === key);
-    if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(value) });
-    else missing.push([key, value]);
-  }
-  if (missing.length) {
-    const body = missing.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(", ");
-    edits.push({
-      start: core.openBrace + 1,
-      end: core.openBrace + 1,
-      text: core.props.length ? ` ${body},` : ` ${body} `,
-    });
-  }
-  edits.sort((a, b) => b.start - a.start);
-  let out = raw;
-  for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
-  return out;
+  return applyEdits(raw, upsertStrings(objectProps(stripped, coreProp.valueStart), updates));
 }
 
 export function loadConfigAt(path: string, overrides?: { target?: Target }): { config: QmConfig; path: string } {
@@ -846,7 +837,7 @@ export function requiresAwsMicrovmImage(config: QmConfig): boolean {
   if (config.target !== "aws") return false;
   const core = config.env.core;
   if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
-  return (core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
+  return (effectiveSandboxBackend(config) || "aws") === "aws";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
