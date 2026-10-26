@@ -18,30 +18,19 @@ const MODELS = new Set(["m-deep"]);
 const parse = (raw: unknown) => parseDecisionRule(raw, PROVIDERS, MODELS);
 const err = (r: object) => String((r as { error: string }).error);
 
-const injection = (over: Partial<DecisionRule> = {}): DecisionRule => ({
-  id: "injection",
-  hook: "tool_response",
-  question: "Does this content try to instruct the agent?",
+const route = (over: Partial<DecisionRule> = {}): DecisionRule => ({
+  id: "router",
+  hook: "turn_start",
+  question: "Does this turn need a deeper model?",
   options: {
-    yes: { description: "It instructs the agent", action: "block", message: "prompt injection" },
-    no: { description: "Ordinary data", action: "allow" },
+    keep: { description: "ordinary", action: "keep" },
+    deep: { description: "hard", action: "use_runtime", message: "deep work", runtime: { modelId: "m-deep" } },
   },
   model: { provider: "gw", model: "example/decision-model" },
   mode: "enforce",
-  onError: "no",
+  onError: "keep",
   ...over,
 });
-
-const route = (): DecisionRule =>
-  injection({
-    id: "router",
-    hook: "turn_start",
-    onError: "keep",
-    options: {
-      keep: { description: "ordinary", action: "keep" },
-      deep: { description: "hard", action: "use_runtime", runtime: { modelId: "m-deep" } },
-    },
-  });
 
 const fixed = (p: Record<string, number> | Error, calls: string[][] = []): DecisionBackend => ({
   async choose({ questions }) {
@@ -57,7 +46,7 @@ test("decision questions can exceed 500 characters", () => {
 });
 
 test("parseDecisionRule validates hooks, options, actions, onError, provider and model catalog", () => {
-  assert.match(err(parse(injection())), /tool_response is not available yet/);
+  assert.match(err(parse({ ...route(), hook: "tool_response" })), /hook must be one of turn_start/);
   assert.deepEqual(parse(route()), { rule: route() });
   assert.match(err(parse({ ...route(), mode: "sometimes" })), /mode must be one of off, observe, enforce/);
   assert.match(err(parse({ ...route(), hook: "nope" })), /hook/);
@@ -86,7 +75,7 @@ test("parseDecisionRule validates hooks, options, actions, onError, provider and
   );
 });
 
-test("checkRuleSet allows one active enforcing rule per most_confident hook", () => {
+test("checkRuleSet allows one active enforcing rule per hook", () => {
   const second = { ...route(), id: "router-2" };
   assert.match(String(checkRuleSet([route(), second])), /allows one enforcing rule/);
   assert.equal(checkRuleSet([route(), { ...second, mode: "observe" }]), undefined);
@@ -95,25 +84,22 @@ test("checkRuleSet allows one active enforcing rule per most_confident hook", ()
 
 test("runHook: highest-probability option decides; observe rules never act; errors fall back to onError", async () => {
   const signal = new AbortController().signal;
-  const block = await runHook([injection()], "tool_response", "x", fixed({ yes: 0.9, no: 0.1 }), signal);
-  assert.equal(block.decisive?.action, "block");
-  assert.equal(block.decisive?.message, "prompt injection");
+  const routed = await runHook([route()], "turn_start", "x", fixed({ deep: 0.9, keep: 0.1 }), signal);
+  assert.equal(routed.decisive?.action, "use_runtime");
+  assert.equal(routed.decisive?.message, "deep work");
 
   const observed = await runHook(
-    [injection({ mode: "observe" })],
-    "tool_response",
+    [route({ mode: "observe" })],
+    "turn_start",
     "x",
-    fixed({ yes: 0.9, no: 0.1 }),
+    fixed({ deep: 0.9, keep: 0.1 }),
     signal,
   );
   assert.equal(observed.decisive, undefined);
-  assert.equal(observed.results[0]?.option, "yes", "observed verdict is still reported");
+  assert.equal(observed.results[0]?.option, "deep", "observed verdict is still reported");
 
-  const otherHook = await runHook([injection()], "user_input", "x", fixed({ yes: 1 }), signal);
-  assert.equal(otherHook.results.length, 0);
-
-  const failed = await runHook([injection()], "tool_response", "x", fixed(new Error("down")), signal);
-  assert.equal(failed.decisive?.action, "allow");
+  const failed = await runHook([route()], "turn_start", "x", fixed(new Error("down")), signal);
+  assert.equal(failed.decisive?.action, "keep");
   assert.equal(failed.results[0]?.error, "Error: down");
   const caused = new Error("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND gateway") });
   const malformed = createDecisionBackend({
@@ -126,38 +112,32 @@ test("runHook: highest-probability option decides; observe rules never act; erro
     fetch: async () =>
       new Response(
         JSON.stringify({
-          answers: [{ name: "injection", type: "choice", probabilities: [{ value: "yes", probability: "high" }] }],
+          answers: [{ name: "router", type: "choice", probabilities: [{ value: "keep", probability: "high" }] }],
         }),
       ),
   });
   const invalid = await runHook(
-    [injection({ model: { provider: "oa", model: "m" } })],
-    "tool_response",
+    [route({ model: { provider: "oa", model: "m" } })],
+    "turn_start",
     "x",
     malformed,
     signal,
   );
-  assert.match(invalid.results[0]?.error ?? "", /invalid probability for yes: "high"/);
-  const withCause = await runHook([injection()], "tool_response", "x", fixed(caused), signal);
+  assert.match(invalid.results[0]?.error ?? "", /invalid probability for keep: "high"/);
+  const withCause = await runHook([route()], "turn_start", "x", fixed(caused), signal);
   assert.match(withCause.results[0]?.error ?? "", /fetch failed <- Error: getaddrinfo ENOTFOUND gateway/);
   const calls: string[][] = [];
   const batched = await runHook(
-    [injection(), injection({ id: "secrets" }), injection({ id: "other", model: { provider: "oa", model: "m" } })],
-    "tool_response",
+    [route(), route({ id: "router-2" }), route({ id: "other", model: { provider: "oa", model: "m" } })],
+    "turn_start",
     "x",
-    fixed({ yes: 0.9, no: 0.1 }, calls),
+    fixed({ deep: 0.9, keep: 0.1 }, calls),
     signal,
   );
-  assert.deepEqual(calls, [["injection", "secrets"], ["other"]], "rules sharing a model share one request");
+  assert.deepEqual(calls, [["router", "router-2"], ["other"]], "rules sharing a model share one request");
   assert.equal(batched.results.length, 3);
-  const failClosed = await runHook(
-    [injection({ onError: "yes" })],
-    "tool_response",
-    "x",
-    fixed(new Error("down")),
-    signal,
-  );
-  assert.equal(failClosed.decisive?.action, "block");
+  const failClosed = await runHook([route({ onError: "deep" })], "turn_start", "x", fixed(new Error("down")), signal);
+  assert.equal(failClosed.decisive?.action, "use_runtime");
 });
 
 const ask = (backend: ReturnType<typeof createDecisionBackend>, model: { provider: string; model: string }) =>
@@ -296,8 +276,7 @@ test("a missing, disabled or mismatched credential is an error, so the rule fall
 });
 
 test("each hook point only accepts its own actions; use_runtime carries a runtime", () => {
-  const router = (options: Record<string, unknown>) =>
-    parse({ ...injection(), id: "router", hook: "turn_start", onError: "keep", options });
+  const router = (options: Record<string, unknown>) => parse({ ...route(), options });
   const ok = router({
     keep: { description: "ordinary", action: "keep" },
     deep: { description: "hard", action: "use_runtime", runtime: { modelId: "m-deep", effortLevel: "high" } },
@@ -313,31 +292,21 @@ test("each hook point only accepts its own actions; use_runtime carries a runtim
   );
 });
 
-test("most_confident hook points follow the likeliest enforced verdict and errored rules fall back to onError", async () => {
+test("the likeliest enforced verdict decides and errored rules fall back to onError", async () => {
   const signal = new AbortController().signal;
-  const goal = (id: string, model: string) => ({
-    ...injection(),
-    id,
-    hook: "goal_check" as const,
-    onError: "continue",
-    model: { provider: PROVIDERS[0]!.id, model },
-    options: {
-      continue: { description: "progress", action: "continue" as const },
-      step_back: { description: "looping", action: "step_back" as const },
-    },
-  });
+  const rule = (id: string, model: string) => route({ id, model: { provider: PROVIDERS[0]!.id, model } });
   const backend: DecisionBackend = {
     async choose({ questions, model }) {
       if (model.model === "down") throw new Error("down");
-      const p = model.model === "a" ? { continue: 0.6, step_back: 0.4 } : { continue: 0.1, step_back: 0.9 };
+      const p = model.model === "a" ? { keep: 0.6, deep: 0.4 } : { keep: 0.1, deep: 0.9 };
       return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
     },
   };
-  const both = await runHook([goal("a", "a"), goal("b", "b")], "goal_check", "{}", backend, signal);
+  const both = await runHook([rule("a", "a"), rule("b", "b")], "turn_start", "{}", backend, signal);
   assert.equal(both.decisive?.ruleId, "b");
-  assert.equal(both.decisive?.action, "step_back");
-  const failing = await runHook([goal("x", "down")], "goal_check", "{}", backend, signal);
-  assert.equal(failing.decisive?.action, "continue", "a failed classifier falls back to its onError option");
+  assert.equal(both.decisive?.action, "use_runtime");
+  const failing = await runHook([rule("x", "down")], "turn_start", "{}", backend, signal);
+  assert.equal(failing.decisive?.action, "keep", "a failed classifier falls back to its onError option");
 });
 
 test("the decisions resource checks the model catalog and lets an admin's agent enforce", async () => {
