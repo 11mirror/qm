@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  deploymentAfterRestore,
-  deploymentActionView,
-  deploymentArchiveUndoAvailable,
   deploymentCanManage,
   deploymentContextScope,
   deploymentInScope,
-  deploymentListAfterRestoreRefresh,
-  deploymentListRefreshCanRedraw,
   deploymentLatestAt,
   deploymentSlug,
   deploymentTab,
@@ -49,55 +44,6 @@ test("deployment context prefers its creation scope and filtering accepts either
   assert.equal(deploymentInScope(fromChannel, "personal:blair@example.com"), true);
   assert.equal(deploymentInScope(fromChannel, "channel:other"), false);
   assert.equal(deploymentContextScope(deployment({ createdInScope: undefined, ownerScopeId: "org:acme" })), "org:acme");
-});
-
-test("archive Undo remains available when the post-mutation list refresh is stale or missing", () => {
-  const archivedToast = deployment({ status: "archived" });
-  assert.equal(deploymentArchiveUndoAvailable(archivedToast), true);
-  assert.equal(deploymentArchiveUndoAvailable(deployment({ status: "running" })), false);
-});
-
-test("a restored notification cannot inherit Undo from a stale archived list row", () => {
-  const staleArchivedRow = deployment({ status: "archived" });
-  const restoredToast = deploymentAfterRestore(staleArchivedRow);
-  assert.equal(deploymentArchiveUndoAvailable(restoredToast), false);
-  assert.equal(restoredToast.status, "running");
-  assert.equal(deploymentTab(restoredToast, "blair@example.com"), "yours");
-});
-
-test("restore ignores a stale archived row when refresh failed", () => {
-  const requested = deployment({
-    status: "archived",
-    ownerScopeId: "personal:casey@example.com",
-    createdBy: "casey@example.com",
-  });
-  const restored = deploymentAfterRestore(requested, undefined, undefined);
-  assert.equal(restored.status, "running");
-  assert.equal(deploymentTab(restored, "blair@example.com"), "shared");
-});
-
-test("a superseded restore refresh cannot overwrite a newer authoritative row", () => {
-  const newer = deployment({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
-  const staleRestore = deploymentAfterRestore(deployment({ id: "deployment-id", status: "archived" }));
-  const list = deploymentListAfterRestoreRefresh([newer], staleRestore, "superseded");
-  assert.deepEqual(list, [newer]);
-  assert.equal(list[0]?.status, "archived");
-  assert.equal(list[0]?.displayName, "Newer metadata");
-});
-
-test("an updated restore refresh trusts a newer authoritative archived row", () => {
-  const requested = deployment({ id: "deployment-id", status: "archived", displayName: "Old metadata" });
-  const authoritative = deployment({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
-  const restored = deploymentAfterRestore(requested, deploymentAfterRestore(requested), authoritative);
-  assert.equal(restored, authoritative);
-  assert.equal(restored.status, "archived");
-  assert.equal(restored.displayName, "Newer metadata");
-});
-
-test("an actual restore refresh failure inserts the optimistic running row", () => {
-  const stale = deployment({ id: "deployment-id", status: "archived" });
-  const restored = deploymentAfterRestore(stale);
-  assert.deepEqual(deploymentListAfterRestoreRefresh([stale], restored, "failed"), [restored]);
 });
 
 test("tabs separate manageable, shared, and archived deployments", () => {
@@ -213,59 +159,4 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
     ),
     ["shared"],
   );
-});
-
-test("sorting supports newest, name, and status without changing the filtered set", () => {
-  const deployments = [
-    deployment({ id: "z", displayName: "Zulu", status: "stopped", versions: [{ version: 1, createdAt: 300 }] }),
-    deployment({ id: "a", displayName: "Alpha", status: "running", versions: [{ version: 1, createdAt: 200 }] }),
-  ];
-  const options = { tab: "yours" as const, scope: null, query: "", viewer: "blair@example.com" };
-  assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "newest" }).map((d) => d.id),
-    ["z", "a"],
-  );
-  assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "name" }).map((d) => d.id),
-    ["a", "z"],
-  );
-  assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "status" }).map((d) => d.id),
-    ["a", "z"],
-  );
-});
-
-test("delayed deployment actions re-check the active detail on resolve and reject", async () => {
-  for (const action of ["edit", "archive", "restore"]) {
-    for (const outcome of ["resolve", "reject"] as const) {
-      let activeId = "A";
-      let finish!: () => void;
-      const pending = new Promise<void>((resolve, reject) => {
-        finish = outcome === "resolve" ? resolve : () => reject(new Error(`${action} failed`));
-      });
-      const settled = pending.then(
-        () => deploymentActionView("A", "deploys", activeId),
-        () => deploymentActionView("A", "deploys", activeId),
-      );
-      activeId = "B";
-      finish();
-      assert.equal(await settled, "other", `${action} ${outcome} must preserve detail B`);
-    }
-  }
-});
-
-test("list refresh completion leaves a pending detail's loading state untouched", async () => {
-  const state: { activeId?: string; detailLoading: boolean } = { detailLoading: false };
-  let finish!: () => void;
-  const refresh = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const completion = refresh.then(() => {
-    if (deploymentListRefreshCanRedraw(state.activeId)) state.detailLoading = false;
-  });
-  state.activeId = "A";
-  state.detailLoading = true;
-  finish();
-  await completion;
-  assert.equal(state.detailLoading, true);
 });

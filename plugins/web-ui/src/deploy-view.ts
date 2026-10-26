@@ -27,19 +27,6 @@ export interface DeploymentView {
 }
 
 export type DeploymentTab = "yours" | "shared" | "archived";
-export type DeploymentSort = "newest" | "name" | "status";
-export type DeploymentActionView = "target" | "other" | "list" | "away";
-export type DeploymentRefreshResult = "updated" | "failed" | "superseded";
-
-export function deploymentActionView(targetId: string, currentView: string, activeId?: string): DeploymentActionView {
-  if (currentView !== "deploys") return "away";
-  if (!activeId) return "list";
-  return activeId === targetId ? "target" : "other";
-}
-
-export function deploymentListRefreshCanRedraw(activeId?: string): boolean {
-  return !activeId;
-}
 
 export function deploymentCanManage(d: DeploymentView): boolean {
   return d.permission === "write";
@@ -51,26 +38,6 @@ export function deploymentContextScope(d: DeploymentView): string | undefined {
 
 export function deploymentInScope(d: DeploymentView, scope: string | null): boolean {
   return !scope || d.createdInScope === scope || d.ownerScopeId === scope;
-}
-
-export function deploymentArchiveUndoAvailable(toastDeployment: DeploymentView): boolean {
-  return toastDeployment.status === "archived";
-}
-
-export function deploymentAfterRestore(
-  requested: DeploymentView,
-  response?: DeploymentView,
-  refreshed?: DeploymentView,
-): DeploymentView {
-  return refreshed ?? { ...(response ?? requested), status: "running" };
-}
-
-export function deploymentListAfterRestoreRefresh(
-  list: DeploymentView[],
-  restored: DeploymentView,
-  result: DeploymentRefreshResult,
-): DeploymentView[] {
-  return result === "failed" ? [restored, ...list.filter((item) => item.id !== restored.id)] : list;
 }
 
 export function deploymentTitle(d: DeploymentView): string {
@@ -101,7 +68,7 @@ export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
 
 export function filterDeployments(
   deployments: DeploymentView[],
-  options: { tab: DeploymentTab; scope: string | null; query: string; viewer?: string; sort?: DeploymentSort },
+  options: { tab: DeploymentTab; scope: string | null; query: string; viewer?: string },
 ): DeploymentView[] {
   const query = options.query.trim().toLocaleLowerCase();
   return deployments
@@ -113,15 +80,9 @@ export function filterDeployments(
         (value) => value?.toLocaleLowerCase().includes(query),
       );
     })
-    .sort((a, b) => {
-      if (options.sort === "name") return deploymentTitle(a).localeCompare(deploymentTitle(b));
-      if (options.sort === "status")
-        return (
-          (a.status ?? "unknown").localeCompare(b.status ?? "unknown") ||
-          deploymentTitle(a).localeCompare(deploymentTitle(b))
-        );
-      return deploymentLatestAt(b) - deploymentLatestAt(a) || deploymentTitle(a).localeCompare(deploymentTitle(b));
-    });
+    .sort(
+      (a, b) => deploymentLatestAt(b) - deploymentLatestAt(a) || deploymentTitle(a).localeCompare(deploymentTitle(b)),
+    );
 }
 
 export function friendlyPrincipal(principal: string | undefined): string {
