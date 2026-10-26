@@ -1546,7 +1546,14 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
+  assert.deepEqual([...names(readOnly)].sort(), [
+    "finish_silently",
+    "history",
+    "memory",
+    "runtime",
+    "subagents",
+    "swarm",
+  ]);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }

@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { SWARM_ACTIONS } from "../swarms/swarm.ts";
 
 export const CRON_ACTIONS = [
   "create",
@@ -13,7 +14,7 @@ export const CRON_ACTIONS = [
   "note",
 ] as const;
 
-const READ_ONLY_TOOLS = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
+const READ_ONLY_TOOLS = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents", "swarm"]);
 
 export interface ToolManifestInput {
   controlTools: boolean;
@@ -78,6 +79,11 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
     native("history", always),
     native("background", gate(!input.delegateWork, ALWAYS, DELEGATED)),
     native("subagents", gate(input.sessionTools, "Subagents are enabled.", NO_SUBAGENTS)),
+    native(
+      "swarm",
+      gate(input.sessionTools, "Subagents are enabled; a swarm is a set of subagents sharing a board.", NO_SUBAGENTS),
+      [...SWARM_ACTIONS],
+    ),
     native(
       "sessions",
       input.sessionTools
