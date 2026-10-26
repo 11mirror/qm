@@ -32,20 +32,13 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 
-function button(
-  text: string,
-  actionId: ApprovalActionId,
-  value: string,
-  style?: "primary" | "danger",
-): Record<string, unknown> {
-  return {
-    type: "button",
-    text: { type: "plain_text", text },
-    action_id: actionId,
-    value,
-    ...(style ? { style } : {}),
-  };
-}
+const button = (text: string, action_id: ApprovalActionId, value: string, style?: "primary" | "danger") => ({
+  type: "button",
+  text: { type: "plain_text", text },
+  action_id,
+  value,
+  ...(style ? { style } : {}),
+});
 
 interface ToolCallView {
   label: string;
@@ -221,16 +214,10 @@ export function approvalDecisionMessage(
   };
 }
 
-export interface StoredApproval {
-  requestId: string;
-  command: string;
+export type StoredApproval = Omit<PendingApproval, "reason" | "originUrl"> & {
   reason?: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
-}
+};
 
 type ApprovalDetails = Pick<PendingApproval, "purpose" | "summary" | "kind" | "grantModes">;
 

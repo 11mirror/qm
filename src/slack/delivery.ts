@@ -83,8 +83,7 @@ export function headerUpdate(
 ): "set" | "skip" {
   const value = (existing?.value ?? "").trim();
   if (unwrapSlackLinks(value) === unwrapSlackLinks(desired)) return "skip";
-  if (!value) return "set";
-  return existing?.creator === botUserId ? "set" : "skip";
+  return !value || existing?.creator === botUserId ? "set" : "skip";
 }
 
 const SURFACE_HEADER_MAX_TRACKED = 1000;
@@ -119,11 +118,8 @@ export function findHeaderPin(
   items: PinnedItem[] | undefined,
   botUserId: string,
 ): { ts: string; text: string } | undefined {
-  for (const item of items ?? []) {
-    const m = item.message;
-    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
-  }
-  return undefined;
+  const m = items?.find(({ message: m }) => m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text))?.message;
+  return m?.ts ? { ts: m.ts, text: m.text ?? "" } : undefined;
 }
 
 const HEADER_PIN_OFF = "<surface-header-off>";
@@ -147,8 +143,7 @@ export function createSurfaceHeaderEnsurer(opts: {
   const requeued = new Map<string, { pinNew?: boolean }>();
   return function ensure(client, channel, scopeId, kind, ensureOpts) {
     if (inFlight.has(channel)) {
-      const prior = requeued.get(channel);
-      requeued.set(channel, { pinNew: Boolean(prior?.pinNew) || Boolean(ensureOpts?.pinNew) });
+      requeued.set(channel, { pinNew: Boolean(requeued.get(channel)?.pinNew || ensureOpts?.pinNew) });
       return;
     }
     inFlight.add(channel);
@@ -185,7 +180,7 @@ export function createSurfaceHeaderEnsurer(opts: {
           }
         }
         settled.set(channel, goal);
-        capMap(settled, maxTracked);
+        while (settled.size > maxTracked) settled.delete(settled.keys().next().value!);
       } catch (err) {
         console.error("[slack] surface header ensure failed:", errMessage(err));
       } finally {
@@ -235,17 +230,13 @@ export function encodeDeliveryTarget(channel: string, threadTs?: string): string
   return threadTs ? `${channel}:${threadTs}` : channel;
 }
 
-async function slackUserIdFor(client: any, principalId: string): Promise<string> {
-  if (!principalId.includes("@")) return principalId;
-  const res = (await client.users.lookupByEmail({ email: principalId })) as { user?: { id?: string } };
-  const id = res?.user?.id;
-  if (!id) throw new Error(`no Slack member found for ${principalId}`);
-  return id;
-}
-
 export async function openConversationFor(client: any, principalIds: readonly string[]): Promise<string> {
   const users: string[] = [];
-  for (const p of principalIds) users.push(await slackUserIdFor(client, p));
+  for (const p of principalIds) {
+    const id = p.includes("@") ? (await client.users.lookupByEmail({ email: p }))?.user?.id : p;
+    if (!id) throw new Error(`no Slack member found for ${p}`);
+    users.push(id);
+  }
   const opened = (await client.conversations.open({ users: users.join(",") })) as { channel?: { id?: string } };
   const channel = opened?.channel?.id;
   if (!channel) throw new Error("conversations.open returned no channel");
@@ -274,13 +265,7 @@ export function deliveryCandidatesFor(
   ];
 }
 
-function capMap<K, V>(map: Map<K, V>, max: number): void {
-  while (map.size > max) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) return;
-    map.delete(oldest);
-  }
-}
+type DeliveryMetadata = { event_type: string; event_payload: Record<string, unknown> };
 
 export interface PostMessageArgs {
   channel: string;
@@ -288,11 +273,6 @@ export interface PostMessageArgs {
   thread_ts?: string;
   metadata?: DeliveryMetadata;
   [key: string]: unknown;
-}
-
-export interface DeliveryMetadata {
-  event_type: string;
-  event_payload: Record<string, unknown>;
 }
 
 export function deliveryMetadata(idempotencyKey: string): DeliveryMetadata {
@@ -332,10 +312,9 @@ export async function findPostedByKey(
       inclusive: true,
       ...(cursor ? { cursor } : {}),
     };
-    const scan = args.thread_ts
-      ? await client.conversations.replies({ ...paging, ts: args.thread_ts })
-      : await client.conversations.history(paging);
-    const page = scan as {
+    const page = (await (args.thread_ts
+      ? client.conversations.replies({ ...paging, ts: args.thread_ts })
+      : client.conversations.history(paging))) as {
       messages?: Array<{
         ts?: string;
         metadata?: { event_type?: string; event_payload?: { idempotency_key?: string } };
@@ -367,12 +346,7 @@ export const SLACK_TEXT_LIMIT = 40000;
 
 export const SLACK_POST_SPLIT_LIMIT = 3_800;
 
-export interface PostedPart {
-  ts: string | undefined;
-  channel: string;
-  reused?: boolean;
-  text: string;
-}
+type PostedPart = { ts: string | undefined; channel: string; reused?: boolean; text: string };
 
 export async function postWithVerify(
   client: PostVerifyClient,
@@ -397,23 +371,17 @@ export async function postWithVerify(
   if (batches.length) {
     const parts: PostedPart[] = [];
     for (const [i, batch] of batches.entries()) {
-      const text = batch.text ?? "";
       const res = await postWithVerify(client, batch, i === 0 ? idempotencyKey : `${idempotencyKey}#p${i + 1}`, {
         ...opts,
         verifyFirst: true,
         verifyBestEffort: !opts?.verifyFirst,
       });
-      parts.push({
-        ts: res.ts,
-        channel: res.channel,
-        ...(res.reused !== undefined ? { reused: res.reused } : {}),
-        text,
-      });
+      const { ts, channel, reused } = res;
+      parts.push({ ts, channel, ...(reused !== undefined ? { reused } : {}), text: batch.text ?? "" });
     }
-    const first = parts[0]!;
     return {
-      ts: first.ts,
-      channel: first.channel,
+      ts: parts[0]!.ts,
+      channel: parts[0]!.channel,
       ...(parts.every((p) => p.reused) ? { reused: true } : {}),
       parts,
     };
@@ -425,9 +393,8 @@ export async function postWithVerify(
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);
   args.metadata = deliveryMetadata(idempotencyKey);
   if (opts?.verifyFirst) {
-    const found = opts.verifyBestEffort
-      ? await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(swallowAs("slack: part verify", null))
-      : await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+    const verify = findPostedByKey(client, args, idempotencyKey, verifyOldest);
+    const found = await (opts.verifyBestEffort ? verify.catch(swallowAs("slack: part verify", null)) : verify);
     if (found) return { ...found, reused: true };
   }
   let lastErr: unknown;

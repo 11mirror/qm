@@ -12,6 +12,14 @@ import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 
+const CARD_GONE_ERRORS = new Set([
+  "channel_not_found",
+  "not_authorized",
+  "no_permission",
+  "thread_ts_not_allowed",
+  "message_not_found",
+]);
+
 export interface SlackSessionStatusState {
   writer?: string;
   account: string;
@@ -54,9 +62,7 @@ export function createSlackSessionStatus(
       for (let attempt = 0; attempt < 300; attempt++) {
         const applied = await lease.hold(`slack:session-status:${id}`, async (lost) => {
           let leaseLost = false;
-          void lost.then(() => {
-            leaseLost = true;
-          });
+          void lost.then(() => (leaseLost = true));
           const writer = randomUUID();
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
           const scope = anchor && conversationScope(anchor.request.conversation, anchor.request.actor.id);
@@ -158,17 +164,7 @@ export function createSlackSessionStatus(
             }
             if (!ongoing) await deleteIf(id, (row) => !leaseLost && row.writer === writer);
           } catch (error) {
-            const code = (error as { data?: { error?: string } }).data?.error;
-            if (
-              [
-                "channel_not_found",
-                "not_authorized",
-                "no_permission",
-                "thread_ts_not_allowed",
-                "message_not_found",
-              ].includes(code ?? "") &&
-              !leaseLost
-            )
+            if (CARD_GONE_ERRORS.has((error as { data?: { error?: string } }).data?.error ?? "") && !leaseLost)
               await deleteIf(id, (row) => !leaseLost && row.writer === writer);
             throw error;
           } finally {
