@@ -39,7 +39,7 @@ async function withStores(fn: (store: SessionStore) => Promise<void>): Promise<v
 test("an imported transcript becomes a private web conversation with its original times", async () => {
   await withStores(async (store) => {
     const thread = `web:ada@example.com:${randomUUID()}`;
-    const [result] = await importTranscripts(store, [line("ada@example.com", thread, conversation)]);
+    const [result] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
     assert.equal(result!.appended, 4);
     assert.equal(result!.session.scopeId, "personal:ada@example.com");
     assert.equal(result!.session.surface, "web");
@@ -65,10 +65,12 @@ test("an imported transcript becomes a private web conversation with its origina
 test("re-importing a transcript appends only messages newer than the conversation", async () => {
   await withStores(async (store) => {
     const thread = `web:ada@example.com:${randomUUID()}`;
-    await importTranscripts(store, [line("ada@example.com", thread, conversation.slice(0, 2))]);
-    const [again] = await importTranscripts(store, [line("ada@example.com", thread, conversation.slice(0, 2))]);
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation.slice(0, 2))]));
+    const [again] = await Array.fromAsync(
+      importTranscripts(store, [line("ada@example.com", thread, conversation.slice(0, 2))]),
+    );
     assert.equal(again!.appended, 0);
-    const [more] = await importTranscripts(store, [line("ada@example.com", thread, conversation)]);
+    const [more] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
     assert.equal(more!.appended, 2);
     const seen = await store.visibleEntries(more!.session.id, "ada@example.com");
     assert.deepEqual(
@@ -81,7 +83,7 @@ test("re-importing a transcript appends only messages newer than the conversatio
 test("a resumed imported conversation keeps live turns after the imported history", async () => {
   await withStores(async (store) => {
     const thread = `web:ada@example.com:${randomUUID()}`;
-    const [imported] = await importTranscripts(store, [line("ada@example.com", thread, conversation)]);
+    const [imported] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
     const session = await store.getOrCreateByThread(thread, "dm", "personal:ada@example.com", undefined, "web");
     assert.equal(session.id, imported!.session.id);
     const { lease } = await store.acquireLease(session.id);
@@ -96,7 +98,7 @@ test("a resumed imported conversation keeps live turns after the imported histor
     const seen = await store.visibleEntries(session.id, "ada@example.com");
     assert.equal(seen.length, 5);
     assert.ok(seen[4]!.createdAt > T0 + 65_000);
-    const [rerun] = await importTranscripts(store, [line("ada@example.com", thread, conversation)]);
+    const [rerun] = await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
     assert.equal(rerun!.appended, 0);
   });
 });
@@ -105,7 +107,10 @@ test("an import cannot reuse a conversation from another scope", async () => {
   await withStores(async (store) => {
     const thread = `web:ada@example.com:${randomUUID()}`;
     await store.getOrCreateByThread(thread, "dm", "channel:C1", undefined, "web");
-    await assert.rejects(importTranscripts(store, [line("ada@example.com", thread, conversation)]), /different scope/);
+    await assert.rejects(
+      Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)])),
+      /different scope/,
+    );
   });
 });
 

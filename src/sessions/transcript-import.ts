@@ -50,12 +50,13 @@ export function parseTranscriptImport(line: string): TranscriptImport {
   };
 }
 
-export async function importTranscripts(
+export async function* importTranscripts(
   sessions: Pick<SessionStore, "importTranscript">,
-  lines: Iterable<string>,
-): Promise<(TranscriptImportResult & { threadRef: string })[]> {
-  const specs = [...lines].filter((line) => line.trim()).map(parseTranscriptImport);
-  const results: (TranscriptImportResult & { threadRef: string })[] = [];
-  for (const spec of specs) results.push({ threadRef: spec.threadRef, ...(await sessions.importTranscript(spec)) });
-  return results;
+  lines: AsyncIterable<string> | Iterable<string>,
+): AsyncGenerator<TranscriptImportResult & { threadRef: string }> {
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    const spec = parseTranscriptImport(line);
+    yield { threadRef: spec.threadRef, ...(await sessions.importTranscript(spec)) };
+  }
 }
