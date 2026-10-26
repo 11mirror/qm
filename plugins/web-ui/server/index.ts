@@ -470,7 +470,7 @@ export const apiRoutes: readonly WebRoute[] = [
     let cursor: string | undefined;
     let match: { id: string; createdAt: number } | undefined;
     for (let page = 0; page < 50; page++) {
-      const qs = new URLSearchParams({ viewer: user, limit: "200" });
+      const qs = new URLSearchParams({ viewer: user, limit: "200", q: name });
       if (cursor) qs.set("cursor", cursor);
       const listed = await coreFetch("GET", `/v1/files?${qs.toString()}`);
       if (listed.status !== 200) return relay(res, listed);
