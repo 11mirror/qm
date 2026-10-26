@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AwsConfig } from "./config.ts";
 import { CliError, errMessage, warn } from "./log.ts";
-import { capture, envNum } from "./util.ts";
+import { capture } from "./util.ts";
 
 const LEASE_SECONDS = 60 * 60;
 
@@ -66,10 +66,7 @@ export function acquireAwsLease(aws: AwsConfig, key = "deploy"): AwsLease {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
   };
-  lease.renewTimer = setInterval(
-    () => renewAwsLease(aws, lease),
-    envNum("QM_AWS_LEASE_RENEW_MS", (LEASE_SECONDS / 3) * 1000),
-  );
+  lease.renewTimer = setInterval(() => renewAwsLease(aws, lease), (LEASE_SECONDS / 3) * 1000);
   lease.renewTimer.unref();
   return lease;
 }

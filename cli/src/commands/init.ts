@@ -18,6 +18,7 @@ import { cliPackageName, cliVersion } from "../manifest.ts";
 import { computedSecrets, renderEnvExample } from "../secrets.ts";
 import { renderSlackManifests, usesSlackOidc } from "../slack-manifests.ts";
 import { hostingProvider } from "../backends/registry.ts";
+import { templateUrl } from "../templates.ts";
 
 const AGENTS_TEMPLATE = `# QM deployment
 
@@ -168,9 +169,7 @@ function initialEnv(config: QmConfig): string {
 }
 
 function template(rel: string): string {
-  const source = new URL(`../../templates/${rel}`, import.meta.url);
-  const packaged = new URL(`../../../templates/${rel}`, import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged, "utf8");
+  return readFileSync(templateUrl(rel), "utf8");
 }
 
 function packageContent(dir: string, orgId: string): string {
@@ -207,12 +206,10 @@ function packageContent(dir: string, orgId: string): string {
   const packageName = cliPackageName();
   const dependencies = objectField("dependencies");
   const installedPackage = typeof dependencies[packageName] === "string" ? dependencies[packageName] : cliVersion();
-  delete dependencies["qm-cli"];
   delete dependencies[packageName];
   for (const group of ["devDependencies", "optionalDependencies"] as const) {
     const groupDependencies = objectField(group);
-    if ("qm-cli" in groupDependencies || packageName in groupDependencies) {
-      delete groupDependencies["qm-cli"];
+    if (packageName in groupDependencies) {
       delete groupDependencies[packageName];
       existing[group] = groupDependencies;
     }

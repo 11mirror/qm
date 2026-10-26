@@ -122,13 +122,19 @@ function normalizedLayerBody(value: unknown): string {
   return JSON.stringify({ contract: 1, tools: files("tools", bundle.tools), skills: files("skills", bundle.skills) });
 }
 
+const LAYER_LIMIT_BYTES = 1_000_000;
+
+export function assertLayerBodyFits(body: string): void {
+  if (Buffer.byteLength(body) > LAYER_LIMIT_BYTES)
+    throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
+}
+
 export function deploymentLayerBody(sandboxDir: string): string {
   const bundle = existsSync(sandboxDir)
     ? deploymentLayerBundle(sandboxDir)
     : { contract: 1 as const, tools: [], skills: [] };
   const body = normalizedLayerBody(bundle);
-  if (Buffer.byteLength(body) > 1_000_000)
-    throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
+  assertLayerBodyFits(body);
   return body;
 }
 
@@ -285,8 +291,7 @@ export async function currentDeploymentLayerState(opts: {
   if (!bundle || typeof bundle !== "object" || Array.isArray(bundle))
     throw new CliError("deployment layer read did not return a restorable bundle");
   const body = normalizedLayerBody(bundle);
-  if (Buffer.byteLength(body) > 1_000_000)
-    throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
+  assertLayerBodyFits(body);
   const contentHash = createHash("sha256").update(body).digest("hex");
   if (result.contentHash !== null && result.contentHash !== undefined && result.contentHash !== contentHash) {
     throw new CliError("deployment layer read returned a bundle that does not match its contentHash");

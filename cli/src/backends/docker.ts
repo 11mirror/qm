@@ -38,6 +38,7 @@ import { dockerBasePort, localSandboxActive, sandboxCoreEnv, securityScreenEnv, 
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
+import { templateUrl } from "../templates.ts";
 
 /** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
@@ -84,9 +85,7 @@ const localSandboxImage = (config: QmConfig): string =>
   config.sandbox?.image ?? `${dockerPrefix(config).toLowerCase()}-sandbox-local:latest`;
 
 function localAgentSource(): Buffer {
-  const source = new URL("../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
-  const packaged = new URL("../../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged);
+  return readFileSync(templateUrl("aws/microvm-agent/agent.mjs"));
 }
 
 function ensureLocalSandboxImage(config: QmConfig): string {

@@ -82,6 +82,7 @@ import {
   terraformVarsDrift,
 } from "../terraform.ts";
 import {
+  assertLayerBodyFits,
   currentDeploymentLayerState,
   deploymentLayerBody,
   syncDeploymentLayerBody,
@@ -1774,8 +1775,7 @@ function recordDeploymentManifest(
 }
 
 function putDeploymentLayerArtifact(config: QmConfig, body: string): NonNullable<DeploymentManifest["layer"]> {
-  if (Buffer.byteLength(body) > 1_000_000)
-    throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
+  assertLayerBodyFits(body);
   const aws = requireAws(config);
   const sha256 = createHash("sha256").update(body).digest("hex");
   const key = `deployment/layers/${sha256}.json`;
@@ -1798,9 +1798,9 @@ function getDeploymentLayerArtifact(config: QmConfig, layer: DeploymentManifest[
   try {
     awsText(aws, ["s3api", "get-object", "--bucket", awsObjectStoreBucket(config), "--key", layer.key, file]);
     const body = readFileSync(file, "utf8");
-    if (Buffer.byteLength(body) > 1_000_000 || createHash("sha256").update(body).digest("hex") !== layer.sha256) {
-      throw new CliError("AWS deployment-layer artifact is invalid or does not match its manifest");
-    }
+    assertLayerBodyFits(body);
+    if (createHash("sha256").update(body).digest("hex") !== layer.sha256)
+      throw new CliError("AWS deployment-layer artifact does not match its manifest");
     return body;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -4349,39 +4349,6 @@ export function assertAwsDeploymentStorage(config: QmConfig): void {
     "--max-keys",
     "1",
   ]);
-}
-
-export function probeAwsSecretStore(
-  secrets: ComputedSecret[],
-  read: (name: string) => string,
-  checkPublicApiUrl: () => void,
-): { values: Map<string, string>; pending: string[]; failures: string[] } {
-  const values = new Map<string, string>();
-  const pending: string[] = [];
-  const failures: string[] = [];
-  for (const secret of secrets) {
-    const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
-    try {
-      const value = read(secret.name);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      values.set(secret.name, value);
-      if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
-      step(secret.required ? `${label}: ok` : `${label}: configured`);
-    } catch (error) {
-      if (awsErrorCode(error) === "ResourceNotFoundException") {
-        if (secret.required) {
-          pending.push(secret.name);
-          step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
-        } else {
-          warn(`${label}: not configured`);
-        }
-      } else {
-        failures.push(`${label}: ${errMessage(error)}`);
-        warn(`${label}: failed`);
-      }
-    }
-  }
-  return { values, pending, failures };
 }
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {

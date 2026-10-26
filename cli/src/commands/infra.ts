@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
@@ -9,6 +9,7 @@ import { CliError, ok, step } from "../log.ts";
 import { awsObjectStoreBucket } from "../terraform.ts";
 import { capture, sleep } from "../util.ts";
 import { guardLambdaMicrovms } from "../backends/aws.ts";
+import { templateUrl } from "../templates.ts";
 
 interface ImageSummary {
   name: string;
@@ -20,9 +21,6 @@ interface ImageSummary {
 }
 
 interface InfraWaitOptions {
-  intervalMs?: number;
-  timeoutMs?: number;
-  now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -90,9 +88,7 @@ function zipFiles(files: Array<{ name: string; body: Buffer }>): Buffer {
 }
 
 function asset(name: string): Buffer {
-  const source = new URL(`../../templates/aws/microvm-agent/${name}`, import.meta.url);
-  const packaged = new URL(`../../../templates/aws/microvm-agent/${name}`, import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged);
+  return readFileSync(templateUrl(`aws/microvm-agent/${name}`));
 }
 
 export function microvmBuildArchive(): Buffer {
@@ -129,22 +125,7 @@ function configuredAws(
   if (!config.aws || config.target !== "aws") throw new CliError(`${operation} is only available for target aws`);
   const imageName = config.env.core?.AWS_DEPLOY_IMAGE;
   if (!imageName) throw new CliError("env.core.AWS_DEPLOY_IMAGE is required");
-  const awsBin = process.env.AWS_BIN ?? "aws";
-  const account = capture(awsBin, [
-    "sts",
-    "get-caller-identity",
-    "--query",
-    "Account",
-    "--output",
-    "text",
-    "--region",
-    config.aws.region,
-    "--no-cli-pager",
-  ]).trim();
-  if (account !== config.aws.accountId) {
-    throw new CliError(`AWS account mismatch: config=${config.aws.accountId}, credentials=${account}`);
-  }
-  return { aws: config.aws, awsBin, imageName };
+  return { ...configuredAwsAccount(config, operation), imageName };
 }
 
 function configuredAwsAccount(
@@ -311,14 +292,13 @@ async function waitForSettledImage(
   imageName: string,
   options: InfraWaitOptions,
 ): Promise<ImageSummary | undefined> {
-  const now = options.now ?? Date.now;
   const wait = options.sleep ?? sleep;
-  const deadline = now() + (options.timeoutMs ?? 15 * 60_000);
+  const deadline = Date.now() + 15 * 60_000;
   for (;;) {
     const image = findImage(awsBin, region, imageName);
     if (!image || !["CREATING", "UPDATING", "DELETING"].includes(image.state)) return image;
-    if (now() >= deadline) throw new CliError(`timed out waiting for MicroVM image ${imageName}`);
-    await wait(options.intervalMs ?? 10_000);
+    if (Date.now() >= deadline) throw new CliError(`timed out waiting for MicroVM image ${imageName}`);
+    await wait(10_000);
   }
 }
 
@@ -347,9 +327,8 @@ async function waitForImageVersion(
   imageVersion: string,
   options: InfraWaitOptions,
 ): Promise<void> {
-  const now = options.now ?? Date.now;
   const wait = options.sleep ?? sleep;
-  const deadline = now() + (options.timeoutMs ?? 15 * 60_000);
+  const deadline = Date.now() + 15 * 60_000;
   for (;;) {
     const version = getImageVersion(awsBin, region, imageArn, imageVersion);
     if (version.imageVersion !== imageVersion) {
@@ -364,8 +343,8 @@ async function waitForImageVersion(
     if (["DELETING", "DELETED", "DELETE_FAILED"].includes(version.state)) {
       throw new CliError(`MicroVM image version ${imageVersion} entered unexpected state ${version.state}`);
     }
-    if (now() >= deadline) throw new CliError(`timed out waiting for MicroVM image version ${imageVersion}`);
-    await wait(options.intervalMs ?? 10_000);
+    if (Date.now() >= deadline) throw new CliError(`timed out waiting for MicroVM image version ${imageVersion}`);
+    await wait(10_000);
   }
 }
 
@@ -452,9 +431,8 @@ async function buildAwsMicrovmImageLocked(
       "--no-cli-pager",
     ]);
     step(`uploaded ${uri}`);
-    const now = options.now ?? Date.now;
     const wait = options.sleep ?? sleep;
-    const deadline = now() + (options.timeoutMs ?? 15 * 60_000);
+    const deadline = Date.now() + 15 * 60_000;
     for (;;) {
       const command = existing ? "update-microvm-image" : "create-microvm-image";
       const identityArgs = existing
@@ -485,9 +463,9 @@ async function buildAwsMicrovmImageLocked(
         break;
       } catch (error) {
         if (awsErrorCode(error) !== "ConflictException") throw error;
-        if (now() >= deadline) throw new CliError(`timed out waiting to start MicroVM image build ${imageName}`);
+        if (Date.now() >= deadline) throw new CliError(`timed out waiting to start MicroVM image build ${imageName}`);
         step(`another ${imageName} image operation started; waiting for it before retrying this build`);
-        await wait(options.intervalMs ?? 10_000);
+        await wait(10_000);
         existing = await waitForSettledImage(awsBin, aws.region, imageName, options);
         if (existing && existing.state !== "DELETED") existing = assertImageIdentity(config, awsBin, existing);
         else existing = undefined;
@@ -599,9 +577,8 @@ async function deleteAwsMicrovmImageLocked(
     assertImageIdentity(config, awsBin, image);
   }
 
-  const now = options.now ?? Date.now;
   const wait = options.sleep ?? sleep;
-  let deadline = now() + (options.timeoutMs ?? 15 * 60_000);
+  let deadline = Date.now() + 15 * 60_000;
   for (;;) {
     const active = listMicrovms(awsBin, aws.region, expectedArn).filter((microvm) => microvm.state !== "TERMINATED");
     for (const microvm of active) {
@@ -620,8 +597,8 @@ async function deleteAwsMicrovmImageLocked(
       step(`terminating MicroVM ${microvm.microvmId}`);
     }
     if (active.length === 0) break;
-    if (now() >= deadline) throw new CliError(`timed out terminating MicroVMs for image ${imageName}`);
-    await wait(options.intervalMs ?? 10_000);
+    if (Date.now() >= deadline) throw new CliError(`timed out terminating MicroVMs for image ${imageName}`);
+    await wait(10_000);
   }
 
   capture(awsBin, [
@@ -636,7 +613,7 @@ async function deleteAwsMicrovmImageLocked(
     "--no-cli-pager",
   ]);
   step(`deleting MicroVM image ${imageName}`);
-  deadline = now() + (options.timeoutMs ?? 15 * 60_000);
+  deadline = Date.now() + 15 * 60_000;
   for (;;) {
     image = findImage(awsBin, aws.region, imageName);
     if (!image || image.state === "DELETED") {
@@ -645,7 +622,7 @@ async function deleteAwsMicrovmImageLocked(
       return;
     }
     if (image.state === "DELETE_FAILED") throw new CliError(`MicroVM image ${imageName} failed to delete`);
-    if (now() >= deadline) throw new CliError(`timed out deleting MicroVM image ${imageName}`);
-    await wait(options.intervalMs ?? 10_000);
+    if (Date.now() >= deadline) throw new CliError(`timed out deleting MicroVM image ${imageName}`);
+    await wait(10_000);
   }
 }

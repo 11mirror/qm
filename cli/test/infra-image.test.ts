@@ -198,7 +198,7 @@ async function withHarness(env: Record<string, string>, fn: (h: Harness) => Prom
 
 test("infra delete-image accepts an empty successful S3 version response", async () => {
   await withHarness({ FAKE_MODE: "deleted", FAKE_EMPTY_OBJECT_VERSIONS: "1" }, async ({ calls }) => {
-    await deleteAwsMicrovmImage(config(), { intervalMs: 0 });
+    await deleteAwsMicrovmImage(config(), { sleep: async () => {} });
     assert.match(calls(), /s3api list-object-versions/);
     assert.doesNotMatch(calls(), /s3api delete-objects/);
   });
@@ -215,7 +215,7 @@ test("the packaged MicroVM archive is deterministic and contains both root build
 for (const mode of ["create", "update"] as const) {
   test(`infra build-image ${mode}s the image and records immutable runtime coordinates`, async () => {
     await withHarness({ FAKE_MODE: mode }, async ({ configPath, calls }) => {
-      const result = await buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 });
+      const result = await buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} });
       const expectedVersion = mode === "create" ? "1" : "2";
       assert.equal(result.version, expectedVersion);
       const loaded = loadConfigAt(configPath).config;
@@ -247,8 +247,8 @@ test("infra build-image checks the AWS account before uploading", async () => {
 
 test("infra build-image uses a fresh idempotency token for each explicit rebuild", async () => {
   await withHarness({ FAKE_MODE: "create" }, async ({ configPath, calls }) => {
-    assert.equal((await buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 })).version, "1");
-    assert.equal((await buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 })).version, "2");
+    assert.equal((await buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} })).version, "1");
+    assert.equal((await buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} })).version, "2");
     const tokens = [...calls().matchAll(/--client-token ([^\s]+)/g)].map((match) => match[1]);
     assert.equal(tokens.length, 2);
     assert.notEqual(tokens[0], tokens[1]);
@@ -259,7 +259,7 @@ test("infra build-image uses a fresh idempotency token for each explicit rebuild
 test("infra build-image reports failure from the exact version returned by update", async () => {
   await withHarness({ FAKE_MODE: "update", FAKE_VERSION_FAIL: "1" }, async ({ configPath, calls }) => {
     await assert.rejects(
-      buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 }),
+      buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} }),
       /version 2 failed: broken archive/,
     );
     const logged = calls();
@@ -273,7 +273,7 @@ for (const scenario of ["inflight", "conflict"] as const) {
     const env: Record<string, string> =
       scenario === "inflight" ? { FAKE_MODE: "inflight" } : { FAKE_MODE: "update", FAKE_CONFLICT: "1" };
     await withHarness(env, async ({ configPath, calls }) => {
-      const result = await buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 });
+      const result = await buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} });
       assert.equal(result.version, "3");
       const logged = calls();
       assert.match(logged, /get-microvm-image-version .* --image-version 3/);
@@ -296,7 +296,6 @@ for (const contender of ["build-image", "delete-image"] as const) {
       });
       try {
         const first = buildAwsMicrovmImage(config(), configPath, {
-          intervalMs: 0,
           sleep: async () => {
             entered();
             await gate;
@@ -305,8 +304,8 @@ for (const contender of ["build-image", "delete-image"] as const) {
         await waiting;
         const second =
           contender === "build-image"
-            ? buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 })
-            : deleteAwsMicrovmImage(config(), { intervalMs: 0 });
+            ? buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} })
+            : deleteAwsMicrovmImage(config(), { sleep: async () => {} });
         await assert.rejects(second, /another QM operation holds the "deploy" lease/);
         const whileHeld = calls();
         assert.equal(whileHeld.match(/lambda-microvms (?:create|update)-microvm-image/g)?.length, 1);
@@ -330,8 +329,8 @@ for (const operation of ["build", "delete"] as const) {
       async ({ configPath, calls }) => {
         const run =
           operation === "build"
-            ? buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 })
-            : deleteAwsMicrovmImage(config(), { intervalMs: 0 });
+            ? buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} })
+            : deleteAwsMicrovmImage(config(), { sleep: async () => {} });
         await assert.rejects(run, /unexpected MicroVM image ARN/);
         assert.doesNotMatch(calls(), /put-object|update-microvm-image|terminate-microvm|delete-microvm-image/);
       },
@@ -342,7 +341,7 @@ for (const operation of ["build", "delete"] as const) {
 test("infra build-image refuses an operation response naming an unexpected image", async () => {
   await withHarness({ FAKE_MODE: "create", FAKE_OP_NAME: "other-image" }, async ({ configPath, calls }) => {
     await assert.rejects(
-      buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 }),
+      buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} }),
       /unexpected MicroVM image name/,
     );
     assert.doesNotMatch(calls(), /get-microvm-image-version/);
@@ -354,8 +353,8 @@ for (const operation of ["build", "delete"] as const) {
     await withHarness({ FAKE_MODE: "update", FAKE_DEPLOYMENT_TAG: "other" }, async ({ configPath, calls }) => {
       const run =
         operation === "build"
-          ? buildAwsMicrovmImage(config(), configPath, { intervalMs: 0 })
-          : deleteAwsMicrovmImage(config(), { intervalMs: 0 });
+          ? buildAwsMicrovmImage(config(), configPath, { sleep: async () => {} })
+          : deleteAwsMicrovmImage(config(), { sleep: async () => {} });
       await assert.rejects(run, /ownership tags do not match deployment acme/);
       assert.doesNotMatch(calls(), /put-object|update-microvm-image|terminate-microvm|delete-microvm-image --/);
     });
@@ -365,7 +364,7 @@ for (const operation of ["build", "delete"] as const) {
 for (const mode of ["update", "deleted"] as const) {
   test(`infra delete-image is idempotent for ${mode === "deleted" ? "an already deleted" : "an active"} image and removes versioned artifacts`, async () => {
     await withHarness({ FAKE_MODE: mode }, async ({ calls }) => {
-      await deleteAwsMicrovmImage(config(), { intervalMs: 0 });
+      await deleteAwsMicrovmImage(config(), { sleep: async () => {} });
       const logged = calls();
       assert.match(logged, /s3api list-object-versions .* --prefix deployment\/microvm-images\//);
       assert.match(logged, /s3api delete-objects .*VersionId":"v1".*VersionId":"m1"/);

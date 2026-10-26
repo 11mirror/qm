@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { EmailTransport, ModelProvider, QmConfig } from "./config.ts";
 import type { Target } from "./providers.ts";
 import { declaredVariables, terraformVars } from "./terraform.ts";
+import { templateUrl } from "./templates.ts";
 
 interface ScaffoldFile {
   segments: string[];
@@ -96,9 +97,7 @@ function clusterName(orgId: string): string {
 }
 
 function template(rel: string): string {
-  const source = new URL(`../templates/${rel}`, import.meta.url);
-  const packaged = new URL(`../../templates/${rel}`, import.meta.url);
-  return readFileSync(existsSync(source) ? source : packaged, "utf8");
+  return readFileSync(templateUrl(rel), "utf8");
 }
 
 const AWS_AGENTS_APPENDIX = `
