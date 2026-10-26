@@ -27,7 +27,7 @@ import {
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
-import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
+import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { loadProtocolFile } from "../resolution/prompt-vars.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
@@ -38,7 +38,7 @@ import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../direc
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { isOverheard, isReply, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
+import { isOverheard, isUserMessage, type Item, type NewItem } from "../sessions/items.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -54,13 +54,7 @@ import {
 } from "./environment-facts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../auth/capability-token.ts";
-import type {
-  GapWork,
-  HarnessDetectResult,
-  HarnessTurnInput,
-  HarnessTurnResult,
-  RuntimeChoice,
-} from "../harness/harness.ts";
+import type { GapWork, HarnessDetectResult, HarnessTurnInput, RuntimeChoice } from "../harness/harness.ts";
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
   quarantineReleaseKey,
@@ -73,12 +67,11 @@ import {
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
-import { commandApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
-import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
+import { createToolContext, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../harness/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
@@ -112,31 +105,22 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
-import {
-  isModelBudget,
-  isNonRetryable,
-  NonRetryableTurnError,
-  ProviderTurnError,
-  turnFailureMessage,
-  turnFailureItem,
-} from "./turn-error.ts";
+import { NonRetryableTurnError } from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
-import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { admitTurn, ProjectRosterChanged, rosterChangedRefusal } from "./orchestrator/admit.ts";
+import { admitTurn, ProjectRosterChanged } from "./orchestrator/admit.ts";
 import { acquireTurnLeaseOrRefuse } from "./orchestrator/turn-lease.ts";
 import { openTurnSession, resolveTurnScope } from "./orchestrator/turn-context.ts";
 import { screenInboundTurn } from "./orchestrator/inbound-screen.ts";
 import { buildCredentialCatalog } from "./orchestrator/credential-catalog.ts";
 import { frameTurnPrompt } from "./orchestrator/turn-prompt.ts";
+import { mapTurnFailure, settleTurnResult } from "./orchestrator/settle.ts";
 import {
   consumeApprovalDecision,
   loadApprovalLedger,
-  parkApprovals,
-  summarizeApproval,
-  type ApprovalRequest,
+  type QuarantineReleaseApproval,
 } from "./orchestrator/approvals.ts";
 import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
@@ -189,7 +173,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
-  const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
@@ -365,7 +348,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const {
         resolution,
         actorGrants,
-        approvalOwner,
         scopeId,
         isCurrentSharedScopeMember,
         filterHistory,
@@ -509,16 +491,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
       const approvalLedger = loadApprovalLedger(await actorGrants(), session.id, resolution.approvalGrantModes);
       const { consume: consumeApproval, authorizeToolCall, authorizeCommand } = approvalLedger;
-      const quarantineReleaseApprovals: Array<{
-        command: string;
-        reason: string;
-        purpose: string;
-        summary: string;
-        summaryDetail: string;
-        screenedOutput?: PendingApprovalRecord["screenedOutput"];
-        approvalKey: string;
-        grantModes: { session: boolean; always: boolean };
-      }> = [];
+      const quarantineReleaseApprovals: QuarantineReleaseApproval[] = [];
       const quarantinePreview = (payload: string): string => {
         const cleaned = payload
           .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
@@ -2299,77 +2272,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         };
 
-        let finalResult: TurnResult;
-        const sourceUserSeq = turnUserSeq;
-        const sourceAssistantEntrySeq = emittedEntries.findLast(isReply)?.seq;
-        if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true };
-        } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
-          finalResult = { status: "silent", sessionId: session.id };
-        } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
-          const turnApprovals: Array<
-            NonNullable<HarnessTurnResult["pendingApprovals"]>[number] & {
-              summary?: string;
-              summaryDetail?: string;
-              screenedOutput?: PendingApprovalRecord["screenedOutput"];
-              grantModes?: { session: boolean; always: boolean };
-            }
-          > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
-          const requests: ApprovalRequest[] = [];
-          for (const pa of turnApprovals) {
-            const command = pa.command;
-            const summary = pa.summary ?? (await summarizeApproval(deps, scopeId, command, pa.reason, pa.purpose));
-            requests.push({
-              requestId: commandApprovalId(
-                session.id,
-                pa.screenedOutput
-                  ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
-                  : command,
-                pa.approvalKey,
-              ),
-              command,
-              reason: pa.reason,
-              blocksInput: approvalBlocksInput(pa.kind, outcome),
-              ...(pa.grantModes ? { grantModes: pa.grantModes } : {}),
-              ...(pa.matched ? { matched: pa.matched } : {}),
-              ...(pa.purpose ? { purpose: pa.purpose } : {}),
-              ...(summary ? { summary } : {}),
-              ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
-              ...(pa.screenedOutput ? { screenedOutput: pa.screenedOutput } : {}),
-              ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
-              ...(pa.kind ? { kind: pa.kind } : {}),
-            });
-          }
-          const approvals = await withManagedRosterVersion(() =>
-            parkApprovals(pending, approvalOwner(session.id), requests),
-          );
-          finalResult = turnCompleted
-            ? {
-                status: "ok",
-                sessionId: session.id,
-                reply,
-                pendingApprovals: approvals,
-                ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-                ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-                ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-              }
-            : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-        } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
-          finalResult = { status: "silent", sessionId: session.id };
-        } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
-        } else {
-          finalResult = {
-            status: "ok",
-            sessionId: session.id,
-            reply,
-            ...(result.stopped ? { stopped: true } : {}),
-            ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-            ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-            ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-          };
-        }
-
+        let finalResult = await settleTurnResult(ctx, {
+          session,
+          strictReadOnly,
+          quarantineReleaseApprovals,
+          hasSurfaceToolDeps: Boolean(surfaceToolDeps),
+          isPollFire,
+          emittedEntries,
+          result,
+          stagedAttachments,
+          reply,
+          cancelStopped,
+          outcome,
+          turnCompleted,
+          turnUserSeq,
+        });
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         await fallbackTitleWrite;
 
@@ -2386,74 +2303,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
-        if (err instanceof ProjectRosterChanged) {
-          return rosterChangedRefusal(session.id);
-        }
-        if (err instanceof NeedsApproval) {
-          const summary = await summarizeApproval(deps, scopeId, err.command, err.approvalReason);
-          try {
-            const pendingApprovals = await withManagedRosterVersion(() =>
-              parkApprovals(pending, approvalOwner(session.id), [
-                {
-                  requestId: commandApprovalId(session.id, err.command),
-                  command: err.command,
-                  reason: err.approvalReason,
-                  blocksInput: true,
-                  grantModes: { session: err.grantModes?.session ?? true, always: err.grantModes?.always ?? true },
-                  ...(err.matched ? { matched: err.matched } : {}),
-                  ...(summary ? { summary } : {}),
-                  ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
-                  ...(err.kind ? { kind: err.kind } : {}),
-                },
-              ]),
-            );
-            return { status: "pending_approval", sessionId: session.id, pendingApprovals };
-          } catch (writeErr) {
-            if (writeErr instanceof ProjectRosterChanged) {
-              return rosterChangedRefusal(session.id);
-            }
-            throw writeErr;
-          }
-        }
-        if (err instanceof CommandDenied) {
-          deps.errors?.record({
-            category: "command_policy",
-            code: "denied",
-            message: err.message,
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          });
-          return { status: "refused", sessionId: session.id, reason: err.message };
-        }
-        const budget = isModelBudget(err) && !input.cancel?.aborted;
-        deps.errors?.record(
-          {
-            category: "turn",
-            code: budget ? "model_budget" : "error",
-            message: err instanceof ProviderTurnError ? err.raw : errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          err,
-        );
-        if ((isNonRetryable(err) || input.finalAttempt) && !input.cancel?.aborted) {
-          if (failureUserItem) {
-            await deps.sessions
-              .append(lease, failureUserItem)
-              .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
-          }
-          await deps.sessions
-            .append(lease, turnFailureItem(turnFailureMessage(err), input.runId))
-            .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
-        }
-        if (budget)
-          return {
-            status: "refused",
-            sessionId: session.id,
-            reason: turnFailureMessage(err),
-            refusalKind: "model_budget",
-          };
-        throw err;
+        return await mapTurnFailure(ctx, { session, lease, failureUserItem }, err);
       } finally {
         if (input.runId) deps.turnStream?.end(input.runId);
         stopLeaseKeepalive();

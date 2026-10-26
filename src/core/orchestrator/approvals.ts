@@ -26,6 +26,17 @@ const OPERATION_APPROVED_NOTE = `\n\n${loadProtocolFile("turn-approval-operation
 
 type ScreenedOutput = NonNullable<PendingApprovalRecord["screenedOutput"]>;
 
+export interface QuarantineReleaseApproval {
+  command: string;
+  reason: string;
+  purpose: string;
+  summary: string;
+  summaryDetail: string;
+  screenedOutput?: ScreenedOutput;
+  approvalKey: string;
+  grantModes: { session: boolean; always: boolean };
+}
+
 export interface ApprovalRequest {
   requestId: string;
   command: string;
