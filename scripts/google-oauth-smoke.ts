@@ -165,6 +165,7 @@ const built = buildApp({
   orgId,
   runStore: "memory",
 });
+await built.start();
 const core = createServer(built.app, {
   signingSecret: secret,
   connectorTokens: built.connectorTokens,
