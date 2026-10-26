@@ -65,8 +65,8 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
       const scopeInstructions = external ? null : config.getInstructions(scope);
       const systemPrompt = composeInstructions(orgInstructions, scopeInstructions);
 
-      const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
-      const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
+      const orgPolicy = config.setting("commandPolicy", orgScope) ?? defaultOrgPolicy();
+      const scopePolicy = config.setting("commandPolicy", scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 

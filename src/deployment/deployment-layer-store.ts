@@ -434,10 +434,8 @@ export function createDeploymentLayerStore(opts: {
     for (const revision of pending) {
       try {
         await retrying(() => opts.auditPersisted!({ ...record, ...revision }));
-        if (!opts.backing.update)
-          throw new Error("deployment layer backing store must support atomic audit reconciliation");
         await retrying(async () => {
-          const updated = await opts.backing.update!(CURRENT, (current) => ({
+          const updated = await opts.backing.update(CURRENT, (current) => ({
             ...current,
             pendingAudits: (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version),
           }));
@@ -587,7 +585,6 @@ export function createDeploymentLayerStore(opts: {
           ];
           let record = await opts.backing.putIfAbsent(CURRENT, candidate);
           if (record.contentHash !== hash) {
-            if (!opts.backing.update) throw new Error("deployment layer backing store must support atomic updates");
             const updated = await opts.backing.update(CURRENT, (current) => {
               if (current.contentHash === hash) return current;
               const version = current.version + 1;

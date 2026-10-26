@@ -85,7 +85,7 @@ async function buildOrchestrator(
 ) {
   const config = testConfigStore(ORG);
   if (opts.orgInstructions !== undefined) await config.setInstructions(scopeId("org", ORG), opts.orgInstructions);
-  if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
+  if (opts.branding) await config.setSetting("branding", opts.branding, scopeId("org", ORG));
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());

@@ -5,9 +5,10 @@ export function startUpdates(prepareRestart, resume = () => {}) {
   if (!app.isPackaged || process.platform !== "darwin" || process.arch !== "arm64") return undefined;
   let restarting = false;
   let downloaded = false;
-  autoUpdater.on("error", () => {
+  autoUpdater.on("error", (error) => {
     restarting = false;
     resume();
+    console.error("QM could not check for or download its update", error);
   });
   const install = async () => {
     if (!downloaded || restarting) return;

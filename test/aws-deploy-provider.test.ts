@@ -698,6 +698,25 @@ test("apply: a healthy app still publishes — the readiness gate does not fire 
   assert.equal(endpoint.proxyHeaders?.["X-aws-proxy-port"], "8081");
 });
 
+test("apply: a version whose snapshot is missing on this instance fails instead of publishing an empty app", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>());
+  await assert.rejects(p.apply(deployment(ID), version("/nonexistent/qm-snapshot")), /ENOENT/);
+});
+
+test("apply: a 4xx launch error (bad image or config) fails at once instead of being retried", async () => {
+  const { api, counts } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  api.runMicrovm = async () => {
+    counts.run++;
+    throw new AwsApiError("validation failed", 400);
+  };
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>());
+  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /validation failed/);
+  assert.equal(counts.run, 1);
+});
+
 test("destroy: terminates the body and clears its pointer", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();

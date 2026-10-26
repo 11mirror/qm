@@ -295,10 +295,14 @@ test("a session approval covers the whole rule: a different command matching it 
 test("an admin-registered rule grants by rule across turns; the approval is keyed on its pattern", async () => {
   const { app, config } = freshApp();
   const pattern = "\\bzz-tool\\s+\\S+";
-  await config.setCommandPolicy(scopeId("org", "default-org"), {
-    mode: "denylist",
-    rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
-  });
+  await config.setSetting(
+    "commandPolicy",
+    {
+      mode: "denylist",
+      rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
+    },
+    scopeId("org", "default-org"),
+  );
 
   const first = await app.turn(dm("!run zz-tool alpha"));
   assert.equal(first.status, "pending_approval");
@@ -523,10 +527,14 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
 
 test("allow once authorizes a single use of the rule, not the rest of the session", async () => {
   const { app, config } = freshApp();
-  await config.setCommandPolicy(scopeId("org", "default-org"), {
-    mode: "denylist",
-    rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
-  });
+  await config.setSetting(
+    "commandPolicy",
+    {
+      mode: "denylist",
+      rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
+    },
+    scopeId("org", "default-org"),
+  );
 
   const first = await app.turn(dm("!run zz-tool alpha"));
   const pending = first.pendingApprovals![0]!;

@@ -2,7 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { setTimeout as delay } from "node:timers/promises";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -31,7 +30,7 @@ async function warm(base: string) {
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
+  await srv.built.config.setSetting("branding", { selfLabel: "Test assistant", accent: "#445566" }, "org:default-org");
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
@@ -83,29 +82,6 @@ test("Customize completes within 500 ms with unrelated model and connector servi
   assert.equal(response.status, 200);
   assert.equal(typeof ((await response.json()) as { instructions: string }).instructions, "string");
   assert.ok(performance.now() - started < 500);
-});
-
-test("independent governance reads overlap rather than accumulating network round trips", async (t) => {
-  const srv = start();
-  t.after(srv.close);
-  const reads = ["getApprovalGrantModesDurable", "getAutoFlaggerConfig"] as const;
-  await warm(srv.base);
-  let active = 0;
-  let maxActive = 0;
-  for (const name of reads) {
-    const original = srv.built.config[name].bind(srv.built.config);
-    t.mock.method(srv.built.config, name, async (scope: string) => {
-      active++;
-      maxActive = Math.max(active, maxActive);
-      await delay(100);
-      active--;
-      return original(scope);
-    });
-  }
-  const response = await fetch(srv.base + scopePath + "?view=governance", { headers: ADMIN });
-  assert.equal(response.status, 200);
-  await response.json();
-  assert.equal(maxActive, reads.length);
 });
 
 test("each settings projection retains authorization before reading configuration", async (t) => {

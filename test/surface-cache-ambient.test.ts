@@ -176,7 +176,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
       undefined,
       true,
     );
-    await built.config.setOrgAmbient(false);
+    await built.config.setSetting("orgAmbient", false);
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
     ]);
@@ -184,7 +184,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
     assert.equal(decision.act, false, "the org switch wins over an explicit per-channel on");
     await quietRuns(built);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0);
-    await built.config.setOrgAmbient(true);
+    await built.config.setSetting("orgAmbient", true);
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
     await built.posts.waitFor((post) => post.destination.type === "slack");
     await quietRuns(built);

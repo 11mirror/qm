@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+export { sleep } from "../../../src/util/async.ts";
 
 export function nowEpoch(): number {
   return Math.floor(Date.now() / 1000);

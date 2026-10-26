@@ -164,7 +164,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   }
 
   async function migrateArchive(archive: DeployGitArchive): Promise<void> {
-    if (!archiveStore?.update || !archiveBytes || archive.bundleB64 == null) return;
+    if (!archiveStore || !archiveBytes || archive.bundleB64 == null) return;
     const { blobKey } = await archiveBytes.put(Buffer.from(archive.bundleB64, "base64"));
     const slim: DeployGitArchive = {
       deploymentId: archive.deploymentId,

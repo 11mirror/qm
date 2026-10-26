@@ -118,7 +118,6 @@ export function createSlackInstallationStore(
       return publicStatus(await map.get(orgId));
     },
     async set(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       const updatedAt = Date.now();
       const record: StoredSlackInstallation = {
         orgId,
@@ -143,7 +142,6 @@ export function createSlackInstallationStore(
       return publicStatus(stored);
     },
     async setManaged(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       await map.putIfAbsent(orgId, {
         orgId,
         disabled: true,
@@ -179,7 +177,6 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async enableManaged() {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let accepted = true;
       await map.update(orgId, (record) => {
         if (!record.disabled && !record.installId) {
@@ -191,7 +188,6 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async disableManaged(installId) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let disabled = false;
       await map.update(orgId, (record) => {
         if (record.disabled || record.installId !== installId) return record;

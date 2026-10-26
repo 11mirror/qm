@@ -18,7 +18,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   );
   const project = await built.app.createProject("owner", "Replay receipt");
   assert.ok(project);
-  await built.config.setWebuiModels(`org:${project.orgId}`, ["gpt-5.5"]);
+  await built.config.setSetting("webuiModels", ["gpt-5.5"], `org:${project.orgId}`);
   assert.equal((await built.app.addProjectMember(project.id, "owner", "sender")).status, "ok");
   const channelRef = projectGroupRef(project.id);
   const version = await built.projects.version(channelRef);

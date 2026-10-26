@@ -351,6 +351,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         await waitDaemon(run.microvmId, endpoint);
         return { id: run.microvmId, endpoint };
       } catch (e) {
+        if (e instanceof AwsApiError && e.status >= 400 && e.status < 500 && e.status !== 429) throw e;
         lastErr = e;
         if (attempt < 2) await sleep(2000);
       }
@@ -497,7 +498,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     if (gitBundle && version.commit) {
       await checkoutBundle(id, endpoint, gitBundle, version.commit);
     } else {
-      await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir, { tolerateMissing: true }));
+      await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir));
     }
     if (version.homeDir)
       await writeFiles(id, endpoint, HOME_DIR, await readTree(version.homeDir, { tolerateMissing: true }));

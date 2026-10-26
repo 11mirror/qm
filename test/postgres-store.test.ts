@@ -2,7 +2,7 @@ import "./run-availability.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-screen.ts";
@@ -449,7 +449,7 @@ test(
   },
 );
 
-test("pg spend indexes preserve legacy and unusual requests through migration and later writes", { skip }, async () => {
+test("pg spend columns count legacy, malformed and unusual usage, and follow later writes", { skip }, async () => {
   const at = Date.UTC(2022, 0, 1);
   const store = createPostgresSessionStore(URL!, { now: () => at });
   const session = await store.getOrCreateByThread("spend-index", "dm", scopeId("personal", "USPENDINDEX"));
@@ -468,10 +468,6 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   };
   const range = { from: at, to: at + 1 };
   try {
-    await raw.query("DROP INDEX session_llm_requests_spend, session_llm_requests_spend_wide");
-    await raw.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0020-spend-usage-json-size-plpgsql', 'sessions/store/0021-spend-covering-index')",
-    );
     await insert("spend-index-normal", "normal", JSON.stringify(usage));
     await insert("spend-index-wide", wideModel, JSON.stringify(wideUsage));
     await insert("spend-index-null", "null", null);
@@ -489,12 +485,13 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await insert("spend-index-fraction", "fraction", JSON.stringify({ ...usage, input: 0.5 }), at - 1);
     await insert("spend-index-overflow", "overflow", JSON.stringify({ ...usage, input: 1e308 }), at - 1);
     await insert("spend-index-deep-history", "deep-history", deeplyNestedUsage, at - 2);
-    await migrateRegisteredPgSchemas(URL!);
-    const indexes = await raw.query(
-      "SELECT indexrelid::regclass::text AS name, indisvalid, indisready FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass)",
-    );
-    assert.equal(indexes.rows.length, 2);
-    assert.ok(indexes.rows.every((r) => r.indisvalid && r.indisready));
+    // Rows written before the spend columns existed: spend reads parse them until the refresh backfills them.
+    const legacy = () =>
+      raw.query(
+        "UPDATE session_llm_requests SET spend_cost_usd = NULL, spend_input = NULL, spend_output = NULL, spend_cache_read = NULL, spend_cache_write = NULL WHERE session_id IN ($1, 'missing-spend-session')",
+        [session.id],
+      );
+    await legacy();
     const read = async () => (await store.spendRollup(range)).filter((r) => r.scopeId === session.scopeId);
     const before = await read();
     assert.equal(before.length, 3);
@@ -523,7 +520,15 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await raw.query("UPDATE session_llm_requests SET created_at = $1 WHERE model = 'fraction-after-index'", [at - 1]);
     await insert("spend-index-bad-later", "bad-later", "not json", at - 1);
     await insert("spend-index-deep-later", "deep-later", deeplyNestedUsage, at - 2);
-    await assert.rejects(store.spendRollup({ from: at - 2, to: at - 1 }), { code: "54001" });
+    const deep = (await store.spendRollup({ from: at - 2, to: at - 1 })).filter((r) => r.model?.startsWith("deep-"));
+    assert.deepEqual(
+      deep.map((r) => [r.model, r.calls, r.costUsd]),
+      [
+        ["deep-history", 1, 0],
+        ["deep-later", 1, 0],
+      ],
+      "usage too deeply nested to parse still counts the call, at zero",
+    );
     await raw.query("UPDATE session_llm_requests SET usage_json = $1 WHERE id = 'spend-index-normal'", [
       JSON.stringify({ ...usage, costUsd: 2 }),
     ]);
@@ -538,7 +543,21 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
       4,
     );
     await raw.query("UPDATE session_llm_requests SET created_at = $1 WHERE id = 'spend-index-bad-later'", [at]);
-    await assert.rejects(store.spendRollup(range), /invalid input syntax for type json/);
+    const withBad = (await store.spendRollup(range)).filter((r) => r.scopeId === "personal:USPENDMOVED");
+    assert.equal(
+      withBad.reduce((sum, row) => sum + row.calls, 0),
+      5,
+      "malformed usage counts the call instead of failing the report",
+    );
+    await legacy();
+    const parsedBefore = await store.spendRollup({ from: at - 2, to: at + 1 });
+    await store.refreshSpendRollup();
+    const unparsed = await raw.query(
+      "SELECT count(*)::int AS n FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session') AND usage_json IS NOT NULL AND spend_cost_usd IS NULL",
+      [session.id],
+    );
+    assert.equal(unparsed.rows[0].n, 0, "the refresh backfills the spend columns");
+    assert.deepEqual(await store.spendRollup({ from: at - 2, to: at + 1 }), parsedBefore);
   } finally {
     await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);
     await store.deleteSession(session.id);
@@ -546,7 +565,7 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   }
 });
 
-test("pg spend usage guard upgrades the original migration without rewriting indexes or ledger", { skip }, async () => {
+test("pg spend usage guard upgrades the original migration without rewriting the ledger", { skip }, async () => {
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `spend_upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -564,11 +583,6 @@ test("pg spend usage guard upgrades the original migration without rewriting ind
       migrations.filter((migration) => migration.id !== "sessions/store/0020-spend-usage-json-size"),
     );
     const ledger = (await raw.query("SELECT * FROM qm_schema_migrations ORDER BY id")).rows;
-    const indexes = (
-      await raw.query(
-        "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
-      )
-    ).rows;
     await store.countSessions();
     assert.deepEqual(
       (
@@ -577,14 +591,6 @@ test("pg spend usage guard upgrades the original migration without rewriting ind
         )
       ).rows,
       ledger,
-    );
-    assert.deepEqual(
-      (
-        await raw.query(
-          "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
-        )
-      ).rows,
-      indexes,
     );
     const deep = "[".repeat(20_000) + "0" + "]".repeat(20_000);
     assert.equal((await raw.query("SELECT spend_usage_json($1) AS usage", [deep])).rows[0].usage, null);
@@ -898,6 +904,36 @@ test("pg latestItemSeq and participant windows round-trip", { skip }, async () =
     listed.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
     windows.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
   );
+});
+
+test("pg attributed turns follow later appends, window changes and session deletes", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "ATTRIB-CACHE");
+  const session = await s.getOrCreateByThread(`attrib-cache-${randomUUID()}`, "dm", scope);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  const turns = async () =>
+    (await s.attributedTurns())
+      .filter((t) => t.sessionId === session.id)
+      .map((t) => [t.principalId, t.turns])
+      .sort();
+  await s.addParticipant(session.id, "attrib-a");
+  await s.append(lease!, { kind: "UserMessage", text: "one" });
+  assert.deepEqual(await turns(), [["attrib-a", 1]]);
+  await s.append(lease!, { kind: "UserMessage", text: "two" });
+  await s.append(lease!, { kind: "AgentMessage", text: "reply" });
+  assert.deepEqual(await turns(), [["attrib-a", 2]], "a later user message is counted on the next read");
+  await s.addParticipant(session.id, "attrib-b", undefined, { includeHistory: true });
+  assert.deepEqual(
+    await turns(),
+    [
+      ["attrib-a", 2],
+      ["attrib-b", 2],
+    ],
+    "a widened window is picked up",
+  );
+  await s.deleteSession(session.id);
+  assert.deepEqual(await turns(), [], "a deleted session leaves nothing behind");
 });
 
 test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {

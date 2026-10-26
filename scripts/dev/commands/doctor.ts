@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { listSlots, readSlotFlag, slotFlagged, slotPorts } from "../lib/pool.ts";
@@ -156,16 +155,16 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
         "/reload",
         { callerEnv: callerEnvSnapshot(), force: false, dryRun: true },
         60_000,
-      ).catch(() => null);
+      ).then(
+        (r) => ({ noop: r.body?.noop }),
+        (error: unknown) => ({ error: errMessage(error) }),
+      );
       checks.push({
         id: "env-drift",
-        ok: reload?.body?.noop !== false,
+        ok: "noop" in reload && reload.noop === true,
         severity: "warn",
-        detail:
-          reload?.body?.noop === false
-            ? "environment changed since boot -- children run stale env"
-            : `env matches boot (${status.envSha})`,
-        remedy: reload?.body?.noop === false ? "dev up  (rolling reload with fresh env)" : undefined,
+        detail: envDriftDetail(reload, status.envSha),
+        remedy: "noop" in reload && reload.noop === false ? "dev up  (rolling reload with fresh env)" : undefined,
       });
     }
   }
@@ -219,17 +218,6 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     detail: docker ? "docker daemon reachable" : "docker daemon unreachable (local Postgres + local sandbox need it)",
     remedy: docker ? undefined : "start Docker Desktop / colima",
   });
-  if (worktree) {
-    checks.push({
-      id: "local-sandbox-code",
-      ok: true,
-      severity: "info",
-      detail: existsSync(join(worktree, "src/sandbox/local-sandbox.ts"))
-        ? "worktree supports the local sandbox backend"
-        : "worktree predates the local sandbox backend (dev up will refuse; use --sandbox sprites)",
-    });
-  }
-
   const fixed: string[] = [];
   if (opts.fix) {
     for (const check of checks.filter((c) => !c.ok && c.autoFixable)) {
@@ -237,7 +225,12 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
       if (check.id.startsWith("child:") && mine) {
         const sock = resolveSocketPath(mine.lockDir);
         const name = check.id.split(":")[1];
-        const res = await supervisorRequest(sock, "POST", "/restart", { children: [name] }, 180_000).catch(() => null);
+        const res = await supervisorRequest(sock, "POST", "/restart", { children: [name] }, 180_000).catch(
+          (error: unknown) => {
+            console.warn(`[dev] restart ${name} failed: ${errMessage(error)}`);
+            return null;
+          },
+        );
         if (res?.body?.ok) fixed.push(check.id);
       }
     }
@@ -267,4 +260,10 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     if (fixed.length) console.log(`fixed: ${fixed.join(", ")}`);
   }
   return critical.length ? EXIT.doctorCritical : EXIT.ok;
+}
+
+function envDriftDetail(reload: { noop?: unknown } | { error: string }, envSha: unknown): string {
+  if ("error" in reload) return `could not compare env with boot: ${reload.error}`;
+  if (reload.noop === true) return `env matches boot (${String(envSha)})`;
+  return "environment changed since boot -- children run stale env";
 }

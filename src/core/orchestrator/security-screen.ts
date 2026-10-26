@@ -106,7 +106,7 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
           signal,
         });
       }
-      const flagger = deps.config?.getAutoFlaggerConfig();
+      const flagger = deps.config?.setting("autoFlagger");
       const verdict = await model!({
         payload: request ? JSON.stringify({ request, payload }) : payload,
         ...(flagger

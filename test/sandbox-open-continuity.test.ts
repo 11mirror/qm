@@ -32,8 +32,7 @@ function fixture(
   const egressClaims: unknown[] = [];
   const config = {
     refreshSecurity: async () => {},
-    getCommandPolicy: () => state.targetPolicy,
-    getEgress: () => state.targetEgress,
+    setting: (name: string) => (name === "commandPolicy" ? state.targetPolicy : state.targetEgress),
   };
   const sandbox = {
     provision: async (...args: unknown[]) => {

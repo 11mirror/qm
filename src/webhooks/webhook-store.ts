@@ -42,7 +42,6 @@ export interface WebhookStore {
 }
 
 export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
-  if (!history.update) throw new Error("webhook history requires atomic updates");
   const updateHistory = history.update.bind(history);
   return {
     async recordEvent(id, event) {

@@ -138,7 +138,8 @@ async function finishBrowserSignIn(url) {
     loginStatus = "";
     void showInstance(attempt.instance);
     setupWindow?.close();
-  } catch {
+  } catch (error) {
+    console.error("QM desktop sign-in redemption failed", error);
     if (pendingLogin !== attempt) return;
     pendingLogin = undefined;
     loginStatus = "Sign-in could not be completed. Please connect again to get a fresh link.";

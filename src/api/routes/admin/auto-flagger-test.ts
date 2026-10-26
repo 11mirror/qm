@@ -94,7 +94,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       error: "unsupported",
       message: "this deployment has no screening model wired, so the flagger cannot be tested",
     });
-  const saved = configStore.getAutoFlaggerConfig();
+  const saved = configStore.setting("autoFlagger");
   const effective: AutoFlaggerDraft = saved
     ? { modelId: saved.modelId, rubric: saved.rubric }
     : defaultAutoFlaggerConfig(ctx.deps);

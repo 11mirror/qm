@@ -293,7 +293,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
     },
   });
   assert.doesNotMatch(incompleteRoster.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
-  await config.setExternalSlackParticipants(scopeId("org", ORG), true);
+  await config.setSetting("externalSlackParticipants", true, scopeId("org", ORG));
   const external = await orchestrator.handleTurn({
     surface: "slack",
     actor,

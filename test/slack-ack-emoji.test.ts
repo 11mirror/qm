@@ -23,14 +23,14 @@ test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops 
 
 test("config store: ack emoji set/get/clear roundtrip, durable read included", async () => {
   const config = testConfigStore(ORG);
-  assert.equal(config.getAckEmoji(ORG), null);
-  assert.equal(await config.getAckEmojiDurable(ORG), null);
-  await config.setAckEmoji(ORG, ["custom_thinking", "custom_ok"]);
-  assert.deepEqual(config.getAckEmoji(ORG), ["custom_thinking", "custom_ok"]);
-  assert.deepEqual(await config.getAckEmojiDurable(ORG), ["custom_thinking", "custom_ok"]);
-  await config.setAckEmoji(ORG, null);
-  assert.equal(config.getAckEmoji(ORG), null);
-  assert.equal(await config.getAckEmojiDurable(ORG), null);
+  assert.equal(config.setting("ackEmoji", ORG), null);
+  assert.equal(await config.settingDurable("ackEmoji", ORG), null);
+  await config.setSetting("ackEmoji", ["custom_thinking", "custom_ok"], ORG);
+  assert.deepEqual(config.setting("ackEmoji", ORG), ["custom_thinking", "custom_ok"]);
+  assert.deepEqual(await config.settingDurable("ackEmoji", ORG), ["custom_thinking", "custom_ok"]);
+  await config.setSetting("ackEmoji", null, ORG);
+  assert.equal(config.setting("ackEmoji", ORG), null);
+  assert.equal(await config.settingDurable("ackEmoji", ORG), null);
 });
 
 function pickerFixture(opts?: { candidatesOverride?: () => readonly string[] | null }) {

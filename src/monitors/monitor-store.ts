@@ -73,12 +73,7 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
       const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
       let deleted = 0;
       for (const m of (await backing.all()).filter(isDefunct)) {
-        if (backing.deleteIf) {
-          if (await backing.deleteIf(m.id, isDefunct)) deleted++;
-        } else {
-          await backing.delete(m.id);
-          deleted++;
-        }
+        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
       }
       return deleted;
     },

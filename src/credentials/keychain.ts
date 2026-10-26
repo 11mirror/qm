@@ -711,7 +711,6 @@ export function createKeychain(deps: {
   async function settleAsk(rec: KeychainAsk, t: number, grant: KeychainGrant | null): Promise<KeychainAsk> {
     if (!unsettled(rec)) return rec;
     if (grant?.askId === rec.id) {
-      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic resolution");
       return (
         (await deps.asks.update(rec.id, (current) =>
           current.status === "pending" || current.status === "expired"
@@ -721,7 +720,6 @@ export function createKeychain(deps: {
       );
     }
     if (rec.status !== "pending" || rec.expiresAt >= t) return rec;
-    if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic expiry");
     return (
       (await deps.asks.update(rec.id, (current) =>
         current.status === "pending" && current.expiresAt < t
@@ -1109,7 +1107,6 @@ export function createKeychain(deps: {
 
   async function claimOnceGrant(grant: KeychainGrant, scopeId: ScopeId, usedBy: string): Promise<void> {
     if (grant.mode !== "once") return;
-    if (!deps.grants.update) throw new KeychainError(503, "grant store does not support atomic one-time use");
     const usedAt = now();
     const claimed = await deps.grants.update(grant.id, (current) => {
       if (current.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
@@ -1214,8 +1211,6 @@ export function createKeychain(deps: {
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
-
-      if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
@@ -1481,7 +1476,6 @@ export function createKeychain(deps: {
     },
 
     async markAskNotified(id, status) {
-      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic notification");
       await deps.asks.update(id, (current) =>
         current.status === status ? { ...current, notifiedAt: now() } : current,
       );

@@ -91,54 +91,32 @@ interface AutoFlaggerConfig {
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
-interface ScopeConfigPresence {
-  instructions: boolean;
-  commandPolicy: boolean;
-  approvalGrantModes: boolean;
-  egress: boolean;
-  unfulfilledInsights: boolean;
-  externalSlackParticipants: boolean;
-  runtime: boolean;
-  branding: boolean;
-}
-
 export interface PersistedDeploymentIdentity {
   orgId: string;
 }
 export interface ScopedConfigStore {
+  /** A per-scope setting as it applies at `id` (default: the org), read from the in-process cache. */
+  setting<K extends ScopeSettingName>(name: K, id?: ScopeId): ScopeSettingValues[K];
+  /** The same, read from the database. */
+  settingDurable<K extends ScopeSettingName>(name: K, id?: ScopeId): Promise<ScopeSettingValues[K]>;
+  /** What `id` itself stores, without inheritance or defaults. */
+  settingOwnDurable<K extends ScopeSettingName>(name: K, id: ScopeId): Promise<ScopeSettingValue<K> | null>;
+  /** Store a setting at `id` (default: the org); null clears it so `id` inherits again. */
+  setSetting<K extends ScopeSettingName>(name: K, value: ScopeSettingValue<K> | null, id?: ScopeId): Promise<void>;
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getInstructions(id: ScopeId): string | null;
   /** Read a scope's instructions from the store (another instance may have written them) and refresh the cache. */
   getInstructionsDurable(id: ScopeId): Promise<string | null>;
   setInstructions(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setInstructionsIfVersion(
-    id: ScopeId,
-    expectedVersion: number,
-    content: string,
-    updatedBy?: string,
-  ): Promise<number | null>;
+  setInstructionsIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
   instructionsVersion(id: ScopeId): number;
   instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
   captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
   restoreInstructionsSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): Promise<boolean>;
   restoreInstructionsCacheSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): void;
-  getCommandPolicy(id: ScopeId): CommandPolicy | null;
-  setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
   getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
-  getEgress(id: ScopeId): EgressPolicy | null;
-  setEgress(id: ScopeId, policy: EgressPolicy): Promise<void>;
-  getUnfulfilledInsights(id: ScopeId): boolean;
-  setUnfulfilledInsights(id: ScopeId, on: boolean): Promise<void>;
-  getExternalSlackParticipants(id: ScopeId): boolean;
-  setExternalSlackParticipants(id: ScopeId, on: boolean): Promise<void>;
-  getExternalSlackParticipantsDurable(id: ScopeId): Promise<boolean>;
-  getChannelHeaderPin(id: ScopeId): boolean;
-  setChannelHeaderPin(id: ScopeId, on: boolean | null): Promise<void>;
-  getChannelHeaderPinDurable(id: ScopeId): Promise<boolean>;
-  getChannelHeaderPinOverrideDurable(id: ScopeId): Promise<boolean | null>;
-  getChannelHeaderPinDefaultDurable(): Promise<boolean>;
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
   getPurposeRuntime(purpose: RuntimePurpose): RuntimeSelection | undefined;
   getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
@@ -151,43 +129,19 @@ export interface ScopedConfigStore {
   acknowledgeRuntimeSelection(id: ScopeId): Promise<void>;
   getRuntimeSelectionDurable(id: ScopeId): Promise<ScopedRuntimeSelection | null>;
   onRuntimeSelectionChanged(listener: (id: ScopeId) => void): void;
-  getOrgAmbient(): boolean;
-  setOrgAmbient(on: boolean): Promise<void>;
-  getOrgAmbientDurable(): Promise<boolean>;
-  getInteractiveFastMode(): boolean;
-  setInteractiveFastMode(on: boolean): Promise<void>;
-  getInteractiveFastModeDurable(): Promise<boolean>;
-  getIndividualModelAuth(): boolean;
-  setIndividualModelAuth(on: boolean): Promise<void>;
   getIndividualModelAuthDurable(principalId?: string): Promise<boolean>;
   setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai"): Promise<void>;
   getModelAccountDurable(principalId: string): Promise<ModelAccount>;
   getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
-  getWebuiModels(id: ScopeId): string[] | null;
-  setWebuiModels(id: ScopeId, ids: string[] | null): Promise<void>;
   getBaseModelDurable(id: ScopeId): Promise<string | null>;
-  getWebuiModelsDurable(id: ScopeId): Promise<string[] | null>;
-  getAckEmoji(id: ScopeId): string[] | null;
-  setAckEmoji(id: ScopeId, names: string[] | null): Promise<void>;
-  getAckEmojiDurable(id: ScopeId): Promise<string[] | null>;
   setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): Promise<void>;
   getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
-  getBranding(id: ScopeId): OrgBranding | null;
-  setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
-  getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
-  getBrowseMaxSteps(id: ScopeId): number | null;
-  setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getBrowseModel(id: ScopeId): string | null;
-  setBrowseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
-  getAutoFlaggerConfig(): AutoFlaggerConfig | null;
-  setAutoFlaggerConfig(config: AutoFlaggerConfig | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
-  scopeConfigPresence(id: ScopeId): Promise<ScopeConfigPresence>;
   refreshScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
 }
@@ -244,6 +198,61 @@ export const configStoreMaps = (map: (table: string) => DurableMap<never>): Requ
   Object.fromEntries(
     Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
   ) as unknown as Required<ConfigStoreMaps>;
+
+/** What each per-scope setting reads as; null means "not set here". */
+export interface ScopeSettingValues {
+  commandPolicy: CommandPolicy | null;
+  egress: EgressPolicy | null;
+  unfulfilledInsights: boolean;
+  externalSlackParticipants: boolean;
+  channelHeaderPin: boolean;
+  orgAmbient: boolean;
+  interactiveFastMode: boolean;
+  individualModelAuth: boolean;
+  webuiModels: string[] | null;
+  ackEmoji: string[] | null;
+  branding: OrgBranding | null;
+  browseMaxSteps: number | null;
+  browseModel: string | null;
+  autoFlagger: AutoFlaggerConfig | null;
+}
+export type ScopeSettingName = keyof ScopeSettingValues;
+export type ScopeSettingValue<K extends ScopeSettingName> = NonNullable<ScopeSettingValues[K]>;
+
+interface ScopeSettingSpec<V> {
+  /** The table-backed map that stores one row per scope. */
+  map: Exclude<keyof ConfigStoreMaps, "connectorClients">;
+  /** Where admins may set it: "org" settings are set on the org scope only. */
+  target: "org" | "any";
+  /** Stored once for the whole org, whatever scope is named. */
+  orgOnly?: true;
+  /** How a scope combines with the org: unset reads only the scope; "fallback" falls back to the org; "any" is on if either is. */
+  inherit?: "fallback" | "any";
+  /** The value at the org scope (with "fallback", everywhere) when nothing is stored. */
+  orgDefault?: V;
+  /** Rewrite a value before storing it; null clears the row. */
+  normalize?: (value: V) => V | null;
+}
+
+const emptyAsNull = (items: string[]): string[] | null => (items.length ? items : null);
+
+/** Every per-scope setting, declared once: the store's get/set and the admin resources come from here. */
+export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSettingValue<K>> } = {
+  commandPolicy: { map: "commandPolicies", target: "any", orgDefault: defaultOrgPolicy() },
+  egress: { map: "egressPolicies", target: "any", orgDefault: { allowedHosts: [], deniedHosts: [] } },
+  unfulfilledInsights: { map: "unfulfilledInsights", target: "any", inherit: "any" },
+  externalSlackParticipants: { map: "externalSlackParticipants", target: "org", inherit: "any" },
+  channelHeaderPin: { map: "channelHeaderPin", target: "org", inherit: "fallback", orgDefault: false },
+  orgAmbient: { map: "orgAmbient", target: "org", orgOnly: true, orgDefault: true },
+  interactiveFastMode: { map: "interactiveFastMode", target: "org", orgOnly: true, orgDefault: false },
+  individualModelAuth: { map: "individualModelAuth", target: "org", orgOnly: true, orgDefault: false },
+  webuiModels: { map: "webuiModels", target: "org", normalize: emptyAsNull },
+  ackEmoji: { map: "ackEmoji", target: "org", normalize: emptyAsNull },
+  branding: { map: "branding", target: "org" },
+  browseMaxSteps: { map: "browseMaxSteps", target: "org" },
+  browseModel: { map: "browseModels", target: "org" },
+  autoFlagger: { map: "autoFlaggerConfigs", target: "org", orgOnly: true },
+};
 
 export function createConfigStore(
   orgId: string,
@@ -375,8 +384,6 @@ export function createConfigStore(
     id: ScopeId,
     fn: (row: PersistedBaseModel | null) => PersistedBaseModel,
   ): Promise<PersistedBaseModel | null> => {
-    if (!baseModelStore.update || !baseModelStore.insertIfAbsent || !baseModelStore.deleteIf)
-      throw new Error("base model store does not support atomic updates");
     for (;;) {
       let saved = await baseModelStore.update(id, fn);
       if (!saved) {
@@ -416,8 +423,6 @@ export function createConfigStore(
       cacheBaseModel(org, saved);
     });
   };
-  const orgDefaultPolicy = defaultOrgPolicy();
-  const orgDefaultEgress: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
   const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };
   const composeApprovalGrantModes = (orgModes: ApprovalGrantModes, scope?: ApprovalGrantModes): ApprovalGrantModes => ({
     session: orgModes.session && (scope?.session ?? true),
@@ -431,17 +436,15 @@ export function createConfigStore(
   instructionsCache.set(org, defaultOrgInstructions);
 
   let hydrated: Promise<void> | null = null;
-  const loadInstructionsCache = (id: ScopeId, stored: PersistedInstructions | null): void => {
-    if (stored) instructionsCache.set(id, { content: stored.content, version: stored.version });
+  const loadInstructionsCache = (id: ScopeId, instructions: PersistedInstructions | null): void => {
+    if (instructions) instructionsCache.set(id, { content: instructions.content, version: instructions.version });
     else if (id === org) instructionsCache.set(org, defaultOrgInstructions);
     else instructionsCache.delete(id);
-    if (stored?.history) instructionsHistory.set(id, stored.history);
+    if (instructions?.history) instructionsHistory.set(id, instructions.history);
     else instructionsHistory.delete(id);
   };
-  const cloneInstructions = (stored: PersistedInstructions | null): InstructionsSnapshot =>
-    stored ? structuredClone(stored) : null;
-  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean =>
-    isDeepStrictEqual(left, right);
+  const cloneInstructions = (instructions: PersistedInstructions | null): InstructionsSnapshot => (instructions ? structuredClone(instructions) : null);
+  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean => isDeepStrictEqual(left, right);
   const mergeInstructionsHistory = (
     embedded: readonly PersistedInstructionsRevision[] | undefined,
     legacy: readonly PersistedInstructionsRevision[],
@@ -469,13 +472,45 @@ export function createConfigStore(
     return history;
   };
 
+  type Access = {
+    get(id: ScopeId): unknown;
+    durable(id: ScopeId): Promise<unknown>;
+    set(id: ScopeId, value: unknown): Promise<void>;
+  };
+  const access = (name: ScopeSettingName) => (settings as unknown as Record<string, Access>)[SCOPE_SETTINGS[name].map]!;
+  const resolve = (name: ScopeSettingName, id: ScopeId, own: unknown, orgValue: () => unknown): unknown => {
+    const { inherit, orgDefault } = SCOPE_SETTINGS[name];
+    if (inherit === "any") return Boolean(orgValue()) || Boolean(own);
+    if (own !== undefined) return own;
+    if (id === org) return orgDefault ?? null;
+    return inherit === "fallback" ? (orgValue() ?? orgDefault ?? null) : null;
+  };
+
   return {
+    setting: <K extends ScopeSettingName>(name: K, id: ScopeId = org) =>
+      resolve(name, id, access(name).get(id), () => access(name).get(org)) as ScopeSettingValues[K],
+    async settingDurable<K extends ScopeSettingName>(name: K, id: ScopeId = org) {
+      const { inherit } = SCOPE_SETTINGS[name];
+      const stored = access(name);
+      if (inherit === "any" && id !== org && (await stored.durable(org))) return true as ScopeSettingValues[K];
+      const own = await stored.durable(id);
+      const orgValue =
+        inherit === "fallback" && own === undefined && id !== org ? await stored.durable(org) : undefined;
+      return resolve(name, id, own, () => orgValue) as ScopeSettingValues[K];
+    },
+    settingOwnDurable: async <K extends ScopeSettingName>(name: K, id: ScopeId) =>
+      ((await access(name).durable(id)) ?? null) as ScopeSettingValue<K> | null,
+    async setSetting(name, value, id = org) {
+      const { normalize } = SCOPE_SETTINGS[name];
+      await access(name).set(id, value !== null && normalize ? normalize(value as never) : value);
+      if (name === "channelHeaderPin") noteChannelHeaderPinChanged(id);
+    },
     async refreshSecurity(ids) {
       await Promise.all(
         ids.flatMap((id) => [
           writeQueue(`instructions:${id}`, async () => {
-            const stored = await instructionsStore.get(id);
-            if (stored) instructionsCache.set(id, { content: stored.content, version: stored.version });
+            const instructions = await instructionsStore.get(id);
+            if (instructions) instructionsCache.set(id, { content: instructions.content, version: instructions.version });
             else if (id !== org) instructionsCache.delete(id);
           }),
           settings.commandPolicies.reload(id),
@@ -517,7 +552,6 @@ export function createConfigStore(
     },
     setInstructions(id, content, updatedBy) {
       return writeQueue(`instructions:${id}`, async () => {
-        if (!instructionsStore.update) throw new Error("instructions store does not support atomic updates");
         const legacy = legacyInstructionsHistory.get(id) ?? [];
         const append = (current: PersistedInstructions): PersistedInstructions => {
           const revision: PersistedInstructionsRevision = {
@@ -575,7 +609,6 @@ export function createConfigStore(
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
         } else {
-          if (!instructionsStore.update) throw new Error("instructions store does not support atomic updates");
           let accepted = false;
           const updated = await instructionsStore.update(id, (current) => {
             if (current.version !== expectedVersion) return current;
@@ -619,8 +652,6 @@ export function createConfigStore(
     restoreInstructionsCacheSnapshot(id, snapshot) {
       loadInstructionsCache(id, cloneInstructions(snapshot));
     },
-    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
-    setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
     getApprovalGrantModes(id) {
       const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -633,27 +664,6 @@ export function createConfigStore(
     },
     setApprovalGrantModes: (id, modes) =>
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org ? orgDefaultEgress : null),
-    setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
-    getUnfulfilledInsights: (id) =>
-      (settings.unfulfilledInsights.get(org) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
-    setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
-    getExternalSlackParticipants: (id) =>
-      (settings.externalSlackParticipants.get(org) ?? false) || (settings.externalSlackParticipants.get(id) ?? false),
-    setExternalSlackParticipants: (id, on) => settings.externalSlackParticipants.set(id, on),
-    getExternalSlackParticipantsDurable: async (id) =>
-      ((await settings.externalSlackParticipants.durable(org)) ?? false) ||
-      ((await settings.externalSlackParticipants.durable(id)) ?? false),
-    getChannelHeaderPin: (id) => settings.channelHeaderPin.get(id) ?? settings.channelHeaderPin.get(org) ?? false,
-    async setChannelHeaderPin(id, on) {
-      await settings.channelHeaderPin.set(id, on);
-      noteChannelHeaderPinChanged(id);
-    },
-    getChannelHeaderPinDurable: async (id) =>
-      (await settings.channelHeaderPin.durable(id)) ??
-      (id === org ? false : ((await settings.channelHeaderPin.durable(org)) ?? false)),
-    getChannelHeaderPinOverrideDurable: async (id) => (await settings.channelHeaderPin.durable(id)) ?? null,
-    getChannelHeaderPinDefaultDurable: async () => (await settings.channelHeaderPin.durable(org)) ?? false,
     onChannelHeaderPinChanged(listener) {
       channelHeaderPinListeners.add(listener);
     },
@@ -707,14 +717,6 @@ export function createConfigStore(
       runtimeSelectionListeners.add(listener);
     },
     getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
-    getOrgAmbient: () => settings.orgAmbient.get(org) ?? true,
-    setOrgAmbient: (on) => settings.orgAmbient.set(org, on),
-    getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(org)) ?? true,
-    getInteractiveFastMode: () => settings.interactiveFastMode.get(org) ?? false,
-    setInteractiveFastMode: (on) => settings.interactiveFastMode.set(org, on),
-    getInteractiveFastModeDurable: async () => (await settings.interactiveFastMode.durable(org)) ?? false,
-    getIndividualModelAuth: () => settings.individualModelAuth.get(org) ?? false,
-    setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
     async getIndividualModelAuthDurable(principalId) {
       if (await settings.individualModelAuth.durable(org)) return true;
       return principalId
@@ -734,26 +736,12 @@ export function createConfigStore(
     getBaseModelDurable: async (id) =>
       (await baseModelStore.get(id))?.modelId ??
       (id === org ? null : ((await baseModelStore.get(org))?.modelId ?? null)),
-    getWebuiModels: (id) => settings.webuiModels.get(id) ?? null,
-    setWebuiModels: (id, ids) => settings.webuiModels.set(id, ids?.length ? ids : null),
-    getWebuiModelsDurable: async (id) =>
-      (await settings.webuiModels.durable(id)) ?? (await settings.webuiModels.durable(org)) ?? null,
-    getAckEmoji: (id) => settings.ackEmoji.get(id) ?? null,
-    setAckEmoji: (id, names) => settings.ackEmoji.set(id, names?.length ? names : null),
-    getAckEmojiDurable: async (id) => (await settings.ackEmoji.durable(id)) ?? null,
     async setSlackEmojiCatalog(id, emoji) {
       await writeQueue(`slackEmojiCatalog:${id}`, () =>
         slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
       );
     },
     getSlackEmojiCatalogDurable: async (id) => (await slackEmojiCatalogStore.get(id)) ?? null,
-    getBranding: (id) => settings.branding.get(id) ?? null,
-    setBranding: (id, value) => settings.branding.set(id, value),
-    getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
-    getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
-    setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getBrowseModel: (id) => settings.browseModels.get(id) ?? null,
-    setBrowseModel: (id, modelId) => settings.browseModels.set(id, modelId),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: async (modelId) => {
       await writeQueue(`model:${org}`, async () => {
@@ -766,8 +754,6 @@ export function createConfigStore(
         cacheBaseModel(org, saved);
       });
     },
-    getAutoFlaggerConfig: () => settings.autoFlaggerConfigs.get(org) ?? null,
-    setAutoFlaggerConfig: (config) => settings.autoFlaggerConfigs.set(org, config),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,
@@ -800,43 +786,27 @@ export function createConfigStore(
         enabled: rec.enabled,
       };
     },
-    async scopeConfigPresence(id) {
-      const stores = {
-        instructions: instructionsStore,
-        commandPolicy: settings.commandPolicies.store,
-        approvalGrantModes: settings.approvalGrantModes.store,
-        egress: settings.egressPolicies.store,
-        unfulfilledInsights: settings.unfulfilledInsights.store,
-        externalSlackParticipants: settings.externalSlackParticipants.store,
-        runtime: baseModelStore,
-        branding: settings.branding.store,
-      };
-      const present = await Promise.all(
-        Object.entries(stores).map(async ([key, store]) => [key, !!(await store.get(id))] as const),
-      );
-      return Object.fromEntries(present) as Record<keyof typeof stores, boolean>;
-    },
     async refreshScope(id) {
-      const [stored, baseModel] = await Promise.all([
+      const [instructions, baseModel] = await Promise.all([
         instructionsStore.get(id),
         baseModelStore.get(id),
         ...allSettings.map((setting) => setting.refresh(id)),
       ]);
-      let refreshedInstructions = stored;
+      let refreshedInstructions = instructions;
       const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
-      if (stored && stored.history === undefined && legacyHistory.length) {
-        const mergedHistory = mergeInstructionsHistory(stored.history, legacyHistory);
-        if (!isDeepStrictEqual(mergedHistory, stored.history ?? [])) {
+      if (instructions && instructions.history === undefined && legacyHistory.length) {
+        const mergedHistory = mergeInstructionsHistory(instructions.history, legacyHistory);
+        if (!isDeepStrictEqual(mergedHistory, instructions.history ?? [])) {
           refreshedInstructions = instructionsStore.update
             ? await instructionsStore.update(id, (current) =>
                 current.history !== undefined
                   ? current
                   : { ...current, history: mergeInstructionsHistory(current.history, legacyHistory) },
               )
-            : { ...stored, history: mergedHistory };
+            : { ...instructions, history: mergedHistory };
         }
         legacyInstructionsHistory.delete(id);
-      } else if (stored?.history !== undefined) {
+      } else if (instructions?.history !== undefined) {
         legacyInstructionsHistory.delete(id);
       }
       loadInstructionsCache(id, refreshedInstructions);

@@ -122,6 +122,31 @@ export function createProjectStore(
     return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
   }
 
+  type Refusal = Exclude<ProjectMutation["status"], "ok">;
+
+  function change(
+    id: string,
+    effect: ProjectMutationEffect | undefined,
+    transform: (project: Project) => Project | Refusal,
+  ): Promise<ProjectMutation> {
+    return withLock(id, async () => {
+      let refusal: Refusal | undefined;
+      let changed = false;
+      const updated = await backing.update(id, (project) => {
+        const next = transform(project);
+        refusal = typeof next === "string" ? next : undefined;
+        if (typeof next === "string") return project;
+        changed = next !== project;
+        return next;
+      });
+      if (!updated) return { status: "not_found" };
+      if (refusal) return { status: refusal };
+      const result = { status: "ok" as const, project: visible(updated), changed };
+      await effect?.(result);
+      return result;
+    });
+  }
+
   async function mutate(
     id: string,
     actorId: string,
@@ -129,40 +154,22 @@ export function createProjectStore(
     add: boolean,
     effect?: ProjectMutationEffect,
   ): Promise<ProjectMutation> {
-    return withLock(id, async () => {
-      if (!memberId) return { status: "invalid_member" };
-      if (!backing.update) throw new Error("project store requires DurableMap.update");
-      const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
-      let changed = false;
-      const updated = await backing.update(id, (project) => {
-        const canChangeRoster = add
-          ? project.memberIds.some((member) => samePerson(member, actorId))
-          : samePerson(project.ownerId, actorId);
-        if (!canChangeRoster || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
-          outcome.status = "forbidden";
-          return project;
-        }
-        if (samePerson(memberId, project.ownerId)) {
-          outcome.status = "invalid_member";
-          return project;
-        }
-        outcome.status = "ok";
-        const memberIds = add
-          ? [...new Set([...project.memberIds, memberId])]
-          : project.memberIds.filter((member) => member !== memberId);
-        if (
-          memberIds.length === project.memberIds.length &&
-          memberIds.every((member, i) => member === project.memberIds[i])
-        )
-          return project;
-        changed = true;
-        return { ...project, memberIds, updatedAt: Math.max(now(), project.updatedAt + 1) };
-      });
-      if (!updated) return { status: "not_found" };
-      if (outcome.status !== "ok") return { status: outcome.status };
-      const result = { status: "ok" as const, project: visible(updated), changed };
-      await effect?.(result);
-      return result;
+    if (!memberId) return { status: "invalid_member" };
+    return change(id, effect, (project) => {
+      const canChangeRoster = add
+        ? project.memberIds.some((member) => samePerson(member, actorId))
+        : samePerson(project.ownerId, actorId);
+      if (!canChangeRoster || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) return "forbidden";
+      if (samePerson(memberId, project.ownerId)) return "invalid_member";
+      const memberIds = add
+        ? [...new Set([...project.memberIds, memberId])]
+        : project.memberIds.filter((member) => member !== memberId);
+      if (
+        memberIds.length === project.memberIds.length &&
+        memberIds.every((member, i) => member === project.memberIds[i])
+      )
+        return project;
+      return { ...project, memberIds, updatedAt: Math.max(now(), project.updatedAt + 1) };
     });
   }
 
@@ -204,98 +211,49 @@ export function createProjectStore(
     addMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, true, effect),
     removeMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, false, effect),
     async rename(id, ownerId, name, effect) {
-      return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
-        const clean = cleanName(name);
-        if (!clean) return { status: "invalid_name" };
-        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
-        let changed = false;
-        const updated = await backing.update(id, (project) => {
-          if (project.ownerId !== ownerId || !isActiveMember(ownerId)) {
-            outcome.status = "forbidden";
-            return project;
-          }
-          outcome.status = "ok";
-          if (project.name === clean) return project;
-          changed = true;
-          return { ...project, name: clean };
-        });
-        if (!updated) return { status: "not_found" };
-        if (outcome.status !== "ok") return { status: outcome.status };
-        const result = { status: "ok" as const, project: visible(updated), changed };
-        await effect?.(result);
-        return result;
+      const clean = cleanName(name);
+      if (!clean) return { status: "invalid_name" };
+      return change(id, effect, (project) => {
+        if (project.ownerId !== ownerId || !isActiveMember(ownerId)) return "forbidden";
+        return project.name === clean ? project : { ...project, name: clean };
       });
     },
     async setSlackChannel(id, actorId, link, effect) {
-      return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
-        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
-        let changed = false;
-        const updated = await backing.update(id, (project) => {
-          const isMember = project.memberIds.some((member) => samePerson(member, actorId));
-          if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
-            outcome.status = "forbidden";
-            return project;
-          }
-          outcome.status = "ok";
-          const current = project.slackChannel;
-          if (!link) {
-            if (!current) return project;
-            changed = true;
-            const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
-            return rest;
-          }
-          if (current && current.channelId === link.channelId && current.channelName === link.channelName)
-            return project;
-          changed = true;
-          return {
-            ...project,
-            slackChannel: {
-              channelId: link.channelId,
-              channelName: link.channelName,
-              linkedBy: actorId,
-              linkedAt: now(),
-            },
-          };
-        });
-        if (!updated) return { status: "not_found" };
-        if (outcome.status !== "ok") return { status: outcome.status };
-        const result = { status: "ok" as const, project: visible(updated), changed };
-        await effect?.(result);
-        return result;
+      return change(id, effect, (project) => {
+        const isMember = project.memberIds.some((member) => samePerson(member, actorId));
+        if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) return "forbidden";
+        const current = project.slackChannel;
+        if (!link) {
+          if (!current) return project;
+          const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
+          return rest;
+        }
+        if (current && current.channelId === link.channelId && current.channelName === link.channelName) return project;
+        return {
+          ...project,
+          slackChannel: {
+            channelId: link.channelId,
+            channelName: link.channelName,
+            linkedBy: actorId,
+            linkedAt: now(),
+          },
+        };
       });
     },
     async syncChannelMembers(id, memberIds, channelName, effect) {
-      return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
-        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
-        let changed = false;
-        const next = [...new Set(memberIds)].sort();
-        const updated = await backing.update(id, (project) => {
-          if (!project.slackChannel || !isActiveMember(project.ownerId)) {
-            outcome.status = "forbidden";
-            return project;
-          }
-          outcome.status = "ok";
-          const current = [...(project.channelMemberIds ?? [])].sort();
-          const sameMembers = current.length === next.length && current.every((m, i) => m === next[i]);
-          const nextName = channelName ?? project.slackChannel.channelName;
-          const sameName = nextName === project.slackChannel.channelName;
-          if (sameMembers && sameName) return project;
-          changed = true;
-          return {
-            ...project,
-            channelMemberIds: next,
-            slackChannel: { ...project.slackChannel, channelName: nextName },
-            ...(sameMembers ? {} : { updatedAt: Math.max(now(), project.updatedAt + 1) }),
-          };
-        });
-        if (!updated) return { status: "not_found" };
-        if (outcome.status !== "ok") return { status: outcome.status };
-        const result = { status: "ok" as const, project: visible(updated), changed };
-        await effect?.(result);
-        return result;
+      const next = [...new Set(memberIds)].sort();
+      return change(id, effect, (project) => {
+        if (!project.slackChannel || !isActiveMember(project.ownerId)) return "forbidden";
+        const current = [...(project.channelMemberIds ?? [])].sort();
+        const sameMembers = current.length === next.length && current.every((m, i) => m === next[i]);
+        const nextName = channelName ?? project.slackChannel.channelName;
+        if (sameMembers && nextName === project.slackChannel.channelName) return project;
+        return {
+          ...project,
+          channelMemberIds: next,
+          slackChannel: { ...project.slackChannel, channelName: nextName },
+          ...(sameMembers ? {} : { updatedAt: Math.max(now(), project.updatedAt + 1) }),
+        };
       });
     },
     async listLinked() {

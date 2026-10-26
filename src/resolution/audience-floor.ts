@@ -20,7 +20,7 @@ function principalEgressHosts(
 ): Set<string> {
   const hosts = new Set<string>();
   for (const s of principalScopes(p, orgScope, contextScope))
-    for (const h of config.getEgress(s)?.allowedHosts ?? []) hosts.add(h);
+    for (const h of config.setting("egress", s)?.allowedHosts ?? []) hosts.add(h);
   return hosts;
 }
 
@@ -32,7 +32,7 @@ function principalDeniedHosts(
 ): Set<string> {
   const hosts = new Set<string>();
   for (const s of principalScopes(p, orgScope, contextScope))
-    for (const h of config.getEgress(s)?.deniedHosts ?? []) hosts.add(h);
+    for (const h of config.setting("egress", s)?.deniedHosts ?? []) hosts.add(h);
   return hosts;
 }
 

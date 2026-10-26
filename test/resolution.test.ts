@@ -56,9 +56,9 @@ test("resolution.systemPrompt is the org/scope policy layer only — protocol gu
 
 test("egress floor includes the actor's team-scope denylist (resolved to the per-turn token)", async () => {
   const config = testConfigStore("default-org");
-  await config.setEgress(scopeId("org", "default-org"), { allowedHosts: [], deniedHosts: ["org-bad.test"] });
-  await config.setEgress(scopeId("team", "T1"), { allowedHosts: [], deniedHosts: ["team-bad.test"] });
-  await config.setEgress(scopeId("personal", "U1"), { allowedHosts: [], deniedHosts: ["me-bad.test"] });
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, scopeId("org", "default-org"));
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["team-bad.test"] }, scopeId("team", "T1"));
+  await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["me-bad.test"] }, scopeId("personal", "U1"));
   const res = createResolutionService(
     "default-org",
     config,
@@ -72,10 +72,14 @@ test("egress floor includes the actor's team-scope denylist (resolved to the per
 
 test("egress floor includes the conversation scope policy for shared rooms", async () => {
   const config = testConfigStore("default-org");
-  await config.setEgress(scopeId("channel", "C1"), {
-    allowedHosts: ["channel-api.test"],
-    deniedHosts: ["channel-bad.test"],
-  });
+  await config.setSetting(
+    "egress",
+    {
+      allowedHosts: ["channel-api.test"],
+      deniedHosts: ["channel-bad.test"],
+    },
+    scopeId("channel", "C1"),
+  );
   const res = createResolutionService(
     "default-org",
     config,
