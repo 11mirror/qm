@@ -2209,179 +2209,112 @@ export function startAdmin(host, env) {
     if (p == null) return "";
     if (typeof p === "string") return p;
     if (typeof p === "object" && typeof p.text === "string") return p.text;
-
     if (typeof p === "object" && typeof p.thinking === "string")
       return p.thinking || (p.redacted ? "[redacted thinking]" : "");
-    try {
-      return JSON.stringify(p, null, 2);
-    } catch {
-      return String(p);
-    }
+    return stringify(p);
   }
-  const stringify = (x) => {
+  function stringify(x) {
     try {
       return JSON.stringify(x, null, 2);
     } catch {
       return String(x);
     }
-  };
-  const TOOL_PREVIEW_CHARS = 1800;
+  }
   function appendInlineMarkdown(parent, text) {
-    const pushText = (s) => {
-      if (s) parent.appendChild(document.createTextNode(s));
-    };
     const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*([^*]+)\*)/g;
     let last = 0;
     for (const m of String(text || "").matchAll(re)) {
-      pushText(text.slice(last, m.index));
-      if (m[2]) {
-        const strong = document.createElement("strong");
-        strong.textContent = m[2];
-        parent.appendChild(strong);
-      } else if (m[3]) {
-        const code = document.createElement("code");
-        code.textContent = m[3];
-        parent.appendChild(code);
-      } else if (m[4] && m[5]) {
-        const a = document.createElement("a");
-        a.href = m[5];
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = m[4];
-        parent.appendChild(a);
-      } else if (m[6]) {
-        const em = document.createElement("em");
-        em.textContent = m[6];
-        parent.appendChild(em);
-      }
+      if (m.index > last) parent.append(text.slice(last, m.index));
+      const [, , bold, code, label, href, em] = m;
+      if (bold) parent.appendChild(el("strong", bold));
+      else if (code) parent.appendChild(el("code", code));
+      else if (label && href)
+        parent.appendChild(el("a", { href, target: "_blank", rel: "noopener", textContent: label }));
+      else if (em) parent.appendChild(el("em", em));
       last = m.index + m[0].length;
     }
-    pushText(text.slice(last));
+    const rest = text.slice(last);
+    if (rest) parent.append(rest);
+  }
+  function inlineMarkdown(tag, text) {
+    const node = el(tag);
+    appendInlineMarkdown(node, text);
+    return node;
   }
   function renderMarkdown(text) {
-    const root = document.createElement("div");
-    root.className = "message-body";
-    const lines = String(text || "")
-      .replace(/\r\n/g, "\n")
-      .split("\n");
+    const root = el("div.message-body");
     let para = [];
     let list = null;
     let quote = [];
     let fence = null;
     const flushPara = () => {
-      if (!para.length) return;
-      const p = document.createElement("p");
-      appendInlineMarkdown(p, para.join(" "));
-      root.appendChild(p);
+      if (para.length) root.appendChild(inlineMarkdown("p", para.join(" ")));
       para = [];
     };
     const flushList = () => {
-      if (list) {
-        root.appendChild(list.node);
-        list = null;
-      }
+      if (list) root.appendChild(list.node);
+      list = null;
     };
     const flushQuote = () => {
-      if (!quote.length) return;
-      const bq = document.createElement("blockquote");
-      const p = document.createElement("p");
-      appendInlineMarkdown(p, quote.join(" "));
-      bq.appendChild(p);
-      root.appendChild(bq);
+      if (quote.length) root.appendChild(el("blockquote", {}, inlineMarkdown("p", quote.join(" "))));
       quote = [];
     };
-    for (const line of lines) {
+    const flushAll = () => {
+      flushPara();
+      flushList();
+      flushQuote();
+    };
+    const codeBlock = () => root.appendChild(el("pre", {}, el("code", fence.join("\n"))));
+    for (const line of String(text || "")
+      .replace(/\r\n/g, "\n")
+      .split("\n")) {
       const fenceMatch = line.match(/^```/);
-      if (fence) {
-        if (fenceMatch) {
-          const pre = document.createElement("pre");
-          const code = document.createElement("code");
-          code.textContent = fence.lines.join("\n");
-          pre.appendChild(code);
-          root.appendChild(pre);
-          fence = null;
-        } else {
-          fence.lines.push(line);
-        }
-        continue;
-      }
-      if (fenceMatch) {
-        flushPara();
-        flushList();
-        flushQuote();
-        fence = { lines: [] };
-        continue;
-      }
       const trimmed = line.trim();
-      if (!trimmed) {
-        flushPara();
-        flushList();
-        flushQuote();
-        continue;
-      }
       const quoteMatch = trimmed.match(/^>\s?(.*)$/);
-      if (quoteMatch) {
+      const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
+      if (fence && fenceMatch) {
+        codeBlock();
+        fence = null;
+      } else if (fence) fence.push(line);
+      else if (fenceMatch) {
+        flushAll();
+        fence = [];
+      } else if (!trimmed) flushAll();
+      else if (quoteMatch) {
         flushPara();
         flushList();
         quote.push(quoteMatch[1]);
-        continue;
-      }
-      const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
-      if (listMatch) {
+      } else if (listMatch) {
         flushPara();
         flushQuote();
         const ordered = /\d+\./.test(listMatch[1]);
-        if (!list || list.ordered !== ordered) {
+        if (list?.ordered !== ordered) {
           flushList();
-          list = { ordered, node: document.createElement(ordered ? "ol" : "ul") };
+          list = { ordered, node: el(ordered ? "ol" : "ul") };
         }
-        const li = document.createElement("li");
-        appendInlineMarkdown(li, listMatch[2]);
-        list.node.appendChild(li);
-        continue;
+        list.node.appendChild(inlineMarkdown("li", listMatch[2]));
+      } else {
+        flushList();
+        flushQuote();
+        para.push(trimmed);
       }
-      flushList();
-      flushQuote();
-      para.push(trimmed);
     }
-    if (fence) {
-      const pre = document.createElement("pre");
-      const code = document.createElement("code");
-      code.textContent = fence.lines.join("\n");
-      pre.appendChild(code);
-      root.appendChild(pre);
-    }
-    flushPara();
-    flushList();
-    flushQuote();
-    if (!root.childNodes.length) {
-      const p = document.createElement("p");
-      p.textContent = "";
-      root.appendChild(p);
-    }
+    if (fence) codeBlock();
+    flushAll();
+    if (!root.childNodes.length) root.appendChild(el("p"));
     return root;
   }
-
   const isXmlishText = (text) => /^\s*<[A-Za-z][\w-]*(\s|\/?>)/.test(String(text || ""));
   function renderXmlish(text) {
-    const root = document.createElement("div");
-    root.className = "message-body xml-body";
-    const unescape = (s) =>
-      s
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, "&");
+    const root = el("div.message-body xml-body");
     const row = (cls, depth) => {
-      const div = document.createElement("div");
-      div.className = cls;
+      const div = root.appendChild(el("div." + cls));
       div.style.paddingLeft = Math.min(depth, 8) * 18 + "px";
-      root.appendChild(div);
       return div;
     };
     const addText = (s, depth) => {
       const t = s.replace(/^[\s\n]+|[\s\n]+$/g, "");
-      if (t) appendInlineMarkdown(row("xml-text", depth), unescape(t));
+      if (t) appendInlineMarkdown(row("xml-text", depth), slackUnescape(t.replace(/&quot;/g, '"')));
     };
     const tagRe = /<\/?[A-Za-z][\w-]*(?:\s+[\w-]+(?:="[^"]*")?)*\s*\/?>/g;
     let depth = 0,
@@ -2466,12 +2399,6 @@ export function startAdmin(host, env) {
     const fallback = hasResult ? resultPayload : callPayload;
     return toolTextValue(fallback);
   }
-  function toolTextCard(text) {
-    const pre = document.createElement("pre");
-    pre.className = "tool-command";
-    pre.textContent = text;
-    return pre;
-  }
   function toolCopyText(callEntry, resultEntry) {
     const parts = [];
     if (callEntry)
@@ -2492,10 +2419,7 @@ export function startAdmin(host, env) {
     } catch {
       void 0;
     }
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
+    const ta = el("textarea", { value: text, style: "position: fixed; opacity: 0;" });
     document.body.appendChild(ta);
     ta.select();
     let ok;
@@ -2508,10 +2432,7 @@ export function startAdmin(host, env) {
     return ok;
   }
   function copyButton(label, getText) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "copy";
-    btn.textContent = label;
+    const btn = el("button.copy", { type: "button", textContent: label });
     btn.onclick = async (ev) => {
       ev.stopPropagation();
       const ok = await copyText(getText());
@@ -2528,74 +2449,51 @@ export function startAdmin(host, env) {
     const callPayload = callEntry?.payload ?? {};
     const resultPayload = resultEntry?.payload ?? {};
     const tool = toolName(callPayload, resultPayload);
-    const block = document.createElement("div");
-    block.className = "entry tool-entry";
-    const who = document.createElement("div");
-    who.className = "who";
-    const label = document.createElement("span");
-    label.className = "tool-label";
-    label.textContent = toolLabelText(tool, callPayload, resultPayload);
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = resultEntry
-      ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
-      : `#${callEntry?.seq ?? resultEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? resultEntry?.createdAt)}`;
-    const status = document.createElement("div");
-    status.className = "meta-row";
-    toolStatusMeta(tool, resultPayload, !!resultEntry).forEach((item) => status.appendChild(item));
+    const block = el("div.entry tool-entry");
+    const who = el("div.who");
     if (contextBtn) who.appendChild(contextBtn);
-    who.append(label);
-
+    who.append(el("span.tool-label", toolLabelText(tool, callPayload, resultPayload)));
     if (timingEl) who.appendChild(timingEl);
     who.append(
-      when,
-      status,
+      el(
+        "span.when",
+        resultEntry
+          ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
+          : `#${callEntry?.seq ?? resultEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? resultEntry?.createdAt)}`,
+      ),
+      el("div.meta-row", {}, ...toolStatusMeta(tool, resultPayload, !!resultEntry)),
       copyButton("Copy", () => toolCopyText(callEntry, resultEntry)),
     );
-    const body = document.createElement("div");
-    body.className = "tool-body";
+    const body = el("div.tool-body");
     const primaryText = toolPrimaryText(callPayload, resultPayload, !!callEntry, !!resultEntry);
     if (primaryText) {
-      const truncated = primaryText.length > TOOL_PREVIEW_CHARS;
-      const preview = truncated ? primaryText.slice(0, TOOL_PREVIEW_CHARS) + "…" : primaryText;
-      const card = toolTextCard(preview);
+      const truncated = primaryText.length > 1800;
+      const preview = truncated ? primaryText.slice(0, 1800) + "…" : primaryText;
+      const card = el("pre.tool-command", { textContent: preview, tabIndex: 0, role: "button" });
       const syncExpanded = () => {
         const expanded = block.classList.contains("expanded");
         card.setAttribute("aria-expanded", String(expanded));
         card.title = expanded ? "Click to collapse tool text" : "Click to expand tool text";
         if (truncated) card.textContent = expanded ? primaryText : preview;
       };
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.onclick = () => {
+      const toggle = () => {
         block.classList.toggle("expanded");
         syncExpanded();
       };
+      card.onclick = toggle;
       card.onkeydown = (ev) => {
         if (ev.key !== "Enter" && ev.key !== " ") return;
         ev.preventDefault();
-        block.classList.toggle("expanded");
-        syncExpanded();
+        toggle();
       };
       syncExpanded();
       body.appendChild(card);
     }
-
     if (delivery) {
-      const dv = document.createElement("div");
-      dv.className = "tool-delivery";
-      const drow = document.createElement("div");
-      drow.className = "who";
-      const dlabel = document.createElement("span");
-      dlabel.className = "entry-label important";
-      dlabel.textContent = deliveryLabel(delivery);
-      drow.appendChild(dlabel);
+      const drow = el("div.who", {}, el("span.entry-label important", deliveryLabel(delivery)));
       if (delivery.shadow) {
-        const sb = document.createElement("span");
-        sb.className = "entry-label";
-        sb.title = "Recorded for observability, never sent to the human (shadow-mode rollout)";
-        sb.textContent = "not sent";
-        drow.appendChild(sb);
+        const title = "Recorded for observability, never sent to the human (shadow-mode rollout)";
+        drow.appendChild(el("span.entry-label", { title, textContent: "not sent" }));
       }
       drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
       const mirror = slackMirrorRef(delivery);
@@ -2604,22 +2502,21 @@ export function startAdmin(host, env) {
         ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
         drow.appendChild(ml);
       }
-      const dwhen = document.createElement("span");
-      dwhen.className = "when";
-      dwhen.textContent = `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`;
-      drow.appendChild(dwhen);
-      const pre = document.createElement("pre");
+      drow.appendChild(el("span.when", `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`));
       const from = delivery.destination?.onBehalfOf ? `from ${delivery.destination.onBehalfOf}\n` : "";
       const to = delivery.destination?.target ? `to ${delivery.destination.target}\n` : "";
       const recipientLine = delivery.recipientThreadRef ? `recipient thread ${delivery.recipientThreadRef}\n` : "";
-      pre.textContent = `${from}${to}${recipientLine}${delivery.text || ""}`.trim();
-      dv.append(drow, pre);
+      const dv = el(
+        "div.tool-delivery",
+        {},
+        drow,
+        el("pre", `${from}${to}${recipientLine}${delivery.text || ""}`.trim()),
+      );
       const files = deliveryFileBadges(delivery.attachments);
       if (files) dv.appendChild(files);
       body.appendChild(dv);
     }
-    block.append(who);
-    block.appendChild(body);
+    block.append(who, body);
     return { block, sync: () => {} };
   }
 
