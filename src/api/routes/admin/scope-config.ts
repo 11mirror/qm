@@ -419,7 +419,10 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     ...environmentMetadata,
     ...values,
     ...(includes("customize")
-      ? { instructionsVersion: deps.config.instructionsVersion(targetScope), instructionsHistory: deps.config.instructionsHistory(targetScope) }
+      ? {
+          instructionsVersion: deps.config.instructionsVersion(targetScope),
+          instructionsHistory: deps.config.instructionsHistory(targetScope),
+        }
       : {}),
     ...(includes("credentials")
       ? { serviceCredentials, directoryMembers: directoryMembers ?? [], directoryChannels: directoryChannels ?? [] }

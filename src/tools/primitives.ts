@@ -323,8 +323,7 @@ export interface ToolContext extends SurfaceToolDeps {
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
   instructionsRead():
-    | { effectiveInstructions: string; instructions: string | null; instructionsVersion: number }
-    | ControlUnavailable;
+    { effectiveInstructions: string; instructions: string | null; instructionsVersion: number } | ControlUnavailable;
   instructionsWrite(
     content: string,
     expectedVersion?: number,
@@ -431,8 +430,7 @@ interface SurfaceFileResult {
 }
 
 type ChannelBehaviorResult =
-  | { ok: true; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
-  | { ok: false; message: string };
+  { ok: true; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean } | { ok: false; message: string };
 
 export interface SurfaceToolDeps {
   post(

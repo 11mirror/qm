@@ -333,7 +333,7 @@ test("Open advertises the source and audits a carried skill read without grantin
   });
   await skills.review(skill.id, actor.id, []);
   await skills.publish(skill.id);
-  const { orchestrator, config, auditLog, acl } = buildOrchestrator({
+  const { orchestrator, auditLog, acl } = buildOrchestrator({
     skills,
     isCurrentSharedScopeMember: async () => true,
   });
@@ -380,7 +380,7 @@ test("Open advertises the source and audits a carried skill read without grantin
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
   let member = true;
-  const { orchestrator, config, memory, files } = buildOrchestrator({
+  const { orchestrator, memory, files } = buildOrchestrator({
     sandbox: readSandbox(),
     isCurrentSharedScopeMember: async (principalId, sourceScope) =>
       member && principalId === actor.id && sourceScope === scopeId("channel", "C1"),
@@ -645,7 +645,7 @@ test("a project session names its linked Slack home channel; unlinked projects g
 
 for (const mode of ["off", "writable", "skip"] as const) {
   test(`Open respects memory ${mode}`, async () => {
-    const { orchestrator, config, memory } = buildOrchestrator({
+    const { orchestrator, memory } = buildOrchestrator({
       sandbox: readSandbox(),
       memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
       isCurrentSharedScopeMember: async () => true,
@@ -738,7 +738,7 @@ for (const location of [
       },
       listDir: async () => [],
     };
-    const { orchestrator, config } = buildOrchestrator({
+    const { orchestrator } = buildOrchestrator({
       skills,
       skillBundles: bundles,
       sandbox,
@@ -826,7 +826,7 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
       return { verdict: { decision: payload.includes("!security-risk") ? "strict" : "auto" }, score: 0, threshold: 1 };
     },
   };
-  const { orchestrator, config } = buildOrchestrator({
+  const { orchestrator } = buildOrchestrator({
     skills,
     securityScreener,
     isCurrentSharedScopeMember: async () => true,
@@ -880,7 +880,7 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
     }
     return { reply: "done" };
   };
-  const { orchestrator, config, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const { orchestrator, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
   const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
@@ -913,7 +913,7 @@ test("read-only turns report steered files as unavailable without provisioning a
     });
     return { reply: "done" };
   };
-  const { orchestrator, config } = buildOrchestrator({ harness });
+  const { orchestrator } = buildOrchestrator({ harness });
   const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
@@ -956,7 +956,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
         assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
     };
-    const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+    const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer });
     const result = await orchestrator.handleTurn({
       ...dm(`steer-budget-${budget}`, "hello"),
       attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
@@ -1048,7 +1048,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
     return { reply: "read after switching" };
   };
-  const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer });
   const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.equal(segments, 2);

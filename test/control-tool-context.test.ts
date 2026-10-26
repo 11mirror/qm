@@ -263,7 +263,10 @@ test("concurrent instructions edits reject a stale replacement without losing th
   const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
   assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
   assert.equal(entries.filter((kind) => kind === "ToolResult").length, 2);
-  assert.match(results.find((result) => result.includes("[error]"))!, /changed/);
+  assert.match(
+    results.find((result) => result.includes("[error]"))!,
+    /changed/,
+  );
   const current = control.readInstructions(claims("U1")).instructions!;
   assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
   const retry = current.includes("First updated.")

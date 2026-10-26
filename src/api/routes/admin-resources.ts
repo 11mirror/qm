@@ -143,7 +143,6 @@ const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { o
 const trimmedList = (value: unknown): string[] | undefined =>
   Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : undefined;
 
-
 function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
@@ -272,7 +271,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       if (typeof body.expectedVersion !== "number")
         return { error: "expectedVersion must be a number", code: "bad_version" };
-      const version = await ctx.deps.config!.setInstructionsIfVersion(scope, body.expectedVersion, body.content, actor.id);
+      const version = await ctx.deps.config!.setInstructionsIfVersion(
+        scope,
+        body.expectedVersion,
+        body.content,
+        actor.id,
+      );
       if (version === null) {
         return {
           error: "Instructions changed after this draft was loaded. Reload before saving.",

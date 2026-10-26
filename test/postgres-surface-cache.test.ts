@@ -195,7 +195,11 @@ test("pg channel-policy: history appends a revision per set with provenance", { 
   const store = createPostgresChannelPolicyStore(URL!);
   try {
     await store.set("CPH1", { setBy: "U-alice", sessionId: "sess-1", ambientEnabled: true });
-    await store.set("CPH1", { setBy: "U-bob", sessionId: "sess-2", bots: { news: { mode: "rollup", rollupHours: 6 } } });
+    await store.set("CPH1", {
+      setBy: "U-bob",
+      sessionId: "sess-2",
+      bots: { news: { mode: "rollup", rollupHours: 6 } },
+    });
     const h = await store.history("CPH1");
     assert.equal(h.length, 2);
     assert.deepEqual(h[0]?.bots, { news: { mode: "rollup", rollupHours: 6 } });

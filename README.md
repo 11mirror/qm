@@ -42,8 +42,8 @@ If you're an infra provider interested in offering a hosted version of QM, feel 
   work with it collaboratively in Slack channels and projects.
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
-- **Admin control.** Set org-level configuration, security and sharing postures. Choose which
-  models are available.
+- **Admin control.** Set org-level configuration and instructions. Choose which models are
+  available.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
   promotion to the whole org and skill packs imported from git repositories.
@@ -108,26 +108,18 @@ store, sandbox, memory) sits behind an interface. Memory can also be routed by s
 
 QM's approach follows local coding agents like OpenCode, Codex, and Claude Code: the
 agent acts as the person it's working for, with their credentials and permissions, and
-everything it does is audited. An org picks one security posture, which narrower scopes
-can only tighten:
+everything it does is audited. The agent's computers cannot reach private networks, and a
+tool that declares an approval pauses for a human before each call.
 
-- **Strict** — every harness tool call pauses for human approval, except the two
-  no-effect turn enders.
-- **Auto** (default) — blocks private-network access.
-- **Dangerous** — no tool approval gates, and content screening only observes.
-
-Content screening observes: it classifies external content under every posture and
-records verdicts in the audit log without acting on them. The classifier is the
-built-in model unless the deployment names an external proxy screener.
+Content screening observes: it classifies external content and records verdicts in the
+audit log without acting on them. The classifier is the built-in model unless the
+deployment names an external proxy screener.
 
 The predeclared command policy — approval rules and hard denials for things like
-recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+recursive deletes or destructive SQL — always applies.
 
-Sharing posture is independent:
-
-- **Isolated** (default) — resources stay in their scope unless explicitly shared.
-- **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
-  files, artifacts, skills, and memory may be read in an opted-in shared room.
+On a live authenticated internal human turn, the speaker's personal files, artifacts,
+skills, and memory may be read in a shared room they belong to.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

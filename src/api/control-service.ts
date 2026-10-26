@@ -167,7 +167,8 @@ export interface ControlService {
     claims: CapabilityClaims,
     expectedVersion?: number,
   ): Promise<
-    ControlOk<{ version: number }> | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
+    | ControlOk<{ version: number }>
+    | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
   >;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }

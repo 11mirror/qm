@@ -3335,8 +3335,7 @@
 #app-view #view-governance #card-governance-org-ambient .posture-choice > span,
 #app-view #view-governance #card-governance-org-ambient > .head,
 #app-view[data-subview="credentials"] #view-governance section.card.sv-credentials,
-:where(#app-view[data-admin-kit="true"]) :is(.admin-main,
-dialog) .posture-choice small {
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice small {
   display: block;
 }
 #app-view #view-governance #card-governance-org-ambient .head .viewlink {

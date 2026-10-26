@@ -111,7 +111,12 @@ export interface ScopedConfigStore {
   /** Read a scope's instructions from the store (another instance may have written them) and refresh the cache. */
   getInstructionsDurable(id: ScopeId): Promise<string | null>;
   setInstructions(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setInstructionsIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
+  setInstructionsIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+  ): Promise<number | null>;
   instructionsVersion(id: ScopeId): number;
   instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
   captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
@@ -433,8 +438,10 @@ export function createConfigStore(
     if (stored?.history) instructionsHistory.set(id, stored.history);
     else instructionsHistory.delete(id);
   };
-  const cloneInstructions = (stored: PersistedInstructions | null): InstructionsSnapshot => (stored ? structuredClone(stored) : null);
-  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean => isDeepStrictEqual(left, right);
+  const cloneInstructions = (stored: PersistedInstructions | null): InstructionsSnapshot =>
+    stored ? structuredClone(stored) : null;
+  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean =>
+    isDeepStrictEqual(left, right);
   const mergeInstructionsHistory = (
     embedded: readonly PersistedInstructionsRevision[] | undefined,
     legacy: readonly PersistedInstructionsRevision[],

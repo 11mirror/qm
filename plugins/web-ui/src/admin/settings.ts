@@ -229,7 +229,9 @@ function instructionsCard(s: SettingsState) {
           >${s.draft.expectedVersion ? "Saved version " + s.draft.expectedVersion : "No saved revision"}</span
         ><span id="instructions-size"
           >${content.length.toLocaleString() + " characters · about " + Math.ceil(content.length / 4).toLocaleString() + " tokens"}</span
-        ><span id="instructions-validation">${content.length >= 100000 ? "Maximum length reached" : "Draft valid"}</span>
+        ><span id="instructions-validation"
+          >${content.length >= 100000 ? "Maximum length reached" : "Draft valid"}</span
+        >
       </div>
       <div class="instructions-diff" id="instructions-diff">
         <section>

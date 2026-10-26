@@ -762,7 +762,8 @@ export function startAdmin(host, env) {
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
         return setStatus("st-instructions", "Restored, but the latest version could not be refreshed.", "warn", true);
-      if (JSON.stringify(settings.collect("instructions")) === draftBefore) settings.load(fresh.data, targetScope, "instructions");
+      if (JSON.stringify(settings.collect("instructions")) === draftBefore)
+        settings.load(fresh.data, targetScope, "instructions");
       else settings.refreshInstructions(fresh.data);
       sectionSnapshots.set("instructions", settings.states.get("instructions").baseline);
       if (!settings.states.get("instructions").dirty)

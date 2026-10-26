@@ -111,7 +111,15 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
   built.runtime.start();
   try {
     const container = "C-off";
-    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, false);
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage !post ambient reply",
+      "U-admin",
+      undefined,
+      undefined,
+      false,
+    );
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
     ]);
@@ -119,7 +127,15 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
     assert.equal(decision.act, false, "the judge never runs in a switched-off channel");
     await sleep(200);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "no proactive post");
-    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage !post ambient reply",
+      "U-admin",
+      undefined,
+      undefined,
+      true,
+    );
     const replay = await built.app.judgeAmbientContainer("slack", container);
     assert.equal(replay.act, false, "messages overheard while off are not replayed");
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
@@ -184,7 +200,15 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
   built.runtime.start();
   try {
     const container = "C-orgoff";
-    await setChannelInstructions(built, container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
+    await setChannelInstructions(
+      built,
+      container,
+      "!engage !post ambient reply",
+      "U-admin",
+      undefined,
+      undefined,
+      true,
+    );
     await built.config.setOrgAmbient(false);
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },

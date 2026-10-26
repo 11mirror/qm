@@ -1,6 +1,10 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { configStoreMaps, type PersistedInstructions, type PersistedInstructionsRevision } from "../src/resolution/config-store.ts";
+import {
+  configStoreMaps,
+  type PersistedInstructions,
+  type PersistedInstructionsRevision,
+} from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import {
   createPostgresMapFactory,
@@ -60,9 +64,16 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
   assert.equal(durable?.history?.length, 1);
   assert.equal(durable?.history?.[0]?.content, durable?.content);
   for (let version = 1; version < 30; version++) {
-    assert.equal(await left.setInstructionsIfVersion(channel, version, `revision ${version + 1}`, "alice"), version + 1);
+    assert.equal(
+      await left.setInstructionsIfVersion(channel, version, `revision ${version + 1}`, "alice"),
+      version + 1,
+    );
   }
-  assert.equal((await instructions.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
+  assert.equal(
+    (await instructions.get(channel))?.history?.length,
+    30,
+    "the canonical row retains the full durable history",
+  );
   assert.equal(left.instructionsHistory(channel).length, 25, "the operator view remains bounded");
   const fresh = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
   await fresh.hydrate?.();
@@ -124,7 +135,11 @@ test("the first write after upgrade retains a canonical revision that predates e
 
   assert.equal(await store.setInstructions(channel, "post-upgrade", "alice"), 9);
   assert.deepEqual(
-    (await instructions.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
+    (await instructions.get(channel))?.history?.map(({ version, content, updatedAt }) => ({
+      version,
+      content,
+      updatedAt,
+    })),
     [
       { version: 9, content: "post-upgrade", updatedAt: (await instructions.get(channel))!.updatedAt },
       { version: 8, content: "pre-upgrade", updatedAt: 0 },
@@ -254,7 +269,6 @@ test(
   async () => {
     const f = createPostgresMapFactory(URL!);
     const ch = scopeId("channel", "C1");
-    const org = scopeId("org", "default-org");
     const policy = defaultOrgPolicy();
 
     const m = maps(f);
@@ -283,7 +297,11 @@ test(
 
     assert.equal(b.getInstructions(ch), "a channel-specific soul", "the scoped soul survived the restart");
     assert.equal(b.instructionsVersion(ch), version, "the soul version round-trips (monotonic across restart)");
-    assert.equal(b.instructionsHistory(ch)[0]?.content, "a channel-specific soul", "the revision history survives a restart");
+    assert.equal(
+      b.instructionsHistory(ch)[0]?.content,
+      "a channel-specific soul",
+      "the revision history survives a restart",
+    );
     assert.deepEqual(b.getCommandPolicy(ch), policy, "the command policy survived");
     assert.deepEqual(
       b.getEgress(ch),
@@ -327,7 +345,11 @@ test(
 
     const b = testConfigStore("default-org", maps(f));
     await b.hydrate?.();
-    assert.equal(b.getInstructions(ch), "soul v8", "the durable soul ends on the last write, not a reordered earlier one");
+    assert.equal(
+      b.getInstructions(ch),
+      "soul v8",
+      "the durable soul ends on the last write, not a reordered earlier one",
+    );
     assert.equal(b.instructionsVersion(ch), lastVersion);
     assert.deepEqual(
       b.getEgress(ch),

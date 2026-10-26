@@ -755,7 +755,6 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       ]);
       const cap = await capFor("admin-alice", { scope: room });
       const headers = { "x-agent-capability": cap, "content-type": "application/json" };
-      const personal = scopeId("personal", "admin-alice");
       const target = scopeId("personal", "U1");
       await s.built.memory.capture(target, ["private test sentinel"], Date.now());
       const path = `/v1/admin/memory?scope=${encodeURIComponent(target)}`;

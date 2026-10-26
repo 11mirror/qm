@@ -1957,7 +1957,11 @@ test("in a channel, instructions also reads and writes ambient replies and the b
   await call(tool("instructions", tc), { action: "replace", content: "keep watching" });
   assert.deepEqual(writes, ["keep watching"]);
   assert.match(await read(), /Ambient replies: on/);
-  await call(tool("instructions", tc), { action: "replace", ambientEnabled: null, bots: { newsbot: { mode: "ignore" } } });
+  await call(tool("instructions", tc), {
+    action: "replace",
+    ambientEnabled: null,
+    bots: { newsbot: { mode: "ignore" } },
+  });
   assert.match(await read(), /Ambient replies: default[\s\S]*newsbot: ignore/);
 });
 

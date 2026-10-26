@@ -456,7 +456,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           .map((c, i) => (i === firstText ? { type: "text", text: result } : c))
           .filter((c, i) => c.type !== "text" || i === firstText);
       }
-      let persistedSummary = summary;
+      const persistedSummary = summary;
       const tool = String(summary.tool ?? "");
       const provenance =
         screenAs?.provenance ??
@@ -2582,12 +2582,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
 
       const behaviorChange = params.bots !== undefined || params.ambientEnabled !== undefined;
-      if (behaviorChange && !channel.ok) return fail("channel_only", "`ambientEnabled` and `bots` apply only in a channel.");
+      if (behaviorChange && !channel.ok)
+        return fail("channel_only", "`ambientEnabled` and `bots` apply only in a channel.");
       let content = params.content;
       let expectedVersion: number | undefined;
       if (params.action === "edit") {
         if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
-          return fail("edit_args", "instructions edit requires `old` (an exact passage of the current instructions) and `new`.");
+          return fail(
+            "edit_args",
+            "instructions edit requires `old` (an exact passage of the current instructions) and `new`.",
+          );
         const current = tc.instructionsRead();
         if (isUnavailable(current)) return unavailable(callId, "instructions");
         const existing = current.instructions ?? "";

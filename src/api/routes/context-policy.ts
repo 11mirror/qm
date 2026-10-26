@@ -70,7 +70,10 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
       message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
     });
   }
-  if (typeof b.instructions === "string" && b.instructions !== (app.getInstructions(scope as ScopeId).instructions ?? "")) {
+  if (
+    typeof b.instructions === "string" &&
+    b.instructions !== (app.getInstructions(scope as ScopeId).instructions ?? "")
+  ) {
     try {
       await app.updateInstructions(scope as ScopeId, b.instructions, principalId, {
         allowSharedScope: true,

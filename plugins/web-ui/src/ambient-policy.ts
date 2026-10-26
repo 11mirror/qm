@@ -251,8 +251,8 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           }}
         ></textarea>
         <p class="ambient-policy-hint" id="ambient-orders-hint">
-          Standing instructions for this conversation, including what to act on proactively. Leave empty to respond
-          only when addressed.
+          Standing instructions for this conversation, including what to act on proactively. Leave empty to respond only
+          when addressed.
         </p>
       </div>
       <div class="ambient-group">

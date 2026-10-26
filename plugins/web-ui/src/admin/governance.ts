@@ -1,4 +1,4 @@
-import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus } from "./setting-controls.ts";
 import { html, type TemplateResult } from "lit";
 import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
@@ -121,11 +121,11 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>
-          When the agent wakes on overheard messages in this channel. The ambient judge weighs each batch of new messages
-          against the channel's instructions (edit them under Instructions); with none set it stays silent unless
-          addressed. The bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the judge, <b>rollup</b> batches its posts (judged at
-          most once per the given hours), <b>action</b> marks its posts as triggers to act on, <b>user</b> reads it like
-          a person.
+          When the agent wakes on overheard messages in this channel. The ambient judge weighs each batch of new
+          messages against the channel's instructions (edit them under Instructions); with none set it stays silent
+          unless addressed. The bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the
+          judge, <b>rollup</b> batches its posts (judged at most once per the given hours), <b>action</b> marks its
+          posts as triggers to act on, <b>user</b> reads it like a person.
         </p>
       </div>
       <div class="body">

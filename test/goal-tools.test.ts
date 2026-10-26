@@ -222,7 +222,7 @@ test("goal tool results are core-authored, so the security classifier never sees
   });
   const created = await create.execute("c1", { objective: "ship the fix" });
   const read = await get.execute("g1", {});
-  const closed = await update.execute("u1", { status: "complete", note: "shipped" });
+  await update.execute("u1", { status: "complete", note: "shipped" });
   assert.match(textOf(created as never), /registered and now enforced/);
   assert.match(textOf(read as never), /"objective": "ship the fix"/);
   assert.deepEqual(screened, [], "no goal tool is handed to the classifier");

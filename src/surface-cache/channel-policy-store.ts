@@ -78,8 +78,7 @@ export interface ChannelPolicyStore {
  * and no longer read. A group DM's container maps to its group scope, every other one to its
  * channel scope.
  */
-export const INSTRUCTIONS_SEPARATOR = "\n\n---\n\n";
-export const ORDERS_INTO_INSTRUCTIONS: readonly string[] = [
+const ORDERS_INTO_INSTRUCTIONS: readonly string[] = [
   `ALTER TABLE channel_policy_history ALTER COLUMN orders SET DEFAULT ''`,
   `DO $orders_into_instructions$
 DECLARE
@@ -163,25 +162,25 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
     {
       id: "surface-cache/channel-policy/0001",
       statements: [
-    `CREATE TABLE IF NOT EXISTS channel_policy(
+        `CREATE TABLE IF NOT EXISTS channel_policy(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL DEFAULT '', bots JSONB NOT NULL DEFAULT '{}'::jsonb,
         set_by TEXT, updated_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container)
       )`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
-    `CREATE TABLE IF NOT EXISTS channel_policy_history(
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
+        `CREATE TABLE IF NOT EXISTS channel_policy_history(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL, set_by TEXT, session_id TEXT,
         created_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `CREATE INDEX IF NOT EXISTS channel_policy_history_container
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `CREATE INDEX IF NOT EXISTS channel_policy_history_container
         ON channel_policy_history(org_id, container, id DESC)`,
       ],
     },

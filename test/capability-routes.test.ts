@@ -103,7 +103,11 @@ describe("capability-token control plane (SOUL)", () => {
     );
     assert.equal(res.status, 200);
     assert.ok(built.config.instructionsVersion(scopeId("personal", "U1")) >= 1, "U1's personal SOUL was updated");
-    assert.equal(built.config.instructionsVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
+    assert.equal(
+      built.config.instructionsVersion(scopeId("org", "default-org")),
+      orgVerBefore,
+      "org SOUL floor untouched",
+    );
   });
 
   it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
@@ -119,7 +123,11 @@ describe("capability-token control plane (SOUL)", () => {
 
     assert.equal(built.config.getInstructions(channelScope), "Channel C speaks in haiku.");
     assert.ok(built.config.instructionsVersion(channelScope) >= 1, "channel SOUL was updated");
-    assert.equal(built.config.instructionsVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
+    assert.equal(
+      built.config.instructionsVersion(personalScope),
+      personalBefore,
+      "actor's personal SOUL was not touched",
+    );
   });
 
   it("does not let capability self-update org or team SOUL", async () => {
