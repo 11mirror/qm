@@ -6,7 +6,7 @@ import { destinationSource, type ActorAssertion } from "../types.ts";
 import { parseSurfaceDeliveryTarget, surfaceContainerRef } from "./refs.ts";
 import type { IngestEvent } from "../surface-cache/types.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { InboundMessage, InboundOutcome, Surface, SurfaceUser } from "./surface.ts";
+import type { InboundMessage, InboundOutcome, InboundSurface, SurfaceUser } from "./surface.ts";
 
 const RESERVED_SURFACES = new Set([
   "slack",
@@ -111,7 +111,7 @@ function permanent(message: string): Error {
 export function createHttpChatSurface(
   config: HttpChatConfig,
   opts: { fetch?: typeof fetch; now?: () => number; mirror?: (events: IngestEvent[]) => Promise<unknown> } = {},
-): Surface {
+): InboundSurface {
   const doFetch = opts.fetch ?? fetch;
   const now = opts.now ?? Date.now;
   const apiBase = config.apiUrl.replace(/\/+$/, "");
@@ -175,11 +175,9 @@ export function createHttpChatSurface(
   }
 
   return {
-    kind: "http-chat",
     name: config.surface,
     label: config.label,
     destinationTypes: [config.surface],
-    capabilities: { threads: true, edits: false, reactions: false, richCards: false, format: "markdown" },
     async normalize({ headers, pathWithQuery, rawBody }): Promise<InboundOutcome> {
       const verified = verifySignature(
         config.signingSecret,
@@ -226,13 +224,13 @@ export function createHttpChatSurface(
       });
       return { status: 200, messages: [message] };
     },
-    async deliver(ctx, item) {
-      const { account } = destinationSource(ctx.destination);
+    async deliver(post) {
+      const { account } = destinationSource(post.destination);
       if (account !== undefined && account !== config.account)
         throw permanent(`${config.surface} account ${account} is not configured`);
-      const target = parseSurfaceDeliveryTarget(ctx.destination.target);
-      if (!target) throw permanent(`${config.surface} cannot post to ${JSON.stringify(ctx.destination.target)}`);
-      const text = [item.text.trim(), ...(item.attachments ?? []).map((a) => `[attachment: ${a.name}]`)]
+      const target = parseSurfaceDeliveryTarget(post.destination.target);
+      if (!target) throw permanent(`${config.surface} cannot post to ${JSON.stringify(post.destination.target)}`);
+      const text = [post.text.trim(), ...(post.attachments ?? []).map((a) => `[attachment: ${a.name}]`)]
         .filter(Boolean)
         .join("\n");
       if (!text) return;
@@ -242,7 +240,7 @@ export function createHttpChatSurface(
         body: JSON.stringify({
           text,
           ...(target.thread ? { thread_id: target.thread } : {}),
-          idempotency_key: ctx.idempotencyKey,
+          idempotency_key: post.idempotencyKey,
         }),
         signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       });
@@ -259,8 +257,5 @@ export function createHttpChatSurface(
       });
     },
     principalFor,
-    native() {
-      return null;
-    },
   };
 }

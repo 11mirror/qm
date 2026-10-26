@@ -1,17 +1,17 @@
-import { tenant, withTenant } from "../tenant.ts";
+import { withTenant } from "../tenant.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
-import type { InboundMessage, Surface, SurfaceRequest } from "./surface.ts";
+import type { InboundMessage, InboundSurface, Surface, SurfaceRequest } from "./surface.ts";
 import { surfaceContainerRef, surfaceDeliveryTarget, surfaceThreadRef } from "./refs.ts";
 
 export interface SurfaceRegistry {
   get(name: string): Surface | undefined;
-  forDestination(type: string): Surface | undefined;
   label(name: string): string | undefined;
+  receives(name: string): boolean;
   receive(name: string, request: SurfaceRequest): Promise<{ status: number; body: Record<string, unknown> }>;
 }
 
-export function inboundTurn(surface: Surface, message: InboundMessage): TurnRequest | undefined {
+export function inboundTurn(surface: InboundSurface, message: InboundMessage): TurnRequest | undefined {
   if (message.author.bot) return undefined;
   const { conversation } = message;
   if (conversation.kind !== "dm" && !message.mentionsSelf && !message.threadEngaged) return undefined;
@@ -61,35 +61,27 @@ export function createSurfaceRegistry(deps: {
   turn: (request: TurnRequest) => Promise<Pick<TurnResult, "runId">>;
 }): SurfaceRegistry {
   const byName = new Map<string, Surface>();
-  const byDestination = new Map<string, Surface>();
+  const inbound = (name: string): InboundSurface | undefined => {
+    const surface = byName.get(name);
+    return surface && "normalize" in surface ? (surface as InboundSurface) : undefined;
+  };
+  const destinationTypes = new Set<string>();
   for (const surface of deps.surfaces) {
     if (byName.has(surface.name)) throw new Error(`chat surface names must be unique: ${surface.name}`);
     byName.set(surface.name, surface);
     for (const type of surface.destinationTypes) {
-      if (byDestination.has(type)) throw new Error(`destination type ${type} has two chat surfaces`);
-      byDestination.set(type, surface);
+      if (destinationTypes.has(type)) throw new Error(`destination type ${type} has two chat surfaces`);
+      destinationTypes.add(type);
     }
-    deps.outbound.register(surface.destinationTypes, (post) => {
-      const ctx = {
-        tenant: tenant(),
-        destination: post.destination,
-        idempotencyKey: post.idempotencyKey,
-        ...(post.provenance ? { provenance: post.provenance, scopeId: post.provenance.sourceScopeId } : {}),
-        ...(post.createdAt !== undefined ? { createdAt: post.createdAt } : {}),
-        ...(post.retry ? { retry: true } : {}),
-      };
-      return withTenant(ctx.tenant, () =>
-        surface.deliver(ctx, { text: post.text, ...(post.attachments ? { attachments: post.attachments } : {}) }),
-      );
-    });
+    deps.outbound.register(surface.destinationTypes, surface.deliver);
   }
   return {
     get: (name) => byName.get(name),
-    forDestination: (type) => byDestination.get(type),
     label: (name) => byName.get(name)?.label,
+    receives: (name) => inbound(name) !== undefined,
     async receive(name, request) {
-      const surface = byName.get(name);
-      if (!surface?.normalize) return { status: 404, body: { error: "not_found" } };
+      const surface = inbound(name);
+      if (!surface) return { status: 404, body: { error: "not_found" } };
       const outcome = await surface.normalize(request);
       if (outcome.status !== 200) return { status: outcome.status, body: { error: outcome.reason } };
       const runs: string[] = [];

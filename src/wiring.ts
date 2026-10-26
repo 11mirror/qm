@@ -1862,7 +1862,7 @@ export function buildApp(
   const runResultRecovery = wireRunResultPosts(runs, outbound, {
     ...(recoveryAdminUrlFor ? { adminUrlFor: recoveryAdminUrlFor } : {}),
     sessions,
-    postsImmediately: (surface) => chatSurfaces.get(surface)?.normalize !== undefined,
+    postsImmediately: chatSurfaces.receives,
   });
   const skillFetcher = createGitFetcher({
     allowLocalRepos: !config.production,
