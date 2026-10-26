@@ -321,7 +321,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  commandCredentialHandles?: readonly string[];
   scratchExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;

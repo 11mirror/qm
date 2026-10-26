@@ -344,7 +344,7 @@ test("execute refuses a credential that would override the computer's own enviro
 
 test("execute schema lists exact command credential handles", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
+  const [execute] = createAgentTools({ current: tc });
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -373,20 +373,17 @@ test("execute masks credential output before model delivery, screening, and tran
     } as unknown as Sandbox,
     commandCredentials: [{ handle: "kc_test123456", env: [{ key: "TOKEN", value: secret }] }],
   });
-  const [execute] = createAgentTools(
-    {
-      current: ctx,
-      scopeLabel: scopeId("personal", "U1"),
-      emit: async (entry) => {
-        emitted.push(entry);
-      },
-      screenToolResult: async (input) => {
-        screened.push(input);
-        return { outcome: "allow" };
-      },
+  const [execute] = createAgentTools({
+    current: ctx,
+    scopeLabel: scopeId("personal", "U1"),
+    emit: async (entry) => {
+      emitted.push(entry);
     },
-    { commandCredentialHandles: ["kc_test123456"] },
-  );
+    screenToolResult: async (input) => {
+      screened.push(input);
+      return { outcome: "allow" };
+    },
+  });
   const result = await call(execute, {
     command: "diagnose",
     credentials: ["kc_test123456"],

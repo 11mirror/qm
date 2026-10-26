@@ -128,7 +128,6 @@ export interface HarnessTurnInput {
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
-  commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;

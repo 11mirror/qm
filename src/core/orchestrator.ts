@@ -3507,7 +3507,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
-            ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
             goal: sessionGoal,

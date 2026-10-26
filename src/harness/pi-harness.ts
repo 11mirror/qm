@@ -100,7 +100,13 @@ import {
   type HarnessTurnResult,
   type GapWork,
 } from "./harness.ts";
-import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
+import {
+  coreToolOptions,
+  createAgentTools,
+  pauseStampAfterToolCall,
+  type CoreToolOptions,
+  type ToolContextRef,
+} from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -138,7 +144,7 @@ import {
 } from "./goal.ts";
 import { perTenant } from "../tenant.ts";
 
-export interface PiHarnessOptions {
+export interface PiHarnessOptions extends CoreToolOptions {
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
   resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
@@ -154,14 +160,7 @@ export interface PiHarnessOptions {
   tempDirPrefix?: string;
   captureRequests?: boolean;
   systemCacheSplit?: boolean;
-  scratchExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
 }
 
@@ -1536,28 +1535,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
   const systemCacheSplit = opts?.systemCacheSplit ?? false;
-  const scratchExec = opts?.scratchExec ?? false;
-  const reachExec = opts?.reachExec ?? false;
-  const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
     return createAgentTools(ref, {
+      scratchExec: opts?.scratchExec,
+      reachExec: opts?.reachExec,
+      controlTools: opts?.controlTools,
+      execTimeoutMs: opts?.execTimeoutMs,
+      execTimeoutCeilingMs: opts?.execTimeoutCeilingMs,
+      backgroundJobTtlMs: opts?.backgroundJobTtlMs,
+      backgroundJobTtlMaxMs: opts?.backgroundJobTtlMaxMs,
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      scratchExec,
-      reachExec,
-      ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
-      controlTools,
-      ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
-      ...(turn.surfaceTools ? { surfaceTools: true } : {}),
-      ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
-      ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
-      ...(turn.readOnly ? { readOnly: true } : {}),
-      ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
-      ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
-      ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
-      ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
+      mcpTools: turn.mcpTools,
+      surfaceTools: turn.surfaceTools,
+      surfaceName: turn.surfaceName || undefined,
+      clientTools: turn.clientTools,
+      readOnly: turn.readOnly,
     });
   }
   async function createTurnSession(

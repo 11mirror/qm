@@ -2813,7 +2813,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     {
       scratchExec: true,
       reachExec: true,
-      commandCredentialHandles: ["git"],
     },
   ).find((t) => t.name === "execute")!;
   for (const [scope, route] of [
@@ -3691,7 +3690,7 @@ test("files share preserves artifact IDs, recipient resolution and authorization
 });
 
 test("the retired credential tool is absent and execute accepts credential handles", () => {
-  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+  const tools = createAgentTools({ current: fakeToolContext() });
   assert.equal(
     tools.some((tool) => tool.name === "credential_exec"),
     false,
