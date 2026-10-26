@@ -1798,7 +1798,17 @@ const apiRoutes: readonly WebRoute[] = [
     });
     return relayCore(res, "POST", "/v1/webhooks", reqBody);
   }),
-  ...["disable", "enable"].map((verb) => relayRoute("POST", `/api/webhooks/:id/${verb}`, { who: "principalId" })),
+  ...["disable", "enable"].map((verb) =>
+    relayRoute("POST", `/api/webhooks/:id/${verb}`, {
+      who: "principalId",
+      gate: async ({ res, user, params }) => {
+        const r = await coreFetch("GET", `/v1/webhooks?viewer=${enc(user)}`);
+        if (r.status < 200 || r.status >= 300) return (relay(res, r), false);
+        const webhooks = tryParse<{ webhooks?: Array<{ id?: unknown }> }>(r.text)?.webhooks ?? [];
+        return webhooks.some((w) => w.id === params.id) || (json(res, 404, { error: "not_found" }), false);
+      },
+    }),
+  ),
   route("GET", "/api/crons", async ({ res, user }) => {
     const r = await coreFetch("GET", `/v1/crons?viewer=${enc(user)}`);
     if (r.status < 200 || r.status >= 300) return relay(res, r);
