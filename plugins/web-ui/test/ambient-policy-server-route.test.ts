@@ -1,3 +1,4 @@
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -36,13 +37,19 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "ambient-policy-web-route-test";
+const IDENTITY = {
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { p: "alice", exp: Date.now() + 3_600_000 },
+    process.env.CORE_SIGNING_SECRET!,
+  ),
+};
 process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
-const headers = { cookie: "webuiuser=alice", "content-type": "application/json" };
+const headers = { ...IDENTITY, "content-type": "application/json" };
 
 test.after(() => {
   surface.close();

@@ -60,7 +60,7 @@ export async function handleVoiceRoute(
   req: IncomingMessage,
   res: ServerResponse,
   path: string,
-  identity: { user: string; impersonator: string | null; portalVerified: boolean },
+  identity: { user: string; impersonator: string | null },
   config: { org: string; publicUrl: string },
 ): Promise<void> {
   const { user } = identity;
@@ -78,7 +78,7 @@ export async function handleVoiceRoute(
     return dictation
       ? fail(404, "dictation_disabled", "Dictation is not enabled for this account.")
       : fail(404, "voice_disabled");
-  if (!voiceRequestAllowed(req, config.publicUrl, identity.portalVerified)) return fail(403, "unexpected_origin");
+  if (!voiceRequestAllowed(req, config.publicUrl)) return fail(403, "unexpected_origin");
   const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
   let sdp = "";
   if (dictation) {

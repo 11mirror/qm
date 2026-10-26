@@ -45,7 +45,6 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },

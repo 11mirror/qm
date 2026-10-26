@@ -47,25 +47,34 @@ test("voice route authenticates and gates accounts before spending", async () =>
     (
       await fetch(`${base}/api/voice/sessions`, {
         method: "POST",
-        headers: { cookie: "webuiuser=alice", [PORTAL_IDENTITY_HEADER]: "forged" },
+        headers: { [PORTAL_IDENTITY_HEADER]: "forged" },
+        body: offer,
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(`${base}/api/voice/sessions`, {
+        method: "POST",
+        headers: {
+          [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() - 60_000 }, "voice-route-test"),
+        },
+        body: offer,
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(`${base}/api/voice/sessions`, {
+        method: "POST",
+        headers: { ...headers, origin: "null" },
         body: offer,
       })
     ).status,
     403,
   );
-  const rejectedRequests: Record<string, string>[] = [
-    { ...headers, origin: "null" },
-    {
-      cookie: "webuiuser=alice",
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() - 60_000 }, "voice-route-test"),
-    },
-  ];
-  for (const rejectedHeaders of rejectedRequests) {
-    assert.equal(
-      (await fetch(`${base}/api/voice/sessions`, { method: "POST", headers: rejectedHeaders, body: offer })).status,
-      403,
-    );
-  }
   const capability = await fetch(`${base}/api/voice`, { headers: identity() });
   assert.deepEqual(await capability.json(), { enabled: true, model: "gpt-live-1" });
   assert.equal(capability.headers.get("cache-control"), "no-store");

@@ -34,13 +34,12 @@ test("voice requires explicit rollout, key, signing, and account access", () => 
 
 test("voice requests come from the web origin or a verified native client", () => {
   const url = "https://qm.example.com/";
-  assert.equal(voiceRequestAllowed(req({ origin: "https://qm.example.com" }), url, false), true);
-  assert.equal(voiceRequestAllowed(req({}), url, true), true);
-  assert.equal(voiceRequestAllowed(req({ "sec-fetch-site": "cross-site" }), url, true), false);
-  assert.equal(voiceRequestAllowed(req({ origin: "https://evil.test" }), url, true), false);
+  assert.equal(voiceRequestAllowed(req({ origin: "https://qm.example.com" }), url), true);
+  assert.equal(voiceRequestAllowed(req({}), url), true);
+  assert.equal(voiceRequestAllowed(req({ "sec-fetch-site": "cross-site" }), url), false);
+  assert.equal(voiceRequestAllowed(req({ origin: "https://evil.test" }), url), false);
   for (const origin of ["null", "https://evil.test", "http://qm.example.com", "https://qm.example.com:8443"])
-    assert.equal(voiceRequestAllowed(req({ origin }), url, false), false);
-  assert.equal(voiceRequestAllowed(req({}), url, false), false);
+    assert.equal(voiceRequestAllowed(req({ origin }), url), false);
 });
 
 test("session creation keeps credentials and authoritative configuration on server", async (t) => {

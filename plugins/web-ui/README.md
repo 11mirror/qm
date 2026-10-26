@@ -5,8 +5,8 @@ platform core. It still uses Pi's `Agent` state machine and selected Pi web util
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
 owned by this plugin. Two processes:
 
-- **A zero-dep `node:http` server** (`server/index.ts`) — holds the signed-in principal
-  in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
+- **A zero-dep `node:http` server** (`server/index.ts`) — takes the signed-in principal
+  from the portal's signed identity header, injects it as the turn's actor, and proxies a small set of
   `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
   see below). It never imports the core and never sends a model/API key to the browser.
 - **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer.
@@ -36,13 +36,13 @@ npm run serve
 npm start
 ```
 
-Dev (HMR): run `npm run serve` in one terminal and `npm run dev` in another — Vite serves
-the front-end on :5173 and proxies `/signin`, `/me`, `/api/*` to the node server.
+Dev (HMR): run `npm run dev-instance` from the repo root. It puts the portal in front of this
+server (which only accepts the portal's signed identity) and turns on Vite HMR.
 
 Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `CORE_ORG_ID` (default `acme`), `PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
-`WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
-and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
+`WEB_UI_PRINCIPALS` (csv allowlist of portal-verified principals; empty = any),
+and `CORE_SIGNING_SECRET` (required; same value as the core).
 
 ## Suggested activities
 
@@ -210,7 +210,7 @@ the CSS media queries, the composer, and the split canvas.
   via `GET /v1/sessions`, so you recognize _where_ a conversation happened at a glance.
 - **Webhook management** (the **Webhooks** sidebar view) — register, list, and disable your
   own incoming webhooks (spec §7). Each registration is created with `owner = createdBy = you`
-  in your `personal:<you>` scope (identity comes from the cookie, **never** the request body —
+  in your `personal:<you>` scope (identity comes from the portal's signed identity, **never** the request body —
   the same trust model as `/api/turn`). The server proxies three routes:
   - `POST /api/webhooks` → core `POST /v1/webhooks`; relays core's response — the webhook, the
     **absolute** public ingress URL (core builds it from its public base — the portal in prod),
@@ -225,7 +225,7 @@ the CSS media queries, the composer, and the split canvas.
     path. Dev single-host posts to the core directly.
 - **Cron management** (the **Crons** sidebar view) — create, list, run-now, enable/disable, and
   delete your own scheduled tasks (spec §7), same trust model as webhooks: created with
-  `owner = createdBy = you` in your `personal:<you>` scope (identity from the cookie, never the
+  `owner = createdBy = you` in your `personal:<you>` scope (identity from the portal's signed identity, never the
   body), list filtered to `owner === you`, and every per-cron route ownership-gated here first
   (core's source-auth routes are operator-wide). A cron is either a **task** (a prompt the agent
   re-runs at each fire) or a **message** (literal text relayed as-is — requires a destination,
