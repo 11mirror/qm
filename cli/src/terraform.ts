@@ -80,10 +80,11 @@ function hclString(source: string, name: string): string | undefined {
 function hclJson(source: string, name: string): unknown {
   const assignment = hclAssignment(source, name);
   const raw = assignment?.slice(assignment.indexOf("=") + 1).trim();
+  if (raw === undefined) return undefined;
   try {
-    return raw === undefined ? undefined : JSON.parse(raw);
+    return JSON.parse(raw);
   } catch {
-    return undefined;
+    throw new CliError(`infra/terraform.tfvars has an invalid ${name} value (expected the JSON qm writes)`);
   }
 }
 

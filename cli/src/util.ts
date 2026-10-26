@@ -329,7 +329,11 @@ export function writeEnvValue(path: string, key: string, value: string): void {
       placed = true;
     }
   }
-  if (!placed) next.push(entry);
+  if (!placed) {
+    const placeholder = next.findIndex((line) => new RegExp(`^#\\s*${key}=`).test(line.trim()));
+    if (placeholder === -1) next.push(entry);
+    else next[placeholder] = entry;
+  }
   writeFileSync(path, `${next.join("\n")}\n`, { mode });
   chmodSync(path, mode);
 }

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -14,7 +14,7 @@ import {
   serviceSecretValue,
   type ComputedSecret,
 } from "../secrets.ts";
-import { isInvalidSecret, isMissingOrPlaceholder, readEnvFile } from "../util.ts";
+import { isInvalidSecret, isMissingOrPlaceholder, readEnvFile, writeEnvValue } from "../util.ts";
 import { runInit } from "./init.ts";
 
 export function adminGrantEmails(adminGrants: string | undefined): string {
@@ -154,24 +154,6 @@ export function pendingSecrets(
   return { todo, done };
 }
 
-export function updateEnvContent(content: string, entries: ReadonlyMap<string, string>): string {
-  const remaining = new Map(entries);
-  const lines = content.split("\n").map((line) => {
-    const match = /^(#\s*)?([A-Z][A-Z0-9_]*)=/.exec(line.trim());
-    const name = match?.[2];
-    if (!name || !remaining.has(name)) return line;
-    const value = remaining.get(name)!;
-    remaining.delete(name);
-    return `${name}=${value}`;
-  });
-  let out = lines.join("\n");
-  if (remaining.size > 0) {
-    if (out !== "" && !out.endsWith("\n")) out += "\n";
-    for (const [name, value] of remaining) out += `${name}=${value}\n`;
-  }
-  return out;
-}
-
 function makePrompter(): {
   rl: Interface;
   ask: (q: string) => Promise<string>;
@@ -298,8 +280,7 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     }
 
     if (collected.size > 0) {
-      const existing = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
-      writeFileSync(envPath, updateEnvContent(existing, collected), { mode: 0o600 });
+      for (const [name, value] of collected) writeEnvValue(envPath, name, value);
       chmodSync(envPath, 0o600);
       ok(`wrote ${collected.size} value${collected.size === 1 ? "" : "s"} to .env`);
     }
