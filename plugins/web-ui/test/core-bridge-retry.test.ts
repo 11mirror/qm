@@ -1,8 +1,8 @@
-import { test, afterEach } from "node:test";
+import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
-import { pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
+import { pollRun, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 
@@ -37,7 +37,7 @@ function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Pr
 const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;
 afterEach(() => {
-  setClock(() => Date.now());
+  mock.restoreAll();
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSetTimeout;
 });
@@ -51,7 +51,7 @@ function instantSleep(): void {
 
 test("a transient fetch failure mid-poll is retried — the turn still completes", async () => {
   let clock = 1_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   let i = 0;
@@ -84,7 +84,7 @@ test("a transient fetch failure mid-poll is retried — the turn still completes
 
 test("a transient 5xx mid-poll is retried — the turn still completes", async () => {
   let clock = 2_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   let i = 0;
@@ -115,7 +115,7 @@ test("a transient 5xx mid-poll is retried — the turn still completes", async (
 
 test("a 4xx is definitive — the poll fails immediately without retrying", async () => {
   const clock = 3_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   let i = 0;
@@ -135,7 +135,7 @@ test("a 4xx is definitive — the poll fails immediately without retrying", asyn
 
 test("persistent transient failures past the idle window fail with a timeout, not a crash", async () => {
   let clock = 4_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   globalThis.fetch = (async () => {
@@ -153,7 +153,7 @@ test("persistent transient failures past the idle window fail with a timeout, no
 
 test("poll requests never put bearer credentials in the URL", async () => {
   let clock = 5_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   const urls: string[] = [];

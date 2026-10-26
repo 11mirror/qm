@@ -1,11 +1,11 @@
 import { activitySeq } from "../src/items.ts";
 import { item } from "./item-fixture.ts";
 import { buildTimeline } from "../src/timeline.ts";
-import { test, afterEach } from "node:test";
+import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
-import { makeRunResumeStreamFn, pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
+import { makeRunResumeStreamFn, pollRun, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
 import type { AssistantWork } from "../src/transcript-messages.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
@@ -41,7 +41,7 @@ function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Pr
 const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;
 afterEach(() => {
-  setClock(() => Date.now());
+  mock.restoreAll();
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSetTimeout;
 });
@@ -64,7 +64,7 @@ function stubRuns(snapshots: Array<Record<string, unknown>>): void {
 
 test("the idle deadline RESETS on each delta — sustained progress past the window never times out", async () => {
   let clock = 1_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   const step = RUN_IDLE_MS - 1;
@@ -98,7 +98,7 @@ test("the idle deadline RESETS on each delta — sustained progress past the win
 
 test("the idle deadline DOES fire after the idle window with no progress", async () => {
   let clock = 2_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   stubRuns([{ status: "running", result: null, partial: "stuck" }]);
@@ -125,7 +125,7 @@ test("the idle deadline DOES fire after the idle window with no progress", async
 
 test("a delta just before the window resets it — no premature timeout", async () => {
   let clock = 3_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   const snapshots: Array<Record<string, unknown>> = [
@@ -152,7 +152,7 @@ test("a delta just before the window resets it — no premature timeout", async 
 
 test("tool-activity growth (no assistant text) ALSO resets the idle clock", async () => {
   let clock = 4_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   const step = RUN_IDLE_MS - 1;
@@ -190,7 +190,7 @@ test("tool-activity growth (no assistant text) ALSO resets the idle clock", asyn
 
 test("core-attested liveness (alive:true) resets the idle clock — a long silent tool call never times out", async () => {
   let clock = 5_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   const step = RUN_IDLE_MS - 1;
@@ -224,7 +224,7 @@ test("core-attested liveness (alive:true) resets the idle clock — a long silen
 
 test("a running snapshot WITHOUT alive still hits the idle deadline (stale run record)", async () => {
   let clock = 6_000_000;
-  setClock(() => clock);
+  mock.method(Date, "now", () => clock);
   instantSleep();
 
   stubRuns([{ status: "running", result: null, partial: "" }]);
@@ -381,7 +381,7 @@ test("a refusal that only mentions a denied approval in its reason is a failure,
 });
 
 test("a failed run renders friendly copy, never the internal failure reason", async () => {
-  setClock(() => 1_000_000);
+  mock.method(Date, "now", () => 1_000_000);
   instantSleep();
   stubRuns([
     { status: "failed", result: { status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }, partial: "" },
@@ -397,7 +397,7 @@ test("a failed run renders friendly copy, never the internal failure reason", as
 });
 
 test("a refused run still shows its authored, user-facing reason", async () => {
-  setClock(() => 1_000_000);
+  mock.method(Date, "now", () => 1_000_000);
   instantSleep();
   stubRuns([
     { status: "done", result: { status: "refused", reason: "you're not a member of that context" }, partial: "" },
@@ -412,7 +412,7 @@ test("a refused run still shows its authored, user-facing reason", async () => {
 });
 
 test("a stored quarantine refusal renders the canned copy on the web, never the internal verdict", async () => {
-  setClock(() => 1_000_000);
+  mock.method(Date, "now", () => 1_000_000);
   instantSleep();
   stubRuns([
     {
