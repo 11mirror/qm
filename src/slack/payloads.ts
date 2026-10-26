@@ -213,16 +213,9 @@ export function slackErrorCode(err: unknown): string | undefined {
   return str(rec(rec(err)?.data)?.error);
 }
 
-const LOG_LEVELS: readonly LogLevel[] = [
-  bolt.LogLevel.ERROR,
-  bolt.LogLevel.WARN,
-  bolt.LogLevel.INFO,
-  bolt.LogLevel.DEBUG,
-];
-
 export function parseLogLevel(v: string | undefined): LogLevel {
   if (v === undefined) return bolt.LogLevel.INFO;
-  const match = LOG_LEVELS.find((l) => l === v);
+  const match = Object.values(bolt.LogLevel).find((l) => l === v);
   if (match) return match;
   console.error(`[slack] unknown log level "${v}" — using info`);
   return bolt.LogLevel.INFO;

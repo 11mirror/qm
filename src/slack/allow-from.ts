@@ -1,15 +1,8 @@
 import type { ActorAssertion } from "./identity.ts";
 
 export function parseAllowFrom(raw: string | undefined): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const part of (raw ?? "").split(/[\s,]+/)) {
-    const entry = part.trim().toLowerCase().replace(/^@+/, "");
-    if (!entry || seen.has(entry)) continue;
-    seen.add(entry);
-    out.push(entry);
-  }
-  return out;
+  const entries = (raw ?? "").split(/[\s,]+/).map((part) => part.trim().toLowerCase().replace(/^@+/, ""));
+  return [...new Set(entries.filter(Boolean))];
 }
 
 export function normalizeAllowFrom(entries: readonly unknown[] | undefined): string[] {
@@ -21,19 +14,12 @@ export type ActorGate = (actor: ActorAssertion) => boolean;
 
 export function createActorGate(entries: readonly string[] | undefined): ActorGate | undefined {
   if (!entries?.length) return undefined;
-  const emails = new Set<string>();
-  const domains = new Set<string>();
-  for (const entry of entries) {
-    if (entry.includes("@")) emails.add(entry);
-    else domains.add(entry);
-  }
+  const allowed = new Set(entries);
   return (actor: ActorAssertion): boolean => {
     if (actor.isBot || actor.isExternalGuest) return false;
     const email = actor.externalId.trim().toLowerCase();
     const at = email.lastIndexOf("@");
-    if (at <= 0) return false;
-    if (emails.has(email)) return true;
-    return domains.has(email.slice(at + 1));
+    return at > 0 && (allowed.has(email) || allowed.has(email.slice(at + 1)));
   };
 }
 

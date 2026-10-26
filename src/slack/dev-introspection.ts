@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { json, readBody } from "../../plugins/chassis/src/http.ts";
@@ -20,23 +20,12 @@ interface DevIntrospectionState {
   lastCanary: { ok: boolean; rttMs?: number; reason?: string; at: number } | null;
 }
 
-export interface DevIntrospection {
-  state: DevIntrospectionState;
-  markEvent(): void;
-  ready(info: { connectedAs: string; botUserId: string; teamId: string }): void;
-  canary(channel: string, timeoutMs?: number): Promise<{ ok: boolean; rttMs?: number; reason?: string; nonce: string }>;
-  port(): number | null;
-  close(): Promise<void>;
-}
+export type DevIntrospection = NonNullable<ReturnType<typeof installDevIntrospection>>;
 
-export interface DevIntrospectionOptions {
-  enabled?: boolean;
-  port?: number;
-  host?: string;
-  now?: () => number;
-}
-
-export function installDevIntrospection(app: any, opts: DevIntrospectionOptions = {}): DevIntrospection | null {
+export function installDevIntrospection(
+  app: any,
+  opts: { enabled?: boolean; port?: number; host?: string; now?: () => number } = {},
+) {
   if (!opts.enabled) return null;
   const now = opts.now ?? Date.now;
   const state: DevIntrospectionState = {
@@ -54,7 +43,40 @@ export function installDevIntrospection(app: any, opts: DevIntrospectionOptions 
   };
   const canaryWaiters = new Map<string, { postedAt: number; resolve: (rttMs: number) => void }>();
 
-  attachRawFrameTap(app, state, canaryWaiters, now);
+  try {
+    const smc = app?.receiver?.client;
+    if (!smc?.on) {
+      console.warn("[slack-plugin] dev-introspection: no socket-mode client reachable — numConnections unavailable");
+    } else {
+      smc.on("ws_message", (raw: unknown) => {
+        let frame: any;
+        try {
+          frame = JSON.parse(String(raw));
+        } catch {
+          return;
+        }
+        if (frame?.type === "hello") {
+          state.numConnections = typeof frame.num_connections === "number" ? frame.num_connections : null;
+          state.helloHost = typeof frame.debug_info?.host === "string" ? frame.debug_info.host : null;
+          state.lastHelloAt = now();
+          return;
+        }
+        state.lastEventAtRaw = now();
+        const event = frame?.type === "events_api" ? frame.payload?.event : undefined;
+        const text = event?.subtype === "message_deleted" ? event.previous_message?.text : event?.text;
+        const isCanary = typeof text === "string" && text.includes(CANARY_PREFIX);
+        if (["interactive", "slash_commands"].includes(frame?.type) && !isCanary) state.lastActivityAt = now();
+        if (frame?.type !== "events_api" || !isCanary || event?.subtype === "message_deleted") return;
+        const nonce = text.slice(text.indexOf(CANARY_PREFIX) + CANARY_PREFIX.length).trim();
+        const waiter = canaryWaiters.get(nonce);
+        if (!waiter) return;
+        canaryWaiters.delete(nonce);
+        waiter.resolve(now() - waiter.postedAt);
+      });
+    }
+  } catch (err) {
+    console.warn(`[slack-plugin] dev-introspection: raw-frame tap failed (${errMessage(err)}) — degrading`);
+  }
 
   const canary = async (
     channel: string,
@@ -71,9 +93,9 @@ export function installDevIntrospection(app: any, opts: DevIntrospectionOptions 
       postedTs = posted.ts ?? "";
     } catch (err) {
       canaryWaiters.delete(nonce);
-      const result = { ok: false, reason: `post failed: ${errMessage(err)}`, nonce };
-      state.lastCanary = { ok: false, reason: result.reason, at: now() };
-      return result;
+      const reason = `post failed: ${errMessage(err)}`;
+      state.lastCanary = { ok: false, reason, at: now() };
+      return { ok: false, reason, nonce };
     }
     const rttMs = await Promise.race([arrival, sleep(timeoutMs).then(() => null)]);
     canaryWaiters.delete(nonce);
@@ -90,85 +112,27 @@ export function installDevIntrospection(app: any, opts: DevIntrospectionOptions 
     return { ok: true, rttMs, nonce };
   };
 
-  const server = startServer(state, canary, opts);
-
-  return {
-    state,
-    markEvent: () => {
-      state.lastEventAt = now();
-      state.lastActivityAt = state.lastEventAt;
-    },
-    ready: (info) => {
-      state.connectedAs = info.connectedAs;
-      state.botUserId = info.botUserId;
-      state.teamId = info.teamId;
-    },
-    canary,
-    port: () => {
-      const addr = server?.address();
-      return addr && typeof addr === "object" ? addr.port : null;
-    },
-    close: async () => {
-      await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
-    },
-  };
-}
-
-function attachRawFrameTap(
-  app: any,
-  state: DevIntrospectionState,
-  canaryWaiters: Map<string, { postedAt: number; resolve: (rttMs: number) => void }>,
-  now: () => number,
-): void {
-  try {
-    const smc = app?.receiver?.client;
-    if (!smc?.on) {
-      console.warn("[slack-plugin] dev-introspection: no socket-mode client reachable — numConnections unavailable");
-      return;
-    }
-    smc.on("ws_message", (raw: unknown) => {
-      let frame: any;
-      try {
-        frame = JSON.parse(String(raw));
-      } catch {
-        return;
-      }
-      if (frame?.type === "hello") {
-        state.numConnections = typeof frame.num_connections === "number" ? frame.num_connections : null;
-        state.helloHost = typeof frame.debug_info?.host === "string" ? frame.debug_info.host : null;
-        state.lastHelloAt = now();
-        return;
-      }
-      state.lastEventAtRaw = now();
-      const event = frame?.type === "events_api" ? frame.payload?.event : undefined;
-      const text = event?.subtype === "message_deleted" ? event.previous_message?.text : event?.text;
-      const isCanary = typeof text === "string" && text.includes(CANARY_PREFIX);
-      const isActivity = ["interactive", "slash_commands"].includes(frame?.type);
-      if (isActivity && !isCanary) state.lastActivityAt = now();
-      if (frame?.type !== "events_api" || !isCanary || event?.subtype === "message_deleted") return;
-      const nonce = text.slice(text.indexOf(CANARY_PREFIX) + CANARY_PREFIX.length).trim();
-      const waiter = canaryWaiters.get(nonce);
-      if (!waiter) return;
-      canaryWaiters.delete(nonce);
-      waiter.resolve(now() - waiter.postedAt);
-    });
-  } catch (err) {
-    console.warn(`[slack-plugin] dev-introspection: raw-frame tap failed (${errMessage(err)}) — degrading`);
-  }
-}
-
-function startServer(
-  state: DevIntrospectionState,
-  canary: (
-    channel: string,
-    timeoutMs?: number,
-  ) => Promise<{ ok: boolean; rttMs?: number; reason?: string; nonce: string }>,
-  opts: DevIntrospectionOptions,
-): Server | null {
   const port = opts.port ?? 0;
   const host = opts.host ?? "127.0.0.1";
   const server = createServer((req, res) => {
-    void handleRequest(req, res, state, canary).catch((err) => {
+    void (async () => {
+      if (req.method === "GET" && req.url === "/healthz")
+        return json(res, 200, { ok: state.connectedAs !== "", pid: process.pid, ...state });
+      if (req.method !== "POST" || req.url !== "/canary") return json(res, 404, { ok: false, reason: "not found" });
+      const raw = await readBody(req, 64 * 1024);
+      let body: any = {};
+      try {
+        if (raw) body = JSON.parse(raw);
+      } catch {
+        body = {};
+      }
+      const timeoutMs = Number(body.timeoutMs);
+      const result = await canary(
+        String(body.channel ?? ""),
+        Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 15_000,
+      );
+      json(res, result.ok ? 200 : 502, result);
+    })().catch((err) => {
       json(res, 500, { ok: false, reason: errMessage(err) });
     });
   });
@@ -181,42 +145,23 @@ function startServer(
     console.log(`[slack-plugin] dev-introspection on http://${host}:${bound}`);
   });
   server.unref();
-  return server;
-}
 
-async function handleRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  state: DevIntrospectionState,
-  canary: (
-    channel: string,
-    timeoutMs?: number,
-  ) => Promise<{ ok: boolean; rttMs?: number; reason?: string; nonce: string }>,
-): Promise<void> {
-  if (req.method === "GET" && req.url === "/healthz") {
-    json(res, 200, { ok: state.connectedAs !== "", pid: process.pid, ...state });
-    return;
-  }
-  if (req.method === "POST" && req.url === "/canary") {
-    const body = await readJsonBody(req);
-    const result = await canary(String(body.channel ?? ""), numberOr(body.timeoutMs, 15_000));
-    json(res, result.ok ? 200 : 502, result);
-    return;
-  }
-  json(res, 404, { ok: false, reason: "not found" });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<any> {
-  const raw = await readBody(req, 64 * 1024);
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-function numberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  return {
+    state,
+    markEvent: () => {
+      state.lastEventAt = now();
+      state.lastActivityAt = state.lastEventAt;
+    },
+    ready: (info: { connectedAs: string; botUserId: string; teamId: string }) => {
+      state.connectedAs = info.connectedAs;
+      state.botUserId = info.botUserId;
+      state.teamId = info.teamId;
+    },
+    canary,
+    port: () => {
+      const addr = server.address();
+      return addr && typeof addr === "object" ? addr.port : null;
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }
