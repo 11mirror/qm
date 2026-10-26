@@ -1127,7 +1127,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         createdAt: entry.createdAt ?? stampedAt,
       };
     });
-    const createdAt = Math.max(...items.map((item) => item.createdAt));
+    const createdAt = items.reduce((latest, item) => Math.max(latest, item.createdAt), -Infinity);
     for (const item of items) {
       if (item.kind !== "Retraction" || typeof item.body.ts !== "string") continue;
       const inBatch = items.findLast(
@@ -1692,9 +1692,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         if (found.rows[0]!.scope_id !== spec.scopeId)
           throw new Error(`importTranscript: ${spec.threadRef} belongs to a different scope`);
         await lockSession(client, sessionId);
+        const others = await client.query(
+          "SELECT 1 FROM participants WHERE session_id = $1 AND principal_id <> $2 LIMIT 1",
+          [sessionId, spec.principalId],
+        );
+        if (others.rows.length) throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
         await client.query(
           `INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq)
-           VALUES ($1, $2, 0, NULL, 0, NULL) ON CONFLICT (session_id, principal_id) DO NOTHING`,
+           VALUES ($1, $2, 0, NULL, 0, NULL)
+           ON CONFLICT (session_id, principal_id) DO UPDATE
+             SET valid_from = 0, valid_to = NULL, valid_from_seq = 0, valid_to_seq = NULL`,
           [sessionId, spec.principalId],
         );
         const latest = await client.query(
@@ -1707,11 +1714,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionId,
           spec.entries.filter((entry) => entry.createdAt > after),
         );
-        if (spec.title?.trim())
-          await client.query("UPDATE sessions SET title = COALESCE(title, $2) WHERE id = $1", [
-            sessionId,
-            spec.title.trim(),
-          ]);
+        const newest = appended.reduce((latest, entry) => Math.max(latest, entry.createdAt), 0);
+        const newestUser = appended.reduce(
+          (latest, entry) => (entry.type === "user" ? Math.max(latest, entry.createdAt) : latest),
+          0,
+        );
+        await client.query(
+          `UPDATE sessions
+              SET title = COALESCE(title, $2),
+                  last_activity = GREATEST(COALESCE(last_activity, 0), $3::bigint),
+                  last_user_activity = CASE WHEN $4::bigint > 0
+                                            THEN GREATEST(COALESCE(last_user_activity, 0), $4::bigint)
+                                            ELSE last_user_activity END
+            WHERE id = $1`,
+          [sessionId, spec.title?.trim() || null, newest, newestUser],
+        );
         const row = await client.query("SELECT * FROM sessions WHERE id = $1", [sessionId]);
         return { session: rowToSession(row.rows[0]!), appended: appended.length };
       });

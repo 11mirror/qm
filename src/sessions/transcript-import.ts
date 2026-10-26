@@ -2,6 +2,7 @@ import { personalScope } from "../types.ts";
 import type { ImportedEntry, SessionStore, TranscriptImport, TranscriptImportResult } from "./session-store.ts";
 
 const ROLES = new Set(["user", "assistant"]);
+const MAX_DATE_MS = 8_640_000_000_000_000;
 
 export function parseTranscriptImport(line: string): TranscriptImport {
   const raw = JSON.parse(line) as Record<string, unknown>;
@@ -26,7 +27,13 @@ export function parseTranscriptImport(line: string): TranscriptImport {
       throw new Error("transcript import: entry role must be user or assistant");
     if (typeof entry.text !== "string" || !entry.text.trim())
       throw new Error("transcript import: entry text is required");
-    if (typeof entry.createdAt !== "number" || !Number.isFinite(entry.createdAt) || entry.createdAt < previous)
+    if (
+      typeof entry.createdAt !== "number" ||
+      !Number.isSafeInteger(entry.createdAt) ||
+      entry.createdAt < 0 ||
+      entry.createdAt > MAX_DATE_MS ||
+      entry.createdAt < previous
+    )
       throw new Error("transcript import: entry times must be ascending epoch milliseconds");
     previous = entry.createdAt;
     return entry.role === "user"

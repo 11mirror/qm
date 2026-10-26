@@ -11,4 +11,5 @@ if (!config.databaseUrl) throw new Error("DATABASE_URL is required");
 const lines = createInterface({ input: createReadStream(file, "utf8"), crlfDelay: Infinity });
 for await (const result of importTranscripts(createPostgresSessionStore(config.databaseUrl), lines))
   console.log(JSON.stringify({ threadRef: result.threadRef, sessionId: result.session.id, appended: result.appended }));
+await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
 process.exit(0);

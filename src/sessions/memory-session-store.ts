@@ -314,9 +314,13 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         byThread.set(spec.threadRef, session.id);
       }
       if (spec.title?.trim() && !session.title) session.title = spec.title.trim();
-      if (!windows.get(session.id)?.has(spec.principalId))
-        await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
-      const after = Math.max(-Infinity, ...(entries.get(session.id) ?? []).map((entry) => entry.createdAt));
+      if ([...(windows.get(session.id)?.keys() ?? [])].some((principalId) => principalId !== spec.principalId))
+        throw new Error(`importTranscript: ${spec.threadRef} has other participants`);
+      await this.addParticipant(session.id, spec.principalId, undefined, { includeHistory: true });
+      const after = (entries.get(session.id) ?? []).reduce(
+        (latest, entry) => Math.max(latest, entry.createdAt),
+        -Infinity,
+      );
       const appended = record(
         session.id,
         spec.entries.filter((entry) => entry.createdAt > after),

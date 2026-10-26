@@ -114,6 +114,45 @@ test("an import cannot reuse a conversation from another scope", async () => {
   });
 });
 
+test("an import refuses a conversation that someone else can see", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const session = await store.getOrCreateByThread(thread, "dm", "personal:ada@example.com", undefined, "web");
+    await store.addParticipant(session.id, "bob@example.com");
+    await assert.rejects(
+      Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)])),
+      /other participants/,
+    );
+    assert.deepEqual(await store.visibleEntries(session.id, "bob@example.com"), []);
+  });
+});
+
+test("an import restores the importer's full view of their conversation", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const [first] = await Array.fromAsync(
+      importTranscripts(store, [line("ada@example.com", thread, conversation.slice(0, 2))]),
+    );
+    await store.removeParticipant(first!.session.id, "ada@example.com");
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, conversation)]));
+    assert.equal((await store.visibleEntries(first!.session.id, "ada@example.com")).length, 4);
+  });
+});
+
+test("an imported conversation's activity is its newest message even within a minute", async () => {
+  await withStores(async (store) => {
+    const thread = `web:ada@example.com:${randomUUID()}`;
+    const quick = [
+      { role: "user", text: "One", createdAt: T0 },
+      { role: "assistant", text: "Two", createdAt: T0 + 5_000 },
+      { role: "user", text: "Three", createdAt: T0 + 10_000 },
+    ];
+    await Array.fromAsync(importTranscripts(store, [line("ada@example.com", thread, quick)]));
+    const page = await store.listParticipantPage("ada@example.com", { limit: 10 });
+    assert.equal(page.sessions[0]!.lastActivityAt, T0 + 10_000);
+  });
+});
+
 test("transcript lines are rejected unless they describe the principal's own web thread", () => {
   const ok = { principalId: "ada@example.com", threadRef: "web:ada@example.com:t1", entries: conversation };
   assert.equal(parseTranscriptImport(JSON.stringify(ok)).scopeId, "personal:ada@example.com");
@@ -125,6 +164,8 @@ test("transcript lines are rejected unless they describe the principal's own web
     ["role", { ...ok, entries: [{ role: "tool", text: "x", createdAt: T0 }] }],
     ["text", { ...ok, entries: [{ role: "user", text: " ", createdAt: T0 }] }],
     ["ascending", { ...ok, entries: [conversation[1], conversation[0]] }],
+    ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: T0 + 0.5 }] }],
+    ["epoch", { ...ok, entries: [{ role: "user", text: "x", createdAt: 9e15 }] }],
   ];
   for (const [what, value] of bad) assert.throws(() => parseTranscriptImport(JSON.stringify(value)), new RegExp(what));
 });
