@@ -10,7 +10,6 @@ function skill(name: string): SkillResolution {
       id: name,
       scopeId: scopeId("org", "acme"),
       manifest: { name, description: name, requiredCapabilities: [], body: name },
-      signature: "sig",
       status: "published",
       createdBy: "test",
       version: 1,

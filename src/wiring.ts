@@ -606,7 +606,6 @@ export function buildApp(
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     advisoryLock,
-    ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });

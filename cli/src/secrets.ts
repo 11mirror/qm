@@ -105,13 +105,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "SKILL_SIGNING_SECRET",
-    service: "core",
-    required: true,
-    description: "Stable signing key for reviewed skills.",
-    generate: MINT_LOCALLY,
-  },
-  {
     name: "PORTER_DEPLOY_API_TOKEN",
     service: "core",
     required: {
