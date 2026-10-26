@@ -43,6 +43,7 @@ import {
 } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { tenant } from "../tenant.ts";
+import { parseSlackThreadRef } from "../slack/message-gating.ts";
 
 const MAX_SESSION_PINS = 50;
 const MAX_PIN_TEXT_CHARS = 2000;
@@ -136,7 +137,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
 
   const slackDmChannel = (session: { surface?: string; threadRef: string }): string | null => {
     if (session.surface !== "slack" || !session.threadRef.startsWith("dm:")) return null;
-    return session.threadRef.split(":")[1] || null;
+    return parseSlackThreadRef(session.threadRef)?.container ?? null;
   };
 
   const mirrorNativePin = async (

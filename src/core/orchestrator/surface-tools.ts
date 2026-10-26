@@ -40,6 +40,7 @@ import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { parseDeliveryTarget } from "../../slack/delivery.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
@@ -189,7 +190,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     coverageChecked = true;
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
     if (!deps.surfaceCache || !container) return coverageSince;
-    const cacheContainer = currentDestination.type === "slack" ? container.split(":")[0]! : container;
+    const cacheContainer = currentDestination.type === "slack" ? parseDeliveryTarget(container).channel : container;
     const st = await deps.surfaceCache
       .containerState(cacheContainer)
       .catch(swallowAs("surface cache: container coverage", null));
