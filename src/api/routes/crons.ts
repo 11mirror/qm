@@ -25,11 +25,6 @@ function isCreateCron(b: unknown): b is CreateCronInput {
   );
 }
 
-function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
-  const { fireLog: _fireLog, ...rest } = cron;
-  return rest;
-}
-
 async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cron | null> {
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
@@ -85,7 +80,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
   if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
   try {
     const cron = await app.createCron(body);
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   } catch (e) {
     throw refusal(400, "cron_create_failed", e);
   }
@@ -94,10 +89,10 @@ async function createCron(ctx: ApiCtx): Promise<void> {
 async function listCrons(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: (await app.listCrons()).map(withoutFireLog) });
+  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
-    ...withoutFireLog(cron),
+    ...cron,
     permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
   });
   return sendJson(res, 200, {
@@ -144,7 +139,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
-  return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total });
+  return sendJson(res, 200, { cron: cron, runs, total });
 }
 
 const CRON_PATCH_BAD_REQUEST =
@@ -156,7 +151,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (method === "GET") {
     const cron = await gateSourceCron(ctx, id, true);
     if (!cron) return;
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
@@ -212,7 +207,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ],
         ...(schedule !== undefined ? { detail: { schedule } } : {}),
       });
-    return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
+    return sendJson(res, 200, { cron: updated ? updated : null });
   } catch (e) {
     throw refusal(400, "cron_update_failed", e);
   }
