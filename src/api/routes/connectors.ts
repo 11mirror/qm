@@ -23,7 +23,7 @@ import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { sendJson, sendRedirect } from "../http.ts";
+import { refusal, sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { tenant } from "../../tenant.ts";
@@ -215,7 +215,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     }
     return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
   } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+    throw refusal(400, "oauth_callback_failed", e);
   }
 }
 

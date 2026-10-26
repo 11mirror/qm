@@ -6,7 +6,6 @@ import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
-import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -276,10 +275,6 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 403, { error: "forbidden", message: "you can only upload to your own contexts" });
     }
     return sendJson(res, 200, { file });
-  } catch (e) {
-    if (e instanceof ByteSourceTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    throw e;
   } finally {
     await deps.blobTransfer.delete(blobId);
   }

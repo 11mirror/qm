@@ -14,7 +14,7 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { sendJson, verifySignedRoute } from "../http.ts";
+import { refusal, sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -1189,7 +1189,7 @@ async function createDeployment(ctx: ApiCtx): Promise<void> {
   try {
     return sendJson(res, 200, { deployment: deploymentView(await app.deploy(body)) });
   } catch (e) {
-    return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
+    throw refusal(400, "deploy_failed", e);
   }
 }
 
@@ -1297,7 +1297,7 @@ function manageDeployment<T = undefined>(spec: {
     try {
       return sendJson(res, 200, await spec.run(ctx, id, input as T));
     } catch (e) {
-      return sendJson(res, 400, { error: spec.failure, message: errMessage(e) });
+      throw refusal(400, spec.failure, e);
     }
   };
 }
@@ -1490,7 +1490,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
   if (e instanceof DeployAccessError)
     return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
-  return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
+  throw refusal(400, "share_failed", e);
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

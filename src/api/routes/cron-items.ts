@@ -3,7 +3,7 @@ import type { Cron, InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { refusal, sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { canAdministerCron } from "../control-service.ts";
@@ -606,7 +606,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     }
     sendJson(ctx.res, 200, { syncCron: crons[0], crons });
   } catch (err) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(err) });
+    throw refusal(400, "bad_request", err);
   }
 }
 

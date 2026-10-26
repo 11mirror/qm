@@ -3,8 +3,7 @@ import type { Cron } from "../../types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { userScheduleFromBody } from "../../cron/schedule.ts";
-import { errMessage } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { refusal, sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
@@ -88,7 +87,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     const cron = await app.createCron(body);
     return sendJson(res, 200, { cron: withoutFireLog(cron) });
   } catch (e) {
-    return sendJson(res, 400, { error: "cron_create_failed", message: errMessage(e) });
+    throw refusal(400, "cron_create_failed", e);
   }
 }
 
@@ -215,7 +214,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       });
     return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
   } catch (e) {
-    return sendJson(res, 400, { error: "cron_update_failed", message: errMessage(e) });
+    throw refusal(400, "cron_update_failed", e);
   }
 }
 

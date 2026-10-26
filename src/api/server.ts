@@ -26,7 +26,10 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import { armBodyDeadline, HttpError, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import { KeychainError } from "../credentials/keychain.ts";
+import { BackgroundOwnershipConflict } from "../runs/background-ownership.ts";
+import { ByteSourceTooLargeError } from "../files/durable-byte-store.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -267,23 +270,27 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
   return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
 }
 
+function typedFailure(err: unknown): HttpError | null {
+  if (err instanceof HttpError) return err;
+  const as = (status: number, error: string) => new HttpError(status, { error, message: (err as Error).message });
+  if (err instanceof MemoryFactsMissing) return as(404, "not_found");
+  if (err instanceof MemoryDisclosureDenied) return as(403, "forbidden");
+  if (err instanceof KeychainError) return as(err.status, "keychain");
+  if (err instanceof BackgroundOwnershipConflict) return as(409, "background_ownership_conflict");
+  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError)
+    return as(413, "payload_too_large");
+  return null;
+}
+
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
-  if (err instanceof MemoryDisclosureDenied || err instanceof MemoryFactsMissing) {
-    const status = err instanceof MemoryFactsMissing ? 404 : 403;
-    if (!res.headersSent)
-      sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
-    else res.destroy();
-    return;
+  const typed = typedFailure(err);
+  if (!typed) {
+    reportBackendError(err);
+    console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
   }
-  if (err instanceof PayloadTooLargeError) {
-    if (!res.headersSent) sendJson(res, 413, { error: "payload_too_large", message: errMessage(err) });
-    else res.destroy();
-    return;
-  }
-  reportBackendError(err);
-  console.error("[server] 500 %s %s: %s", req.method ?? "?", loggablePath(req.url), errMessage(err));
-  if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
-  else res.destroy();
+  if (res.headersSent) return void res.destroy();
+  if (typed) sendJson(res, typed.status, typed.body);
+  else sendJson(res, 500, { error: "internal_error", message: "internal server error" });
 }
 
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {

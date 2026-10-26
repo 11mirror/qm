@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import pg from "pg";
+import { errMessage } from "../util/errors.ts";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
@@ -90,6 +92,31 @@ export function sendRedirect(res: ServerResponse, location: string): void {
 export function headerValue(req: IncomingMessage, name: string): string | undefined {
   const v = req.headers[name];
   return typeof v === "string" ? v : undefined;
+}
+
+export class HttpError extends Error {
+  readonly status: number;
+  readonly body: { error: string; message?: string };
+  constructor(status: number, body: { error: string; message?: string }) {
+    super(body.message ?? body.error);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+function backendFailure(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    error instanceof ReferenceError ||
+    error instanceof pg.DatabaseError ||
+    (error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string")
+  );
+}
+
+export function refusal(status: number, error: string, cause: unknown): Error {
+  return cause instanceof HttpError || backendFailure(cause)
+    ? (cause as Error)
+    : new HttpError(status, { error, message: errMessage(cause) });
 }
 
 export class PayloadTooLargeError extends Error {

@@ -1,4 +1,4 @@
-import { sendJson } from "../../http.ts";
+import { refusal, sendJson } from "../../http.ts";
 import { orgAdmin } from "./common.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -84,7 +84,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
     authz.audit("slack-installation.update", "slack-installation");
     return sendJson(ctx.res, 200, { ...status, source: "admin" });
   } catch (error) {
-    return sendJson(ctx.res, 400, { error: "invalid_slack_installation", message: errMessage(error) });
+    throw refusal(400, "invalid_slack_installation", error);
   }
 }
 

@@ -1,5 +1,4 @@
 import {
-  KeychainError,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -62,15 +61,6 @@ async function resolveScopeNames(
 
 type Keychain = NonNullable<ApiCtx["deps"]["keychain"]>;
 
-export async function keychainErrors(res: ApiCtx["res"], run: () => Promise<void>): Promise<void> {
-  try {
-    return await run();
-  } catch (e) {
-    if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
-    throw e;
-  }
-}
-
 const keychainRoute =
   (handle: (ctx: ApiCtx, kc: Keychain, capability: CapabilityClaims) => Promise<void>) =>
   async (ctx: ApiCtx): Promise<void> => {
@@ -86,7 +76,7 @@ const keychainRoute =
         message: "keychain routes require an agent capability token",
       });
     const kc = deps.keychain;
-    return keychainErrors(res, () => handle(ctx, kc, capability));
+    return handle(ctx, kc, capability);
   };
 
 const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, scopeId }) => {
@@ -287,9 +277,7 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const { keychainApprovals } = deps;
   const decision = b.decision;
   const principalId = b.principalId;
-  return keychainErrors(res, async () =>
-    sendJson(res, 200, await keychainApprovals.decide(params.id!, { externalId: principalId }, decision)),
-  );
+  return sendJson(res, 200, await keychainApprovals.decide(params.id!, { externalId: principalId }, decision));
 }
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
