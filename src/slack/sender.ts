@@ -18,7 +18,7 @@ import {
   slackReplyArgs,
 } from "./delivery.ts";
 import { createThreadTracker, dmThreadRef } from "./message-gating.ts";
-import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
+import { escapeSlackText, slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import { stripReactionDirectives, applyReactions } from "./reactions.ts";
 import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -64,10 +64,7 @@ export function createSlackSender(deps: {
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
     if (!base || !id) return attribution;
-    const title = (d.provenance?.sourceTitle?.trim() || "Cron")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
+    const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [
       ...attribution,
       { type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true },
@@ -88,14 +85,53 @@ export function createSlackSender(deps: {
     return client;
   }
 
+  const runIdOf = (d: Post): string | undefined =>
+    d.idempotencyKey.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+
+  function bodyOf(d: Post, text: string): { text: string; blocks?: Array<Record<string, unknown>> } {
+    const footer = deliveryFooter(d);
+    if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
+    if (!footer.length) return { text };
+    return { text, blocks: [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }] };
+  }
+
+  async function uploadOrNote(client: any, channel: string, root: string | undefined, d: Post): Promise<void> {
+    if (!d.attachments?.length) return;
+    try {
+      await uploadAttachments(client, channel, root, d.attachments, core);
+    } catch (err) {
+      console.error(`[slack-plugin] delivery ${d.idempotencyKey} attachment upload failed:`, errMessage(err));
+      await client.chat
+        .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
+        .catch(swallowAs("slack: post upload-failure note", undefined));
+    }
+  }
+
+  async function quietly(
+    d: Post,
+    op: () => Promise<unknown>,
+    settledCodes: Set<string>,
+    what: string,
+    note = "",
+  ): Promise<void> {
+    try {
+      await op();
+    } catch (err) {
+      const code = slackErrorCode(err);
+      if (!code || !settledCodes.has(code))
+        console.error(`[slack-plugin] delivery ${d.idempotencyKey} ${what}: ${code ?? (err as Error).message}${note}`);
+    }
+  }
+
   async function postToConversation(d: Post): Promise<PostReceipt | void> {
     const client = deliveryClient(d.destination);
-    const runId = d.idempotencyKey.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+    const runId = runIdOf(d);
     const source = destinationSource(d.destination);
     const namespace = deps.externalNamespace?.(source.account ?? "default");
+    const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
     if (
       namespace &&
-      (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
+      (channel.startsWith("D")
         ? runId && source.policyNamespace !== namespace
         : !d.provenance?.sourceThreadRef.startsWith(`${namespace}:`))
     ) {
@@ -111,52 +147,36 @@ export function createSlackSender(deps: {
       continuation.task &&
       d.provenance?.sourceThreadRef.startsWith("external-slack:") &&
       deps.continuePrivate
-    ) {
-      await deps.continuePrivate(runId, continuation.task);
-      return undefined;
-    }
+    )
+      return deps.continuePrivate(runId, continuation.task);
     const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
-    const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
-    if (d.destination.keychainAskId) {
-      await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
-      return undefined;
-    }
-    if (d.destination.react) {
-      const { messageTs, emoji } = d.destination.react;
-      const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
+    const { keychainAskId, react, pin, delete: del } = d.destination;
+    if (keychainAskId) return deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
+    if (react) {
+      const { failed } = await applyReactions(client, channel, react.messageTs, [react.emoji]);
       if (failed.length)
         console.error(
           `[slack-plugin] delivery ${d.idempotencyKey} reaction(s) failed: ${failed.join(", ")} (check reactions:write / message ts)`,
         );
-      return undefined;
+      return;
     }
-    if (d.destination.pin) {
-      const { messageTs, remove } = d.destination.pin;
-      try {
-        if (remove) await client.pins.remove({ channel, timestamp: messageTs });
-        else await client.pins.add({ channel, timestamp: messageTs });
-      } catch (err) {
-        const code = slackErrorCode(err);
-        if (!code || !SETTLED_PIN_ERRORS.has(code))
-          console.error(
-            `[slack-plugin] delivery ${d.idempotencyKey} native ${remove ? "unpin" : "pin"} failed: ${code ?? (err as Error).message}`,
-          );
-      }
-      return undefined;
+    if (pin) {
+      const args = { channel, timestamp: pin.messageTs };
+      return quietly(
+        d,
+        () => (pin.remove ? client.pins.remove(args) : client.pins.add(args)),
+        SETTLED_PIN_ERRORS,
+        `native ${pin.remove ? "unpin" : "pin"} failed`,
+      );
     }
-    if (d.destination.delete) {
-      const { messageTs } = d.destination.delete;
-      try {
-        await client.chat.delete({ channel, ts: messageTs });
-      } catch (err) {
-        const code = slackErrorCode(err);
-        if (code !== "message_not_found")
-          console.error(
-            `[slack-plugin] delivery ${d.idempotencyKey} delete failed: ${code ?? (err as Error).message} (own messages only)`,
-          );
-      }
-      return undefined;
-    }
+    if (del)
+      return quietly(
+        d,
+        () => client.chat.delete({ channel, ts: del.messageTs }),
+        new Set(["message_not_found"]),
+        "delete failed",
+        " (own messages only)",
+      );
     let editRef = d.destination.editRef;
     if (!editRef && runId) {
       const placeholder = await findPostedByKey(
@@ -170,104 +190,76 @@ export function createSlackSender(deps: {
         editRef = placeholder.ts;
       }
     }
-    let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
-    const replayAttachments = async (root?: string): Promise<void> => {
-      if (!d.attachments?.length) return;
-      try {
-        await uploadAttachments(client, channel, root, d.attachments, core);
-      } catch (err) {
-        console.error(
-          "%s",
-          `[slack-plugin] delivery ${d.idempotencyKey} attachment upload failed:`,
-          (err as Error).message,
-        );
-        await client.chat
-          .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
-          .catch(swallowAs("slack: post upload-failure note", undefined));
-      }
-    };
-    const messageFooter = deliveryFooter(d);
-    if (!text.trim() && !messageFooter.length && d.attachments?.length) text = "Files attached.";
-    const footer = [...messageFooter];
-    const footerBlocks = footer.length
-      ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
-      : undefined;
-    if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
-      if (editRef) {
+    const { text, blocks } = bodyOf(
+      d,
+      toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text)),
+    );
+    if (!text.trim() && !(blocks && d.attachments?.length)) {
+      if (editRef)
         await client.chat
           .delete({ channel, ts: editRef })
           .catch(swallowAs("slack: delete status placeholder", undefined));
-      }
-      await replayAttachments(threadTs);
+      await uploadOrNote(client, channel, threadTs, d);
       if (d.attachments?.length && threadTs) threads.mark(channel, threadTs, true);
-      return undefined;
+      return;
     }
     const verifyOldest = recoveryVerifyOldest(d.createdAt, editRef);
-    const deliveredMarker = (): Promise<{ ts: string; channel: string } | undefined> =>
-      findPostedByKey(
-        postClient,
-        { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
-        d.idempotencyKey,
-        verifyOldest ?? String(Date.now() / 1000 - 60),
-      ).catch(swallowAs("slack: delivered-marker probe", undefined));
+    const unfurlLinks = runId ? false : d.destination.unfurlLinks;
     if (editRef) {
-      const unfurlLinks = runId ? false : d.destination.unfurlLinks;
       try {
-        const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
+        const alreadyDelivered = d.attachments?.length
+          ? await findPostedByKey(
+              postClient,
+              { channel, ...(threadTs ? { thread_ts: threadTs } : {}) },
+              d.idempotencyKey,
+              verifyOldest ?? String(Date.now() / 1000 - 60),
+            ).catch(swallowAs("slack: delivered-marker probe", undefined))
+          : undefined;
         await client.chat.update({
           channel,
           ts: editRef,
           text,
-          ...(footerBlocks ? { blocks: footerBlocks } : {}),
+          ...(blocks ? { blocks } : {}),
           ...botIdentityArgs(),
           metadata: deliveryMetadata(d.idempotencyKey),
           ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
         });
         if (threadTs) threads.mark(channel, threadTs, true);
-        if (!alreadyDelivered) await replayAttachments(threadTs);
-        return undefined;
+        if (!alreadyDelivered) await uploadOrNote(client, channel, threadTs, d);
+        return;
       } catch (e) {
         swallow("slack: finalize recovered reply in place", e);
       }
     }
     const res = await postWithVerify(
       postClient,
-      {
-        ...slackReplyArgs(channel, text, threadTs, {
-          unfurlLinks: runId ? false : d.destination.unfurlLinks,
-        }),
-        ...(footerBlocks ? { blocks: footerBlocks } : {}),
-      },
+      { ...slackReplyArgs(channel, text, threadTs, { unfurlLinks }), ...(blocks ? { blocks } : {}) },
       d.idempotencyKey,
       runId || d.retry ? { verifyFirst: true, ...(verifyOldest ? { verifyOldest } : {}) } : undefined,
     );
     const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
     if (root) threads.mark(channel, root, true);
-    if (!res.reused) await replayAttachments(root);
-    return undefined;
+    if (!res.reused) await uploadOrNote(client, channel, root, d);
   }
 
   async function postToPrincipal(d: Post): Promise<PostReceipt | void> {
     const client = deliveryClient(d.destination);
-    if (d.destination.keychainAskId) {
-      const dm = await openConversationFor(client, [d.destination.target]);
-      await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, deps.webUiPublicUrl);
-      return undefined;
+    const { keychainAskId, commandApprovalId, deploymentAccess, target, threadTs } = d.destination;
+    if (keychainAskId) {
+      const dm = await openConversationFor(client, [target]);
+      return deliverKeychainCard(core, client, d, dm, threadTs, deps.webUiPublicUrl);
     }
-    const commandApproval = d.destination.commandApprovalId
-      ? await core.getApproval(d.destination.commandApprovalId)
-      : null;
+    const commandApproval = commandApprovalId ? await core.getApproval(commandApprovalId) : null;
     const requester = approvalDeliveryRecipient(commandApproval?.request?.actor as { externalId?: string } | undefined);
     if (
-      d.destination.commandApprovalId &&
+      commandApprovalId &&
       (!commandApproval ||
         !requester ||
-        !samePerson(requester, d.destination.target) ||
-        d.idempotencyKey !== approvalDeliveryKey(d.destination.commandApprovalId, commandApproval))
+        !samePerson(requester, target) ||
+        d.idempotencyKey !== approvalDeliveryKey(commandApprovalId, commandApproval))
     )
-      return undefined;
-    let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
-    if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
+      return;
+    let card = deploymentAccess ? deployAccessMessage(deploymentAccess, d.text) : undefined;
     if (commandApproval)
       card = approvalMessage([
         {
@@ -280,18 +272,12 @@ export function createSlackSender(deps: {
             : {}),
         },
       ]);
-    let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
-    if (!text.trim() && !d.attachments?.length) return undefined;
-    const channel = await openConversationFor(client, [d.destination.target]);
-    const threadTs = d.destination.threadTs;
-    const footer = deliveryFooter(d);
-    if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
-    const blocks =
-      card?.blocks ??
-      (footer.length
-        ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
-        : undefined);
-    let uploadError: unknown;
+    const draft = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
+    if (!draft.trim() && !d.attachments?.length) return;
+    const channel = await openConversationFor(client, [target]);
+    const body = bodyOf(d, draft);
+    const { text } = body;
+    const blocks = card?.blocks ?? body.blocks;
     let reused = false;
     if (text.trim() || blocks) {
       const posted = await postWithVerify(
@@ -305,22 +291,7 @@ export function createSlackSender(deps: {
       );
       reused = Boolean(posted.reused);
     }
-    if (d.attachments?.length && !reused) {
-      try {
-        await uploadAttachments(client, channel, threadTs, d.attachments, core);
-      } catch (error) {
-        uploadError = error;
-        console.error(
-          `[slack-plugin] principal delivery ${d.idempotencyKey} attachment upload failed:`,
-          errMessage(error),
-        );
-      }
-    }
-    if (uploadError) {
-      await client.chat
-        .postMessage(slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs))
-        .catch(swallowAs("slack: post principal upload-failure note", undefined));
-    }
+    if (!reused) await uploadOrNote(client, channel, threadTs, d);
     return { recipientThreadRef: dmThreadRef(channel, threadTs) };
   }
 
@@ -328,7 +299,7 @@ export function createSlackSender(deps: {
     try {
       const receipt =
         post.destination.type === "principal" ? await postToPrincipal(post) : await postToConversation(post);
-      const runId = post.idempotencyKey.startsWith("run:") ? post.idempotencyKey.slice("run:".length) : undefined;
+      const runId = runIdOf(post);
       if (runId && !receipt?.deferred)
         await core.taskAcknowledgements
           ?.finish(deliveryClient(post.destination), runId)

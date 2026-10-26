@@ -3,29 +3,26 @@ import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
-export interface SlackReplyArgs {
-  channel: string;
-  text: string;
-  thread_ts?: string;
-  reply_broadcast?: false;
-  username?: string;
-  icon_emoji?: string;
-  unfurl_links?: boolean;
-  unfurl_media?: boolean;
-}
-
 export interface BotIdentityOverride {
   username?: string;
   icon_emoji?: string;
 }
 
+export interface SlackReplyArgs extends BotIdentityOverride {
+  channel: string;
+  text: string;
+  thread_ts?: string;
+  reply_broadcast?: false;
+  unfurl_links?: boolean;
+  unfurl_media?: boolean;
+}
+
+function botIdentity(username: string | undefined, icon_emoji: string | undefined): BotIdentityOverride {
+  return { ...(username ? { username } : {}), ...(icon_emoji ? { icon_emoji } : {}) };
+}
+
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
-  const username = (env.SLACK_BOT_DISPLAY_NAME ?? "").trim();
-  const icon_emoji = (env.SLACK_BOT_ICON_EMOJI ?? "").trim();
-  return {
-    ...(username ? { username } : {}),
-    ...(icon_emoji ? { icon_emoji } : {}),
-  };
+  return botIdentity(env.SLACK_BOT_DISPLAY_NAME?.trim(), env.SLACK_BOT_ICON_EMOJI?.trim());
 }
 
 let defaultIdentity: BotIdentityOverride = {};
@@ -34,11 +31,7 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
-  return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
-  };
+  return botIdentity(defaultIdentity.username, defaultIdentity.icon_emoji);
 }
 
 export function slackReplyArgs(
@@ -67,23 +60,14 @@ export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: str
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
 }
 
-export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId: string): string | undefined {
-  return scopeSurfaceUrl(webUiPublicUrl, `channel:${channelId}`);
-}
-
 export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
-  if (!surfaceUrl) {
-    return "QM here, ready to assist.";
-  }
-  return `QM here, ready to assist. Access my data and channel settings <${surfaceUrl}|here>.`;
+  return `QM here, ready to assist.${surfaceUrl ? ` Access my data and channel settings <${surfaceUrl}|here>.` : ""}`;
 }
 
 export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
-  const model = (facts.modelName ?? "").trim();
-  const url = (projectUrl ?? "").trim();
-  const modelText = model ? `Using ${model} here.` : "";
-  const link = url ? `<${url}|More settings>` : "";
-  return [modelText, link].filter(Boolean).join(" ") || undefined;
+  const model = facts.modelName?.trim();
+  const url = projectUrl?.trim();
+  return [model && `Using ${model} here.`, url && `<${url}|More settings>`].filter(Boolean).join(" ") || undefined;
 }
 
 function unwrapSlackLinks(text: string): string {
@@ -97,8 +81,7 @@ export function headerUpdate(
 ): "set" | "skip" {
   const value = (existing?.value ?? "").trim();
   if (unwrapSlackLinks(value) === unwrapSlackLinks(desired)) return "skip";
-  if (!value) return "set";
-  return existing?.creator === botUserId ? "set" : "skip";
+  return !value || existing?.creator === botUserId ? "set" : "skip";
 }
 
 const SURFACE_HEADER_MAX_TRACKED = 1000;
@@ -126,19 +109,15 @@ export interface PinnedItem {
 
 export function isSurfaceHeaderMessage(text: string | undefined): boolean {
   const t = (text ?? "").trim();
-  if (!t) return false;
-  return /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
+  return !!t && /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
 }
 
 export function findHeaderPin(
   items: PinnedItem[] | undefined,
   botUserId: string,
 ): { ts: string; text: string } | undefined {
-  for (const item of items ?? []) {
-    const m = item.message;
-    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
-  }
-  return undefined;
+  const m = items?.find(({ message: m }) => m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text))?.message;
+  return m?.ts ? { ts: m.ts, text: m.text ?? "" } : undefined;
 }
 
 const HEADER_PIN_OFF = "<surface-header-off>";
@@ -149,21 +128,20 @@ export function createSurfaceHeaderEnsurer(opts: {
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string };
   maxTracked?: number;
-}): (
-  client: SurfaceHeaderClient,
-  channel: string,
-  scopeId: string,
-  kind: "dm" | "channel",
-  ensureOpts?: { pinNew?: boolean },
-) => void {
+}) {
   const maxTracked = opts.maxTracked ?? SURFACE_HEADER_MAX_TRACKED;
   const settled = new Map<string, string>();
   const inFlight = new Set<string>();
   const requeued = new Map<string, { pinNew?: boolean }>();
-  return function ensure(client, channel, scopeId, kind, ensureOpts) {
+  return function ensure(
+    client: SurfaceHeaderClient,
+    channel: string,
+    scopeId: string,
+    kind: "dm" | "channel",
+    ensureOpts?: { pinNew?: boolean },
+  ): void {
     if (inFlight.has(channel)) {
-      const prior = requeued.get(channel);
-      requeued.set(channel, { pinNew: Boolean(prior?.pinNew) || Boolean(ensureOpts?.pinNew) });
+      requeued.set(channel, { pinNew: Boolean(requeued.get(channel)?.pinNew || ensureOpts?.pinNew) });
       return;
     }
     inFlight.add(channel);
@@ -200,7 +178,7 @@ export function createSurfaceHeaderEnsurer(opts: {
           }
         }
         settled.set(channel, goal);
-        capMap(settled, maxTracked);
+        while (settled.size > maxTracked) settled.delete(settled.keys().next().value!);
       } catch (err) {
         console.error("[slack] surface header ensure failed:", errMessage(err));
       } finally {
@@ -231,7 +209,7 @@ export async function onBotJoinedChannel(opts: {
 }): Promise<void> {
   const { client, channel, joinerUserId, botUserId, webUiPublicUrl, syncDirectory, ensureHeader } = opts;
   if (!channel || !joinerUserId || joinerUserId !== botUserId) return;
-  const surfaceUrl = channelSurfaceUrl(webUiPublicUrl, channel);
+  const surfaceUrl = scopeSurfaceUrl(webUiPublicUrl, `channel:${channel}`);
   try {
     const info = (await client.conversations.info({ channel })).channel;
     if (!isExternallyShared(info)) {
@@ -243,28 +221,20 @@ export async function onBotJoinedChannel(opts: {
   } catch {
     void 0;
   }
-  try {
-    await syncDirectory();
-  } catch {
-    void 0;
-  }
+  await syncDirectory().catch(() => undefined);
 }
 
 export function encodeDeliveryTarget(channel: string, threadTs?: string): string {
   return threadTs ? `${channel}:${threadTs}` : channel;
 }
 
-async function slackUserIdFor(client: any, principalId: string): Promise<string> {
-  if (!principalId.includes("@")) return principalId;
-  const res = (await client.users.lookupByEmail({ email: principalId })) as { user?: { id?: string } };
-  const id = res?.user?.id;
-  if (!id) throw new Error(`no Slack member found for ${principalId}`);
-  return id;
-}
-
 export async function openConversationFor(client: any, principalIds: readonly string[]): Promise<string> {
   const users: string[] = [];
-  for (const p of principalIds) users.push(await slackUserIdFor(client, p));
+  for (const p of principalIds) {
+    const id = p.includes("@") ? (await client.users.lookupByEmail({ email: p }))?.user?.id : p;
+    if (!id) throw new Error(`no Slack member found for ${p}`);
+    users.push(id);
+  }
   const opened = (await client.conversations.open({ users: users.join(",") })) as { channel?: { id?: string } };
   const channel = opened?.channel?.id;
   if (!channel) throw new Error("conversations.open returned no channel");
@@ -293,13 +263,7 @@ export function deliveryCandidatesFor(
   ];
 }
 
-function capMap<K, V>(map: Map<K, V>, max: number): void {
-  while (map.size > max) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) return;
-    map.delete(oldest);
-  }
-}
+type DeliveryMetadata = { event_type: string; event_payload: Record<string, unknown> };
 
 export interface PostMessageArgs {
   channel: string;
@@ -309,34 +273,23 @@ export interface PostMessageArgs {
   [key: string]: unknown;
 }
 
-export interface DeliveryMetadata {
-  event_type: string;
-  event_payload: Record<string, unknown>;
-}
-
 export function deliveryMetadata(idempotencyKey: string): DeliveryMetadata {
   return { event_type: "qm_delivery", event_payload: { idempotency_key: idempotencyKey } };
 }
+type ScanArgs = {
+  channel: string;
+  limit: number;
+  include_all_metadata: boolean;
+  oldest: string;
+  inclusive: boolean;
+  cursor?: string;
+};
+
 export interface PostVerifyClient {
   chat: { postMessage(args: PostMessageArgs): Promise<unknown> };
   conversations: {
-    history(args: {
-      channel: string;
-      limit: number;
-      include_all_metadata: boolean;
-      oldest: string;
-      inclusive: boolean;
-      cursor?: string;
-    }): Promise<unknown>;
-    replies(args: {
-      channel: string;
-      ts: string;
-      limit: number;
-      include_all_metadata: boolean;
-      oldest: string;
-      inclusive: boolean;
-      cursor?: string;
-    }): Promise<unknown>;
+    history(args: ScanArgs): Promise<unknown>;
+    replies(args: ScanArgs & { ts: string }): Promise<unknown>;
   };
 }
 
@@ -357,10 +310,9 @@ export async function findPostedByKey(
       inclusive: true,
       ...(cursor ? { cursor } : {}),
     };
-    const scan = args.thread_ts
-      ? await client.conversations.replies({ ...paging, ts: args.thread_ts })
-      : await client.conversations.history(paging);
-    const page = scan as {
+    const page = (await (args.thread_ts
+      ? client.conversations.replies({ ...paging, ts: args.thread_ts })
+      : client.conversations.history(paging))) as {
       messages?: Array<{
         ts?: string;
         metadata?: { event_type?: string; event_payload?: { idempotency_key?: string } };
@@ -392,16 +344,7 @@ export const SLACK_TEXT_LIMIT = 40000;
 
 export const SLACK_POST_SPLIT_LIMIT = 3_800;
 
-export interface PostedPart {
-  ts: string | undefined;
-  channel: string;
-  reused?: boolean;
-  text: string;
-}
-
-function splitPostKey(idempotencyKey: string, partIndex: number): string {
-  return partIndex === 0 ? idempotencyKey : `${idempotencyKey}#p${partIndex + 1}`;
-}
+type PostedPart = { ts: string | undefined; channel: string; reused?: boolean; text: string };
 
 export async function postWithVerify(
   client: PostVerifyClient,
@@ -426,23 +369,17 @@ export async function postWithVerify(
   if (batches.length) {
     const parts: PostedPart[] = [];
     for (const [i, batch] of batches.entries()) {
-      const text = batch.text ?? "";
-      const res = await postWithVerify(client, batch, splitPostKey(idempotencyKey, i), {
+      const res = await postWithVerify(client, batch, i === 0 ? idempotencyKey : `${idempotencyKey}#p${i + 1}`, {
         ...opts,
         verifyFirst: true,
         verifyBestEffort: !opts?.verifyFirst,
       });
-      parts.push({
-        ts: res.ts,
-        channel: res.channel,
-        ...(res.reused !== undefined ? { reused: res.reused } : {}),
-        text,
-      });
+      const { ts, channel, reused } = res;
+      parts.push({ ts, channel, ...(reused !== undefined ? { reused } : {}), text: batch.text ?? "" });
     }
-    const first = parts[0]!;
     return {
-      ts: first.ts,
-      channel: first.channel,
+      ts: parts[0]!.ts,
+      channel: parts[0]!.channel,
       ...(parts.every((p) => p.reused) ? { reused: true } : {}),
       parts,
     };
@@ -454,9 +391,8 @@ export async function postWithVerify(
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);
   args.metadata = deliveryMetadata(idempotencyKey);
   if (opts?.verifyFirst) {
-    const found = opts.verifyBestEffort
-      ? await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(swallowAs("slack: part verify", null))
-      : await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+    const verify = findPostedByKey(client, args, idempotencyKey, verifyOldest);
+    const found = await (opts.verifyBestEffort ? verify.catch(swallowAs("slack: part verify", null)) : verify);
     if (found) return { ...found, reused: true };
   }
   let lastErr: unknown;
@@ -468,20 +404,13 @@ export async function postWithVerify(
       lastErr = err;
       const code = (err as { code?: string }).code;
       if (code === "slack_webapi_platform_error") throw err;
-      if (code === "slack_webapi_rate_limited_error") {
-        const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
-        await sleep(retryAfter * 1000);
-        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(() => undefined);
-        if (found) return { ...found, reused: true };
-        continue;
-      }
-      let found: { ts: string; channel: string } | undefined;
-      try {
-        found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-      } catch {
+      const limited = code === "slack_webapi_rate_limited_error";
+      if (limited) await sleep(((err as { retryAfter?: number }).retryAfter ?? 1) * 1000);
+      const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(() => {
+        if (limited) return undefined;
         throw err;
-      }
-      if (found) return found;
+      });
+      if (found) return limited ? { ...found, reused: true } : found;
     }
   }
   throw lastErr;

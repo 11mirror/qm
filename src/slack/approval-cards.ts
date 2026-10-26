@@ -9,6 +9,10 @@ export function inlineCode(text: string): string {
   return `\`${safe}${cleaned.length > safe.length ? "..." : ""}\``;
 }
 
+export function slackLink(url: string | undefined, label: string): string {
+  return url && /^https?:\/\//.test(url) ? `<${url.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${label}>` : label;
+}
+
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
 export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
 
@@ -32,31 +36,13 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 
-function button(
-  text: string,
-  actionId: ApprovalActionId,
-  value: string,
-  style?: "primary" | "danger",
-): Record<string, unknown> {
-  return {
-    type: "button",
-    text: { type: "plain_text", text },
-    action_id: actionId,
-    value,
-    ...(style ? { style } : {}),
-  };
-}
-
-export interface ApprovalCardDestination {
-  toDm: boolean;
-  channelPointer: string;
-}
-
-export function approvalCardDestination(threadOnly: boolean): ApprovalCardDestination {
-  return threadOnly
-    ? { toDm: true, channelPointer: "I sent you a DM to approve before I run that." }
-    : { toDm: false, channelPointer: "" };
-}
+const button = (text: string, action_id: ApprovalActionId, value: string, style?: "primary" | "danger") => ({
+  type: "button",
+  text: { type: "plain_text", text },
+  action_id,
+  value,
+  ...(style ? { style } : {}),
+});
 
 interface ToolCallView {
   label: string;
@@ -138,7 +124,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
       lines.push(
         shown
           ? commandHeading
-          : `${commandHeading} too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
+          : `${commandHeading} too long to show in Slack. Open ${slackLink(p.originUrl, "this conversation in QM")} on the web to review and approve it.`,
       );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${safeClip(p.reason, 200)}`);
@@ -232,36 +218,26 @@ export function approvalDecisionMessage(
   };
 }
 
-export interface StoredApproval {
-  requestId: string;
-  command: string;
+export type StoredApproval = Omit<PendingApproval, "reason" | "originUrl"> & {
   reason?: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
-}
+};
 
-export interface RecoveredApprovalContext {
-  requesterId: string;
-  channel: string;
-  replyThreadTs?: string;
-  threadOnly: boolean;
-  approvalChannel: string;
-  command: string;
-  reason: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
-  turn: Record<string, unknown>;
+type ApprovalDetails = Pick<PendingApproval, "purpose" | "summary" | "kind" | "grantModes">;
+
+export function approvalDetails(p: ApprovalDetails): ApprovalDetails {
+  return {
+    ...(p.purpose ? { purpose: p.purpose } : {}),
+    ...(p.summary ? { summary: p.summary } : {}),
+    ...(p.kind ? { kind: p.kind } : {}),
+    ...(p.grantModes ? { grantModes: p.grantModes } : {}),
+  };
 }
 
 export function recoveredApprovalContext(
   stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "request">,
   click: { channel: string; threadTs?: string },
-): RecoveredApprovalContext | null {
+) {
   const req = stored.request as
     | (Record<string, unknown> & {
         actor?: { externalId?: unknown };
@@ -293,48 +269,26 @@ export function recoveredApprovalContext(
     approvalChannel: click.channel,
     command: stored.command,
     reason: stored.reason ?? "requires approval",
-    ...(stored.purpose ? { purpose: stored.purpose } : {}),
-    ...(stored.summary ? { summary: stored.summary } : {}),
-    ...(stored.kind ? { kind: stored.kind } : {}),
-    ...(stored.grantModes ? { grantModes: stored.grantModes } : {}),
+    ...approvalDetails(stored),
     turn,
   };
 }
 
-type ApprovalBegin<T> = { state: "missing" } | { state: "busy" } | { state: "ready"; ctx: T };
-
-export interface ApprovalRegistry<T> {
-  remember(id: string, ctx: T): void;
-  get(id: string): T | undefined;
-  busy(id: string): boolean;
-  begin(id: string): ApprovalBegin<T>;
-  settle(id: string): void;
-  release(id: string): void;
-}
-
-export function createApprovalRegistry<T>(): ApprovalRegistry<T> {
+export function createApprovalRegistry<T>() {
   const pending = new Map<string, { ctx: T; inFlight: boolean }>();
   return {
-    remember(id, ctx) {
-      pending.set(id, { ctx, inFlight: false });
-    },
-    get(id) {
-      return pending.get(id)?.ctx;
-    },
-    busy(id) {
-      return pending.get(id)?.inFlight === true;
-    },
-    begin(id) {
+    remember: (id: string, ctx: T) => void pending.set(id, { ctx, inFlight: false }),
+    get: (id: string) => pending.get(id)?.ctx,
+    busy: (id: string) => pending.get(id)?.inFlight === true,
+    begin(id: string): { state: "missing" } | { state: "busy" } | { state: "ready"; ctx: T } {
       const entry = pending.get(id);
       if (!entry) return { state: "missing" };
       if (entry.inFlight) return { state: "busy" };
       entry.inFlight = true;
       return { state: "ready", ctx: entry.ctx };
     },
-    settle(id) {
-      pending.delete(id);
-    },
-    release(id) {
+    settle: (id: string) => void pending.delete(id),
+    release(id: string) {
       const entry = pending.get(id);
       if (entry) entry.inFlight = false;
     },

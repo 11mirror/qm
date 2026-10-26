@@ -10,7 +10,6 @@ import {
   postWithVerify,
   SLACK_POST_SPLIT_LIMIT,
   recoveryVerifyOldest,
-  channelSurfaceUrl,
   channelWelcomeMessage,
   surfaceHeaderText,
   headerUpdate,
@@ -151,15 +150,15 @@ function fakeJoinClient(
   };
 }
 
-test("channelSurfaceUrl builds the project deep link and degrades when unset", () => {
-  assert.equal(channelSurfaceUrl(WEB_BASE, "C123"), `${WEB_BASE}/projects/channel/C123`);
-  assert.equal(channelSurfaceUrl("https://x/web-ui/", "C9"), "https://x/web-ui/projects/channel/C9");
-  assert.equal(channelSurfaceUrl(undefined, "C1"), undefined);
-  assert.equal(channelSurfaceUrl("", "C1"), undefined);
+test("scopeSurfaceUrl builds the channel project deep link and degrades when unset", () => {
+  assert.equal(scopeSurfaceUrl(WEB_BASE, "channel:C123"), `${WEB_BASE}/projects/channel/C123`);
+  assert.equal(scopeSurfaceUrl("https://x/web-ui/", "channel:C9"), "https://x/web-ui/projects/channel/C9");
+  assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
+  assert.equal(scopeSurfaceUrl("", "channel:C1"), undefined);
 });
 
 test("channelWelcomeMessage includes the link when present, omits it cleanly when not", () => {
-  const url = channelSurfaceUrl(WEB_BASE, "C1")!;
+  const url = scopeSurfaceUrl(WEB_BASE, "channel:C1")!;
   assert.ok(channelWelcomeMessage(url).includes(url));
   const linkless = channelWelcomeMessage(undefined);
   assert.ok(!linkless.includes("http"));
