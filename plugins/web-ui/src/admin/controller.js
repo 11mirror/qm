@@ -715,17 +715,15 @@ export function startAdmin(host, env) {
     );
   }
 
-  function navLink(label, target) {
-    const a = document.createElement("a");
-    a.className = "link";
-    a.textContent = label;
-    a.href = stateToUrl(target);
-    a.onclick = (e) => {
+  function linkClick(go) {
+    return (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      go(target);
+      go();
     };
-    return a;
+  }
+  function navLink(label, target) {
+    return el("a.link", { textContent: label, href: stateToUrl(target), onclick: linkClick(() => go(target)) });
   }
 
   function defaultShell(extras = {}) {
@@ -1740,50 +1738,40 @@ export function startAdmin(host, env) {
     root.textContent = "";
     if (["files", "memory", "skills", "crons", "deployments"].includes(view))
       return governanceUI.artifacts[view](root, data, artifactContext());
-    if (["errors", "audit", "egress"].includes(view)) return governanceUI.activity[view](root, data, activityContext());
+    if (["errors", "audit", "egress"].includes(view))
+      return governanceUI.activity[view](root, data, {
+        ...helpers(),
+        all: orgWideView(),
+        scope,
+        errorsPageSize: ERRORS_PAGE_SIZE,
+      });
     ({ spend: renderSpend, history: renderHistory, users: renderUsers, keychain: renderKeychain })[view](root, data);
   }
   async function renderData() {
     const root = $("view-data");
     const reqId = ++dataReq;
-    const q = "scope=" + encodeURIComponent(scope);
     const ep = view === "history" ? "sessions" : view;
-    let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
-
+    let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?scope=${encodeURIComponent(scope)}`;
     if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
     if (view === "history") {
       path += `&limit=50&category=${encodeURIComponent(historyCategory(historyKind))}`;
       if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
-      if (historyKind === "cron") {
-        path += `&origin=${encodeURIComponent(historyKind)}`;
-        const cronSel = urlToState().cron;
-        if (cronSel) path += `&cron=${encodeURIComponent(cronSel)}`;
-      }
+      const cronSel = urlToState().cron;
+      if (historyKind === "cron") path += `&origin=cron` + (cronSel ? `&cron=${encodeURIComponent(cronSel)}` : "");
       if (historyKind === "background") path += "&origin=other_background";
     }
     if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
     if (view === "spend") path += `?${spendQuery(urlToState())}`;
     const cacheable = view !== "memory";
     const cached = cacheable ? dataCache.get(path) : undefined;
-    if (cached !== undefined) {
-      paintData(root, cached);
-    } else {
-      root.textContent = "";
-      const loading = document.createElement("div");
-      loading.className = "loadingline";
-      loading.textContent = "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "...";
-      root.appendChild(loading);
-    }
+    if (cached !== undefined) paintData(root, cached);
+    else root.replaceChildren(el("div.loadingline", "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "..."));
     const r = await api("GET", path);
     if (reqId !== dataReq) return;
     if (!r.ok) {
-      if (cached !== undefined) return;
-      root.textContent = "";
-      const p = document.createElement("p");
-      p.className = "empty";
-      p.textContent =
+      const message =
         r.status === 403 ? "You don't administer this scope." : r.data?.message || `Failed to load (${r.status}).`;
-      root.appendChild(p);
+      if (cached === undefined) root.replaceChildren(el("p.empty", message));
       return;
     }
     if (cacheable) dataCache.set(path, r.data);
@@ -1791,27 +1779,20 @@ export function startAdmin(host, env) {
     paintData(root, r.data);
   }
   function kpis(items, className = "") {
-    const wrap = document.createElement("div");
-    wrap.className = "kpis";
+    const kpi = ([n, k]) => el("div.kpi", {}, el("div.n", { textContent: n }), el("div.k", { textContent: k }));
+    const wrap = el("div.kpis", {}, ...items.map(kpi));
     if (className) wrap.classList.add(className);
-    items.forEach(([n, k]) => {
-      const d = document.createElement("div");
-      d.className = "kpi";
-      const a = document.createElement("div");
-      a.className = "n";
-      a.textContent = n;
-      const b = document.createElement("div");
-      b.className = "k";
-      b.textContent = k;
-      d.append(a, b);
-      wrap.appendChild(d);
-    });
     return wrap;
   }
-
   function spendQuery(st) {
     const { from, to, bucket } = governanceUI.spend.spendWindow(st);
     return new URLSearchParams({ from, to, bucket }).toString();
+  }
+  function clickLink(props) {
+    const a = el("a", { rel: "noreferrer", ...props });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
   const openUser = (principal) => go({ view: "user", scope, session: null, principal });
   function renderSpend(root, d) {
@@ -1822,24 +1803,12 @@ export function startAdmin(host, env) {
         go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
       setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
       setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
-      downloadCsv: (breakdown = "entity") => {
-        const a = document.createElement("a");
-        a.href =
-          API_BASE + "/spend?format=csv&breakdown=" + encodeURIComponent(breakdown) + "&" + spendQuery(urlToState());
-        a.rel = "noreferrer";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      },
+      downloadCsv: (breakdown = "entity") =>
+        clickLink({
+          href:
+            API_BASE + "/spend?format=csv&breakdown=" + encodeURIComponent(breakdown) + "&" + spendQuery(urlToState()),
+        }),
     });
-  }
-  function activityContext() {
-    return {
-      ...helpers(),
-      all: orgWideView(),
-      scope,
-      errorsPageSize: ERRORS_PAGE_SIZE,
-    };
   }
   async function adminErrors(query) {
     const r = await api("GET", "/api/errors?" + query);
@@ -1850,40 +1819,18 @@ export function startAdmin(host, env) {
     return r.ok ? Number(r.data?.total || 0) : 0;
   }
   function errorStripBox(errs, headText, max, rowLink) {
-    const box = document.createElement("div");
-    box.className = "error-strip";
-    const head = document.createElement("div");
-    head.className = "error-strip-head";
-    head.textContent = headText;
-    box.appendChild(head);
+    const box = el("div.error-strip", {}, el("div.error-strip-head", headText));
     errs.slice(0, max).forEach((e) => {
       const link = rowLink ? rowLink(e) : null;
-      const row = document.createElement(link ? "a" : "div");
-      row.className = "error-strip-row";
-      if (link) {
-        row.href = link.href;
-        row.onclick = (ev) => {
-          if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-          ev.preventDefault();
-          link.go();
-        };
-      }
-      const msg = document.createElement("span");
-      msg.className = "mono";
-      msg.textContent = firstLine(e.message || "(no message)", 160);
-      msg.title = e.message || "";
-      const meta = document.createElement("span");
-      meta.className = "subline";
-      meta.textContent = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
-      row.append(msg, meta);
+      const row = link
+        ? el("a.error-strip-row", { href: link.href, onclick: linkClick(link.go) })
+        : el("div.error-strip-row");
+      const msg = el("span.mono", { textContent: firstLine(e.message || "(no message)", 160), title: e.message || "" });
+      const meta = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
+      row.append(msg, el("span.subline", meta));
       box.appendChild(row);
     });
-    if (errs.length > max) {
-      const more = document.createElement("div");
-      more.className = "subline";
-      more.textContent = "…and " + (errs.length - max) + " more";
-      box.appendChild(more);
-    }
+    if (errs.length > max) box.appendChild(el("div.subline", "…and " + (errs.length - max) + " more"));
     return box;
   }
   function egressDetail(r) {
@@ -2243,11 +2190,7 @@ export function startAdmin(host, env) {
     renderChips();
     return pick;
   }
-  function renderKeychain(root, d) {
-    governanceUI.keychain.keychain(root, d, {
-      ...helpers(),
-    });
-  }
+  const renderKeychain = (root, d) => governanceUI.keychain.keychain(root, d, helpers());
   function renderUsers(root, d) {
     governanceUI.users.users(root, d, {
       ...helpers(),
@@ -3168,13 +3111,7 @@ export function startAdmin(host, env) {
       window.open(href, "_blank", "noreferrer");
       return;
     }
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = f.name || fileName(f.path);
-    a.rel = "noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    clickLink({ href, download: f.name || fileName(f.path) });
   }
 
   function helpers() {
