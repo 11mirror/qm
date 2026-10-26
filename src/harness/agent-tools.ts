@@ -722,12 +722,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         { tool: "execute", ...scopeNote, ...execMeta },
         {
-          content: [
-            {
-              type: "text" as const,
-              text: `${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
-            },
-          ],
+          ...text(`${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`),
           details: r,
         },
         r.timedOut,
@@ -1886,12 +1881,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         { tool: "execute", background: true, ...startMeta },
         {
-          content: [
-            {
-              type: "text" as const,
-              text: `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
-            },
-          ],
+          ...text(
+            `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
+          ),
           details: r,
         },
         false,
@@ -4198,6 +4190,7 @@ function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): T
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
+const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
@@ -4236,17 +4229,10 @@ function withToolApprovalGate(
     ...tool,
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
+      const resourceTool = RESOURCE_TOOL_NAMES.has(tool.name);
       const resourceAction =
-        ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(tool.name) &&
-        isObj(params) &&
-        typeof params.action === "string"
-          ? params.action
-          : undefined;
-      const approvalIdentity = ["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"].includes(
-        tool.name,
-      )
-        ? `${tool.name}:${resourceAction ?? "invalid"}`
-        : tool.name;
+        resourceTool && isObj(params) && typeof params.action === "string" ? params.action : undefined;
+      const approvalIdentity = resourceTool ? `${tool.name}:${resourceAction ?? "invalid"}` : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       let declaredReason: string | undefined;
       try {
@@ -4310,11 +4296,7 @@ function withToolApprovalGate(
             blocked: "needs_approval",
             reason,
           },
-          {
-            content: [{ type: "text" as const, text: `[blocked: needs human approval] ${reason}` }],
-            details: {},
-            terminate: true,
-          },
+          { ...text(`[blocked: needs human approval] ${reason}`), terminate: true },
           true,
         );
       }
@@ -4356,13 +4338,9 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
       const [, params] = args;
       if (ref.runtimeHandoff || ref.runtimeMutationPending)
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
-            },
-          ],
-          details: {},
+          ...text(
+            "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
+          ),
           terminate: !!ref.runtimeHandoff,
         };
       const mutation =
@@ -4372,11 +4350,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         try {
           await Promise.allSettled(ref.runtimeInFlight ?? []);
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
-            return {
-              content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
-              details: {},
-              terminate: true,
-            };
+            return { ...text("Runtime change cancelled before execution."), terminate: true };
           return await tool.execute(...args);
         } finally {
           ref.runtimeMutationPending = false;
