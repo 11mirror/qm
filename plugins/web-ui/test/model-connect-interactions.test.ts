@@ -70,15 +70,16 @@ test("AI account modal interactions", async (t) => {
   let fetcher: (path: string, init?: RequestInit) => Promise<Response>;
   globalThis.fetch = async (input, init) => fetcher(String(input), init);
   const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const root = () => doc.querySelector<HTMLElement>(".mc-overlay") ?? doc.querySelector<HTMLElement>("#app")!;
   const button = (label: string) => {
-    const found = [...doc.querySelectorAll<HTMLButtonElement>(".mc-overlay button")].find(
+    const found = [...root().querySelectorAll<HTMLButtonElement>("button")].find(
       (b) => b.textContent?.trim() === label || b.getAttribute("aria-label") === label,
     );
     assert.ok(found, `button ${label} exists`);
     return found;
   };
   const provider = (name: string) => {
-    const found = [...doc.querySelectorAll<HTMLElement>(".mc-provider")].find(
+    const found = [...root().querySelectorAll<HTMLElement>(".mc-provider")].find(
       (el) => el.querySelector("strong")?.textContent === name,
     );
     assert.ok(found, `provider ${name} exists`);
@@ -91,9 +92,13 @@ test("AI account modal interactions", async (t) => {
     assert.ok(found, `${name}: ${label} exists`);
     found.click();
   };
-  const open = async () => {
+  const open = async (apiName: "anthropic" | "openai") => {
     doc.querySelector<HTMLButtonElement>("#opener")!.focus();
-    openModelConnectManager();
+    openModelConnectManager(apiName);
+    await tick();
+  };
+  const gate = async () => {
+    renderModelConnectGate();
     await tick();
   };
   const close = () => doc.querySelector<HTMLButtonElement>(".mc-close")?.click();
@@ -113,16 +118,16 @@ test("AI account modal interactions", async (t) => {
 
   await t.test("Escape, focus trap, backdrop close, and focus restoration work", async () => {
     fetcher = base;
-    await open();
+    await open("openai");
     assert.equal(doc.activeElement, button("Close"));
-    const last = button("Done");
+    const last = button("Use an API key instead");
     last.focus();
     last.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
     assert.equal(doc.activeElement, button("Close"));
     button("Close").dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert.equal(doc.querySelector(".mc-overlay"), null);
     assert.equal(doc.activeElement?.id, "opener");
-    await open();
+    await open("openai");
     doc.querySelector<HTMLElement>(".mc-overlay .signin")!.click();
     assert.equal(doc.querySelector(".mc-overlay"), null);
   });
@@ -130,19 +135,18 @@ test("AI account modal interactions", async (t) => {
   await t.test("an initial status failure is retryable and never shows a guessed account", async () => {
     let fail = true;
     fetcher = async (path) => (fail ? Response.json({ error: "offline" }, { status: 503 }) : base(path));
-    await open();
+    await gate();
     assert.match(doc.querySelector("[role=alert]")!.textContent!, /offline/);
     assert.equal(doc.querySelector(".mc-providers"), null);
     fail = false;
     button("Retry").click();
     await tick();
     assert.ok(doc.querySelector(".mc-providers"));
-    close();
   });
 
   await t.test("switching providers clears key drafts; selecting the same method preserves them", async () => {
     fetcher = base;
-    await open();
+    await gate();
     providerButton("ChatGPT / Codex", "Connect");
     providerButton("ChatGPT / Codex", "Use an API key");
     const input = doc.querySelector<HTMLInputElement>("input")!;
@@ -156,7 +160,6 @@ test("AI account modal interactions", async (t) => {
     assert.equal(doc.querySelector<HTMLInputElement>("input")!.value, "");
     providerButton("Claude", "Cancel");
     assert.equal(doc.querySelector("input"), null);
-    close();
   });
 
   await t.test("a delayed sign-in response cannot overwrite a reopened modal", async () => {
@@ -167,18 +170,16 @@ test("AI account modal interactions", async (t) => {
             resolveStart = resolve;
           })
         : base(path);
-    await open();
+    await gate();
     providerButton("ChatGPT / Codex", "Connect");
     providerButton("ChatGPT / Codex", "Sign in with ChatGPT / Codex");
-    close();
-    await open();
+    await gate();
     providerButton("Claude", "Connect");
     providerButton("Claude", "Use an API key");
     resolveStart(Response.json(pendingDevice));
     await tick();
     assert.ok(provider("Claude").querySelector("input"));
     assert.equal(doc.querySelector(".mc-code"), null);
-    close();
   });
 
   await t.test("poll errors stay visible and allow a fresh sign-in", async () => {
@@ -189,7 +190,7 @@ test("AI account modal interactions", async (t) => {
         ? Promise.resolve(Response.json({ message: "login expired or unknown" }, { status: 502 }))
         : base(path);
     };
-    await open();
+    await gate();
     providerButton("ChatGPT / Codex", "Connect");
     providerButton("ChatGPT / Codex", "Sign in with ChatGPT / Codex");
     await tick();
@@ -197,38 +198,39 @@ test("AI account modal interactions", async (t) => {
     providerButton("ChatGPT / Codex", "Sign in with ChatGPT / Codex");
     await tick();
     assert.equal(starts, 2);
-    close();
   });
 
-  await t.test("an in-flight successful poll cannot overlap a key save or reopened modal", async () => {
+  await t.test("an in-flight successful poll blocks key entry and closing, then activates the account", async () => {
     let resolvePoll!: (response: Response) => void;
     let connected = false;
-    fetcher = (path) => {
+    let account = "company";
+    fetcher = (path, init) => {
       if (path.endsWith("/chatgpt/poll"))
         return new Promise((resolve) => {
           resolvePoll = resolve;
         });
-      if (path.endsWith("/status"))
+      if (path.endsWith("/account")) account = JSON.parse(String(init?.body)).provider;
+      if (path.endsWith("/status") || path.endsWith("/account"))
         return Promise.resolve(
-          Response.json(status("company", connected ? [{ provider: "openai", kind: "oauth" }] : [])),
+          Response.json(status(account, connected ? [{ provider: "openai", kind: "oauth" }] : [])),
         );
       return base(path);
     };
-    await open();
-    providerButton("ChatGPT / Codex", "Connect");
-    providerButton("ChatGPT / Codex", "Sign in with ChatGPT / Codex");
-    await tick();
-    providerButton("ChatGPT / Codex", "Use an API key");
-    assert.equal(doc.querySelector("input"), null);
-    assert.equal(button("Cancel").disabled, true);
+    await open("openai");
+    assert.ok(root().querySelector(".mc-code"));
+    assert.equal(button("Use an API key instead").disabled, true);
+    assert.equal(button("Close").disabled, true);
     close();
+    doc
+      .querySelector(".mc-overlay")!
+      .dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert.ok(doc.querySelector(".mc-overlay"));
     connected = true;
     resolvePoll(Response.json({ status: "connected" }));
     await tick();
-    assert.ok(provider("ChatGPT / Codex").classList.contains("connected"));
-    assert.equal(button("Done").disabled, false);
-    close();
+    assert.equal(account, "openai");
+    assert.equal(appState.me.modelAuthConnected, true);
+    assert.equal(doc.querySelector(".mc-overlay"), null);
   });
 
   await t.test(
@@ -250,7 +252,7 @@ test("AI account modal interactions", async (t) => {
         }
         return Response.json(status(account, connected ? [{ provider: "anthropic", kind: "apikey" }] : []));
       };
-      await open();
+      await gate();
       providerButton("Claude", "Connect");
       providerButton("Claude", "Use an API key");
       const input = doc.querySelector<HTMLInputElement>("input")!;
@@ -264,15 +266,13 @@ test("AI account modal interactions", async (t) => {
       providerButton("Claude", "Connect");
       await tick();
       assert.ok(provider("Claude").classList.contains("connected"));
-      assert.equal(appState.me.individualModelAuth, false);
-      providerButton("Claude", "Use account");
-      await tick();
+      assert.equal(account, "anthropic");
+      assert.match(provider("Claude").textContent!, /In use/);
       providerButton("Claude", "Disconnect");
       await tick();
       assert.equal(appState.me.individualModelAuth, true);
       assert.equal(appState.me.modelAuthConnected, false);
       assert.match(doc.querySelector("[role=status]")!.textContent!, /Reconnect/);
-      close();
     },
   );
 
@@ -285,9 +285,9 @@ test("AI account modal interactions", async (t) => {
             resolveSave = resolve;
           })
         : Promise.resolve(Response.json(status("company", connections)));
-    await open();
+    await open("openai");
     providerButton("ChatGPT / Codex", "Use account");
-    assert.equal(button("Done").disabled, true);
+    assert.equal(button("Close").disabled, true);
     close();
     doc
       .querySelector(".mc-overlay")!
@@ -297,7 +297,7 @@ test("AI account modal interactions", async (t) => {
     resolveSave(Response.json(status("openai", connections)));
     await tick();
     assert.equal(appState.me.individualModelAuth, true);
-    assert.equal(button("Done").disabled, false);
+    assert.equal(button("Close").disabled, false);
     close();
     assert.equal(doc.querySelector(".mc-overlay"), null);
   });
@@ -314,7 +314,7 @@ test("AI account modal interactions", async (t) => {
       }
       return base(path);
     };
-    await open();
+    await gate();
     providerButton("Claude", "Connect");
     providerButton("Claude", "Use an API key");
     const input = doc.querySelector<HTMLInputElement>("input")!;
@@ -332,9 +332,8 @@ test("AI account modal interactions", async (t) => {
     resolveSave(Response.json({ error: "invalid_api_key" }, { status: 400 }));
     await tick();
     assert.equal(button("Cancel").disabled, false);
-    assert.equal(button("Done").disabled, false);
+    assert.equal(button("Start chatting").disabled, false);
     assert.equal(doc.querySelector<HTMLInputElement>("input")!.value, "test-only-key");
-    close();
   });
 
   await t.test("choosing a provider opens only its sign-in and activates it after connecting", async () => {
@@ -353,13 +352,12 @@ test("AI account modal interactions", async (t) => {
       }
       return base(path);
     };
-    openModelConnectManager("anthropic");
-    await tick();
-    assert.equal(doc.querySelector("#mc-title")!.textContent?.trim(), "Connect Claude");
-    assert.equal(doc.querySelector(".mc-providers"), null);
-    assert.equal(doc.querySelector(".mc-method"), null);
+    await open("anthropic");
+    assert.equal(root().querySelector("h1")!.textContent?.trim(), "Connect Claude");
+    assert.equal(root().querySelector(".mc-providers"), null);
+    assert.equal(root().querySelector(".mc-method"), null);
     button("Use an API key instead").click();
-    const input = doc.querySelector<HTMLInputElement>("input")!;
+    const input = root().querySelector<HTMLInputElement>("input")!;
     input.value = "test-only-key";
     input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     button("Connect").click();
@@ -376,14 +374,13 @@ test("AI account modal interactions", async (t) => {
       if (path.endsWith("/chatgpt/poll")) polls++;
       return base(path);
     };
-    await open();
+    await gate();
     providerButton("ChatGPT / Codex", "Connect");
     providerButton("ChatGPT / Codex", "Sign in with ChatGPT / Codex");
     await tick();
     assert.match(doc.querySelector("[role=alert]")!.textContent!, /expired/);
     assert.equal(polls, 0);
     assert.equal(doc.querySelector(".mc-code"), null);
-    close();
   });
 
   await t.test("switching accounts updates the modal and app without reloading or disconnecting", async () => {
@@ -401,7 +398,7 @@ test("AI account modal interactions", async (t) => {
       }
       return Response.json(status(account, connections));
     };
-    await open();
+    await gate();
     providerButton("ChatGPT / Codex", "Use account");
     await tick();
     assert.equal(appState.me.individualModelAuth, true);
@@ -418,7 +415,6 @@ test("AI account modal interactions", async (t) => {
     company.click();
     await tick();
     assert.equal(writes.length, 2);
-    close();
   });
 
   await t.test("the startup gate activates the newly connected provider before allowing chats", async () => {
