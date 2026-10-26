@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -34,14 +35,6 @@ export const realBrokerFetch: BrokerFetch = async (url, init) => {
     text: () => r.text(),
   };
 };
-
-export interface BrokerRequest {
-  credential?: unknown;
-  method?: unknown;
-  url?: unknown;
-  headers?: unknown;
-  body?: unknown;
-}
 
 export interface BrokerResult {
   status: number;
@@ -160,7 +153,7 @@ export async function grantedCredential(
 export async function brokerCredentialCall(
   opts: BrokerSinks & {
     claims: CapabilityClaims;
-    body: BrokerRequest;
+    body: Record<string, unknown>;
     orgScopeId: ScopeId;
     reader: ServiceCredentialReader;
     fetchImpl: BrokerFetch;
@@ -185,11 +178,8 @@ export async function brokerCredentialCall(
   if (credentialInjectionError(rec.injection)) {
     return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
   }
-  if (
-    body.headers &&
-    typeof body.headers === "object" &&
-    Object.keys(body.headers).some((key) => key.toLowerCase() === "x-qm-actor")
-  ) {
+  const callerHeaders = Object.entries(isObj(body.headers) ? body.headers : {});
+  if (callerHeaders.some(([key]) => key.toLowerCase() === "x-qm-actor")) {
     return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
   }
   if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
@@ -239,11 +229,8 @@ export async function brokerCredentialCall(
   }
 
   const caller: Record<string, string> = {};
-  if (body.headers && typeof body.headers === "object") {
-    for (const [k, v] of Object.entries(body.headers as Record<string, unknown>)) {
-      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
-    }
-  }
+  for (const [k, v] of callerHeaders)
+    if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
   const headers = brokerRequestHeaders(rec, caller);
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 

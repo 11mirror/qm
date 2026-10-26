@@ -943,15 +943,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   }
   if (reach.status === "denied" && wantsHtml) return sendGateHtml(res, 403, notSharedHtml(viewer));
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") return cleanUrlRedirect();
+  const signedInViewer = sub && (canManage || authenticatedPermission) ? sub : undefined;
   if (reach.status === "ok") {
-    let authMode: AppViewAuthMode = "public";
-    if (session?.appOnly) authMode = "app_only";
-    else if (sub && (canManage || authenticatedPermission)) authMode = "signed_in";
-    recordPageView(authMode);
+    const signedInMode: AppViewAuthMode = signedInViewer ? "signed_in" : "public";
+    recordPageView(session?.appOnly ? "app_only" : signedInMode);
   }
-  await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
-    frameAncestors: embedAncestors,
-  });
+  await proxyReach(ctx, reach, pathname, signedInViewer, { frameAncestors: embedAncestors });
   return true;
 }
 
@@ -1257,13 +1254,7 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
 }
 
-function textContentType(contentType: string): boolean {
-  return (
-    /^text\//i.test(contentType) ||
-    /(?:^|\/)(?:json|xml|javascript)(?:;|$)/i.test(contentType) ||
-    /\+(?:json|xml)(?:;|$)/i.test(contentType)
-  );
-}
+const TEXT_CONTENT_TYPE = /^text\/|(?:^|\/)(?:json|xml|javascript)(?:;|$)|\+(?:json|xml)(?:;|$)/i;
 
 const LOGS_DEFAULT_TAIL_LINES = 200;
 const LOGS_MAX_TAIL_LINES = 2000;
@@ -1302,7 +1293,7 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
-    const text = textContentType(contentType);
+    const text = TEXT_CONTENT_TYPE.test(contentType);
     return sendJson(res, 200, {
       status: response.status,
       contentType,
