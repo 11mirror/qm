@@ -2736,7 +2736,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
             return {
               search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
-              open: async (seq: number) => openSessionItem(await historyView(), seq),
+              open: async (seq: number) => {
+                const item = await deps.sessions.getItem(session.id, seq);
+                if (!item) return null;
+                // Only a compaction summary's visibility depends on the rest of the transcript (just the latest shows).
+                const view =
+                  item.kind === "ContextCompaction" ? await historyView() : filterHistory(forSearchView([item]));
+                return openSessionItem(view, seq);
+              },
             };
           })(),
           ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
