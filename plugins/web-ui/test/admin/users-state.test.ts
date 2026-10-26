@@ -23,8 +23,6 @@ test("user invitation keeps newer edited fields open when the submitted invitati
   view.services = {
     api: async (method: string) => (method === "POST" ? new Promise((r) => (resolve = r)) : { ok: true, data: {} }),
     clearCache: () => {},
-    fmtTime: () => "",
-    labelRole: () => "",
   };
   const pending = view.invite();
   view.email = "next@example.com";
@@ -67,7 +65,6 @@ test("roster refresh updates shell counts while retaining search focus and invit
     },
     api: async (_method: string, path: string) => ({ ok: true, data: path === "/api/users" ? data : { people: [] } }),
     clearCache() {},
-    labelRole: String,
   });
   f.root.querySelector<HTMLButtonElement>('[aria-label="Invite teammate"]')!.click();
   const email = f.root.querySelector<HTMLInputElement>("#users-email")!;

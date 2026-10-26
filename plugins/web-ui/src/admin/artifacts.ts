@@ -2,6 +2,25 @@ import { html, nothing, render } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { card, bareCard, table, renderer, empty, stacked, denseList as dense } from "./shared.ts";
 import { mountPacks, skillDetail, removeSkill } from "./artifacts-skills.ts";
+import {
+  createdByCell,
+  cronName,
+  destinationDetails,
+  destinationSummary,
+  fileKind,
+  fileName,
+  firstLine,
+  fmtBytes,
+  fmtTime,
+  plural,
+  relTime,
+  scopeKind,
+  shortId,
+  titleCase,
+  uploadErrorMessage,
+} from "./format.ts";
+import { fmtSchedule, shortSchedule } from "./schedule.ts";
+import { fileSha256 } from "../file-hash.ts";
 export type Data = Record<string, any>;
 export type Context = Record<string, any>;
 type Fact = { id: string; text: string };
@@ -19,9 +38,9 @@ function scopeList(items: Data[], c: Context, noun: string, latest: (r: Data) =>
     [...groups.values()].sort((a, b) => b.latest - a.latest),
     (g) => ({
       name: c.shortName(g.scopeId),
-      preview: c.plural(g.count, noun),
-      time: c.relTime(g.latest),
-      href: c.stateToUrl({ view: c.view, scope: g.scopeId, ...(c.scopeKind(g.scopeId) === "org" ? { own: "1" } : {}) }),
+      preview: plural(g.count, noun),
+      time: relTime(g.latest),
+      href: c.stateToUrl({ view: c.view, scope: g.scopeId, ...(scopeKind(g.scopeId) === "org" ? { own: "1" } : {}) }),
     }),
     (g) => c.openScopeRow(g.scopeId, c.view === "crons" ? { cron: null } : {}),
     message,
@@ -74,13 +93,13 @@ const listShell = (c: Context, title: string, count: string) => ({
 export function files(root: HTMLElement, d: Data, c: Context) {
   const render = renderer(root);
   const all = [...(d.files || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const items = c.own ? all.filter((f) => c.scopeKind(f.scopeId) === "org") : all;
+  const items = c.own ? all.filter((f) => scopeKind(f.scopeId) === "org") : all;
   const capped = all.length >= 2000;
   let [query, remote, request] = ["", null as Data[] | null, 0];
   let timer: ReturnType<typeof setTimeout>;
   const failedImages = new Set<string>();
   const row = (f: Data) => {
-    const kind = c.fileKind(f.name || f.path);
+    const kind = fileKind(f.name || f.path);
     const image = f.openable && /^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(f.mimetype || "");
     const large = image && f.size > 200 * 1024;
     return {
@@ -99,13 +118,13 @@ export function files(root: HTMLElement, d: Data, c: Context) {
             : nothing
         }</span
       >`,
-      name: f.name || c.fileName(f.path),
+      name: f.name || fileName(f.path),
       preview: c.index ? c.shortName(f.scopeId) : "",
-      time: c.fmtBytes(f.size || 0) + " · " + c.relTime(f.createdAt),
+      time: fmtBytes(f.size || 0) + " · " + relTime(f.createdAt),
     };
   };
   const draw = () => {
-    const local = items.filter((f) => hit(query, f.name || c.fileName(f.path)));
+    const local = items.filter((f) => hit(query, f.name || fileName(f.path)));
     render(
       bareCard(
         indexed(
@@ -133,7 +152,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
       if (token !== request || !root.isConnected) return;
       if (response?.ok) {
         remote = [...(response.data?.files || [])]
-          .filter((f) => !c.own || c.scopeKind(f.scopeId) === "org")
+          .filter((f) => !c.own || scopeKind(f.scopeId) === "org")
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       }
       draw();
@@ -142,7 +161,7 @@ export function files(root: HTMLElement, d: Data, c: Context) {
   query = searchShell(
     c,
     "files",
-    { ...listShell(c, "Files", items.length ? c.plural(items.length, "file") : ""), actions: [uploadBox(c)] },
+    { ...listShell(c, "Files", items.length ? plural(items.length, "file") : ""), actions: [uploadBox(c)] },
     "files",
     onQuery,
   );
@@ -155,12 +174,12 @@ export function uploadBox(c: Context) {
   const upload = async (files: FileList | File[]) => {
     const picked = [...files].filter((f) => f && f.size >= 0);
     if (!picked.length || busy) return;
-    [busy, message, tone] = [true, "Uploading " + c.plural(picked.length, "file") + "...", "saving"];
+    [busy, message, tone] = [true, "Uploading " + plural(picked.length, "file") + "...", "saving"];
     draw();
     let uploaded = 0;
     try {
       for (const file of picked) {
-        const sha = await c.fileSha256(file);
+        const sha = await fileSha256(file);
         const query = new URLSearchParams({ scope: c.scope, sha, name: file.name || "file" });
         const response = await fetch(c.apiBase + "/files/upload?" + query.toString(), {
           method: "POST",
@@ -168,10 +187,10 @@ export function uploadBox(c: Context) {
           body: file,
         });
         if (!response.ok)
-          throw new Error(c.uploadErrorMessage(await response.text(), "Upload failed (" + response.status + ")."));
+          throw new Error(uploadErrorMessage(await response.text(), "Upload failed (" + response.status + ")."));
         uploaded++;
       }
-      [message, tone] = ["Uploaded " + c.plural(picked.length, "file") + ".", "ok"];
+      [message, tone] = ["Uploaded " + plural(picked.length, "file") + ".", "ok"];
       c.invalidate();
       await c.reload();
     } catch (error) {
@@ -258,21 +277,21 @@ function listPage(root: HTMLElement, c: Context, key: string, noun: string, all:
 export function deployments(root: HTMLElement, d: Data, c: Context) {
   const latest = (r: Data) => r.lastAccessAt || r.createdAt || 0;
   const all = [...(d.deployments || [])].sort((a, b) => latest(b) - latest(a));
-  const items = c.own ? all.filter((r) => c.scopeKind(r.ownerScopeId) === "org") : all;
+  const items = c.own ? all.filter((r) => scopeKind(r.ownerScopeId) === "org") : all;
   const row = (r: Data) => ({
     name: r.name || r.id,
     preview: dot(
-      c.titleCase(r.status || "unknown"),
+      titleCase(r.status || "unknown"),
       r.currentVersion || "",
       c.index ? c.shortName(r.ownerScopeId) : "",
       r.createdBy || "",
     ),
-    time: c.relTime(r.lastAccessAt || r.createdAt),
+    time: relTime(r.lastAccessAt || r.createdAt),
     href: c.deploymentHref(r) || undefined,
     target: "_blank",
   });
   listPage(root, c, "deployments", "app", all, items, {
-    shell: listShell(c, "Apps", c.plural(items.length, "app")),
+    shell: listShell(c, "Apps", plural(items.length, "app")),
     latest,
     text: (r: Data) => r.name || r.id,
     row,
@@ -383,7 +402,7 @@ export function memory(root: HTMLElement, d: Data, c: Context) {
 }
 function memoryIndex(root: HTMLElement, d: Data, c: Context) {
   const render = renderer(root);
-  const scopes = (d.scopes || []).filter((s: Data) => s.hasMemory || c.scopeKind(s.scopeId) === "org");
+  const scopes = (d.scopes || []).filter((s: Data) => s.hasMemory || scopeKind(s.scopeId) === "org");
   const written = scopes.filter((s: Data) => s.hasMemory);
   const hasTimestamps = written.some((s: Data) => s.updatedAt);
   scopes.sort(
@@ -393,7 +412,7 @@ function memoryIndex(root: HTMLElement, d: Data, c: Context) {
     view: "memory",
     scope: s.scopeId,
     session: null,
-    ...(c.scopeKind(s.scopeId) === "org" ? { mem: "edit" } : {}),
+    ...(scopeKind(s.scopeId) === "org" ? { mem: "edit" } : {}),
   });
   const draw = (q: string) =>
     render(
@@ -402,9 +421,9 @@ function memoryIndex(root: HTMLElement, d: Data, c: Context) {
         ${dense(
           scopes.filter((s: Data) => hit(q, s.label, c.shortName(s.scopeId), s.scopeId)),
           (s) => ({
-            name: c.scopeKind(s.scopeId) === "org" ? "org" : s.label || c.shortName(s.scopeId),
-            preview: s.hasMemory ? c.fmtBytes(s.bytes || 0) : "empty",
-            time: s.updatedAt ? c.relTime(s.updatedAt) : "Never",
+            name: scopeKind(s.scopeId) === "org" ? "org" : s.label || c.shortName(s.scopeId),
+            preview: s.hasMemory ? fmtBytes(s.bytes || 0) : "empty",
+            time: s.updatedAt ? relTime(s.updatedAt) : "Never",
             href: c.stateToUrl(state(s)),
           }),
           (s) => c.go(state(s)),
@@ -414,7 +433,7 @@ function memoryIndex(root: HTMLElement, d: Data, c: Context) {
     );
   c.pageShell({
     title: "Memory",
-    count: c.plural(written.length, "notebook"),
+    count: plural(written.length, "notebook"),
     search: { placeholder: "Search notebooks…", onInput: (value: string) => draw(value.trim().toLowerCase()) },
     context: written.length && !hasTimestamps ? "sorted by size (this backend keeps no edit history)" : "",
   });
@@ -426,10 +445,10 @@ export function skills(root: HTMLElement, d: Data, c: Context) {
   const all = (d.skills || [])
     .filter((s: Data) => s.status !== "archived")
     .sort((a: Data, b: Data) => lastUse(b) - lastUse(a) || (a.name || "").localeCompare(b.name || ""));
-  const items = c.own ? all.filter((s: Data) => c.scopeKind(s.ownerScopeId) === "org") : all;
+  const items = c.own ? all.filter((s: Data) => scopeKind(s.ownerScopeId) === "org") : all;
   const count =
-    c.plural(items.length, "skill") +
-    (c.index && items.length ? " · " + c.plural(new Set(items.map((s: Data) => s.ownerScopeId)).size, "scope") : "");
+    plural(items.length, "skill") +
+    (c.index && items.length ? " · " + plural(new Set(items.map((s: Data) => s.ownerScopeId)).size, "scope") : "");
   const packs = document.createElement("div"),
     detail = document.createElement("div");
   const identity = (s: Data) => (s.name || s.id) + "\0" + (s.createdBy || "");
@@ -442,15 +461,15 @@ export function skills(root: HTMLElement, d: Data, c: Context) {
     const shown = items.filter((s: Data) => hit(q, s.name || s.id, s.description || ""));
     const rows = shown.map((s: Data) => [
       {
-        node: stacked(s.name || s.id, s.description || c.shortId(s.id)),
+        node: stacked(s.name || s.id, s.description || shortId(s.id)),
       },
       ...(c.index ? [{ text: c.shortName(s.ownerScopeId), cls: "mono" }] : []),
-      { text: c.titleCase(s.status || "unknown"), cls: "subline" },
-      c.createdByCell(s),
+      { text: titleCase(s.status || "unknown"), cls: "subline" },
+      createdByCell(s),
       {
         text: s.lastUsedAt
-          ? c.fmtHistoryTime(s.lastUsedAt)
-          : (lastUse(s) && "never · imported " + c.fmtHistoryTime(lastUse(s))) || "never",
+          ? relTime(s.lastUsedAt)
+          : (lastUse(s) && "never · imported " + relTime(lastUse(s))) || "never",
         cls: s.lastUsedAt ? "num" : "num subline",
       },
       {
@@ -502,29 +521,29 @@ const cronStatus = (c: Data) => (c.archived && "archived") || (c.enabled === fal
 export function crons(root: HTMLElement, d: Data, c: Context) {
   const all = d.crons || [];
   if (c.cron) return cronDetail(root, all, c.cron, c);
-  const items = c.own ? all.filter((r: Data) => c.scopeKind(r.ownerScopeId) === "org") : all;
+  const items = c.own ? all.filter((r: Data) => scopeKind(r.ownerScopeId) === "org") : all;
   const latest = (r: Data) => r.lastFiredAt || r.createdAt || 0;
   const sorted = [...items].sort((a, b) => latest(b) - latest(a));
   const disabled = items.filter((r: Data) => !r.archived && r.enabled === false).length;
   const archived = items.filter((r: Data) => r.archived).length;
   const row = (r: Data) => ({
-    name: c.firstLine(c.cronName(r, true), 72),
+    name: firstLine(cronName(r, true), 72),
     preview: dot(
       c.index ? c.shortName(r.ownerScopeId) : "",
       cronStatus(r) === "enabled" ? "" : cronStatus(r),
-      c.firstLine(r.title ? r.action || r.message || "" : (r.message && r.action) || "", 200),
+      firstLine(r.title ? r.action || r.message || "" : (r.message && r.action) || "", 200),
     ),
-    time: c.shortSchedule(r.schedule) + " · " + (r.lastFiredAt ? c.relTime(r.lastFiredAt) : "never fired"),
+    time: shortSchedule(r.schedule) + " · " + (r.lastFiredAt ? relTime(r.lastFiredAt) : "never fired"),
     cls: cronStatus(r) === "enabled" ? "" : "dim",
     href: c.stateToUrl({ view: "crons", scope: c.scope, cron: r.id }),
   });
   listPage(root, c, "crons", "cron", all, sorted, {
     shell: {
-      ...listShell(c, "Crons", c.plural(items.length, "cron")),
+      ...listShell(c, "Crons", plural(items.length, "cron")),
       stats: [...(disabled ? [[disabled, "disabled"]] : []), ...(archived ? [[archived, "archived"]] : [])],
     },
     latest,
-    text: (r: Data) => c.cronName(r, true) + " " + (r.action || r.message || ""),
+    text: (r: Data) => cronName(r, true) + " " + (r.action || r.message || ""),
     row,
     open: (r: Data) => c.go({ view: "crons", scope: c.scope, session: null, cron: r.id, page: 1 }),
   });
@@ -537,10 +556,10 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
       label: "← Crons",
       onClick: () => c.go({ view: "crons", scope: c.scope, session: null, cron: null, page: 1 }),
     },
-    title: cron ? c.firstLine(c.cronName(cron, true), 90) : "Cron",
+    title: cron ? firstLine(cronName(cron, true), 90) : "Cron",
     context: cron ? c.shortName(cron.ownerScopeId) : "",
   });
-  if (!cron) return render(empty("Cron " + c.shortId(id) + " isn't in this scope."));
+  if (!cron) return render(empty("Cron " + shortId(id) + " isn't in this scope."));
   let [editing, saving, expanded, needsToggle] = [false, false, false, true];
   let [fires, error, total] = [null as Data[] | null, "", 0];
   const current = () => ({
@@ -594,17 +613,17 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
   };
   const prompt = cron.action || cron.message || "";
   const facts = () => [
-    ["Schedule", c.fmtSchedule(cron.schedule)],
+    ["Schedule", fmtSchedule(cron.schedule)],
     [
       "Destination",
       html`<span
-        >${c.destinationSummary(cron.destination) + (c.destinationDetails(cron.destination) && cron.destination ? " · " + c.destinationDetails(cron.destination) : "")}</span
+        >${destinationSummary(cron.destination) + (destinationDetails(cron.destination) && cron.destination ? " · " + destinationDetails(cron.destination) : "")}</span
       >`,
     ],
     ["Owner", cron.owner || cron.createdBy || "None"],
     ["Status", cronStatus(cron)],
-    ["Created", c.fmtTime(cron.createdAt)],
-    ["Last fired", cron.lastFiredAt ? c.relTime(cron.lastFiredAt) : "never fired"],
+    ["Created", fmtTime(cron.createdAt)],
+    ["Last fired", cron.lastFiredAt ? relTime(cron.lastFiredAt) : "never fired"],
     ["Id", cron.id],
   ];
   const draw = () =>
@@ -724,21 +743,21 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
                 : dense(
                     fires,
                     (s) => ({
-                      name: c.relTime(s.createdAt || s.lastActivity),
+                      name: relTime(s.createdAt || s.lastActivity),
                       preview: dot(
                         typeof s.delivered === "number" &&
                           (s.delivered ? "delivered" + (s.delivered > 1 ? " ×" + s.delivered : "") : "silent"),
-                        c.plural(s.turns || 0, "turn"),
+                        plural(s.turns || 0, "turn"),
                         s.result || "(no messages)",
                       ),
-                      time: c.plural(s.messages || 0, "entry", "entries"),
+                      time: plural(s.messages || 0, "entry", "entries"),
                       cls: typeof s.delivered === "number" && !s.delivered ? "dim" : "",
                       href: c.stateToUrl({ view: "history", scope: s.scopeId || c.scope, session: s.id }),
                     }),
                     (s) => c.go({ view: "history", scope: s.scopeId || c.scope, session: s.id }),
                     "This cron has never fired.",
                   ))
-            }${total > 25 ? html`<button type="button" class="prompt-toggle" @click=${() => c.go({ view: "history", scope: c.scope, session: null, page: 1, historyKind: "cron", cron: id })}>${"All " + c.plural(total, "fire") + " →"}</button>` : nothing}
+            }${total > 25 ? html`<button type="button" class="prompt-toggle" @click=${() => c.go({ view: "history", scope: c.scope, session: null, page: 1, historyKind: "cron", cron: id })}>${"All " + plural(total, "fire") + " →"}</button>` : nothing}
           </div>`,
         )}`,
     );

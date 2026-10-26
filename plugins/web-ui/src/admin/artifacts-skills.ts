@@ -2,6 +2,8 @@ import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { badge, card, table, renderer, stacked } from "./shared.ts";
 import type { Context, Data } from "./artifacts.ts";
+import { packRepoLabel, scopeKind, shortId } from "./format.ts";
+import { statusBadge } from "./dom.ts";
 export async function removeSkill(s: Data, c: Context) {
   const where = c.dirLabel(s.ownerScopeId) || s.ownerScopeId;
   if (!confirm(`Remove '${s.name || s.id}' from ${where}? It stops being available to agents (kept for audit).`))
@@ -34,9 +36,9 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
     );
   const k = response.data;
   const by =
-    (k.pack && "from " + (c.packRepoLabel(k.pack.url) || "pack " + c.shortId(k.pack.id, 8))) ||
+    (k.pack && "from " + (packRepoLabel(k.pack.url) || "pack " + shortId(k.pack.id, 8))) ||
     (k.createdBy?.startsWith("system:") ? "built-in" : "by " + (k.createdBy || "None"));
-  const org = (g: Data) => c.scopeKind(g.ownerScopeId) === "org";
+  const org = (g: Data) => scopeKind(g.ownerScopeId) === "org";
   const granted = k.grantedCapabilities || [];
   paint(
     card(
@@ -44,7 +46,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
       "",
       html`<div>
         <div class="badges">
-          ${c.statusBadge(k.status)}${badge("v" + k.version, "muted")}${badge(by, "muted")}${badge("skill " + c.shortId(k.id, 16), "muted")}
+          ${statusBadge(k.status)}${badge("v" + k.version, "muted")}${badge(by, "muted")}${badge("skill " + shortId(k.id, 16), "muted")}
         </div>
         ${k.description ? html`<p class="metric-note">${k.description}</p>` : nothing}${card(
           "Scopes (" + group.length + ")",
@@ -57,7 +59,7 @@ export async function skillDetail(root: HTMLElement, rep: Data, group: Data[], c
               )
               .map((g) => [
                 c.scopeCell(g.ownerScopeId),
-                { node: c.statusBadge(g.status) },
+                { node: statusBadge(g.status) },
                 { text: g.version != null ? "v" + g.version : "None", cls: "num" },
                 {
                   node:
@@ -273,8 +275,8 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
               return [
                 {
                   node: html`<span class="pack-name" title=${s.url + (delta ? "\n" + delta : "")}
-                    ><strong>${c.packRepoLabel(s.url) || s.url}</strong
-                    >${s.ref ? html`<span class="subline">${" @ " + c.shortId(s.ref, 10)}</span>` : nothing}</span
+                    ><strong>${packRepoLabel(s.url) || s.url}</strong
+                    >${s.ref ? html`<span class="subline">${" @ " + shortId(s.ref, 10)}</span>` : nothing}</span
                   >`,
                 },
                 {

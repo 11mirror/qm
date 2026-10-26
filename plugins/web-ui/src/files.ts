@@ -1,3 +1,4 @@
+import { fileSha256 } from "./file-hash.ts";
 import { previewFile } from "./file-open.ts";
 import { html, nothing } from "lit";
 import {
@@ -184,11 +185,6 @@ function fileRow(f: FileRow) {
         >${content}</a
       >`
     : html`<article class="list-row file-row">${content}</article>`;
-}
-
-async function fileSha256(file: globalThis.File): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function uploadOne(file: globalThis.File): Promise<void> {
