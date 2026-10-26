@@ -155,8 +155,6 @@ export interface PiHarnessOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  systemCacheSplit?: boolean;
-  scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
@@ -183,7 +181,6 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
     ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
     ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
     captureRequests: config.piCaptureRequests,
-    systemCacheSplit: config.piSystemCacheSplit,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
@@ -1590,8 +1587,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const systemCacheSplit = opts?.systemCacheSplit ?? false;
-  const scratchExec = opts?.scratchExec ?? false;
   const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
@@ -1601,7 +1596,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      scratchExec,
       ownerAuthExec,
       reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
@@ -1644,7 +1638,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
       "turn",
-      systemCacheSplit ? "long" : undefined,
+      "long",
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
