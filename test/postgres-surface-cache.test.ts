@@ -68,7 +68,7 @@ test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the
   }
 });
 
-test("pg surface-cache: tsvector search + active threads + membership", { skip }, async () => {
+test("pg surface-cache: tsvector search + membership", { skip }, async () => {
   const cache = createPostgresSurfaceCache(URL!);
   try {
     await cache.ingest([
@@ -88,9 +88,6 @@ test("pg surface-cache: tsvector search + active threads + membership", { skip }
     const hits = await cache.search("launch");
     assert.ok(hits.length >= 2, "tsvector matches the two live 'launch' messages");
     assert.ok(!hits.some((h) => h.deleted), "the deleted row is excluded from search");
-    const threads = await cache.activeThreads({ container: "CS1" });
-    assert.equal(threads.length, 1, "activeThreads projects the one sub-conversation");
-    assert.equal(threads[0]!.sub, "T1");
     assert.deepEqual((await cache.members("CS1")).sort(), ["U1", "U2"]);
     assert.equal(await cache.isMember("CS1", "U1"), true);
     assert.equal(await cache.isMember("CS1", "U9"), false);
@@ -103,37 +100,6 @@ test("pg surface-cache: tsvector search + active threads + membership", { skip }
     await cache.close();
   }
 });
-
-test(
-  "pg surface-cache: activeThreads excludes deleted + sub-null rows, orders by activity, honors limit",
-  { skip },
-  async () => {
-    const cache = createPostgresSurfaceCache(URL!);
-    try {
-      await cache.ingest([
-        { container: "CT1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 9000000000001 },
-        { container: "CT1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 9000000000002 },
-        { container: "CT1", ts: "2.5", sub: "T-a", text: "gone", deleted: true, createdAt: 9000000000005 },
-        { container: "CT1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 9000000000003 },
-        { container: "CT1", ts: "4.0", text: "top-level, no sub", createdAt: 9000000000004 },
-        { container: "CT1", ts: "5.0", sub: "T-c", text: "only deleted", deleted: true, createdAt: 9000000000006 },
-        { container: "CT2", ts: "6.0", sub: "T-d", text: "d1", createdAt: 9000000000007 },
-      ]);
-      const threads = await cache.activeThreads({ container: "CT1" });
-      assert.equal(threads.length, 2, "sub-null, deleted-only, and other-container rows are excluded");
-      assert.equal(threads[0]!.sub, "T-b", "newest live activity first");
-      const a = threads.find((t) => t.sub === "T-a")!;
-      assert.equal(a.messageCount, 2, "the deleted reply does not count");
-      assert.equal(a.lastTs, "2.0", "the deleted reply does not advance lastTs");
-      assert.equal(a.lastActivityAt, 9000000000002, "the deleted reply does not advance lastActivityAt");
-      const limited = await cache.activeThreads({ limit: 1 });
-      assert.equal(limited.length, 1);
-      assert.equal(limited[0]!.sub, "T-d", "the cross-container query returns the newest thread");
-    } finally {
-      await cache.close();
-    }
-  },
-);
 
 test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not lexical)", { skip }, async () => {
   const cache = createPostgresSurfaceCache(URL!);
@@ -509,14 +475,6 @@ test(
       );
       assert.deepEqual(
         (await cache.listContainers({ surface: "forum" })).map((c) => c.container),
-        ["forum:prod:42"],
-      );
-      assert.equal(
-        (await cache.activeThreads()).some((t) => t.container === "forum:prod:42"),
-        false,
-      );
-      assert.deepEqual(
-        (await cache.activeThreads({ surface: "forum" })).map((t) => t.container),
         ["forum:prod:42"],
       );
       const [dm] = await cache.readMessages("forum:prod:42", { noFallback: true });

@@ -178,32 +178,6 @@ test("OAuth callback rejects forged state even without source-auth", async () =>
   }
 });
 
-test("connector token route normalizes expiry seconds before storing", async () => {
-  const srv = start(async () => {
-    throw new Error("token route must not call OAuth exchange");
-  });
-  try {
-    const expiresAtMs = Math.floor((Date.now() + 3_600_000) / 1000) * 1000;
-    const body = JSON.stringify({
-      host: "api.example.test",
-      principalId: "U1",
-      accessToken: "at-route",
-      expiresAt: expiresAtMs / 1000,
-    });
-    const res = await fetch(`${srv.base}/v1/connectors/token`, {
-      method: "POST",
-      headers: sign("POST", "/v1/connectors/token", body),
-      body,
-    });
-    assert.equal(res.status, 200);
-    const status = await srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1");
-    assert.equal(status.connected, true);
-    assert.equal(status.expiresAt, expiresAtMs);
-  } finally {
-    await srv.close();
-  }
-});
-
 const X_ENV = { X_OAUTH_CLIENT_ID: "xid", X_OAUTH_CLIENT_SECRET: "xsecret" } as NodeJS.ProcessEnv;
 const X_STATE_LIMIT = 500;
 

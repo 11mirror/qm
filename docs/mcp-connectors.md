@@ -34,13 +34,8 @@ For example:
 ```
 
 Per-user mode requires persistent keychain encryption (`CONNECTOR_SECRET_KEY`).
-Connect the user's account using an existing QM OAuth connector, or have a trusted
-integration save its token through the source-authenticated
-`POST /v1/connectors/token` endpoint with `host`, `principalId`, `accessToken`, and
-optional `expiresAt` (Unix milliseconds). Supported OAuth providers can also store
-and refresh a `refreshToken`. This change does not add OAuth provider discovery or
-an interactive MCP login flow. An unsupported provider must manage token renewal
-in its integration; do not store a refresh token that QM cannot refresh.
+Connect the user's account using an existing QM OAuth connector. This change does
+not add OAuth provider discovery or an interactive MCP login flow.
 
 Missing, expired, revoked, or unrefreshable user credentials fail the call with a
 connection-required message. Per-user MCP calls do not use operator environment
