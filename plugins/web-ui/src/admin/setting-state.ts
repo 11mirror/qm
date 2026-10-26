@@ -16,6 +16,10 @@ export class SettingState {
   get dirty() {
     return JSON.stringify(this.collect(false)) !== this.baseline;
   }
+  change(field: string, value: unknown) {
+    this.draft[field] = value;
+    this.changed();
+  }
   changed() {
     if (!this.saving) {
       this.message = this.dirty ? "Unsaved changes" : "";

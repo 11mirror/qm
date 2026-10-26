@@ -200,28 +200,38 @@ export class SlackInstallationState extends Status {
     if (step === "connected" && this.data.configured && this.data.setup?.connected)
       this.setStatus("Connected. You can return to your QM conversation.", "ok");
   }
-  async start(step = "install") {
-    if (this.busy) return;
-    this.busy = "start";
+  async run(busy: string, work: () => Promise<unknown>, failure?: string) {
+    this.busy = busy;
     this.render();
     try {
-      const browser = new URL(location.href);
-      browser.searchParams.set("slack", step);
-      if (await openDesktopBrowser(browser.href)) return;
-      const result = await context.api("POST", "/api/slack-installation/start", { step });
-      if (result.ok && result.data.url) {
+      await work();
+    } catch (error) {
+      if (!failure) throw error;
+      this.setStatus(failure, "err");
+    } finally {
+      this.busy = "";
+      this.render();
+    }
+  }
+  async start(step = "install") {
+    if (this.busy) return;
+    const failure = "Could not start Slack installation. Please try again.";
+    await this.run(
+      "start",
+      async () => {
+        const browser = new URL(location.href);
+        browser.searchParams.set("slack", step);
+        if (await openDesktopBrowser(browser.href)) return;
+        const result = await context.api("POST", "/api/slack-installation/start", { step });
+        if (!result.ok || !result.data.url) return this.setStatus(failure, "err");
         const form = document.createElement("form");
         form.method = "POST";
         form.action = result.data.url;
         document.body.appendChild(form);
         form.submit();
-      } else this.setStatus("Could not start Slack installation. Please try again.", "err");
-    } catch {
-      this.setStatus("Could not start Slack installation. Please try again.", "err");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+      },
+      failure,
+    );
   }
   async save() {
     if (this.busy) return;
@@ -229,24 +239,23 @@ export class SlackInstallationState extends Status {
       appToken = this.appToken.trim(),
       revision = this.revision;
     if (!botToken || !appToken) return this.setStatus("Both Slack tokens are required.", "err");
-    this.busy = "save";
-    this.setStatus("Validating with Slack…", "saving");
-    try {
-      const result = await context.api("PUT", "/api/slack-installation", { botToken, appToken });
-      if (!result.ok) return this.setStatus(result.data?.message || "Slack validation failed.", "err");
-      if (revision === this.revision) {
-        this.botToken = "";
-        this.appToken = "";
-        this.editor = false;
-      }
-      await this.load();
-      this.setStatus("Tokens verified and saved. Allow a few seconds, then test a mention and DM in Slack.", "ok");
-    } catch {
-      this.setStatus("Slack validation failed. Please try again.", "err");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+    this.message = "Validating with Slack…";
+    this.tone = "saving";
+    await this.run(
+      "save",
+      async () => {
+        const result = await context.api("PUT", "/api/slack-installation", { botToken, appToken });
+        if (!result.ok) return this.setStatus(result.data?.message || "Slack validation failed.", "err");
+        if (revision === this.revision) {
+          this.botToken = "";
+          this.appToken = "";
+          this.editor = false;
+        }
+        await this.load();
+        this.setStatus("Tokens verified and saved. Allow a few seconds, then test a mention and DM in Slack.", "ok");
+      },
+      "Slack validation failed. Please try again.",
+    );
   }
   async remove() {
     if (
@@ -256,17 +265,12 @@ export class SlackInstallationState extends Status {
       )
     )
       return;
-    this.busy = "remove";
-    this.render();
-    try {
+    await this.run("remove", async () => {
       const result = await context.api("DELETE", "/api/slack-installation");
       if (!result.ok) return this.setStatus(result.data?.message || "Remove failed.", "err");
       await this.load();
       this.setStatus("Slack disconnected.", "ok");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+    });
   }
 }
 export const installation = new SlackInstallationState();

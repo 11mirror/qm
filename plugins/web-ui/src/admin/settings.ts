@@ -2,23 +2,16 @@ import { mountTemplate } from "./shared.ts";
 import { cardClass, closeIcon, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
 import { mountCredentials } from "./settings-credentials.ts";
-export {
-  configureCredentials,
-  credentialState,
-  credentialStatus,
-  credentialLoading,
-  loadCredentials,
-  keychainSummary,
-} from "./settings-credentials.ts";
 import { mountProviders } from "./settings-providers.ts";
-export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";
 import { mountFlags } from "./settings-flags.ts";
 import { mountDecisions } from "./settings-decisions.ts";
-export { configureFlags, loadFlags } from "./settings-flags.ts";
-export { configureDecisions, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { mountRuntimes } from "./settings-runtimes.ts";
-export { configureRuntimes } from "./settings-runtimes.ts";
+export * from "./settings-credentials.ts";
+export * from "./settings-providers.ts";
+export * from "./settings-flags.ts";
+export * from "./settings-decisions.ts";
+export * from "./settings-runtimes.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -49,10 +42,6 @@ export class SettingsState extends SettingState {
     return [...(this.context.baseModelOptions || [])].filter(
       (m: any, i, all) => m?.id && all.findIndex((x: any) => x?.id === m.id) === i,
     ) as Model[];
-  }
-  change(field: string, value: unknown) {
-    this.draft[field] = value;
-    this.changed();
   }
   changed() {
     this.message = this.dirty ? "Unsaved changes" : "";

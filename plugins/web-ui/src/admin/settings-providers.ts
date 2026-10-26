@@ -90,15 +90,17 @@ export function providerBody() {
     ...(d.validate ? {} : { validate: false }),
   };
 }
+function fail(message: string, draw = true) {
+  provider.message = message;
+  provider.error = true;
+  if (draw) redraw();
+}
 async function saveProvider() {
   if (provider.saving) return;
   const body = providerBody();
   const id = provider.draft.id.trim();
   if (!id || !body.name || !body.baseUrl || !body.models.length) {
-    provider.message = "Provider id, name, base URL, and at least one model are required.";
-    provider.error = true;
-    redraw();
-    return;
+    return fail("Provider id, name, base URL, and at least one model are required.");
   }
   const revision = provider.revision;
   const session = provider.session;
@@ -109,21 +111,14 @@ async function saveProvider() {
   try {
     const saved = await config.api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
     if (session !== provider.session) return;
-    if (!saved.ok) {
-      provider.error = true;
-      provider.message = saved.data?.message || "Could not save this provider.";
-      return;
-    }
+    if (!saved.ok) return fail(saved.data?.message || "Could not save this provider.", false);
     if (provider.draft.key.trim() === body.apiKey) provider.draft.key = "";
     await config.refresh();
     if (session !== provider.session) return;
     if (revision === provider.revision) closeProvider();
     else provider.message = "Provider saved. Your newer edits are not saved.";
   } catch {
-    if (session === provider.session) {
-      provider.error = true;
-      provider.message = "Could not save this provider. Your draft is preserved.";
-    }
+    if (session === provider.session) fail("Could not save this provider. Your draft is preserved.", false);
   } finally {
     if (session === provider.session) {
       provider.saving = false;
@@ -134,12 +129,7 @@ async function saveProvider() {
 async function removeProvider(item: any) {
   if (!confirm("Remove " + item.name + "? Its models leave every model picker.")) return;
   const removed = await config.api("DELETE", "/api/custom-providers/" + encodeURIComponent(item.id));
-  if (!removed.ok) {
-    provider.message = removed.data?.message || "Could not remove this provider.";
-    provider.error = true;
-    redraw();
-    return;
-  }
+  if (!removed.ok) return fail(removed.data?.message || "Could not remove this provider.");
   await config.refresh();
 }
 export async function loadProviders() {

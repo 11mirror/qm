@@ -1,12 +1,12 @@
 import { badge, mountTemplate } from "./shared.ts";
 import { textField, toggleField } from "./setting-controls.ts";
+import { SettingState } from "./setting-state.ts";
 import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 let config: any = { label: (id: string) => id, formatTime: String, edit: () => {}, remove: () => {} };
 type Data = Record<string, any>;
-export class CredentialState {
-  draft: Data = {};
+export class CredentialState extends SettingState {
   rows: Data[] = [];
   listMessage = "Loading credentials…";
   listRetry = false;
@@ -18,15 +18,11 @@ export class CredentialState {
   version: number | null = null;
   original: Data | null = null;
   open = false;
-  saving = false;
-  message = "";
-  tone = "";
-  baseline = "";
   query = "";
   picker = false;
   resolutionError = "";
-  render = () => {};
   constructor() {
+    super("service-credentials");
     this.reset();
   }
   reset() {
@@ -103,19 +99,12 @@ export class CredentialState {
     this.saving = false;
     this.changed();
   }
-  change(key: string, value: unknown) {
-    this.draft[key] = value;
-    this.changed();
-  }
   changed() {
     if (!this.saving) {
       this.message = this.dirty ? "Unsaved changes" : "";
       this.tone = "";
     }
     this.render();
-  }
-  get dirty() {
-    return JSON.stringify(this.collect()) !== this.baseline;
   }
   get selected(): string[] {
     return this.draft.people

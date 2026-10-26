@@ -5,18 +5,7 @@ import { classMap } from "lit/directives/class-map.js";
 import { slackMark } from "../slack-mark.ts";
 import { repeat } from "lit/directives/repeat.js";
 import { states, connectors, installation, emoji, context, type SlackSetting } from "./integrations-state.ts";
-export {
-  configure,
-  owns,
-  collect,
-  capture,
-  commit,
-  status,
-  statusKey,
-  states,
-  connectors,
-  installation,
-} from "./integrations-state.ts";
+export * from "./integrations-state.ts";
 import { loadScope as loadSettings } from "./integrations-state.ts";
 export function loadScope(data: any, scope: string) {
   loadSettings(data, scope);
