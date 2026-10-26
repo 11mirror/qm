@@ -1,3 +1,4 @@
+import { watchTurnSignals, type TurnStop } from "./turn-signals.ts";
 import { createTurnRecovery } from "./turn-recovery.ts";
 import {
   piFailedAssistant,
@@ -9,8 +10,7 @@ import {
   refusalFallbackModelId,
   type AssistantTextSession,
 } from "./turn-recovery.ts";
-import { createCallTelemetry } from "./call-telemetry.ts";
-import { sumCacheUsage } from "./call-telemetry.ts";
+import { createCallTelemetry, sumCacheUsage } from "./call-telemetry.ts";
 import {
   recordSteerIntake,
   recordStoppedTurn,
@@ -101,12 +101,11 @@ import {
   type CoreToolOptions,
   type ToolContextRef,
 } from "./agent-tools.ts";
-import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
+import { type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
   dayMarkerPrefix,
-  recordedMessageTimestamps,
   replayPreamble,
   userPromptText,
   seedPriorTurns,
@@ -1527,73 +1526,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             { stopReason?: string } | undefined;
           return last?.stopReason;
         };
-        let userAborted = false;
-        let abortReason: string | undefined;
+        const stop: TurnStop = { userAborted: false };
         let recoveryDead = false;
         entry.ref.abortSignal = toolAbort.signal;
-        const onCancel = (): void => {
-          toolAbort.abort();
-          entry.agentSession.clearQueue();
-          void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
-        };
-        if (turn.cancel) {
-          if (turn.cancel.aborted) onCancel();
-          else turn.cancel.addEventListener("abort", onCancel, { once: true });
-        }
-        const steeredSeen = recordedMessageTimestamps(turn.history);
-        const stopSignalPoll =
-          signals && turn.runId
-            ? startSignalPoll(
-                signals,
-                turn.runId,
-                {
-                  onSteer: async (text, ts, request, acknowledge) => {
-                    if (ts && steeredSeen.has(ts)) return;
-                    const prepared = await turn.prepareSteer?.(text, request);
-                    const prompt = prepared?.text ?? text;
-                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
-                    const steer = {
-                      text,
-                      prompt,
-                      ts,
-                      attachments: prepared?.attachments,
-                      images: prepared?.images,
-                      author: prepared?.author,
-                      acknowledge,
-                    };
-                    pendingSteers.push(steer);
-                    if (ts) steeredSeen.add(ts);
-                    if (prepared?.documents?.length)
-                      entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
-                    entry.ref.silentRequested = false;
-                    try {
-                      await entry.agentSession.steer(
-                        prompt,
-                        prepared?.images?.map((image) => ({
-                          type: "image" as const,
-                          mimeType: image.mimeType,
-                          data: image.dataBase64,
-                        })),
-                      );
-                    } catch (error) {
-                      const at = pendingSteers.indexOf(steer);
-                      if (at >= 0) pendingSteers.splice(at, 1);
-                      if (ts) steeredSeen.delete(ts);
-                      throw error;
-                    }
-                    return false;
-                  },
-                  onAbort: async (reason) => {
-                    userAborted = true;
-                    abortReason ??= reason;
-                    toolAbort.abort();
-                    entry.agentSession.clearQueue();
-                    await entry.agentSession.abort();
-                  },
-                },
-                { onError: (e) => swallow("pi: run signal poll", e) },
-              )
-            : null;
+        const { release: releaseSignals } = watchTurnSignals({
+          turn,
+          entry,
+          signals,
+          toolAbort,
+          pendingSteers,
+          stop,
+        });
         const promptStart = Date.now();
         const floorCap = createFloorCapPolicy({
           goal: () => entry.ref.goal,
@@ -1614,7 +1557,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             turnWallClockMs,
             raceCapMs,
             race,
-            stopped: () => userAborted,
+            stopped: () => stop.userAborted,
             directModel: (id) => !turnModelGateway?.models[id],
             servedModelId: (id) => (turn.providerKeys ? id : companyServedId(id)),
             resolveFallbackRuntime: () => opts?.resolveFallbackRuntime?.(),
@@ -1630,14 +1573,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           );
           if (wallClock === "ok") await recoverFailedRound();
           const goalAfterPrompt = entry.ref.goal;
-          if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
+          if (wallClock === "ok" && goalAfterPrompt && !stop.userAborted && !turn.cancel?.aborted) {
             wallClock = await enforceGoal({
               goal: goalAfterPrompt,
               meter: grindMeter,
               outcome: wallClock,
               ok: "ok" as const,
               blocked: () =>
-                userAborted ||
+                stop.userAborted ||
                 !!turn.cancel?.aborted ||
                 !!entry.ref.runtimeHandoff ||
                 !!entry.ref.pausedOnApproval ||
@@ -1670,7 +1613,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
           const note = emptyEndingNote({
             wallClock,
-            userAborted,
+            userAborted: stop.userAborted,
             cancelled: !!turn.cancel?.aborted,
             surfaceTools: !!turn.surfaceTools,
             pollFire: !!turn.pollFire,
@@ -1686,17 +1629,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await thinkTail;
             const capMs = raceCapMs();
             if (
-              !userAborted &&
+              !stop.userAborted &&
               !turn.cancel?.aborted &&
               (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
             ) {
               try {
                 const outcome = await race(entry.agentSession.prompt(note), capMs);
-                if (outcome !== "ok" && !userAborted) {
+                if (outcome !== "ok" && !stop.userAborted) {
                   recoveryDead = true;
                 } else if (
                   outcome === "ok" &&
-                  !userAborted &&
+                  !stop.userAborted &&
                   !(entry.agentSession.getLastAssistantText() ?? "").trim()
                 ) {
                   console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
@@ -1711,7 +1654,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (persistError) throw persistError;
           const cancelAbortRejection =
             turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
-          if (!userAborted && !cancelAbortRejection) {
+          if (!stop.userAborted && !cancelAbortRejection) {
             const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
             let recovered = false;
             try {
@@ -1726,12 +1669,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 swallow("pi: refusal fallback", e);
               }
             }
-            if (!recovered && !userAborted) throw turnErr;
+            if (!recovered && !stop.userAborted) throw turnErr;
           }
           wallClock = "ok";
         } finally {
-          turn.cancel?.removeEventListener("abort", onCancel);
-          await stopSignalPoll?.();
+          await releaseSignals();
           if (pendingSteers.length) entry.agentSession.clearQueue();
           unsubscribeMessageEnd?.();
           unsubscribe?.();
@@ -1746,7 +1688,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.screenToolResult = undefined;
         }
         if (persistError) throw persistError;
-        if (wallClockTurnFailure(wallClock, userAborted, turn.cancel?.aborted === true)) {
+        if (wallClockTurnFailure(wallClock, stop.userAborted, turn.cancel?.aborted === true)) {
           const capLabel =
             turnWallClockMs % 60_000 === 0
               ? `${turnWallClockMs / 60_000}-minute`
@@ -1767,7 +1709,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           await turn.saveGoal?.(g);
           if (g.status === "complete") entry.ref.goal = null;
         };
-        if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
+        if (entry.ref.runtimeHandoff && !stop.userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;
           if (persistError) throw persistError;
@@ -1782,7 +1724,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const freshStopReason = freshAssistantStopReason();
         const cancelStoppedCleanly =
           turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
-        if (userAborted || cancelStoppedCleanly) {
+        if (stop.userAborted || cancelStoppedCleanly) {
           const freshMessages = entry.agentSession.messages.slice(messagesBefore);
           const lastFreshAssistant = [...freshMessages]
             .reverse()
@@ -1791,11 +1733,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
           const reply = partial.trim() ? partial : "(stopped)";
-          await settleGoal(userAborted);
+          await settleGoal(stop.userAborted);
           await recordStoppedTurn(
             turn,
             partial,
-            userAborted ? abortReason : "because the run was cancelled",
+            stop.userAborted ? stop.abortReason : "because the run was cancelled",
             steps.closing(reply),
           );
           const cacheUsage = sumCacheUsage(callStats);
