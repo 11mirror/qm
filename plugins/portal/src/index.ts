@@ -120,8 +120,6 @@ export {
   bootChecks,
 };
 
-const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
 let modelProviderConfigured: boolean | undefined;
 let surfaceConfigNextAt = 0;
 let surfaceConfigInflight: Promise<void> | null = null;
@@ -155,14 +153,11 @@ async function coreCall<T extends object>(
 
 async function fetchSurfaceConfig(): Promise<void> {
   try {
-    const r = await coreCall<{ branding?: { accent?: unknown }; modelProviderConfigured?: unknown }>(
-      "GET",
-      "/v1/surface-config",
-      { signal: AbortSignal.timeout(2_000) },
-    );
+    const r = await coreCall<{ modelProviderConfigured?: unknown }>("GET", "/v1/surface-config", {
+      signal: AbortSignal.timeout(2_000),
+    });
     if (r.ok) {
       const body = r.body;
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
@@ -264,7 +259,7 @@ function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
     return sendHtml(
       res,
       503,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Could not confirm your identity. Try again in a moment.</p></body>',
+      connectPage({ title: "Service unavailable", body: "Could not confirm your identity. Try again in a moment." }),
     );
   json(res, 503, { error: "identity_unavailable", message: "could not confirm your identity, try again in a moment" });
 }
@@ -336,23 +331,16 @@ export function notConfiguredHtml(): string {
   });
 }
 
-const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
-  html,body{ height:100%; margin:0; }
-  body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
-    font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
-  .card{ max-width:440px; text-align:center; }
-  h1{ font-size:19px; margin:0 0 10px; }
-  p{ color:var(--muted); margin:0 0 18px; }
-  .btn{ display:inline-block; font-weight:600; min-height:40px; line-height:40px; padding:0 18px;
-    border:1px solid var(--brand); border-radius:var(--radius-md); background:var(--brand); color:#fff; text-decoration:none; }
-  a.muted{ color:var(--muted); display:inline-block; margin-top:14px; }
-</style>`;
-
-function connectPage(o: { title: string; body: string; action?: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle()}</head>
-<body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}</div></body></html>`;
+function connectPage(o: { title: string; body: string; action?: string; icon?: string }): string {
+  return cardPage({
+    title: o.title,
+    heading: o.title,
+    msg: o.body,
+    icon: o.icon ?? ALERT_ICON,
+    warn: !o.icon,
+    actions: o.action ?? "",
+    help: "",
+  });
 }
 
 function providerLabel(provider: string): string {
@@ -370,13 +358,15 @@ export function connectWrongRecipientHtml(o: { provider: string; alreadyConnecte
     return connectPage({
       title: `You've already connected ${prov}`,
       body: `This link was meant for a different teammate, and your ${prov} is already connected, so there's nothing to do here.`,
-      action: `<a class="muted" href="/connectors">Manage your connections</a>`,
+      action: `<a class="btn ghost" href="/connectors">Manage your connections</a>`,
+      icon: LOCK_ICON,
     });
   }
   return connectPage({
     title: "This link was for someone else",
     body: `This connect link was created for a different teammate. Want to connect your own ${prov} instead?`,
-    action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+    action: `<a class="btn primary" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+    icon: LOCK_ICON,
   });
 }
 
@@ -457,11 +447,7 @@ async function handleSecretDrop(
         error: "unreachable",
         message: "couldn't reach the credential service, try again in a moment",
       });
-    return sendHtml(
-      res,
-      502,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Try the link again in a moment.</p></body>',
-    );
+    return sendHtml(res, 502, connectPage({ title: "Service unavailable", body: "Try the link again in a moment." }));
   }
   const bodyText = await r.text();
   const ct = r.headers.get("content-type") ?? (isPost ? "application/json" : "text/html; charset=utf-8");
@@ -739,7 +725,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         connectPage({
           title: "Still signed in",
           body: "Use Sign out from the account menu to end this session.",
-          action: `<a class="btn" href="/">Back to the portal</a>`,
+          action: `<a class="btn primary" href="/">Back to the portal</a>`,
+          icon: LOCK_ICON,
         }),
       );
     return sendHtml(
@@ -748,7 +735,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       connectPage({
         title: "Signed out",
         body: "You have signed out of this portal.",
-        action: `<a class="btn" href="/auth/login">Sign in</a>`,
+        action: `<a class="btn primary" href="/auth/login">Sign in</a>`,
+        icon: LOCK_ICON,
       }),
     );
   }
