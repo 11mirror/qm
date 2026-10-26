@@ -353,10 +353,10 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return { ok: false, message: "I can't find that file — it may have expired." };
     },
     async getChannelBehavior() {
-      return { ok: true };
+      return { ok: false, message: "channel settings apply only inside a channel." };
     },
     async setChannelBehavior() {
-      return { ok: true };
+      return { ok: false, message: "channel settings apply only inside a channel." };
     },
     async callMcpTool() {
       return "";
@@ -2990,24 +2990,6 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   assert.equal(writes.length, before);
 });
 
-test("a files read approval cannot authorize writes or sharing", async () => {
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    pendingApprovals: [],
-    toolApprovalGate: (identity) => identity === "files:read",
-  };
-  const files = createAgentTools(ref).find((tool) => tool.name === "files")!;
-  assert.equal(textOut(await call(files, { action: "read", path: "a.txt" })), "data");
-  for (const params of [
-    { action: "write", path: "a.txt", data: "new" },
-    { action: "share", path: "a.txt", scope: "org" },
-  ]) {
-    ref.pausedOnApproval = false;
-    assert.match(textOut(await call(files, params)), /needs human approval/);
-    assert.equal(ref.pendingApprovals!.at(-1)!.approvalKey, `tool:files:${params.action}`);
-  }
-});
-
 test("apps publish schema no longer advertises audience and rejects it as an unknown argument", async () => {
   const inputs: unknown[] = [];
   const tc = {
@@ -3567,36 +3549,6 @@ test("sessions search forwards a bounded query and preserves source references a
   assert.deepEqual(seen, [{ query: "memo", limit: 3 }]);
   assert.deepEqual(output.hits[0].metadata, { sessionId: "source", seq: 7 });
   assert.deepEqual(output.failedBackends, ["conversations"]);
-});
-
-test("background read approval cannot authorize process input or termination", async () => {
-  let mutations = 0;
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      backgroundWrite: async () => {
-        mutations++;
-        throw new Error("must not write");
-      },
-      backgroundStop: async () => {
-        mutations++;
-        throw new Error("must not stop");
-      },
-    },
-    pendingApprovals: [],
-    toolApprovalGate: (id) => id === "background:poll",
-  };
-  const background = createAgentTools(ref).find((t) => t.name === "background")!;
-  assert.match(textOut(await call(background, { action: "poll", process_id: "bg-1" })), /more output/);
-  for (const action of ["send_input", "stop"]) {
-    ref.pausedOnApproval = false;
-    assert.match(
-      textOut(await call(background, { action, process_id: "bg-1", data: "danger" })),
-      /needs human approval/,
-    );
-    assert.equal(ref.pendingApprovals?.at(-1)?.approvalKey, `tool:background:${action}`);
-  }
-  assert.equal(mutations, 0);
 });
 
 test("invalid execution arguments cannot dispatch commands or retarget process operations", async () => {

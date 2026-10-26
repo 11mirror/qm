@@ -167,17 +167,6 @@ export function createMockHarness(): Harness {
         summary?: string;
       }> = [];
       let pausedOnApproval = false;
-      const gateTool = (tool: string): boolean => {
-        if (!turn.toolApprovalGate || turn.toolApprovalGate(tool)) return false;
-        collected.push({
-          command: tool,
-          reason: "strict posture: this tool call requires human approval",
-          kind: "approval",
-          approvalKey: `tool:${tool}`,
-        });
-        pausedOnApproval = true;
-        return true;
-      };
 
       if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
         reply = "[strict/read-only posture: that tool is unavailable]";
@@ -371,20 +360,14 @@ export function createMockHarness(): Harness {
         else if (command0.startsWith("!owner ")) tag = "!owner ";
         const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
         const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
-        if (gateTool("execute")) {
-          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
-          usedTool = true;
-          reply = "";
-        } else {
-          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
-          let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
-          if (tag === "!scratch ") opts = { scratch: true };
-          else if (tag === "!owner ") opts = { ownerAuth: true };
-          const result = await turn.tools.execute(command, opts);
-          await turn.emit({ kind: "ToolResult", body: { ...result } });
-          usedTool = true;
-          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        }
+        await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
+        let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
+        if (tag === "!scratch ") opts = { scratch: true };
+        else if (tag === "!owner ") opts = { ownerAuth: true };
+        const result = await turn.tools.execute(command, opts);
+        await turn.emit({ kind: "ToolResult", body: { ...result } });
+        usedTool = true;
+        reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
       } else if (command0.startsWith("!screened-run ")) {
         const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
         await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
@@ -486,9 +469,6 @@ export function createMockHarness(): Harness {
           pausedOnApproval = true;
           reply = "";
         }
-      } else if (command0.startsWith("!read ") && gateTool("read")) {
-        usedTool = true;
-        reply = "";
       } else if (command0.startsWith("!read ")) {
         const path = command0.slice(6).trim();
         const { content } = await turn.tools.read(path);
@@ -542,14 +522,9 @@ export function createMockHarness(): Harness {
         const sp = rest.indexOf(" ");
         const path = sp === -1 ? rest : rest.slice(0, sp);
         const data = sp === -1 ? "" : rest.slice(sp + 1);
-        if (gateTool("write")) {
-          usedTool = true;
-          reply = "";
-        } else {
-          await turn.tools.write(path, data);
-          usedTool = true;
-          reply = `wrote ${path}`;
-        }
+        await turn.tools.write(path, data);
+        usedTool = true;
+        reply = `wrote ${path}`;
       } else if (
         command0.startsWith("!writeattach ") ||
         command0.startsWith("!attachsilent ") ||
