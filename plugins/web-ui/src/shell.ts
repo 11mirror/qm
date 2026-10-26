@@ -29,7 +29,6 @@ import {
   type IconNode,
 } from "lucide";
 import {
-  api,
   ApiError,
   setSigninRequiredHandler,
   type SigninRequired,
@@ -46,7 +45,7 @@ import {
   fetchSessionRow,
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
-import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
+import { swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
@@ -104,7 +103,7 @@ import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, can, canView, isView, quietly, type AuthMode, type Me, type View } from "./shell-state";
+import { appState, can, canView, isView, quietly, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { UI_OUTDATED_EVENT } from "../../chassis/src/ui-release.ts";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
@@ -134,14 +133,10 @@ function signOutFromMenu(): void {
   void signOut();
 }
 
-let authMode: AuthMode = "portal";
 let shellMounted = false;
 let pendingCanvasRestore: Promise<void> | null = null;
 
-setSigninRequiredHandler((detail) => {
-  authMode = detail.mode ?? authMode;
-  renderAuthGate(gateFor(authMode, detail.reason));
-});
+setSigninRequiredHandler((detail) => renderAuthGate(gateFor(detail.reason)));
 
 onExitCanvas(() => exitSplitIfActive());
 
@@ -240,8 +235,6 @@ const ICON = {
 export async function signOut(): Promise<void> {
   stopAnalytics();
   stopBrowserErrors();
-  const portal = authMode === "portal";
-  if (!portal) await api("/signout", { method: "POST" }).catch(() => undefined);
   appState.me = null;
   closeBrowse();
   resetInboxState();
@@ -256,10 +249,6 @@ export async function signOut(): Promise<void> {
   resetKeychainState();
   mainConversation().composer.resetComposer();
   updateDocumentTitle();
-  if (!portal) {
-    renderAuthGate({ kind: "dev" });
-    return;
-  }
   let endedSession: boolean;
   let redirectTo = "/";
   try {
@@ -313,23 +302,11 @@ function outdatedBanner() {
   </div>`;
 }
 
-function devBanner(user: string) {
-  return html`
-    <div class="top-banner dev" role="status">
-      <span><b>Dev mode</b> — no identity provider, signed in as ${user}</span>
-      <button class="top-banner-action" type="button" @click=${signOut}>Sign out</button>
-    </div>
-  `;
-}
-
 function gateShell(body: unknown) {
   return html`
     <div class="signin">
       <div class="signin-panel">
-        <div class="signin-brand">
-          ${brandMark()}<span>${brandName()}</span>
-          ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing}
-        </div>
+        <div class="signin-brand">${brandMark()}<span>${brandName()}</span></div>
         ${body}
       </div>
     </div>
@@ -380,11 +357,6 @@ function deniedGate() {
       Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
     </p>
     <button class="btn" type="button" @click=${signOut}>Sign out</button>
-    ${
-      authMode === "dev"
-        ? html`<div class="hint">This instance lists its principals in <b>WEB_UI_PRINCIPALS</b>.</div>`
-        : nothing
-    }
   `);
 }
 
@@ -397,72 +369,18 @@ function unreachableGate() {
   `);
 }
 
-async function submitDevSignin(user: string): Promise<void> {
-  renderAuthGate({ kind: "dev", value: user, pending: true });
-  try {
-    await api("/signin", { method: "POST", body: JSON.stringify({ user }) });
-  } catch (err) {
-    renderAuthGate({ kind: "dev", value: user, error: errMessage(err, "Sign-in failed.") });
-    return;
-  }
-  await bootSafely();
-}
-
-function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
-  return gateShell(html`
-    <form
-      @submit=${(e: Event) => {
-        e.preventDefault();
-        if (gate.pending) return;
-        const input = (e.target as HTMLFormElement).querySelector("input") as HTMLInputElement | null;
-        const user = input?.value.trim();
-        if (user) void submitDevSignin(user);
-      }}
-    >
-      <h1>Dev sign-in</h1>
-      <p class="signin-body">
-        No identity provider is configured, so this instance trusts a local cookie. Set
-        <b>CORE_SIGNING_SECRET</b> and run the portal to use real sign-in.
-      </p>
-      <label for="dev-principal">Principal</label>
-      <input
-        id="dev-principal"
-        name="principal"
-        type="text"
-        inputmode="email"
-        autocomplete="username"
-        spellcheck="false"
-        required
-        autofocus
-        placeholder="you@org.com"
-        .value=${gate.value ?? ""}
-        ?disabled=${gate.pending === true}
-      />
-      <button class="btn primary" type="submit" ?disabled=${gate.pending === true}>
-        ${gate.pending ? "Signing in…" : "Continue"}
-      </button>
-      ${gate.error ? html`<div class="hint error" role="alert">${gate.error}</div>` : nothing}
-    </form>
-  `);
-}
-
-export type AuthGate =
-  | { kind: "portal" }
-  | { kind: "denied" }
-  | { kind: "unreachable" }
-  | { kind: "dev"; value?: string; error?: string; pending?: boolean };
+export type AuthGate = { kind: "portal" } | { kind: "denied" } | { kind: "unreachable" };
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
   stopBrowserErrors();
   shellMounted = false;
   const gates = { portal: portalGate, denied: deniedGate, unreachable: unreachableGate };
-  render(gate.kind === "dev" ? devGate(gate) : gates[gate.kind](), root);
+  render(gates[gate.kind](), root);
 }
 
-function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
-  if (reason === "not_allowed") return { kind: "denied" };
-  return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
+function gateFor(reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
+  return reason === "not_allowed" ? { kind: "denied" } : { kind: "portal" };
 }
 
 export function mountShell(): void {
@@ -471,7 +389,6 @@ export function mountShell(): void {
   let banner: TemplateResult | typeof nothing = nothing;
   if (uiOutdated) banner = outdatedBanner();
   else if (impersonatedBy) banner = impersonationBanner(impersonatedBy);
-  else if (authMode === "dev") banner = devBanner(appState.me?.user ?? "");
   render(
     html`
       ${banner}
@@ -1008,8 +925,7 @@ export async function boot(): Promise<void> {
   }
   if (r.status === 401) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
-    authMode = body.mode ?? "portal";
-    renderAuthGate(gateFor(authMode, body.reason));
+    renderAuthGate(gateFor(body.reason));
     return;
   }
   if (!r.ok) {
@@ -1020,7 +936,6 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
-  authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
     shellMounted = false;

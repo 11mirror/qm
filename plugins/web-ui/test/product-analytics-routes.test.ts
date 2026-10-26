@@ -33,7 +33,6 @@ process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).p
 process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = secret;
 process.env.PORTAL_IDENTITY_SECRET = secret;
-process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 process.env.POSTHOG_API_KEY = "phc_test";
 process.env.POSTHOG_HOST = "https://us.i.posthog.com";
 const { handler } = await import("../server/index.ts");

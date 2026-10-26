@@ -59,7 +59,7 @@ export function voiceEnabled(user: string, env: NodeJS.ProcessEnv = process.env)
   );
 }
 
-export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, portalVerified: boolean): boolean {
+export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string): boolean {
   let expected: string;
   try {
     expected = new URL(publicUrl).origin;
@@ -67,7 +67,7 @@ export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, por
     return false;
   }
   if (sameOriginRequest(req, expected)) return true;
-  return portalVerified && req.headers.origin === undefined && req.headers["sec-fetch-site"] === undefined;
+  return req.headers.origin === undefined && req.headers["sec-fetch-site"] === undefined;
 }
 
 interface Caller {

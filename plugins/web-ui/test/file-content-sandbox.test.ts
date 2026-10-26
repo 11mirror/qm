@@ -1,3 +1,4 @@
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -27,6 +28,12 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = "file-content-test-secret";
+const IDENTITY = {
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { p: "alice", exp: Date.now() + 3_600_000 },
+    process.env.CORE_SIGNING_SECRET!,
+  ),
+};
 process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
@@ -40,7 +47,7 @@ test.after(() => {
 });
 
 test("inline file artifacts are sandboxed to an opaque origin (no same-origin XSS)", async () => {
-  const r = await fetch(`${base}/api/files/some-file/content`, { headers: { cookie: "webuiuser=alice" } });
+  const r = await fetch(`${base}/api/files/some-file/content`, { headers: { ...IDENTITY } });
   assert.equal(r.status, 200);
   const csp = r.headers.get("content-security-policy") ?? "";
   assert.match(csp, /^sandbox\b/, "served under a CSP sandbox");
@@ -53,7 +60,7 @@ test("inline file artifacts are sandboxed to an opaque origin (no same-origin XS
 });
 
 test("inert types (PDF) are served without a CSP sandbox so the browser viewer renders them", async () => {
-  const r = await fetch(`${base}/api/files/some-pdf/content`, { headers: { cookie: "webuiuser=alice" } });
+  const r = await fetch(`${base}/api/files/some-pdf/content`, { headers: { ...IDENTITY } });
   assert.equal(r.status, 200);
   assert.equal(r.headers.get("content-type"), "application/pdf");
   assert.equal(r.headers.get("content-security-policy"), "frame-ancestors 'self'");
@@ -62,7 +69,7 @@ test("inert types (PDF) are served without a CSP sandbox so the browser viewer r
 
 test("a cosmetic trailing filename on the content URL serves the same file", async () => {
   const r = await fetch(`${base}/api/files/some-pdf/content/Upstream%20Batch%20Review.pdf`, {
-    headers: { cookie: "webuiuser=alice" },
+    headers: { ...IDENTITY },
   });
   assert.equal(r.status, 200);
   assert.equal(r.headers.get("content-type"), "application/pdf");
