@@ -30,7 +30,7 @@ const MIN_QUERY_LEN = 2;
 const DEBOUNCE_MS = 150;
 const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
 
-const searchState = {
+const freshSearch = () => ({
   open: false,
   query: "",
   hits: [] as ChatSearchHit[],
@@ -42,7 +42,8 @@ const searchState = {
   loading: false,
   sel: 0,
   selectionMoved: false,
-};
+});
+const searchState = freshSearch();
 
 let host: HTMLDivElement | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -61,17 +62,7 @@ export function registerChatSearchHotkey(): void {
 
 export function openChatSearch(): void {
   if (searchState.open) return;
-  searchState.open = true;
-  searchState.query = "";
-  searchState.hits = [];
-  searchState.loading = false;
-  searchState.failed = false;
-  searchState.sel = 0;
-  searchState.selectionMoved = false;
-  searchState.resources = [];
-  searchState.resourceFailures = [];
-  searchState.resourcesLimited = false;
-  searchState.resourcesLoading = false;
+  Object.assign(searchState, freshSearch(), { open: true });
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLInputElement>(".chat-search-input")?.focus());
 }
@@ -79,12 +70,16 @@ export function openChatSearch(): void {
 function closeChatSearch(): void {
   if (!searchState.open) return;
   searchState.open = false;
+  cancelSearch();
+  draw();
+}
+
+function cancelSearch(): void {
   fetchSeq++;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   inflight?.abort();
   inflight = null;
-  draw();
 }
 
 function ensureHost(): HTMLDivElement {
@@ -123,26 +118,10 @@ function clampSel(): void {
 }
 
 function onQueryInput(e: InputEvent): void {
-  searchState.query = (e.currentTarget as HTMLInputElement).value;
-  searchState.sel = 0;
-  searchState.selectionMoved = false;
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = null;
-  fetchSeq++;
-  inflight?.abort();
-  inflight = null;
-  searchState.hits = [];
-  searchState.resources = [];
-  searchState.resourceFailures = [];
-  searchState.resourcesLimited = false;
-  searchState.resourcesLoading = false;
-  searchState.failed = false;
+  Object.assign(searchState, freshSearch(), { open: true, query: (e.currentTarget as HTMLInputElement).value });
+  cancelSearch();
   const q = searchState.query.trim();
-  if (q.length < MIN_QUERY_LEN) {
-    searchState.loading = false;
-    draw();
-    return;
-  }
+  if (q.length < MIN_QUERY_LEN) return draw();
   searchState.loading = true;
   searchState.resourcesLoading = true;
   draw();

@@ -20,7 +20,7 @@ interface PolicyWire {
   };
 }
 
-const ambientPolicyState = {
+const freshPolicyState = () => ({
   scope: null as string | null,
   loading: false,
   orders: "",
@@ -32,7 +32,8 @@ const ambientPolicyState = {
   notice: "",
   noticeKind: "" as "" | "saved" | "error",
   newBotName: "",
-};
+});
+const ambientPolicyState = freshPolicyState();
 
 let loadSeq = 0;
 let redraw: () => void = () => {};
@@ -43,17 +44,18 @@ function ambientPolicyApplies(scopeId: string): boolean {
 
 export function resetAmbientPolicy(): void {
   loadSeq += 1;
-  ambientPolicyState.scope = null;
-  ambientPolicyState.loading = false;
-  ambientPolicyState.orders = "";
-  ambientPolicyState.ambientEnabled = null;
-  ambientPolicyState.bots = [];
-  ambientPolicyState.baseUpdatedAt = 0;
-  ambientPolicyState.dirty = false;
-  ambientPolicyState.saving = false;
-  ambientPolicyState.notice = "";
-  ambientPolicyState.noticeKind = "";
-  ambientPolicyState.newBotName = "";
+  Object.assign(ambientPolicyState, freshPolicyState());
+}
+
+function applyPolicy(r: PolicyWire): void {
+  ambientPolicyState.orders = r.policy.orders;
+  ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
+  ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
+    name,
+    mode: p.mode,
+    ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
+  }));
+  ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
 }
 
 export async function loadAmbientPolicy(scopeId: string, onChange: () => void): Promise<void> {
@@ -66,14 +68,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
   try {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scopeId)}/ambient-policy`);
     if (seq !== loadSeq) return;
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
   } catch (e) {
     if (seq !== loadSeq) return;
     ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
@@ -114,14 +109,7 @@ async function save(): Promise<void> {
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
       }),
     });
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
     ambientPolicyState.dirty = false;
     ambientPolicyState.notice = "Saved.";
     ambientPolicyState.noticeKind = "saved";

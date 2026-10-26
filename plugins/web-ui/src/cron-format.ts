@@ -71,30 +71,21 @@ export function cronRunSummaryTitle(c: CronTimingView): string {
 }
 
 export function formatCronDateTime(ms: number, now = Date.now(), timeZone?: string): string {
-  const date = new Date(ms);
-  const today = new Date(now);
-  if (timeZone) {
-    const zonedDate = zoned(ms, timeZone);
-    const zonedToday = zoned(now, timeZone);
-    if (zonedDate && zonedToday) {
-      const time = formatTime(ms, timeZone);
-      if (isSameDay(zonedDate, zonedToday)) return time;
-      if (isSameDay(zonedDate, addDays(zonedToday, 1))) return `tomorrow ${time}`;
-      const dateOpts: Intl.DateTimeFormatOptions =
-        zonedDate.getFullYear() === zonedToday.getFullYear()
-          ? { month: "short", day: "numeric", timeZone }
-          : { month: "short", day: "numeric", year: "numeric", timeZone };
-      return `${date.toLocaleDateString([], dateOpts)} ${time}`;
-    }
-  }
-  const time = formatTime(ms);
+  const zonedDate = timeZone ? zoned(ms, timeZone) : null;
+  const zonedToday = timeZone ? zoned(now, timeZone) : null;
+  const tz = zonedDate && zonedToday ? timeZone : undefined;
+  const date = zonedDate && zonedToday ? zonedDate : new Date(ms);
+  const today = zonedDate && zonedToday ? zonedToday : new Date(now);
+  const time = formatTime(ms, tz);
   if (isSameDay(date, today)) return time;
   if (isSameDay(date, addDays(today, 1))) return `tomorrow ${time}`;
-  const dateOpts: Intl.DateTimeFormatOptions =
-    date.getFullYear() === today.getFullYear()
-      ? { month: "short", day: "numeric" }
-      : { month: "short", day: "numeric", year: "numeric" };
-  return `${date.toLocaleDateString([], dateOpts)} ${time}`;
+  const dateOpts: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }),
+    ...(tz ? { timeZone: tz } : {}),
+  };
+  return `${new Date(ms).toLocaleDateString([], dateOpts)} ${time}`;
 }
 
 function calendarTimezone(schedule: { timezone?: string }): string | undefined {

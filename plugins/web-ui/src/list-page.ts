@@ -1,22 +1,43 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { ArrowLeft, Plus, Search } from "lucide";
+import { ArrowLeft, Plus, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
 import { contextsState, scopeFilterControl } from "./contexts";
 import { fieldSelect } from "./ui";
 import { appState, type View } from "./shell-state";
 import { scopedSession, scopedViewTopbar, type SessionTool } from "./session-scope";
-import { deepLinkPath, UI_BASE } from "./deep-link";
+import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { trapDialogFocus } from "./dialog-focus";
 import { errMessage } from "../../chassis/src/errors";
+import { tip } from "./tooltip";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {
-  return html`<button class="context-back" type="button" @click=${onBack}>
-    ${icon(ArrowLeft, 15)}<span>${label}</span>
+  return textBtn(label, ArrowLeft, onBack, "context-back");
+}
+
+export function iconBtn(
+  label: string,
+  node: IconNode,
+  onClick?: () => void,
+  o: { aria?: string; size?: number; cls?: string; disabled?: boolean; submit?: boolean } = {},
+): TemplateResult {
+  return html`<button
+    class=${o.cls ?? "icon-btn"}
+    type=${o.submit ? "submit" : "button"}
+    aria-label=${o.aria ?? label}
+    ${tip(label)}
+    ?disabled=${Boolean(o.disabled)}
+    @click=${onClick}
+  >
+    ${icon(node, o.size ?? 14)}
   </button>`;
 }
 
-export function listRowsTpl(rows: TemplateResult[], className = ""): TemplateResult {
+export function textBtn(label: string, node: IconNode, onClick: () => void, cls = "btn", size = 15): TemplateResult {
+  return html`<button class=${cls} type="button" @click=${onClick}>${icon(node, size)}<span>${label}</span></button>`;
+}
+
+function listRowsTpl(rows: TemplateResult[], className = ""): TemplateResult {
   return html`<div class="list-rows ${className}">
     ${rows.flatMap((row, i) => (i ? [html`<div class="list-divider" role="presentation"></div>`, row] : row))}
   </div>`;
@@ -186,13 +207,7 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
       </div>
       <div class="list-page-actions">
         ${o.controls ?? nothing} ${o.onScope ? scopeFilterControl(o.scope ?? null, o.onScope) : nothing}
-        ${
-          o.action
-            ? html`<button class="btn primary list-page-action" type="button" @click=${o.action.onClick}>
-                ${icon(Plus, 15)}<span>${o.action.label}</span>
-              </button>`
-            : nothing
-        }
+        ${o.action ? textBtn(o.action.label, Plus, o.action.onClick, "btn primary list-page-action") : nothing}
       </div>
       ${
         o.search
@@ -251,6 +266,20 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       if (`${location.pathname}${location.search}` === next) return;
       if (push) history.pushState(null, "", next);
       else history.replaceState(null, "", next);
+    },
+
+    link(id: string | null, cls: string, open: () => void, content: TemplateResult, label?: string): TemplateResult {
+      return html`<a
+        class=${cls}
+        href=${deepLinkPath(UI_BASE, view, null, null, id)}
+        aria-label=${label ?? nothing}
+        @click=${(event: MouseEvent) => {
+          if (!isPlainLeftClick(event)) return;
+          event.preventDefault();
+          open();
+        }}
+        >${content}</a
+      >`;
     },
 
     takeFlash(): string {

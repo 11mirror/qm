@@ -2,10 +2,8 @@ import { html } from "lit";
 import { Pencil, Trash2 } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./icons";
 import { appState } from "./shell";
-import { artifactPage, listPageTpl } from "./list-page";
-import { tip } from "./tooltip";
+import { artifactPage, iconBtn, listPageTpl } from "./list-page";
 
 interface Fact {
   id: string;
@@ -80,28 +78,16 @@ function factRow(fact: Fact) {
       <div>${text}</div>
       <div class="card-meta">Captured ${new Date(fact.createdAt).toISOString().slice(0, 10)}</div>
     </div>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Edit this fact"
-      ${tip("Edit this fact")}
-      @click=${() => {
+    ${iconBtn(
+      "Edit this fact",
+      Pencil,
+      () => {
         editing = { id: fact.id, text };
         drawMemory();
-      }}
-    >
-      ${icon(Pencil, 15)}
-    </button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Forget this fact"
-      ${tip("Forget this fact")}
-      ?disabled=${busy}
-      @click=${() => void change("DELETE", { ids: [fact.id] }, "Forgotten ✓")}
-    >
-      ${icon(Trash2, 15)}
-    </button>
+      },
+      { size: 15 },
+    )}
+    ${iconBtn("Forget this fact", Trash2, () => void change("DELETE", { ids: [fact.id] }, "Forgotten ✓"), { size: 15, disabled: busy })}
   </div>`;
 }
 
