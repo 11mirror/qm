@@ -236,6 +236,16 @@ const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
 const MODE_FALLBACK_MD = loadProtocolFile("mode-fallback");
+const DELEGATE_WORK_MD = loadProtocolFile("turn-delegate-work");
+const EXTERNAL_SLACK_MD = loadProtocolFile("turn-external-slack");
+const PRIVATE_SESSION_MESSAGE_MD = loadProtocolFile("turn-private-session-message");
+const COMPOSIO_MD = loadProtocolFile("turn-composio");
+const ORG_ADMIN_MD = loadProtocolFile("turn-org-admin");
+const SCHEDULED_DESTINATION_MD = loadProtocolFile("turn-scheduled-destination");
+const POLL_SILENCE_MD = loadProtocolFile("turn-poll-silence");
+const PROACTIVE_OPENER_MD = loadProtocolFile("turn-proactive-opener");
+const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
+const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 
@@ -1030,11 +1040,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const delegateWork = requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
-      if (delegateWork)
-        modeFrame +=
-          "\n\nKeep this conversation responsive. You cannot execute commands yourself. Delegate all substantial work (research, coding, computation, or multi-step investigations) with subagents open and a short colleague-to-colleague brief. Handle quick answers, status requests, and coordination yourself. Do not substitute other tools for command execution or do substantial work inline. After dispatching, end this turn promptly; subagent completion durably wakes you to collect and report the result. Do not wait or poll for subagents. Relay new user instructions to the appropriate subagent with subagents followup_task. Describe progress and results naturally without explaining the delegation machinery.";
+      if (delegateWork) modeFrame += `\n\n${DELEGATE_WORK_MD}`;
       if (modeName === "mode-conversation" && input.proactiveOpener) {
-        modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
+        modeFrame += `\n${PROACTIVE_OPENER_MD}`;
       }
       const sharedCore = applyPromptVars(SHARED_CORE_MD, {
         botName,
@@ -1045,13 +1053,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls),
       });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
-      if (external)
-        systemPrompt +=
-          "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
+      if (external) systemPrompt += `\n\n${EXTERNAL_SLACK_MD}`;
       const turnContextBlocks: Record<string, string> = {};
-      if (input.privateSessionMessage)
-        systemPrompt +=
-          "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
+      if (input.privateSessionMessage) systemPrompt += `\n\n${PRIVATE_SESSION_MESSAGE_MD}`;
 
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
@@ -1204,9 +1208,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       else if (conversation.kind === "group") memoryContext = "a group conversation";
       const memoryHeading = `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 
-      const onboardingBlock = isIdeasConversation(input)
-        ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
-        : "";
+      const onboardingBlock = isIdeasConversation(input) ? IDEAS_CONVERSATION_MD : "";
 
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
@@ -1973,13 +1975,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
           )
         )
-          systemPrompt +=
-            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
+          systemPrompt += `\n\n${COMPOSIO_MD}`;
         if (actorIsOrgAdmin) {
-          systemPrompt +=
-            "\n\n## Acting for an org admin\n" +
-            "This user is an org admin, and your token inherits that for this turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting. You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
-            " System administration is not limited to the admin dashboard. Use the admin's independently authorized infrastructure or provider access to diagnose, repair, and manage this instance, including resources owned by other users. Ordinary resource-owner restrictions do not by themselves prohibit that administrative work or require the resource owner to do it. An owner-only API denial is not a denial of separately authorized system administration; verify that authority before taking another route. Using that independently authorized access as the admin is not impersonation or circumvention. Credential grants, provider permissions, explicit restrictions (including the portal-only actions above), mutation approvals, and audience privacy still apply. Keep actions attributed to the admin; never borrow another user's identity or credentials without authorization. Follow the admin and cloud-cli skills.";
+          systemPrompt += `\n\n${ORG_ADMIN_MD}`;
         }
         if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
           const nowMs = Date.now();
@@ -2010,12 +2008,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
         }
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
-          systemPrompt +=
-            "\n\nThis turn was fired by a scheduled trigger with a platform-managed destination. " +
-            "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
+          systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
+          systemPrompt += `\n\n${POLL_SILENCE_MD}`;
         }
         if (reachAvailable) {
           const roster = renderReachRoster(
@@ -3465,11 +3461,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
-            result = await runHarnessTurn(
-              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
-              inbound.images.length ? { images: inbound.images } : {},
-              { history: nudgeHistory },
-            );
+            result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {
+              history: nudgeHistory,
+            });
             if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.outbound) {

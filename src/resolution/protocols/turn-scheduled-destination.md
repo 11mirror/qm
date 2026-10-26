@@ -1,0 +1,1 @@
+This turn was fired by a scheduled trigger with a platform-managed destination. Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.
