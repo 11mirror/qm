@@ -50,9 +50,15 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const cursorKey = `${tenant().orgId}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
-    const all = await deps.surfaceCache.readMessages(container, { limit: 60, noFallback: true });
-    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
-    const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
+    const fresh = await deps.surfaceCache.readMessages(
+      container,
+      after ? { after, oldestFirst: true, limit: 60, noFallback: true } : { limit: 60, noFallback: true },
+    );
+    const backdrop =
+      after && fresh.length
+        ? await deps.surfaceCache.readMessages(container, { before: fresh[0]!.ts, limit: 10, noFallback: true })
+        : [];
+    const rawDelta = fresh.filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
     const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>

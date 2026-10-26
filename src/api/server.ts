@@ -31,6 +31,7 @@ import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
 import { InstructionsTooLargeError } from "../resolution/config-store.ts";
+import { zodMessage } from "./routes/shared.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -76,6 +77,7 @@ interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
   actor: PortalIdentity | null;
+  caller: string | null;
 }
 
 interface Wiring {
@@ -233,7 +235,10 @@ async function gate(
       }
     }
   }
-  return { body, capability, actor };
+  const field = route?.actor?.includes(".") ? route.actor : undefined;
+  const named = field ? assertedActorField(field, url, body) : null;
+  const caller = capability?.actorId ?? (typeof named === "string" && named ? named : (actor?.p ?? null));
+  return { body, capability, actor, caller };
 }
 
 function assertedActorField(field: string, url: URL, body: unknown): unknown {
@@ -354,6 +359,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     );
     if (!gated) return;
     if (!matched) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+    const schema = matched.route.body;
+    if (schema) {
+      const parsed = schema.safeParse(gated.body);
+      if (!parsed.success)
+        return sendJson(res, 400, { error: "bad_request", message: zodMessage("body", parsed.error) });
+      gated.body = parsed.data;
+    }
     await run(matched.route, matched.params, { ...base, ...gated });
   }
   return server;

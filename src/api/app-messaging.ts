@@ -10,7 +10,10 @@ import {
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { createMemoryEventBus } from "../util/event-bus.ts";
+import type { ContextRequestEvent } from "./app-types.ts";
 import {
   reachPost,
   withSlackUnfurlOption,
@@ -68,8 +71,18 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
-  const contextRequestTokens = new Map<string, string>();
+  const contextRequestEvents =
+    deps.contextRequestEvents ?? createMemoryEventBus<ContextRequestEvent>("context requests");
+  const viewerTokenKey = deps.contextViewerTokenKey ?? deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
+  const withViewerToken = ({ sealedViewerToken, ...request }: SurfaceContextRequest): SurfaceContextRequest => {
+    if (!sealedViewerToken) return request;
+    try {
+      return { ...request, query: { ...request.query, viewerToken: decryptSecret(sealedViewerToken, viewerTokenKey) } };
+    } catch (error) {
+      reportFailureAs("context: viewer token unreadable", undefined)(error);
+      return request;
+    }
+  };
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
@@ -221,8 +234,10 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         status: "pending",
         query: storedQuery,
       };
-      await contextRequests.put(request.id, request);
-      if (viewerToken) contextRequestTokens.set(request.id, viewerToken);
+      await contextRequests.put(request.id, {
+        ...request,
+        ...(viewerToken && source !== "web" ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) } : {}),
+      });
       if (source === "web") {
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
@@ -231,33 +246,54 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         await contextRequests.merge(request.id, settledContext(outcome));
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      contextRequestEvents.emit({ kind: "created", id: request.id });
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
-      return () => contextRequestListeners.delete(listener);
+      return contextRequestEvents.subscribe(({ kind, id }) => {
+        if (kind !== "created") return;
+        void contextRequests
+          .get(id)
+          .then((request) => {
+            if (request?.status === "pending") listener(withViewerToken(request));
+          })
+          .catch(reportFailureAs("context: read created request", undefined));
+      });
     },
-    getContextRequest: (id) => contextRequests.get(id),
-    async deleteContextRequest(id) {
-      contextRequestTokens.delete(id);
-      return contextRequests.delete(id);
+    async getContextRequest(id) {
+      const request = await contextRequests.get(id);
+      if (!request) return null;
+      const { sealedViewerToken: _sealed, ...visible } = request;
+      return visible;
     },
+    deleteContextRequest: (id) => contextRequests.delete(id),
     async pendingContextRequests(source) {
       const all = await contextRequests.all();
       const now = Date.now();
       const stale = all.filter((r) => r.status === "pending" && now - r.createdAt > CONTEXT_REQUEST_EXPIRY_MS);
-      await Promise.all(stale.map((r) => (contextRequestTokens.delete(r.id), contextRequests.delete(r.id))));
+      await Promise.all(stale.map((r) => contextRequests.delete(r.id)));
       return all
         .filter((r) => r.source === source && r.status === "pending" && now - r.createdAt <= CONTEXT_REQUEST_EXPIRY_MS)
-        .map((r) => {
-          const token = contextRequestTokens.get(r.id);
-          return token ? { ...r, query: { ...r.query, viewerToken: token } } : r;
-        });
+        .map(withViewerToken);
     },
     async fulfillContextRequest(id, outcome) {
-      contextRequestTokens.delete(id);
-      return (await contextRequests.merge(id, settledContext(outcome))) != null;
+      const settled =
+        (await contextRequests.merge(id, { ...settledContext(outcome), sealedViewerToken: undefined })) != null;
+      if (settled) contextRequestEvents.emit({ kind: "settled", id });
+      return settled;
+    },
+    awaitContextRequestEvent(kind, id, ms) {
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          stop();
+          resolve();
+        };
+        const timer = setTimeout(done, ms);
+        const stop = contextRequestEvents.subscribe((event) => {
+          if (event.kind === kind && (id === null || event.id === id)) done();
+        });
+      });
     },
     setRunDeliveryState: (runId, state) => deps.runs.setDeliveryState(runId, null, state),
 

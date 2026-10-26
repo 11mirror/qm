@@ -358,6 +358,44 @@ test("a judge failure leaves the batch unjudged so the next pass judges it again
   }
 });
 
+test("a backlog longer than one judge window is judged oldest-first, not skipped", async () => {
+  const built = freshApp();
+  try {
+    const container = "C-backlog";
+    await setChannelInstructions(built, container, "flag launch talk", "U-admin");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1000.000", authorId: "U1", text: "hello", createdAt: 1 }]);
+    await built.app.judgeAmbientContainer("slack", container);
+    const ts = (i: number) => `${2000 + i}.000`;
+    await built.app.ingestSurfaceEvents(
+      Array.from({ length: 70 }, (_, i) => ({
+        container,
+        ts: ts(i),
+        authorId: "U1",
+        text: `note ${i}`,
+        createdAt: 2 + i,
+      })),
+    );
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.judgeAmbientContainer("slack", container);
+    let rows: Array<{ tsFrom?: string; tsTo?: string }> = [];
+    for (let i = 0; i < 50; i++) {
+      rows = await built.ambientJudgments!.list({ scope: container });
+      if (rows.some((r) => r.tsFrom === ts(0)) && rows.some((r) => r.tsTo === ts(69))) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(
+      rows.some((r) => r.tsFrom === ts(0)),
+      "the oldest message after the cursor is judged even when more than 60 arrived",
+    );
+    assert.ok(
+      rows.some((r) => r.tsTo === ts(69)),
+      "a later pass reaches the newest message",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("mirror read interface: ingest is queryable by search + readMessages", async () => {
   const built = freshApp();
   try {
@@ -549,7 +587,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildTestApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setRuntimeSelection("org:default-org", { modelId: "gpt-5.6-sol" });
   built.runtime.start();
   try {
     const container = "C-admin-base";

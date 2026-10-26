@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type SurfaceContextRequest } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -18,6 +18,7 @@ describe("surface-context pulls", async () => {
   let server: Server;
   let base: string;
   let built: BuiltApp;
+  let databaseUrl: string;
 
   const cap = (overrides: Record<string, unknown> = {}) =>
     mintCapabilityToken(
@@ -66,7 +67,9 @@ describe("surface-context pulls", async () => {
   };
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
+    const config = testConfig({ signingSecret: SECRET });
+    databaseUrl = config.databaseUrl!;
+    built = buildApp(config);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -374,5 +377,35 @@ describe("surface-context pulls", async () => {
     const done = await built.app.getContextRequest(r.id);
     assert.equal((done as any)?.query?.viewerToken, undefined, "a fulfilled row still carries no token");
     await built.app.deleteContextRequest(r.id);
+  });
+
+  it("another core instance sees a new request and its sealed viewer token through Postgres", async () => {
+    const peer = buildApp(testConfig({ signingSecret: SECRET, databaseUrl }));
+    try {
+      const announced = new Promise<SurfaceContextRequest>((resolve, reject) => {
+        setTimeout(() => reject(new Error("the peer never heard about the request")), 10_000).unref();
+        const stop = peer.app.onContextRequestCreated((request) => {
+          if (request.query.searchAll !== "peer-visible") return;
+          stop();
+          resolve(request);
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const r = await built.app.createContextRequest("slack", {
+        conversationTarget: "C9:1.1",
+        viewer: "U1",
+        searchAll: "peer-visible",
+        viewerToken: "xoxp-peer",
+      });
+      const seen = await announced;
+      assert.equal(seen.id, r.id);
+      assert.equal(seen.query.viewerToken, "xoxp-peer", "the peer decrypts the token the creator sealed");
+      const pending = (await peer.app.pendingContextRequests("slack")).find((p) => p.id === r.id);
+      assert.equal(pending?.query.viewerToken, "xoxp-peer");
+      assert.equal(JSON.stringify(await built.app.getContextRequest(r.id)).includes("xoxp-peer"), false);
+      await built.app.deleteContextRequest(r.id);
+    } finally {
+      await peer.runtime.stop();
+    }
   });
 });

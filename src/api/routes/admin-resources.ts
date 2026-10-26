@@ -468,7 +468,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get enumValues() {
       return selectableBaseModels();
     },
-    get: (deps, scope) => deps.config.getBaseModel(scope),
+    get: (deps, scope) => deps.config.getRuntimeSelection(scope)?.modelId ?? null,
     apply: async (ctx, _actor, scope) => {
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string")

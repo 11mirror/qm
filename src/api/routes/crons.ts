@@ -1,85 +1,60 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
-import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
+import type { CreateCronInput } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { userScheduleFromBody } from "../../cron/schedule.ts";
 import { refusal, sendJson } from "../http.ts";
-import { isObj, refuse } from "./shared.ts";
+import { refuse } from "./shared.ts";
+import { z } from "zod";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron } from "../control-service.ts";
-import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
+import { applyCronPatch, canAdministerCron } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
-function isCreateCron(b: unknown): b is CreateCronInput {
-  return (
-    isObj(b) &&
-    isCronRuntime(b.runtime) &&
-    userScheduleFromBody(b.schedule) !== null &&
-    (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
-    (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
-    typeof b.ownerScopeId === "string" &&
-    typeof b.owner === "string" &&
-    typeof b.createdBy === "string" &&
-    ((b as { title?: unknown }).title === undefined || typeof (b as { title?: unknown }).title === "string") &&
-    (b.destination === undefined || isObj(b.destination))
-  );
-}
+const cronRuntime = z.custom<Cron["runtime"]>(isCronRuntime, "expected { modelId, effortLevel?, fastMode? }");
+const cronSchedule = z.custom<unknown>((value) => userScheduleFromBody(value) !== null, "expected a valid schedule");
+
+const createCronBody = z
+  .looseObject({
+    runtime: cronRuntime.optional(),
+    schedule: cronSchedule,
+    action: z.string().optional(),
+    message: z.string().optional(),
+    unattendedGrants: z.undefined({ error: "unattended grants can only be set from a live turn" }),
+    ownerScopeId: z.string(),
+    owner: z.string(),
+    createdBy: z.string(),
+    title: z.string().optional(),
+    destination: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((b) => b.action !== undefined || b.message !== undefined, "expected action or message");
+
+const cronPatchBody = z.object({
+  runtime: cronRuntime.optional(),
+  title: z.string().optional(),
+  action: z.string().optional(),
+  task: z.string().optional(),
+  schedule: cronSchedule.optional(),
+  enabled: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  unfurlLinks: z.boolean().optional(),
+  unattendedGrants: z.array(z.string()).optional(),
+  session: z.boolean().optional(),
+});
 
 async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cron | null> {
-  const { res, app, url } = ctx;
+  const { res, app } = ctx;
   const cron = await app.getCron(id);
-  const principalId = url.searchParams.get("principalId");
+  const principalId = ctx.caller ?? null;
   if (cron && (!principalId || (await canAdministerCron(app, cron, principalId)))) return cron;
   if (cron && read && (await app.listCronsForViewer(principalId!)).visible.some((candidate) => candidate.id === id))
     return cron;
   return refuse(res, 404, { error: "not_found" });
 }
 
-const CRON_PATCH_TYPES = {
-  runtime: null,
-  title: "string",
-  action: "string",
-  task: "string",
-  schedule: null,
-  enabled: "boolean",
-  archived: "boolean",
-  unfurlLinks: "boolean",
-  unattendedGrants: null,
-  session: "boolean",
-} as const;
-
-function hasCronPatchFields(b: Record<string, unknown>): boolean {
-  return Object.keys(CRON_PATCH_TYPES).some((key) => b[key] !== undefined);
-}
-
-function isCronPatch(b: unknown): b is {
-  runtime?: Cron["runtime"];
-  title?: string;
-  task?: string;
-  action?: string;
-  schedule?: unknown;
-  enabled?: boolean;
-  archived?: boolean;
-  unfurlLinks?: boolean;
-  unattendedGrants?: string[];
-  session?: boolean;
-} {
-  if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
-  for (const [key, type] of Object.entries(CRON_PATCH_TYPES))
-    if (type && b[key] !== undefined && typeof b[key] !== type) return false;
-  if (
-    b.unattendedGrants !== undefined &&
-    (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
-  )
-    return false;
-  return b.schedule === undefined || userScheduleFromBody(b.schedule) !== null;
-}
-
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
-  if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
   try {
-    const cron = await app.createCron(body);
+    const cron = await app.createCron(body as CreateCronInput);
     return sendJson(res, 200, { cron });
   } catch (e) {
     throw refusal(400, "cron_create_failed", e);
@@ -142,11 +117,9 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { cron: cron, runs, total });
 }
 
-const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
-
 async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, method, body } = ctx;
+  const { res, app, method } = ctx;
+  const body = ctx.body as z.infer<typeof cronPatchBody>;
   const id = ctx.params.id!;
   if (method === "GET") {
     const cron = await gateSourceCron(ctx, id, true);
@@ -157,7 +130,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!cron) return;
   if (method === "DELETE") {
     await app.deleteCron(id);
-    const editor = url.searchParams.get("principalId");
+    const editor = ctx.caller;
     if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
@@ -167,61 +140,45 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       message: "a privileged cron may only be patched by its owner from a live turn",
     });
   }
-  if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
-  if (!hasCronPatchFields(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
-  }
-  const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
-  const task = body.action ?? body.task;
-  if (body.unfurlLinks !== undefined && !cron.destination) {
+  if (body.unattendedGrants !== undefined) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "unfurlLinks can only be set on a cron with a delivery destination",
+      message: "unattended grants can only be set by the cron's owner from a live turn",
     });
   }
-  const patch: CronPatch = {
-    ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
-    ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(task !== undefined ? { action: task } : {}),
-    ...(schedule !== undefined ? { schedule } : {}),
-    ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-    ...(body.archived !== undefined ? { archived: body.archived } : {}),
-    ...(body.unfurlLinks !== undefined && cron.destination
-      ? { destination: { ...cron.destination, unfurlLinks: body.unfurlLinks } }
-      : {}),
-  };
-  try {
-    const updated = await app.updateCron(id, patch);
-    const editor = url.searchParams.get("principalId");
-    if (updated && editor)
-      await notifyOwnerOfCronEdit(app, {
-        cron: updated,
-        editorId: editor,
-        changeSummary: [
-          ...(body.runtime !== undefined ? ["runtime"] : []),
-          ...(body.title !== undefined ? ["title"] : []),
-          ...(task !== undefined ? ["task"] : []),
-          ...(schedule !== undefined ? ["schedule"] : []),
-          ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
-          ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
-        ],
-        ...(schedule !== undefined ? { detail: { schedule } } : {}),
-      });
-    return sendJson(res, 200, { cron: updated ? updated : null });
-  } catch (e) {
-    throw refusal(400, "cron_update_failed", e);
-  }
+  const { task, action, schedule, ...rest } = body;
+  const text = action ?? task;
+  const result = await applyCronPatch(
+    app,
+    cron,
+    {
+      ...rest,
+      ...(text !== undefined ? { action: text } : {}),
+      ...(schedule !== undefined ? { schedule: userScheduleFromBody(schedule)! } : {}),
+    },
+    { actorId: ctx.caller ?? cron.owner },
+  );
+  if (result.ok) return sendJson(res, 200, { cron: result.cron });
+  if (result.code === "not_found") return sendJson(res, 200, { cron: null });
+  return sendJson(res, result.code === "forbidden" ? 403 : 400, { error: result.code, message: result.message });
 }
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "source", handle: createCron },
+  {
+    method: "POST",
+    path: "/v1/crons",
+    actor: "body.createdBy",
+    auth: "source",
+    body: createCronBody,
+    handle: createCron,
+  },
   { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "source", handle: listCrons },
   ...withActor("query.principalId", [
     { method: "POST", path: "/v1/crons/:id/disable", auth: "source", handle: disableCron },
     { method: "POST", path: "/v1/crons/:id/run", auth: "source", handle: runCronNow },
     { method: "GET", path: "/v1/crons/:id/runs", auth: "source", handle: cronRuns },
     { method: "GET", path: "/v1/crons/:id", auth: "source", handle: cronById },
-    { method: "PATCH", path: "/v1/crons/:id", auth: "source", handle: cronById },
+    { method: "PATCH", path: "/v1/crons/:id", auth: "source", body: cronPatchBody, handle: cronById },
     { method: "DELETE", path: "/v1/crons/:id", auth: "source", handle: cronById },
   ]),
 ];

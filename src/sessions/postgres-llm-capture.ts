@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { tenantCols } from "../persistence/pg-pool.ts";
-import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
+import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-screen.ts";
 import { promptEnvelopeBody } from "./session-store.ts";
 import type { LlmRequestRecord, NewLlmRequest, ScreenSample, SessionStore } from "./session-store.ts";
 

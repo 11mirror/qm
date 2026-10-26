@@ -277,7 +277,7 @@ test(
     await a.setSetting("commandPolicy", policy, ch);
     await a.setApprovalGrantModes(ch, { session: false, always: true });
     await a.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] }, ch);
-    await a.setBaseModel(ch, "claude-opus-4-8");
+    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
     await a.setSetting("browseMaxSteps", 120, ch);
     await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
     await settle(
@@ -308,7 +308,7 @@ test(
       { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },
       "the egress policy survived",
     );
-    assert.equal(b.getBaseModel(ch), "claude-opus-4-8", "the base model survived");
+    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, "claude-opus-4-8", "the base model survived");
     assert.equal(b.setting("browseMaxSteps", ch), 120, "the browse step limit survived");
     assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6", "the browse model survived");
   },
@@ -328,8 +328,8 @@ test(
       lastVersion = await a.setInstructions(ch, `soul v${i}`);
       await a.setSetting("egress", { allowedHosts: [`host${i}.example`], deniedHosts: [] }, ch);
     }
-    await a.setBaseModel(ch, "claude-opus-4-8");
-    await a.setBaseModel(ch, null);
+    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
+    await a.setRuntimeSelection(ch, null);
     await a.setSetting("browseMaxSteps", 60, ch);
     await a.setSetting("browseMaxSteps", null, ch);
     await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
@@ -356,7 +356,7 @@ test(
       { allowedHosts: ["host8.example"], deniedHosts: [] },
       "the durable egress ends on the last write",
     );
-    assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
+    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, null, "a cleared base model stays cleared after restart");
     assert.equal(b.setting("browseMaxSteps", ch), null, "a cleared browse step limit stays cleared after restart");
     assert.equal(b.setting("browseModel", ch), null, "a cleared browse model stays cleared after restart");
   },

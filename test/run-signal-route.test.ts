@@ -247,6 +247,38 @@ test("an orphaned steer with a request replays as the steerer, not the run's own
   assert.equal(replayed!.request.timezone, "America/New_York", "turn options are inherited from the ended run");
 });
 
+test("an orphaned steer whose replay fails stays pending for the next replay", async () => {
+  const threadRef = `web:web-eve:${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({ sessionId: "t-orphan-retry", request: request("hi", "t-orphan-retry") });
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "try again later",
+    ts: "1712.009",
+    request: steererRequest("web-eve", threadRef, "try again later"),
+  });
+  const turn = built.app.turn;
+  built.app.turn = async () => {
+    throw new Error("database unavailable");
+  };
+  try {
+    const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+    assert.ok(claimed);
+    await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    await built.app.replayOrphanedRunSignals(run.id);
+    assert.equal((await built.signals.pending(run.id)).length, 1, "a failed replay leaves the steer pending");
+  } finally {
+    built.app.turn = turn;
+  }
+  await built.app.replayOrphanedRunSignals(run.id);
+  assert.deepEqual(await built.signals.pending(run.id), [], "the next replay delivers it");
+  let replayed = await built.runs.activeForThread(threadRef);
+  for (let i = 0; !replayed && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    replayed = await built.runs.activeForThread(threadRef);
+  }
+  assert.equal(replayed?.request.text, "try again later");
+});
+
 test("an orphaned steer whose own request is refused falls back to replaying on the run's request", async () => {
   const threadRef = "t-orphan-fallback";
   const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });

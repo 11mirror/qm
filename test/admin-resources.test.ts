@@ -256,20 +256,6 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     const inherited = (await inherit.json()) as { effective: { modelId: string }; scopeOverride: unknown };
     assert.equal(inherited.effective.modelId, "claude-sonnet-4-6");
     assert.equal(inherited.scopeOverride, null);
-
-    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
-    assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
-    const keepLegacy = await fetch(`${srv.base}/v1/runtime-config`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
-    });
-    const keptLegacy = (await keepLegacy.json()) as {
-      upgradeAvailable: boolean;
-      scopeOverride: { modelId: string };
-    };
-    assert.equal(keptLegacy.upgradeAvailable, false);
-    assert.deepEqual(keptLegacy.scopeOverride, { modelId: "claude-sonnet-4-6", orgRevision: 2 });
   } finally {
     await srv.close();
   }
