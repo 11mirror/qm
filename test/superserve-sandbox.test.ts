@@ -13,12 +13,13 @@ import {
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions, computerVerdict } from "../src/sandbox/sandbox.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { scopeId } from "../src/types.ts";
 import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-superserve.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testMap } from "./support/test-database.ts";
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;
@@ -37,7 +38,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSuperserveSandbox(newWorkspace(), {
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
@@ -246,7 +247,7 @@ test("a newer core stamps its epoch on adoption", async () => {
 });
 
 test("the config epoch is claimed once per deployment generation, so a restarted core cannot outrank a newer one", async () => {
-  const epochs: DurableMap<StoredConfigEpoch> = createMemoryMap();
+  const epochs: DurableMap<StoredConfigEpoch> = testMap();
   const lock = singleProcessDeps().advisoryLock;
   const claimed = await createConfigEpochResolver(epochs, "release-1", lock)();
   assert.equal(claimed, 1);
@@ -343,7 +344,7 @@ test("a sandbox lost mid-session fails the command and is replaced by the next p
 });
 
 test("destroyScope surfaces a failed listing instead of forgetting the scope", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   await sandbox.provision(layers);
   fake.failNextList(new Error("superserve unavailable"));

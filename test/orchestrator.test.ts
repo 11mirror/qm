@@ -27,9 +27,10 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -885,7 +886,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     if (opts) captures.push(opts);
     return realProvision(layers, opts);
   };
-  const directory = createDirectoryStore();
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },
@@ -912,7 +913,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     const out = await runTrigger(
       {
         outbound,
-        idempotency: createIdempotencyStore(createMemoryMap()),
+        idempotency: createIdempotencyStore(testMap()),
         identity,
         run: (req) => app.turn(req),
         directory,
@@ -3642,6 +3643,7 @@ test("a HiLO approval falls back to the static reason when the summarizer throws
 
 test("a HiLO approval summarizer that hangs past the deadline falls back without delaying the approval", async () => {
   const { app } = freshApp({ approvalSummaryTimeoutMs: 50 });
+  assert.equal((await app.turn(dm("hello", { conversation: { kind: "dm", threadRef: "dm:U1:warm" } }))).status, "ok");
   const started = Date.now();
   const first = await app.turn(dm("!run rm -rf build !summary-hang"));
   assert.equal(first.status, "pending_approval");

@@ -987,11 +987,9 @@ export function createSessionMethods(
         await deps.sessions.setParentSession(sessionId, null);
         return { detached: true as const };
       };
-      return deps.advisoryLock
-        ? deps.advisoryLock.withLock("session-tree-admission", () =>
-            deps.advisoryLock!.withLock("session-run-admission", detach),
-          )
-        : detach();
+      return deps.advisoryLock.withLock("session-tree-admission", () =>
+        deps.advisoryLock.withLock("session-run-admission", detach),
+      );
     },
 
     async cancelSessionGoal(sessionId, principalId) {
@@ -1320,7 +1318,7 @@ export function createSessionMethods(
           throw error;
         }
       };
-      return deps.advisoryLock?.withLock(`admin-governance:${scopeIdValue}`, write) ?? write();
+      return deps.advisoryLock.withLock(`admin-governance:${scopeIdValue}`, write);
     },
   };
 }

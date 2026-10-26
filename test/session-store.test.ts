@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "../src/sessions/session-store.ts";
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
@@ -21,7 +22,7 @@ test("sessionOrigin classifies trigger threads by prefix", () => {
 
 test("attributedTurns applies each window's [validFrom,validTo) and excludes overheard", async () => {
   const nowRef = { v: 10_000_000_000 };
-  const store = createMemorySessionStore({ now: () => nowRef.v });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v });
   const scope = scopeId("channel", "C1");
   const t0 = nowRef.v;
   const s = await store.getOrCreateByThread("ch:C1:t1", "channel", scope);
@@ -62,7 +63,7 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
 });
 
 test("scopeHasSessions + listByScope answer scope questions directly", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("channel", "scoped");
   const other = scopeId("channel", "other");
   assert.equal(await store.scopeHasSessions(scope), false);
@@ -80,7 +81,7 @@ test("scopeHasSessions + listByScope answer scope questions directly", async () 
 test("a blocked acquire names, dates, and times out the holder it lost to", async () => {
   const nowRef = { v: 10_000_000_000 };
   const t0 = nowRef.v;
-  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 60_000 });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v, leaseTtlMs: 60_000 });
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t1", "dm", scope);
   const { lease } = await store.acquireLease(s.id, "compaction");
@@ -105,7 +106,7 @@ test("a blocked acquire names, dates, and times out the holder it lost to", asyn
 });
 
 test("peekLease reads the holder without contending for it, and clears on release", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t-peek", "dm", scope);
   assert.equal(await store.peekLease(s.id), null);
@@ -119,7 +120,7 @@ test("peekLease reads the holder without contending for it, and clears on releas
 });
 
 test("acquireLeaseWithin outlasts a short hold and returns the winning lease", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t-wait", "dm", scope);
   const { lease: held } = await store.acquireLease(s.id, "compaction");
@@ -131,7 +132,7 @@ test("acquireLeaseWithin outlasts a short hold and returns the winning lease", a
 });
 
 test("acquireLeaseWithin gives up after its budget and reports the holder it lost to", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t-wait-loses", "dm", scope);
   const { lease: held } = await store.acquireLease(s.id, "compaction");
@@ -145,7 +146,7 @@ test("acquireLeaseWithin gives up after its budget and reports the holder it los
 });
 
 test("acquireLeaseWithin bails immediately on holders the caller will not wait for", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t-wait-turn", "dm", scope);
   const { lease: held } = await store.acquireLease(s.id, "turn");
@@ -161,7 +162,9 @@ test("acquireLeaseWithin bails immediately on holders the caller will not wait f
   await store.releaseLease(held!);
 });
 
-const backends: Array<[string, () => SessionStore]> = [["memory", () => createMemorySessionStore()]];
+const backends: Array<[string, () => SessionStore]> = [
+  ["postgres", () => createPostgresSessionStore(testDatabaseUrl())],
+];
 
 for (const [name, make] of backends) {
   test(`${name}: fork provenance is available through get and participant lists`, async () => {
@@ -282,7 +285,7 @@ for (const [name, make] of backends) {
 
   test(`${name}: scopeSessionSummaries paginates newest-activity-first`, async () => {
     let clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => ++clock });
+    const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => (clock += 61_000) });
     const scope = scopeId("personal", "U1");
     const a = await store.getOrCreateByThread("dm:A", "dm", scope);
     const b = await store.getOrCreateByThread("dm:B", "dm", scope);
@@ -616,7 +619,7 @@ for (const [name, make] of backends) {
   });
 
   test(`${name}: spendRollup groups model-call cost by UTC day, scope, origin and model`, async () => {
-    await assertSpendRollupParity((now) => createMemorySessionStore({ now }), `spend-${name}`);
+    await assertSpendRollupParity((now) => createPostgresSessionStore(testDatabaseUrl(), { now }), `spend-${name}`);
   });
 
   test(`${name}: countSessions and distinctParticipants aggregate without loading rows`, async () => {
@@ -671,7 +674,7 @@ for (const [name, make] of backends) {
 
   test(`${name}: listByParticipant sets lastActivityAt to the most recent user message`, async () => {
     let clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => ++clock });
+    const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => ++clock });
     const scope = scopeId("personal", "U1");
     const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.addParticipant(s.id, "U1");
@@ -693,7 +696,7 @@ for (const [name, make] of backends) {
 
   test(`${name}: listByParticipant falls back to createdAt for an entry-less session`, async () => {
     let clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => ++clock });
+    const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => ++clock });
     const scope = scopeId("personal", "U1");
     const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.addParticipant(s.id, "U1");
@@ -724,7 +727,7 @@ for (const [name, make] of backends) {
 
   test(`${name}: tenure windows remain exact when every event shares a timestamp`, async () => {
     const clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => clock });
+    const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock });
     const scope = scopeId("personal", "U1");
     const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.addParticipant(s.id, "U1");
@@ -836,7 +839,7 @@ for (const [name, make] of backends) {
 
   test(`${name}: keyset cursor pages stitch into the full listing and skip nothing`, async () => {
     let clock = Date.now() + 1_000_000;
-    const store = createMemorySessionStore({ now: () => ++clock });
+    const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => ++clock });
     const scope = scopeId("personal", "U1");
     for (let i = 0; i < 5; i++) {
       const s = await store.getOrCreateByThread(`dm:K${i}`, "dm", scope);
@@ -866,7 +869,7 @@ for (const [name, make] of backends) {
 }
 
 test("getItem returns exactly the requested seq and nothing else", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("dm:point-fetch", "dm", scope);
   const { lease } = await store.acquireLease(s.id);
@@ -933,7 +936,7 @@ test("the store's origin and the admin wake-ref parser agree on which threadRefs
 
 test("deleteSessionIfEmpty refuses while a lease is held and after entries land", async () => {
   const nowRef = { v: 10_000_000_000 };
-  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 50 });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v, leaseTtlMs: 50 });
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("web:U1:seed", "dm", scope);
   const { lease } = await store.acquireLease(s.id);
@@ -965,7 +968,7 @@ test("deleteSessionIfEmpty refuses while a lease is held and after entries land"
 test("renewLease keeps a live turn's lock fresh and refuses stale or superseded tokens", async () => {
   const nowRef = { v: 10_000_000_000 };
   const t0 = nowRef.v;
-  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 60_000 });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v, leaseTtlMs: 60_000 });
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("t-renew", "dm", scope);
   const { lease } = await store.acquireLease(s.id, "turn");

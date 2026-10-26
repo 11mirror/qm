@@ -60,7 +60,6 @@ test(
     const baseEnv = {
       PATH: process.env.PATH,
       NODE_ENV: "test",
-      SESSION_STORE: "postgres",
       SANDBOX_BACKEND: "local",
       CONNECTOR_SECRET_KEY: "tenant-import-test-connector-secret",
       CAPABILITY_SECRET: "tenant-import-test-capability-secret",

@@ -314,9 +314,7 @@ function printSuccess(result: BootResult, branch: string): void {
     out(
       `   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and settings at /settings`,
     );
-  out(
-    `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
-  );
+  out(`   core   : http://localhost:${ports.core}  (org=${orgId}, run_store=${meta.run_store})`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   if (result.webEnabled !== false) out(`   web    : http://localhost:${ports.portal}/  (settings: /settings)`);
   out(`   logs   : ${lock}`);

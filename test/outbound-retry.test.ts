@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createOutbound, type OutboundPost, type QueuedPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
 const post = (key: string, type = "slack"): OutboundPost => ({
   destination: { type, target: "C1:1.0" },
@@ -11,12 +11,12 @@ const post = (key: string, type = "slack"): OutboundPost => ({
 });
 
 function rig() {
-  const retries = createMemoryMap<QueuedPost>();
+  const retries = testMap<QueuedPost>();
   const sent: string[] = [];
   const after: string[] = [];
   let failure: Error | null = null;
   const outbound = createOutbound({
-    idempotency: createIdempotencyStore(createMemoryMap()),
+    idempotency: createIdempotencyStore(testMap()),
     retries,
     afterSend: (p) => after.push(p.idempotencyKey),
   });
@@ -45,7 +45,7 @@ test("a transient surface failure is queued, counted as sent once, and goes out 
 });
 
 test("a post for a surface that is not connected yet waits in the queue for it", async () => {
-  const retries = createMemoryMap<QueuedPost>();
+  const retries = testMap<QueuedPost>();
   const outbound = createOutbound({ retries });
   assert.deepEqual(await outbound.send(post("k6")), { queued: true });
   const sent: string[] = [];

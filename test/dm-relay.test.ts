@@ -12,6 +12,8 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
@@ -69,7 +71,10 @@ describe("agent → teammate DM: cron recipients and the reach route (§10)", ()
       { groupId: "G-jrs", principalId: "U-alice" },
       { groupId: "G-jrs", principalId: "U-sam1" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

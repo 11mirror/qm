@@ -8,8 +8,13 @@ import { createManagedAgentsSandbox } from "../src/sandbox/managed-agents-sandbo
 import { createSdkManagedAgentsClient } from "../src/sandbox/managed-agents-client.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const apiToken = process.env.DO_AGENTS_API_TOKEN;
 const template = process.env.DO_AGENTS_TEMPLATE ?? "";
@@ -31,8 +36,8 @@ async function main(): Promise<void> {
     {
       client,
       namePrefix: prefix,
-      store: createMemoryMap(),
-      advisoryLock: createMemoryAdvisoryLock(),
+      store: smokeMap("managed_agents"),
+      advisoryLock: createNoopAdvisoryLock(),
     },
   );
   const scope = scopeId("personal", "smoke");

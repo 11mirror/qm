@@ -92,7 +92,7 @@ export interface StatusReport {
   envSha: string;
   gitSha: string;
   sandbox: { backend: string; detail: string };
-  durability: { sessionStore: string; runStore: string; databaseUrl: boolean };
+  durability: { databaseUrl: boolean };
   webEnabled?: boolean;
   slackEnabled: boolean;
   watch: boolean;

@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import {
   connectorLabel,
   connectorStatusIsStale,
@@ -10,6 +9,7 @@ import {
 } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
+import { testMap } from "./support/test-database.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {
@@ -18,7 +18,7 @@ function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenSt
 }
 
 test("connector status cache: put/get round-trips per principal", async () => {
-  const cache = createConnectorStatusCache(createMemoryMap<ConnectorStatusRecord>());
+  const cache = createConnectorStatusCache(testMap<ConnectorStatusRecord>());
   assert.equal(await cache.get("U1"), null);
   const rec: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { slack: { connected: true } } };
   await cache.put(rec);

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { baseModelProviders, configuredModel, providerKeysPresent } from "../src/config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -16,7 +17,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
-  const built = buildApp(config);
+  const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,

@@ -1,5 +1,4 @@
 import { test } from "node:test";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { parseSlackContextSource, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
@@ -7,8 +6,19 @@ import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orc
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { ReadMessagesOpts } from "../src/surface-cache/types.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
+
+async function shadowComparisons(logs: string[], count = 1) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const lines = logs.filter((line) => line.includes('"slack_mirror_shadow"'));
+    if (lines.length >= count) return lines.map((line) => JSON.parse(line));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`expected ${count} shadow comparisons`);
+}
 
 test("context source defaults live and invalid modes fail closed", () => {
   assert.equal(parseSlackContextSource(undefined), "live");
@@ -162,8 +172,7 @@ test("secondary Slack accounts inherit the explicitly selected shadow mode", () 
 });
 
 test("shadow distinguishes stored messages with wrong parents from ingestion loss", async (t) => {
-  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1", text: "root" },
     { container: "C1", ts: "2", sub: "wrong", text: "reply" },
@@ -195,8 +204,7 @@ test("shadow distinguishes stored messages with wrong parents from ingestion los
     "C1",
     "1",
   );
-  await new Promise((resolve) => setImmediate(resolve));
-  const result = JSON.parse(logs[0]!);
+  const [result] = await shadowComparisons(logs);
   assert.equal(result.liveMessagesMissingFromStorage, 1);
   assert.equal(result.liveMessagesMissingFromMirror, 2);
   assert.equal(result.threadParentMismatches, 1);
@@ -205,8 +213,7 @@ test("shadow distinguishes stored messages with wrong parents from ingestion los
 });
 
 test("shadow compares canonical mention IDs without erasing literal entity or attachment differences", async (t) => {
-  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1", text: "Hi <@U1> &lt;", mentions: { U1: "Alice" } },
     { container: "C1", ts: "2", text: "<" },
@@ -233,8 +240,7 @@ test("shadow compares canonical mention IDs without erasing literal entity or at
     },
     "C1",
   );
-  await new Promise((resolve) => setImmediate(resolve));
-  const result = JSON.parse(logs[0]!);
+  const [result] = await shadowComparisons(logs);
   assert.equal(result.textMismatches, 1);
   assert.equal(result.fileMismatches, 1);
   assert.equal(result.matchingMessages, 1);
@@ -242,8 +248,7 @@ test("shadow compares canonical mention IDs without erasing literal entity or at
 });
 
 test("mirror selects newest channel roots and the first thread page", async () => {
-  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const ts = (n: number) => String(n).padStart(6, "0");
   await cache.ingest(Array.from({ length: 205 }, (_, i) => ({ container: "C1", ts: ts(i), text: "root" })));
   await cache.ingest(
@@ -268,12 +273,11 @@ test("mirror selects newest channel roots and the first thread page", async () =
 });
 
 test("shadow never certifies failed or truncated live thread expansion as complete", async (t) => {
-  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "1", text: "root" }]);
   const logs: string[] = [];
   t.mock.method(console, "info", (line: string) => logs.push(line));
-  for (const fail of [true, false]) {
+  for (const [index, fail] of [true, false].entries()) {
     const reader = createSlackHistoryReader({
       ids,
       source: "shadow",
@@ -294,8 +298,7 @@ test("shadow never certifies failed or truncated live thread expansion as comple
       undefined,
       true,
     );
-    await new Promise((resolve) => setImmediate(resolve));
-    const result = JSON.parse(logs.at(-1)!);
+    const result = (await shadowComparisons(logs, index + 1))[index];
     assert.equal(result.matchingMessages, 1);
     assert.equal(result.liveComplete, false);
     assert.equal(result.liveExpansionFailures, fail ? 1 : 0);
@@ -306,7 +309,7 @@ test("shadow never certifies failed or truncated live thread expansion as comple
 test("shadow and mirror use the live first-page thread contract without fallback", async (t) => {
   const logs: string[] = [];
   t.mock.method(console, "info", (line: string) => logs.push(line));
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const messages = Array.from({ length: 220 }, (_, index) => ({
     ts: `1000.${String(index).padStart(6, "0")}`,
     text: `message-${index}`,
@@ -337,8 +340,7 @@ test("shadow and mirror use the live first-page thread contract without fallback
   );
   const live = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1", "1000.000000");
   assert.deepEqual(live.raw, messages.slice(0, 200));
-  await new Promise((resolve) => setImmediate(resolve));
-  const comparison = JSON.parse(logs[0]!);
+  const [comparison] = await shadowComparisons(logs);
   assert.equal(comparison.liveMessages, 200);
   assert.equal(comparison.mirroredMessages, 200);
   assert.equal(comparison.liveMessagesMissingFromMirror, 0);
@@ -385,8 +387,7 @@ test("shadow freezes live messages and attachments before callers modify their c
 });
 
 test("shadow reports legacy rewritten mentions as a difference", async (t) => {
-  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C", ts: "1", text: "Hi @Alice", mentions: { U1: "Alice" } }]);
   const logs: string[] = [];
   t.mock.method(console, "info", (line: string) => logs.push(line));
@@ -396,7 +397,7 @@ test("shadow reports legacy rewritten mentions as a difference", async (t) => {
     core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
   });
   await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "Hi <@U1>" }] }) } }, "C");
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(JSON.parse(logs[0]!).textMismatches, 1);
-  assert.equal(JSON.parse(logs[0]!).matchingMessages, 0);
+  const [comparison] = await shadowComparisons(logs);
+  assert.equal(comparison.textMismatches, 1);
+  assert.equal(comparison.matchingMessages, 0);
 });

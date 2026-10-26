@@ -5,9 +5,10 @@ import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { ScopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 type Sink = {
   entries: Item[];
@@ -186,7 +187,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
 test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
   const attempt = await store.acquireLease(session.id, "turn");
   const lease = attempt.lease!;
@@ -210,7 +211,7 @@ test("a lease lost mid-turn fails the turn instead of degrading silently", async
 
 test("completed Pi attach results retain openable files in viewer history", async () => {
   const { createTranscriptSource } = await import("../src/sessions/transcript-source.ts");
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
@@ -412,7 +413,7 @@ for (const stopBeforeIntake of [false, true]) {
   test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
     const signals = createMemoryRunSignalStore();
     const harness = createPiHarness({ apiKey: "sk-test", signals });
-    const store = createMemorySessionStore();
+    const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
     const realFetch = globalThis.fetch;
@@ -545,7 +546,7 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
 for (const abort of ["shutdown", "stop"] as const) {
   test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
     const harness = createPiHarness({ apiKey: "sk-test" });
-    const store = createMemorySessionStore();
+    const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
     const realFetch = globalThis.fetch;

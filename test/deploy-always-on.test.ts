@@ -10,6 +10,8 @@ import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { DeployEndpoint } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 function svc(
   opts: {
@@ -18,7 +20,7 @@ function svc(
     apply?: DeployProvider["apply"];
   } = {},
 ) {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   let applies = 0;
   let resolves = 0;
   const provider: DeployProvider = {
@@ -45,7 +47,7 @@ function svc(
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
   return {
@@ -122,7 +124,7 @@ test("deployOrUpdate carries alwaysOn on create and on update", async () => {
 });
 
 test("alwaysOn is visible to the provider at first launch (not applied after the fact)", async () => {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const seen: Array<boolean | undefined> = [];
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
@@ -139,7 +141,7 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
   await deploy.deployOrUpdate({ ...owner, name: "warm-launch", entrypoint: "x", files: [], alwaysOn: true });

@@ -8,7 +8,12 @@ import { createMicrovmApi } from "../src/sandbox/aws-microvm-api.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const region = process.env.AWS_SANDBOX_REGION ?? "us-west-2";
 const profile = process.env.AWS_SANDBOX_PROFILE ?? "dev";
@@ -19,7 +24,7 @@ const log = (...a: unknown[]) => console.log("[aws-smoke]", ...a);
 
 async function main(): Promise<void> {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "aws-smoke-ws-")));
-  const store = createMemoryMap<StoredMicrovm>();
+  const store = smokeMap<StoredMicrovm>("aws_sandbox");
   const sandbox = createAwsSandbox(ws, {
     store,
     advisoryLock: createNoopAdvisoryLock(),

@@ -17,7 +17,6 @@ const built = buildApp({
   ...loadConfig(),
   port: 0,
   dataDir: DATA,
-  sessionStore: "memory",
   runStore: "memory",
 });
 await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");

@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { tenant, tenantFor, withTenant } from "../src/tenant.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
+import { testMap } from "./support/test-database.ts";
+import { testAdminGrantStore } from "./support/test-database.ts";
 
 test("outside any tenant context the process tenant comes from ORG_ID", () => {
   const before = process.env.ORG_ID;
@@ -34,14 +35,14 @@ test("a tenant context follows async work and does not leak into concurrent work
 });
 
 test("one feature flag store serves each tenant its own org-wide switch", async () => {
-  const store = createFeatureFlagStore(createMemoryMap<FeatureFlagRecord>());
+  const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
   await withTenant(tenantFor("alpha"), () => store.setEnabled("inbox_loops", "org:alpha", true, "admin"));
   assert.equal(await withTenant(tenantFor("alpha"), () => store.enabled("inbox_loops", "channel:C1")), true);
   assert.equal(await withTenant(tenantFor("beta"), () => store.enabled("inbox_loops", "channel:C1")), false);
 });
 
 test("one admin service resolves internal actors only for the tenant in context", () => {
-  const admin = createAdminService();
+  const admin = createAdminService(testAdminGrantStore());
   assert.deepEqual(
     withTenant(tenantFor("alpha"), () => admin.resolveActor("ops@alpha")),
     { id: "ops", type: "internal" },

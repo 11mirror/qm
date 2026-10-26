@@ -1,7 +1,9 @@
 import { createCronStore } from "../../src/cron/cron-store.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { testDatabaseUrl, testMap } from "./test-database.ts";
 
 export function inboxApp() {
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   return {
     crons,
     app: {

@@ -8,8 +8,6 @@ export interface SpecInputs {
   web?: boolean;
   webUiBasePath: string;
   slack?: { botToken: string; appToken: string };
-  sessionStore: string;
-  runStore: string;
   databaseUrl: string;
   adminGrantsSeed: string;
   coreSigningSecret: string;
@@ -47,8 +45,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ...base,
         ...signing,
         ORG_ID: orgId,
-        SESSION_STORE: i.sessionStore,
-        RUN_STORE: i.runStore,
         PORT: String(i.ports.core),
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),

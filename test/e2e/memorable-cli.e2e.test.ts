@@ -5,10 +5,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
-import { createMemoryService } from "../../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
-import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
@@ -84,7 +83,7 @@ describe(
         env,
       );
       memory = createConfiguredMemoryService({
-        defaultMemory: createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memorable-ws-")))),
+        defaultMemory: createPostgresMemoryService(DB!),
         config,
         sessionItems: async (id) => (id === "s-e2e" ? trace : []),
       });

@@ -12,7 +12,6 @@ import { surfaceThreadRef } from "../src/chat-surface/refs.ts";
 import type { InboundMessage } from "../src/chat-surface/surface.ts";
 import { createApprovalStore } from "../src/core/approval-store.ts";
 import { createOutbound, type OutboundPost } from "../src/surfaces/outbound.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { conversationScope } from "../src/resolution/resolution-service.ts";
 import { tenant } from "../src/tenant.ts";
 import type { PendingApprovalRecord, TurnRequest } from "../src/types.ts";
@@ -20,6 +19,7 @@ import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { testMap } from "./support/test-database.ts";
 
 const SECRET = "synthetic-chat-surface-signing-secret-0123456789";
 const PATH = "/v1/surfaces/forum/events";
@@ -273,7 +273,7 @@ test("an approval on a non-Slack surface is posted to the conversation as text w
   const forum = fakeForum();
   const outbound = createOutbound({});
   const registry = createSurfaceRegistry({ surfaces: [forum.adapter], outbound, turn: async () => ({}) });
-  const store = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), outbound, {
+  const store = createApprovalStore(testMap<PendingApprovalRecord>(), outbound, {
     surfaces: registry,
     webSessionUrl: (id) => `https://qm.test/s/${id}`,
   });

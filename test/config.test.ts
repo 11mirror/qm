@@ -21,7 +21,6 @@ const productionEnv = {
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
-  SESSION_STORE: "postgres",
 } as const;
 
 test("capability compression is explicitly enabled after verifier rollout", () => {
@@ -53,23 +52,9 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   );
 });
 
-test("store kinds default to memory and accept postgres", () => {
-  const def = loadConfig({});
-  assert.equal(def.sessionStore, "memory");
-  assert.equal(def.runStore, "memory");
-
-  const pg = loadConfig({ SESSION_STORE: "postgres", DATABASE_URL: "postgres://test" });
-  assert.equal(pg.sessionStore, "postgres");
-  assert.equal(pg.runStore, "postgres", "runStore mirrors sessionStore when unset");
-
-  assert.equal(
-    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "memory", DATABASE_URL: "postgres://test" }).runStore,
-    "memory",
-  );
-  assert.throws(
-    () => loadConfig({ SESSION_STORE: "postgres" }),
-    /missing or insecure required core secrets: DATABASE_URL/,
-  );
+test("run store defaults to postgres and accepts memory", () => {
+  assert.equal(loadConfig({}).runStore, "postgres");
+  assert.equal(loadConfig({ RUN_STORE: "memory" }).runStore, "memory");
 });
 
 test("deploy provider defaults to docker and rejects unknown values", () => {
@@ -159,7 +144,6 @@ test("a remote sandbox backend without the shared egress proxy warns once", () =
 });
 
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
-  assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ ARTIFACT_STORE: "sqlite" }), /ARTIFACT_STORE=sqlite is no longer supported/);
 });
@@ -231,17 +215,15 @@ test("sandbox backend is parsed once before production backend guards", () => {
   );
 });
 
-test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+test("production refuses to boot without Postgres or on an in-memory run store", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
     () => loadConfig(noDatabase),
     /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
   );
-  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
-  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
   assert.throws(
     () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
-    /production requires SESSION_STORE=postgres/,
+    /production requires a Postgres run store/,
   );
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
   assert.doesNotThrow(

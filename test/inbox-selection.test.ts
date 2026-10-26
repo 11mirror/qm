@@ -3,17 +3,17 @@ import { test } from "node:test";
 import { inboxRoutes } from "../src/api/routes/inbox.ts";
 import { createInboxLedger } from "../src/inbox/ledger.ts";
 import { ensureInboxCron } from "../src/inbox/sync-task.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { inboxApp } from "./support/inbox-app.ts";
+import { testMap } from "./support/test-database.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const { crons, app } = inboxApp();
-  const items = createInboxLedger();
-  const uiState = createMemoryMap<PersistedUiState>();
+  const items = createInboxLedger(testMap());
+  const uiState = testMap<PersistedUiState>();
   const defaults = async (owner = "alice") => [
     await ensureInboxCron(crons, owner, "gmail"),
     await ensureInboxCron(crons, owner, "slack"),

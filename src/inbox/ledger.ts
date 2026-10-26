@@ -3,7 +3,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThreadMessage } from "../types.ts";
 import { isResolved } from "./view.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -204,10 +204,7 @@ function mergeIngest(item: InboxItem, entry: IngestEntryInput, now: number): Inb
   };
 }
 
-export function createInboxLedger(
-  backing: DurableMap<InboxItem> = createMemoryMap<InboxItem>(),
-  onEvent?: (event: LedgerEvent) => void,
-): InboxLedger {
+export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (event: LedgerEvent) => void): InboxLedger {
   if (!backing.update) throw new Error("inbox items need atomic durable updates");
   const update = backing.update.bind(backing);
   const emit = (item: InboxItem | null | undefined, op: LedgerEventOp): void => {

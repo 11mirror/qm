@@ -275,7 +275,11 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
       accessToken: "orders-token",
       expiresAt: Date.now() + 3_600_000,
     });
-    const linked = (await read()).providers.orders;
+    let linked = (await read()).providers.orders;
+    for (let attempt = 0; attempt < 100 && !linked?.connected; attempt++) {
+      await new Promise((r) => setTimeout(r, 20));
+      linked = (await read()).providers.orders;
+    }
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");
     assert.equal(linked?.available, true);

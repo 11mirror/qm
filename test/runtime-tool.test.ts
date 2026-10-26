@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import { storedItem } from "../src/sessions/items.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -15,7 +15,7 @@ const claims: CapabilityClaims = {
   exp: Date.now() + 60000,
 };
 async function setup(allowed = true) {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setRuntimeSelection("org:default-org", active);
   const service = createRuntimeService(
     { config, baseModelDefault: active.modelId },

@@ -15,6 +15,8 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const alpha = tenantFor("tenant-alpha");
 const beta = tenantFor("tenant-beta");
@@ -79,7 +81,12 @@ test("the API reports a capability token minted for another tenant", async (t) =
   const reports = t.mock.method(console, "error", () => {});
   const secret = "tenant-capability-secret".repeat(2);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "tenant-cap-")), signingSecret: secret }));
-  const server = createServer(built.app, { admin: built.admin, memory: built.memory, signingSecret: secret });
+  const server = createServer(built.app, {
+    admin: built.admin,
+    memory: built.memory,
+    signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const mint = () =>

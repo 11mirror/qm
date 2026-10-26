@@ -11,6 +11,8 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 
@@ -22,6 +24,7 @@ async function start() {
     }),
   );
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     memory: built.memory,
     auditLog: built.auditLog,

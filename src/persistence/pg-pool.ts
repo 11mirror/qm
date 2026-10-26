@@ -142,11 +142,14 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
             ...ssl,
             max,
             connectionTimeoutMillis: 10_000,
+            allowExitOnIdle: true,
             options: TENANT_BYPASS_OPTION,
           }),
         )
       : tenantScopedPool(
-          guardedPool(new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 })),
+          guardedPool(
+            new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true }),
+          ),
         );
   sharedPools.set(key, { pool, users: 1 });
   return pool;

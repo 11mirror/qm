@@ -13,7 +13,8 @@ import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
 let fake: FakePorter;
 let sandbox: Sandbox;
@@ -35,7 +36,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
 
 beforeEach(() => {
   fake = installFakePorter();
-  store = createMemoryMap<StoredPorterSandbox>();
+  store = testMap<StoredPorterSandbox>();
   sandbox = make();
 });
 after(() => fake?.cleanup());

@@ -2,16 +2,19 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp as buildProductionApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 
+const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
+
 type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
 async function setup() {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,

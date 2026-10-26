@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
@@ -13,9 +14,11 @@ const MODEL_ID = "unregistered-future-model";
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
   assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
   const config = testConfig();
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-  });
+  const built = stopAtEnd(
+    buildApp(config, {
+      modelCredentialFetch: async () => Response.json({ data: [] }),
+    }),
+  );
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));

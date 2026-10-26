@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInboxSourceRefresh as createRefresh } from "../src/inbox/source-refresh.ts";
 import { createInboxLedger, type LatestEvent } from "../src/inbox/ledger.ts";
+import { testMap } from "./support/test-database.ts";
+import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createInboxLedger();
+  const items = createInboxLedger(testMap());
   await items.ingest([
     {
       cronId: "inbox",
@@ -651,10 +654,9 @@ test("saved participants do not supply a missing sender identity", async () => {
 });
 
 test("profile failures retain diagnostics without exposing credentials", async () => {
-  const { createErrorLog } = await import("../src/admin/error-log.ts");
   for (const mode of [undefined, "avatars"] as const) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-    const errors = createErrorLog();
+    const errors = createPostgresErrorLog(testDatabaseUrl());
     await createInboxSourceRefresh({
       featureFlags,
       items,
@@ -675,9 +677,8 @@ test("profile failures retain diagnostics without exposing credentials", async (
 });
 
 test("cosmetic refresh records ledger failures without rejecting the inbox request", async () => {
-  const { createErrorLog } = await import("../src/admin/error-log.ts");
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-  const errors = createErrorLog();
+  const errors = createPostgresErrorLog(testDatabaseUrl());
   await createInboxSourceRefresh({
     featureFlags,
     items: {
@@ -700,8 +701,7 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
 
 test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
   const { createFeatureFlagStore } = await import("../src/feature-flags.ts");
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-  const flags = createFeatureFlagStore(createMemoryMap());
+  const flags = createFeatureFlagStore(testMap());
   await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
   for (const mode of [undefined, "avatars"] as const) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });

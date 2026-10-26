@@ -2,11 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
   const session = await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
@@ -29,7 +30,7 @@ test("getRun resolves the threadRef to the real UUID and builds the admin link f
 });
 
 test("getRun omits the admin link when no portal (publicWebUrl) is configured", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const threadRef = "ch:C2:2.2";
   await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
@@ -44,7 +45,7 @@ test("getRun omits the admin link when no portal (publicWebUrl) is configured", 
 });
 
 test("getRun leaves an already-UUID refused sessionId untouched (no false rewrite)", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const session = await sessions.getOrCreateByThread("dm:U1", "dm", scopeId("personal", "U1"));
   const { run } = await runs.enqueue({ sessionId: "ch:C1:1.1", request: {} as never });
@@ -61,7 +62,7 @@ test("getRun leaves an already-UUID refused sessionId untouched (no false rewrit
 });
 
 test("getRun drops an unresolvable threadRef sessionId (turn failed before its session existed)", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const { run } = await runs.enqueue({ sessionId: "ch:C9:9.9", request: {} as never });
   const claimed = await runs.claimById(run.id, "w1", 60_000);

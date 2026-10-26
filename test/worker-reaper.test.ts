@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
@@ -16,11 +16,23 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
+import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { isReply } from "../src/sessions/items.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function reopened<T>(databaseUrl: string | undefined, fn: (runs: RunStore) => Promise<T>): Promise<T> {
+  const store = createPostgresRunStore(databaseUrl!);
+  try {
+    return await fn(store.runs);
+  } finally {
+    await store.close();
+  }
+}
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
   actor,
@@ -35,7 +47,10 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
+  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+  });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
   assert.equal(swept.parked, 0);
@@ -65,7 +80,10 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
   const { runs } = createMemoryRunStore();
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
-  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
+  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+  });
 
   for (let i = 0; i < 5; i++) {
     await runs.claim("dead-worker", 10);
@@ -83,7 +101,10 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
   const { runs } = createMemoryRunStore({ maxClaims: 3 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
-  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
+  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+  });
 
   for (let i = 1; i <= 2; i++) {
     await runs.claim("dead-worker", 10);
@@ -134,14 +155,17 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
       return leader ? fn(new Promise<void>(() => {})) : null;
     },
   };
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 5, leaderLease: lease });
+  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+    intervalMs: 5,
+    leaderLease: lease,
+  });
   reaper.start();
   try {
     await sleep(40);
     assert.equal((await runs.get(r.id))?.status, "running", "a non-leader's interval does not reap");
 
     leader = true;
-    await sleep(40);
+    await settle(async () => (await runs.get(r.id))?.status === "pending");
     assert.equal((await runs.get(r.id))?.status, "pending", "the leader's interval reaps the expired run");
   } finally {
     reaper.stop();
@@ -158,7 +182,10 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
       return null;
     },
   };
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 60_000, leaderLease: denyAll });
+  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+    intervalMs: 60_000,
+    leaderLease: denyAll,
+  });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1, "direct sweep() runs regardless of leadership");
   assert.equal((await runs.get(r.id))?.status, "pending");
@@ -166,7 +193,7 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
 
 test("reaping a lease-expired run releases its stranded session lease", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const { lease: held } = await sessions.acquireLease(session.id);
   assert.ok(held, "the (now-dead) worker holds the session lease");
@@ -208,7 +235,7 @@ test("reapExpired fences the dead attempt, releases its session lease, and only 
 
 test("a heartbeat landing between SELECT and retire leaves the run AND its session lease untouched", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const { lease: held } = await sessions.acquireLease(session.id);
   assert.ok(held, "the live worker holds the session lease");
@@ -235,7 +262,7 @@ test("a heartbeat landing between SELECT and retire leaves the run AND its sessi
 
 test("shutdown cancels before handback and holds both leases until the turn unwinds", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
   let started!: () => void;
@@ -300,7 +327,7 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
 
 test("an uncooperative turn keeps both leases until it actually exits", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   let held: Awaited<ReturnType<typeof sessions.acquireLease>>["lease"];
@@ -496,14 +523,13 @@ test("stop() lets an in-flight turn finish inside the drain budget — the run c
 });
 
 test("runtime.stop() drains the in-flight run even with the queue non-empty", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "wr-")),
+    workers: 1,
+    leaseTtlMs: 5_000,
+    reaperIntervalMs: 60_000,
+  });
+  const built = buildApp(config);
   const a = await built.app.turn({
     surface: "test",
     actor: { externalId: "U1" },
@@ -524,11 +550,13 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
   built.runtime.start();
   await built.runs.waitFor(a.runId!, 5_000);
   await built.runtime.stop();
-  for (const id of [a.runId!, b.runId!]) {
-    const status = (await built.runs.get(id))?.status;
-    assert.notEqual(status, "running", `run ${id} not abandoned mid-flight (status=${status})`);
-  }
-  assert.equal((await built.runs.get(a.runId!))?.status, "done", "the drained run finished");
+  await reopened(config.databaseUrl, async (runs) => {
+    for (const id of [a.runId!, b.runId!]) {
+      const status = (await runs.get(id))?.status;
+      assert.notEqual(status, "running", `run ${id} not abandoned mid-flight (status=${status})`);
+    }
+    assert.equal((await runs.get(a.runId!))?.status, "done", "the drained run finished");
+  });
 });
 
 test("a worker pool drains a queued run end-to-end", async () => {
@@ -788,13 +816,12 @@ test("inline turns remain admitted through pause and queued intake survives roll
 });
 
 test("final shutdown waits for an already-started completion instead of releasing its lease", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
-      workers: 1,
-      shutdownDrainMs: 30,
-    }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
+    workers: 1,
+    shutdownDrainMs: 30,
+  });
+  const built = buildApp(config);
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -827,7 +854,7 @@ test("final shutdown waits for an already-started completion instead of releasin
     assert.equal((await built.runs.get(queued.runId!))?.status, "running");
     release.resolve();
     await Promise.all([stopping, ownershipDrain]);
-    assert.equal((await built.runs.get(queued.runId!))?.status, "done");
+    assert.equal(await reopened(config.databaseUrl, async (runs) => (await runs.get(queued.runId!))?.status), "done");
   } finally {
     release.resolve();
     await built.runtime.backgroundDrained();
@@ -887,9 +914,12 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
 });
 
 test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")), workers: 1, shutdownDrainMs: 200 }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")),
+    workers: 1,
+    shutdownDrainMs: 200,
+  });
+  const built = buildApp(config);
   const blocked = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
   const append = built.sessions.append.bind(built.sessions);
@@ -925,12 +955,14 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     await stopping;
     assert.equal(result.status, "queued");
     assert.equal(result.runId, running.id);
-    const handedBack = (await built.runs.get(running.id))!;
-    assert.equal(handedBack.status, "pending");
-    assert.equal(handedBack.leaseToken, null);
-    assert.equal(handedBack.errorAttempts, 0);
-    assert.equal(handedBack.attempts, 1);
-    assert.equal((await built.runs.claim("replacement", 5_000))?.id, running.id);
+    await reopened(config.databaseUrl, async (runs) => {
+      const handedBack = (await runs.get(running.id))!;
+      assert.equal(handedBack.status, "pending");
+      assert.equal(handedBack.leaseToken, null);
+      assert.equal(handedBack.errorAttempts, 0);
+      assert.equal(handedBack.attempts, 1);
+      assert.equal((await runs.claim("replacement", 5_000))?.id, running.id);
+    });
   } finally {
     gate.resolve();
     await inline.catch(() => {});

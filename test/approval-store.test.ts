@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApprovalStore } from "../src/core/approval-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
   return {
@@ -23,7 +23,7 @@ function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
 
 for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
   test(`saving approval immediately delivers a native request for ${threadRef}`, async () => {
-    const backing = createMemoryMap<PendingApprovalRecord>();
+    const backing = testMap<PendingApprovalRecord>();
     const outbound = recordingOutbound();
     const approvals = createApprovalStore(backing, outbound);
     await approvals.put("A1", record(threadRef));
@@ -42,7 +42,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
 }
 
 test("persisted approvals recover after a failed post and restart without failing the turn", async () => {
-  const backing = createMemoryMap<PendingApprovalRecord>();
+  const backing = testMap<PendingApprovalRecord>();
   const failed = createApprovalStore(backing, {
     send: async () => {
       throw new Error("delivery unavailable");
@@ -59,7 +59,7 @@ test("persisted approvals recover after a failed post and restart without failin
 
 test("web approvals remain on their native surface", async () => {
   const outbound = recordingOutbound();
-  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), outbound);
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
   const approval = record("web:U1");
   approval.request!.surface = "web";
   await approvals.put("A1", approval);
@@ -68,7 +68,7 @@ test("web approvals remain on their native surface", async () => {
 });
 
 test("system approvals stay pending without posting an impossible Slack DM", async () => {
-  const backing = createMemoryMap<PendingApprovalRecord>();
+  const backing = testMap<PendingApprovalRecord>();
   const outbound = recordingOutbound();
   const approvals = createApprovalStore(backing, outbound);
   const approval = record("slack:C1:ambient:1.0");
@@ -87,7 +87,7 @@ test("system approvals stay pending without posting an impossible Slack DM", asy
 test("approvals requested from a Slack DM thread are delivered into that thread", async () => {
   for (const threadRef of ["dm:D1:1700.1", "agent:main:subagent:child"]) {
     const outbound = recordingOutbound();
-    const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), outbound);
+    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
     const approval = record(threadRef);
     approval.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.1" };
     await approvals.put("A1", approval);
@@ -95,7 +95,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
     assert.equal(delivery?.destination.threadTs, "1700.1");
   }
   const outbound = recordingOutbound();
-  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), outbound);
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
   const channel = record("channel:C1:1700.2");
   channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
   channel.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.2" };

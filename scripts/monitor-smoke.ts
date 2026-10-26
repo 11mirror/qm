@@ -5,7 +5,7 @@ import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
@@ -15,8 +15,13 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");
@@ -57,8 +62,8 @@ print("PHASE: image saved diffusion-out.png", flush=True)
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "monitor-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
-  store: createMemoryMap(),
-  advisoryLock: createMemoryAdvisoryLock(),
+  store: smokeMap("sprites_initialization"),
+  advisoryLock: createNoopAdvisoryLock(),
 });
 if (!supportsProcessSessions(sb)) throw new Error("Sprites sandbox does not advertise process sessions");
 
@@ -67,8 +72,8 @@ const owner = "qm-monitor-smoke";
 const threadRef = "monitor-smoke-thread";
 const destination = { type: "smoke", target: "smoke-dm", audienceScopeId: scope };
 
-const registry = createMemoryProcessRegistry();
-const monitors = createMonitorStore();
+const registry = createPostgresProcessRegistry(databaseUrl);
+const monitors = createMonitorStore(smokeMap("monitors"));
 const posted: OutboundPost[] = [];
 const outbound = createOutbound({});
 outbound.register(["smoke"], async (post) => void posted.push(post));
@@ -103,8 +108,10 @@ const poller = createMonitorPoller({
   processes: registry,
   sandbox: sb,
   outbound,
-  idempotency: createIdempotencyStore(),
-  identity: createIdentityService(),
+  idempotency: createIdempotencyStore(smokeMap("idempotency")),
+  identity: createIdentityService(smokeMap("deactivated_principals"), {
+    externalMembers: smokeMap("external_members"),
+  }),
   run: async (req: TurnRequest): Promise<TurnResult> => {
     wakes.push(req);
     console.log(

@@ -8,9 +8,10 @@ import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import { stopAtEnd } from "./support/build-app.ts";
 
 test("browser follows durable user AI access and personal model defaults", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   const input = {
     actorId: "U1",
     config: built.config,
@@ -39,7 +40,7 @@ test("browser follows durable user AI access and personal model defaults", async
 });
 
 test("ChatGPT browser inference uses refreshed subscription auth and native structured output", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "original-access",
     refreshToken: "never-forward-refresh",
@@ -125,7 +126,7 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
 });
 
 test("Claude subscription browser requests fail without deriving or sending credentials", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "anthropic", {
     accessToken: "claude-subscription",
     expiresAt: Date.now() + 3600_000,
@@ -163,11 +164,13 @@ test("company ChatGPT subscription auth uses the native subscription transport w
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
   const credentialId = hashId(["company-admin", "codex", "file"]);
-  const built = buildApp(
-    testConfig({
-      codexAuthCredential: credentialId,
-      openaiApiKey: "must-not-fallback",
-    }),
+  const built = stopAtEnd(
+    buildApp(
+      testConfig({
+        codexAuthCredential: credentialId,
+        openaiApiKey: "must-not-fallback",
+      }),
+    ),
   );
   const saved = await built.keychain!.save({
     ownerId: "company-admin",

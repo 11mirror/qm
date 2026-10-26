@@ -13,18 +13,20 @@ import { createDeployService, type DeployService } from "../src/deploy/deploy-se
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 interface ProviderProbe {
   appliedImages: Array<string | undefined>;
 }
 
 function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; probe: ProviderProbe } {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const probe: ProviderProbe = { appliedImages: [] };
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
     provider: {
@@ -94,11 +96,11 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
 });
 
 test("a runtime-mount provider (no image) leaves versions image-less — Docker behavior unchanged", async () => {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-noimg-")),
     provider: {
@@ -123,12 +125,12 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
 });
 
 test("a git-bundle provider receives each version's bundle on apply and marks the applied version", async () => {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const bundles: Array<Uint8Array | undefined> = [];
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
     provider: {
@@ -167,7 +169,7 @@ test("a git-bundle provider receives each version's bundle on apply and marks th
 });
 
 test("applied version is marked only after endpoint metadata is persisted", async () => {
-  const baseStore = createDeployStore();
+  const baseStore = createDeployStore(testDeployBackings());
   const deployStore: DeployStore = {
     ...baseStore,
     setEndpoint: async () => {
@@ -177,7 +179,7 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-applied-order-")),
     provider: {
@@ -204,12 +206,12 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
 });
 
 test("a failed redeploy does not move the hosted git current ref", async () => {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   let applies = 0;
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-current-ref-")),
     provider: {

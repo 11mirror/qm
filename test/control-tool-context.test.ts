@@ -14,8 +14,9 @@ import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
-import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
+import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -243,9 +244,25 @@ test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () 
 for (const scope of ["conversation", "channel"] as const) {
   test(`concurrent guidance edits at ${scope} scope reject a stale replacement without losing the winner`, async () => {
     const { control } = build();
-    const channelPolicy = createMemoryChannelPolicyStore();
+    const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
+    let reads = 0;
+    let releaseReads!: () => void;
+    const bothRead = new Promise<void>((resolve) => (releaseReads = resolve));
+    const racingPolicy = {
+      ...channelPolicy,
+      async get(container: string) {
+        const policy = await channelPolicy.get(container);
+        if (++reads === 2) releaseReads();
+        await bothRead;
+        return policy;
+      },
+    };
     const surface = createSurfaceToolDeps({
-      deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
+      deps: {
+        outbound: {},
+        channelPolicy: scope === "channel" ? racingPolicy : channelPolicy,
+        auditLog: { record() {} },
+      },
       input: { surfaceTools: true },
       actor: { id: "U1" },
       conversation: { kind: "channel", channelRef: "C1" },
@@ -292,7 +309,7 @@ for (const scope of ["conversation", "channel"] as const) {
 }
 
 test("channel guidance metadata updates preserve intervening edits and initialize missing policies", async () => {
-  const channelPolicy = createMemoryChannelPolicyStore();
+  const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const surface = createSurfaceToolDeps({
     deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },

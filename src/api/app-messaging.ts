@@ -4,7 +4,6 @@ import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from 
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachPost,
@@ -118,7 +117,7 @@ export function createMessagingMethods(
 > {
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
-  const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
+  const contextRequests = deps.contextRequests;
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email

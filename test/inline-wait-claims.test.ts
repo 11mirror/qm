@@ -23,7 +23,6 @@ for (const backend of ["memory", "postgres"] as const) {
           ...(backend === "postgres"
             ? {
                 databaseUrl: databaseUrl!,
-                sessionStore: "postgres" as const,
                 runStore: "postgres" as const,
                 dataDir: mkdtempSync(join(tmpdir(), "inline-wait-")),
               }
