@@ -43,7 +43,6 @@ export async function repairStaleTurns(deps: {
   sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease" | "acquireLease" | "append" | "releaseLease">;
   errors?: ErrorLog;
 }): Promise<void> {
-  await deps.ledger.releaseCapped();
   for (const candidate of await deps.ledger.repairCandidates()) {
     const repaired = await deps.ledger.repair(candidate, {
       status: "failed",

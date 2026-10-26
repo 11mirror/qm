@@ -10,13 +10,7 @@ import { routeTurns } from "../src/turns/turn-engine.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "../src/turns/absurd-schema.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
-import {
-  createTurnLedger,
-  FAIR_ACTIVE_CAP,
-  TURN_READY_CHANNEL,
-  TURN_YIELD_CHANNEL,
-  type TurnLedger,
-} from "../src/turns/turn-ledger.ts";
+import { createTurnLedger, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL, type TurnLedger } from "../src/turns/turn-ledger.ts";
 import { createTurnRunner } from "../src/turns/turn-runner.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
@@ -587,79 +581,6 @@ test("a person's message parks a background turn that is not running and starts 
   await ready.close?.();
 });
 
-async function admitBackground(owner: string, thread: string, text: string) {
-  const base = request(thread, text);
-  const result = await ledger.admit({
-    sessionId: thread,
-    request: { ...base, actor: { ...base.actor, id: owner } },
-    priority: 2,
-  });
-  assert.ok(result);
-  return result;
-}
-
-test("an owner's ninth active background turn waits for a slot, then starts when one ends", { skip }, async () => {
-  const owner = `${randomUUID()}@example.com`;
-  const members = [];
-  for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
-  assert.deepEqual(
-    members.map((m) => m.run.status),
-    [...Array(FAIR_ACTIVE_CAP).fill("pending"), "queued"],
-  );
-  const capped = members.at(-1)!.run;
-  assert.equal(await pointer(capped.sessionId), capped.id);
-  assert.equal(
-    (await ledger.repairCandidates(1000)).some((c) => c.turnId === capped.id),
-    false,
-  );
-  assert.equal(await ledger.cancel(members[0]!.run.id), "cancelled");
-  assert.equal((await runStore.runs.get(capped.id))?.status, "pending");
-  for (const member of members.slice(1)) await ledger.cancel(member.run.id);
-});
-
-test("a person's message is not held behind a capped background turn", { skip }, async () => {
-  const owner = `${randomUUID()}@example.com`;
-  const members = [];
-  for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
-  const capped = members.at(-1)!.run;
-  const person = await admit(capped.sessionId, "person", undefined, 0);
-  assert.equal(person.run.status, "pending");
-  assert.equal(await pointer(capped.sessionId), person.run.id);
-  for (const member of members) await ledger.cancel(member.run.id);
-  await ledger.cancel(person.run.id);
-});
-
-test("withdrawing a capped head moves its conversation on", { skip }, async () => {
-  const owner = `${randomUUID()}@example.com`;
-  const members = [];
-  for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
-  const capped = members.at(-1)!.run;
-  const next = await admit(capped.sessionId, "after the capped turn", undefined, 1);
-  assert.equal(next.run.status, "queued");
-  const routing = routeTurns(runStore.runs, ledger, { enabled: async () => true });
-  assert.equal(await routing.withdraw(capped.id), true);
-  assert.equal(await runStore.runs.get(capped.id), null);
-  assert.equal(await pointer(capped.sessionId), next.run.id);
-  for (const member of members.slice(0, -1)) await ledger.cancel(member.run.id);
-  await ledger.cancel(next.run.id);
-});
-
-test("a background turn's subagents are not counted against its owner's cap", { skip }, async () => {
-  const parent = await admit(`web:cron:${randomUUID()}`, "cron", undefined, 2);
-  const child = await ledger.admit({
-    sessionId: `agent:main:subagent:${randomUUID()}`,
-    request: { ...request("child", "child work"), delegatingRunId: parent.run.id },
-    priority: 2,
-  });
-  assert.equal(child?.run.fairKey ?? null, null);
-  assert.equal(parent.run.fairKey, "owner:alice@example.com");
-  await ledger.cancel(child!.run.id);
-  await ledger.cancel(parent.run.id);
-});
-
 test("stopping a tree stops every turn in its conversations in one step", { skip }, async () => {
   const parent = `web:alice:${randomUUID()}`;
   const child = `agent:main:subagent:${randomUUID()}`;
@@ -683,17 +604,4 @@ test("stopping a tree stops every turn in its conversations in one step", { skip
     true,
   );
   assert.equal(await pointer(parent), null);
-});
-
-test("slots freed together by one owner are refilled without waiting for the sweep", { skip }, async () => {
-  const owner = `${randomUUID()}@example.com`;
-  const members = [];
-  for (let i = 0; i < FAIR_ACTIVE_CAP + 4; i++)
-    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
-  const active = members.slice(0, FAIR_ACTIVE_CAP);
-  const capped = members.slice(FAIR_ACTIVE_CAP);
-  assert.ok(capped.every((m) => m.run.status === "queued"));
-  await Promise.all(active.map((m) => ledger.cancel(m.run.id)));
-  for (const m of capped) assert.equal((await runStore.runs.get(m.run.id))?.status, "pending");
-  for (const m of capped) await ledger.cancel(m.run.id);
 });

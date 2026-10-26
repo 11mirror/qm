@@ -62,7 +62,6 @@ export function rowToRun(r: Record<string, unknown>): Run {
           absurdQueue: (r.absurd_queue as string | null) ?? null,
           absurdTaskId: r.absurd_task_id == null ? null : String(r.absurd_task_id),
           absurdRunId: r.absurd_run_id == null ? null : String(r.absurd_run_id),
-          fairKey: (r.fair_key as string | null | undefined) ?? null,
         }
       : {}),
   };
@@ -194,16 +193,6 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         statements: [
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_in_flight ON runs(session_id, created_at, seq) WHERE status IN ('queued','pending','running')`,
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_queued ON runs(session_id, claim_priority, created_at, seq) WHERE status = 'queued'`,
-        ],
-      },
-      {
-        id: "runs/store/0013-turn-fairness",
-        statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS fair_key TEXT`],
-      },
-      {
-        id: "runs/store/0014-turn-fairness-index",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_fair_key ON runs(fair_key, status) WHERE fair_key IS NOT NULL AND status IN ('queued','pending','running')`,
         ],
       },
     ],
