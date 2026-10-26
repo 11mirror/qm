@@ -1,5 +1,5 @@
 import type { ExternalSlackAccess } from "../slack/external-access.ts";
-import type { SlackEventsHandler } from "../slack/http-events.ts";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SurfaceSender } from "../surfaces/outbound.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { Surface, SurfaceUser } from "./surface.ts";
@@ -10,6 +10,8 @@ interface SlackAccountHandle {
   policy?: ExternalSlackAccess;
   inFlightRuns?: { add(id: string): void; delete(id: string): void; has(id: string): boolean };
 }
+
+export type SlackEventsHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 export interface SlackNative {
   accounts: Map<string, SlackAccountHandle>;
