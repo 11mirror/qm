@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { flyTo } from "./cursor.mjs";
 
-const binary =
+export const binary =
   process.env.QM_DESK_BIN ??
   (app.isPackaged
     ? path.join(process.resourcesPath, "desk")

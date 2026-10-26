@@ -1532,20 +1532,8 @@ export function createKeychain(deps: {
     async getServiceCredentialSecret(orgScopeId, slug) {
       const rec = await brokerRecord(orgScopeId, slug);
       if (!rec?.secretEnc) return null;
-      const b = rec.broker ?? { name: rec.service, enabled: true };
-      return {
-        slug: rec.service,
-        name: b.name,
-        secret: decryptSecret(rec.secretEnc, deps.key),
-        delivery: b.delivery ?? "broker",
-        ...(b.envKey ? { envKey: b.envKey } : {}),
-        host: rec.host ?? "",
-        ...(b.injection ? { injection: b.injection } : {}),
-        ...(b.allowedMethods ? { allowedMethods: b.allowedMethods } : {}),
-        ...(b.allowedPathPrefixes ? { allowedPathPrefixes: b.allowedPathPrefixes } : {}),
-        deployments: b.deployments !== false,
-        enabled: b.enabled,
-      };
+      const { hasSecret: _hasSecret, updatedBy: _updatedBy, updatedAt: _updatedAt, ...projected } = brokerToPublic(rec);
+      return { ...projected, secret: decryptSecret(rec.secretEnc, deps.key) };
     },
 
     async setConnectorToken(host, principalId, token, accountType) {

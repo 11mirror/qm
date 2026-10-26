@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { stopComputer } from "./runtime.mjs";
+import { binary } from "./desk.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -18,9 +19,6 @@ let finish;
 let icon;
 
 async function status(prompt = false) {
-  const binary =
-    process.env.QM_DESK_BIN ??
-    (app.isPackaged ? path.join(process.resourcesPath, "desk") : path.join(directory, "desk/target/release/desk"));
   const { stdout } = await execute(binary, ["permissions", ...(prompt ? ["--prompt"] : [])], {
     timeout: 10_000,
     maxBuffer: 64 * 1024,

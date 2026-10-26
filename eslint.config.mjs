@@ -2,6 +2,14 @@ import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+const ENV_BOUNDARY =
+  "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.";
+const RAW_ERROR_TO_CONSOLE = {
+  selector: "CallExpression[callee.object.name='console'] > Identifier.arguments[name=/^(e|err|error)$/]",
+  message:
+    "Pass errMessage(e), not the raw error object, to console.* — raw errors can leak response bodies or secrets into logs.",
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -94,26 +102,16 @@ export default tseslint.config(
         "error",
         {
           selector: "MemberExpression[object.name='process'][property.name='env']",
-          message:
-            "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
+          message: ENV_BOUNDARY,
         },
         {
           selector: "MemberExpression[object.name='process'][computed=true][property.value='env']",
-          message:
-            "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
+          message: ENV_BOUNDARY,
         },
-        {
-          // Never dump a raw error object to the console: an error can carry HTTP
-          // response bodies, connection strings, or credential material. Wrap it in
-          // errMessage(...) (src/util/errors.ts) so only the message is logged.
-          selector: "CallExpression[callee.object.name='console'] > Identifier.arguments[name=/^(e|err|error)$/]",
-          message:
-            "Pass errMessage(e), not the raw error object, to console.* — raw errors can leak response bodies or secrets into logs.",
-        },
+        RAW_ERROR_TO_CONSOLE,
         {
           selector: "VariableDeclarator[init.name='process'] ObjectPattern Property[key.name='env']",
-          message:
-            "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
+          message: ENV_BOUNDARY,
         },
       ],
       "no-restricted-imports": [
@@ -123,14 +121,12 @@ export default tseslint.config(
             {
               name: "node:process",
               importNames: ["env"],
-              message:
-                "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
+              message: ENV_BOUNDARY,
             },
             {
               name: "process",
               importNames: ["env"],
-              message:
-                "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
+              message: ENV_BOUNDARY,
             },
           ],
         },
@@ -138,8 +134,6 @@ export default tseslint.config(
     },
   },
   {
-    // Same raw-error rule for plugin server code and the src files the env-boundary
-    // block above deliberately skips (local scripts/ and test/ CLIs keep full stacks).
     files: [
       "plugins/**/*.ts",
       "src/config.ts",
@@ -148,14 +142,7 @@ export default tseslint.config(
       "src/tenant-import-main.ts",
     ],
     rules: {
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "CallExpression[callee.object.name='console'] > Identifier.arguments[name=/^(e|err|error)$/]",
-          message:
-            "Pass errMessage(e), not the raw error object, to console.* — raw errors can leak response bodies or secrets into logs.",
-        },
-      ],
+      "no-restricted-syntax": ["error", RAW_ERROR_TO_CONSOLE],
     },
   },
 );
