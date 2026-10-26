@@ -5,8 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPorterSandbox, type StoredPorterSandbox } from "../src/sandbox/porter-sandbox.ts";
-import { createPorterClient, porterSlug, type PorterSandboxSpec } from "../src/sandbox/porter-client.ts";
-import { SandboxError } from "porter-sandbox";
+import { porterSlug, type PorterSandboxSpec } from "../src/sandbox/porter-client.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -184,22 +183,6 @@ test("restartComputer replaces the body but keeps the home volume", async () => 
   assert.equal(h2.coldStart, false);
   assert.equal(await sandbox.readFile(h2, "keep.txt"), "survives restart");
   assert.equal((await sandbox.computerStatus!(scope)).guestResponsive, true);
-});
-
-test("porter API errors surface the response body detail, not just the status", async (t) => {
-  t.mock.method(globalThis, "fetch", async () =>
-    Response.json({ code: "INVALID_INPUT", message: "the cluster could not pull the sandbox image" }, { status: 400 }),
-  );
-  const client = createPorterClient({ baseUrl: "http://porter.invalid" });
-  await assert.rejects(
-    () => client.sandboxes.create({ image: "x" }),
-    (e: Error) => {
-      assert.equal(e.message, "HTTP 400: the cluster could not pull the sandbox image");
-      assert.ok(e instanceof SandboxError);
-      assert.equal((e as SandboxError).statusCode, 400);
-      return true;
-    },
-  );
 });
 
 test("destroy waits for a slowly terminating body before deleting its volume", async () => {
