@@ -105,6 +105,16 @@ export async function delegatedAuthorizationOrigin(
   }
 }
 
+/** Whether every principal may read item `seq` of the session — one indexed lookup. */
+async function itemVisibleToAll(
+  sessions: Pick<SessionStore, "visibleItems">,
+  sessionId: string,
+  seq: number,
+  principalIds: readonly string[],
+): Promise<boolean> {
+  return (await sessions.visibleItems(sessionId, principalIds, { sinceSeq: seq, beforeSeq: seq + 1 })).length > 0;
+}
+
 export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
@@ -114,6 +124,8 @@ const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
+/** Messages handed to the agent per receive call; the rest stay pending for the next call. */
+const RECEIVE_BATCH_MAX = 4;
 
 interface SessionOpenInput {
   requestId?: string;
@@ -240,6 +252,7 @@ export interface SessionSyscallDeps {
     | "setParentSession"
     | "setSpawnMeta"
     | "childrenOf"
+    | "descendantsOf"
     | "addParticipant"
     | "updateTitle"
     | "getItems"
@@ -407,7 +420,7 @@ export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, se
 }
 
 export async function sessionTreeWorking(
-  sessions: Pick<SessionStore, "childrenOf">,
+  sessions: Pick<SessionStore, "descendantsOf">,
   runs: Pick<RunStore, "activeForThread">,
   root: Session,
 ): Promise<boolean> {
@@ -437,21 +450,11 @@ export async function workingSessionThreadRefs(
   return working;
 }
 
-async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
-  const all: Session[] = [root];
-  const queue = [root];
-  const seen = new Set([root.id]);
-  while (queue.length) {
-    const next = queue.shift()!;
-    const children = await sessions.childrenOf(next.id);
-    for (const child of children) {
-      if (seen.has(child.id)) throw new Error("session parent cycle");
-      seen.add(child.id);
-      all.push(child);
-      queue.push(child);
-    }
-  }
-  return all;
+type TreeNode = Pick<Session, "id" | "threadRef" | "scopeId">;
+
+/** The root and every descendant, in one recursive query. */
+async function treeSessions(sessions: Pick<SessionStore, "descendantsOf">, root: Session): Promise<TreeNode[]> {
+  return [root, ...(await sessions.descendantsOf([root.id])).filter((node) => node.id !== root.id)];
 }
 
 async function sessionRunCancelled(
@@ -474,7 +477,7 @@ async function sessionRunCancelled(
 
 export async function stopSessionTree(
   deps: {
-    sessions: Pick<SessionStore, "childrenOf">;
+    sessions: Pick<SessionStore, "descendantsOf">;
     runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get" | "cancelTurn" | "cancelTree">;
     signals: Pick<RunSignalStore, "send">;
   },
@@ -491,7 +494,7 @@ export async function stopSessionTree(
 }
 
 export async function sessionTreeRunCount(
-  sessions: Pick<SessionStore, "childrenOf">,
+  sessions: Pick<SessionStore, "descendantsOf">,
   runs: Pick<RunStore, "inFlightForThread">,
   root: Session,
 ): Promise<number> {
@@ -546,17 +549,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
-      async function visibleHistory(target: Session): Promise<Item[]> {
+      async function visibleHistory(target: Session, limit: number): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
-        const views = await Promise.all(
-          [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleItems(target.id, id),
-          ),
-        );
-        const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
-        return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
+        return deps.sessions.visibleItems(target.id, [binding.request.actor.id, ...audience.map((p) => p.id)], {
+          limit,
+        });
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -597,25 +596,19 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
                   caller,
                 );
-                if (message.sourceEntrySeq !== undefined) {
-                  const viewers = new Set([
-                    caller.actor.id,
-                    ...caller.conversation.audience.map((person) => person.id),
-                  ]);
-                  const readable = await Promise.all(
-                    [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleItems(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq,
-                      ),
-                    ),
-                  );
-                  if (!readable.every(Boolean)) continue;
-                }
-                visible.push(message);
-                if (visible.length >= 4) break;
               } catch {
                 continue;
               }
+              if (
+                message.sourceEntrySeq !== undefined &&
+                !(await itemVisibleToAll(deps.sessions, sender.id, message.sourceEntrySeq, [
+                  caller.actor.id,
+                  ...caller.conversation.audience.map((person) => person.id),
+                ]))
+              )
+                continue;
+              visible.push(message);
+              if (visible.length >= RECEIVE_BATCH_MAX) break;
             }
             if (visible.length || Date.now() >= deadline) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
@@ -873,7 +866,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
               )
                 continue;
-              const entries = (await visibleHistory(child)).slice(-LAST_SAID_SCAN);
+              const entries = await visibleHistory(child, LAST_SAID_SCAN);
               const said = lastAssistantText(entries);
               summaries.push({
                 sessionId: child.id,
@@ -898,9 +891,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
-          const entries = await visibleHistory(target);
+          const entries = await visibleHistory(target, limit);
           const lines: string[] = [];
-          for (const entry of entries.slice(-limit)) {
+          for (const entry of entries) {
             const text = itemText(entry);
             if (!text) continue;
             lines.push(`${entry.kind}#${entry.seq} ${snippet(text, 300)}`);
@@ -1155,11 +1148,13 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleItems(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
-    }
+    if (
+      !(await itemVisibleToAll(deps.sessions, child.id, outputSeq, [
+        prepared.actor.id,
+        ...prepared.conversation.audience.map((person) => person.id),
+      ]))
+    )
+      throw new Error("the current parent audience cannot read this child result");
   }
   if (result?.attachments?.length && deps.outbound) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);

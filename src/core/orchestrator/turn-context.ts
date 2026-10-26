@@ -68,16 +68,12 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
         .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
     );
     await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-    const snapshot = await deps.sessions.getItems(sessionId);
-    participantHistoryMaxSeq = snapshot.reduce((max, entry) => Math.max(max, entry.seq), -1);
-    const views = await Promise.all(
-      participantIds.map((principalId) => deps.sessions.visibleItems(sessionId, principalId)),
+    participantHistoryMaxSeq = await deps.sessions.latestItemSeq(sessionId);
+    participantHistorySeqs = new Set(
+      (await deps.sessions.visibleItems(sessionId, participantIds, { beforeSeq: participantHistoryMaxSeq + 1 })).map(
+        (entry) => entry.seq,
+      ),
     );
-    participantHistorySeqs = new Set(views[0]!.map((entry) => entry.seq));
-    for (const view of views.slice(1)) {
-      const visible = new Set(view.map((entry) => entry.seq));
-      for (const seq of participantHistorySeqs) if (!visible.has(seq)) participantHistorySeqs.delete(seq);
-    }
   };
   return {
     ...admitted,

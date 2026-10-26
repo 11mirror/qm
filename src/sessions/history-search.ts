@@ -1,5 +1,6 @@
 import { contextSummary } from "./session-store.ts";
-import { isOverheard, isUserMessage, itemFields, proseText, type Item } from "./items.ts";
+import { isOverheard, itemFields, proseText, type Item } from "./items.ts";
+import { searchAuthor } from "./entry-search.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 
 const MAX_HIT_CHARS = 500;
@@ -24,22 +25,16 @@ function itemText(item: Item): string {
   return JSON.stringify(itemFields(item));
 }
 
-function itemAuthor(item: Item): string | undefined {
-  if (!isUserMessage(item)) return undefined;
-  const name = item.body.name;
-  return typeof name === "string" && name.trim() ? name.trim() : undefined;
-}
-
 const MAX_OPEN_CHARS = 20_000;
 const OPEN_TAIL_CHARS = 2_000;
 
 function itemLabel(entry: Item): string {
   const stamp = `(${new Date(entry.createdAt).toISOString()})`;
   if (isOverheard(entry)) {
-    const author = itemAuthor(entry) ?? "someone";
+    const author = searchAuthor(entry) ?? "someone";
     return `overheard#${entry.seq} ${stamp} ${author} (untrusted, SAID — not established fact):`;
   }
-  const author = itemAuthor(entry);
+  const author = searchAuthor(entry);
   return `${entry.kind}#${entry.seq} ${stamp}${author ? ` ${author}:` : ":"}`;
 }
 
@@ -61,7 +56,7 @@ export function searchSessionItems(entries: Item[], query: string, limit = 20): 
   for (let i = entries.length - 1; i >= 0 && hits.length < limit; i--) {
     const entry = entries[i]!;
     const text = itemText(entry).trim();
-    const author = itemAuthor(entry);
+    const author = searchAuthor(entry);
     const haystack = `${author ? `${author} ` : ""}${text}`.toLowerCase();
     if (!terms.every((t) => haystack.includes(t))) continue;
     const clipped = clipHit(text, terms);
