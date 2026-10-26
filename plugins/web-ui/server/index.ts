@@ -1127,6 +1127,75 @@ async function serveFileContent(c: WebCtx): Promise<unknown> {
   return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }
 
+const enc = encodeURIComponent;
+
+const corePathFor = (template: string, c: WebCtx): string =>
+  template.replace(/^\/api\//, "/v1/").replace(/:(\w+)/g, (_, key: string) => enc(c.params[key]!));
+
+interface Relay {
+  core?: string;
+  to?: HttpMethod;
+  who?: "principalId" | "viewer";
+  query?: (c: WebCtx) => Record<string, string> | URLSearchParams;
+  principal?: boolean;
+  pick?: readonly string[];
+  strings?: boolean;
+  read?: "json" | "strict";
+  shape?: (p: Record<string, unknown>, c: WebCtx) => object;
+  raw?: boolean;
+  cap?: boolean;
+  noStore?: boolean;
+  gate?: (c: WebCtx) => Promise<boolean>;
+}
+
+function relayRoute(method: HttpMethod, path: string, o: Relay = {}): WebRoute {
+  return {
+    method,
+    path,
+    handle: async (c) => {
+      if (o.gate && !(await o.gate(c))) return;
+      let body = o.raw ? await readBody(c.req) : o.principal ? JSON.stringify({ principalId: c.user }) : "";
+      if (o.pick || o.shape || o.read) {
+        const p = o.read
+          ? await readJson<Record<string, unknown>>(c.req, c.res, o.read === "json")
+          : (JSON.parse((await readBody(c.req)) || "{}") as Record<string, unknown>);
+        if (o.read && !p) return;
+        const fields: object = o.shape
+          ? o.shape(p!, c)
+          : o.pick
+            ? Object.fromEntries(o.pick.flatMap((k) => (o.strings && typeof p![k] !== "string" ? [] : [[k, p![k]]])))
+            : p!;
+        body = JSON.stringify(o.principal ? { principalId: c.user, ...fields } : fields);
+      }
+      if (o.noStore) c.res.setHeader("Cache-Control", "no-store");
+      const query = o.who
+        ? `?${o.who}=${enc(c.user)}`
+        : o.query
+          ? `?${new URLSearchParams(o.query(c)).toString()}`
+          : "";
+      const target = corePathFor(o.core ?? path, c) + query;
+      return (o.cap ? relayCap : relayCore)(c.res, o.to ?? method, target, body);
+    },
+  };
+}
+
+function copyParams(
+  c: WebCtx,
+  keys: readonly string[],
+  init: Record<string, string> = { principalId: c.user },
+  keepEmpty = false,
+  max = Infinity,
+): URLSearchParams {
+  const qs = new URLSearchParams(init);
+  for (const key of keys) {
+    const value = c.url.searchParams.get(key);
+    if (value !== null && (keepEmpty || value)) qs.set(key, value.slice(0, max));
+  }
+  return qs;
+}
+
+const managesDeployment = (c: WebCtx) => gateManageDeployment(c.res, c.user, c.params.id!);
+
 const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
@@ -1166,77 +1235,14 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
 
-  {
-    method: "GET",
-    path: "/api/user-model-auth/status",
-    handle: async (c) =>
-      relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/account",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/account",
-        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/api-key",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
-      const body = JSON.stringify({ principalId: c.user, provider: p.provider, apiKey: p.apiKey });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/api-key", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/disconnect",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/disconnect",
-        JSON.stringify({ principalId: c.user, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/poll",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown; userCode?: unknown };
-      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId, userCode: p.userCode });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/poll", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/claude/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/complete",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { code?: unknown; verifier?: unknown };
-      const body = JSON.stringify({ principalId: c.user, code: p.code, verifier: p.verifier });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/claude/complete", body);
-    },
-  },
+  relayRoute("GET", "/api/user-model-auth/status", { who: "principalId" }),
+  relayRoute("POST", "/api/user-model-auth/account", { principal: true, pick: ["account", "provider"] }),
+  relayRoute("POST", "/api/user-model-auth/api-key", { principal: true, pick: ["provider", "apiKey"] }),
+  relayRoute("POST", "/api/user-model-auth/disconnect", { principal: true, pick: ["provider"] }),
+  relayRoute("POST", "/api/user-model-auth/chatgpt/start", { principal: true }),
+  relayRoute("POST", "/api/user-model-auth/chatgpt/poll", { principal: true, pick: ["deviceAuthId", "userCode"] }),
+  relayRoute("POST", "/api/user-model-auth/claude/start", { principal: true }),
+  relayRoute("POST", "/api/user-model-auth/claude/complete", { principal: true, pick: ["code", "verifier"] }),
 
   {
     method: "GET",
@@ -1260,16 +1266,8 @@ const apiRoutes: readonly WebRoute[] = [
       c.res.end();
     },
   },
-  ...["reply-status", "reply"].map((action) => ({
-    method: "POST",
-    path: `/api/composio/slack/${action}`,
-    handle: async (c: WebCtx) => {
-      const body = await readJson(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
-    },
-  })),
-  { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
+  ...["reply-status", "reply"].map((action) => relayRoute("POST", `/api/composio/slack/${action}`, { read: "strict" })),
+  relayRoute("GET", "/api/composio/slack"),
   {
     method: "POST",
     path: "/api/composio/slack/authorize",
@@ -1285,38 +1283,12 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
     },
   },
-  {
-    method: "POST",
-    path: "/api/composio/slack/complete",
-    handle: async (c) => {
-      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/composio/toolkits",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/composio/toolkits?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/composio/connections",
-    handle: async (c) => {
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(
-        c.res,
-        "GET",
-        `/v1/composio/connections?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/composio/slack/complete", { pick: ["ticket"], read: "strict", noStore: true }),
+  relayRoute("GET", "/api/composio/toolkits", { query: (c) => ({ cursor: c.url.searchParams.get("cursor") ?? "" }) }),
+  relayRoute("GET", "/api/composio/connections", {
+    query: (c) => ({ cursor: c.url.searchParams.get("cursor") ?? "" }),
+    noStore: true,
+  }),
   {
     method: "POST",
     path: "/api/composio/authorize",
@@ -1336,16 +1308,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/composio/disconnect",
-    handle: async (c) => {
-      const body = await readJson<{ accountId?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/disconnect", JSON.stringify({ accountId: body.accountId }));
-    },
-  },
+  relayRoute("POST", "/api/composio/disconnect", { pick: ["accountId"], read: "strict", noStore: true }),
   {
     match: (_method, pathname) => pathname === "/me",
     handle: async (c) => {
@@ -1445,184 +1408,51 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "GET",
-    path: "/api/sessions",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["limit", "before", "status", "surface", "scope", "q"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v.slice(0, 500));
-      }
-      return relayCore(res, "GET", `/v1/sessions?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/row",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["id", "threadRef"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v);
-      }
-      return relayCore(res, "GET", `/v1/sessions/row?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/children",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/children?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/contexts",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("GET", "/api/sessions", {
+    query: (c) => copyParams(c, ["limit", "before", "status", "surface", "scope", "q"], undefined, true, 500),
+  }),
+  relayRoute("GET", "/api/sessions/row", { query: (c) => copyParams(c, ["id", "threadRef"], undefined, true) }),
+  relayRoute("GET", "/api/sessions/:id/children", { who: "principalId" }),
+  relayRoute("GET", "/api/contexts", { who: "principalId" }),
   {
     method: "GET",
     path: "/api/contexts/:scope/ambient-policy",
-    handle: async (c) => {
-      const { res, user } = c;
-      const scope = c.params.scope!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/contexts/policy?principalId=${encodeURIComponent(user)}&scope=${encodeURIComponent(scope)}`,
-      );
-    },
+    handle: (c) =>
+      relayCore(c.res, "GET", `/v1/contexts/policy?principalId=${enc(c.user)}&scope=${enc(c.params.scope!)}`),
   },
-  {
-    method: "PUT",
-    path: "/api/contexts/:scope/ambient-policy",
+  relayRoute("PUT", "/api/contexts/:scope/ambient-policy", {
+    core: "/v1/contexts/policy",
+    read: "json",
+    shape: (p, c) => ({
+      principalId: c.user,
+      scope: c.params.scope,
+      orders: p.orders,
+      bots: p.bots,
+      ambientEnabled: p.ambientEnabled,
+      baseUpdatedAt: p.baseUpdatedAt,
+    }),
+  }),
+  ...(
+    [
+      ["POST", "/api/projects", "name", 200],
+      ["PATCH", "/api/projects/:id", "name", 200],
+      ["POST", "/api/projects/:id/members", "memberId", Infinity],
+      ["PUT", "/api/projects/:id/slack-channel", "channel", 200],
+    ] as const
+  ).map(([method, path, field, max]): WebRoute => ({
+    method,
+    path,
     handle: async (c) => {
-      const { req, res, user } = c;
-      const scope = c.params.scope!;
-      const p = await readJson<{ orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown }>(
-        req,
-        res,
-      );
+      const p = await readJson<Record<string, unknown>>(c.req, c.res);
       if (!p) return;
-      return relayCore(
-        res,
-        "PUT",
-        "/v1/contexts/policy",
-        JSON.stringify({
-          principalId: user,
-          scope,
-          orders: p.orders,
-          bots: p.bots,
-          ambientEnabled: p.ambientEnabled,
-          baseUpdatedAt: p.baseUpdatedAt,
-        }),
-      );
+      const value = p[field];
+      const text = typeof value === "string" ? value.trim().slice(0, max) : "";
+      if (!text) return json(c.res, 400, { error: "bad_request", message: `${field} required` });
+      return relayCore(c.res, method, corePathFor(path, c), JSON.stringify({ principalId: c.user, [field]: text }));
     },
-  },
-  {
-    method: "POST",
-    path: "/api/projects",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      return relayCore(res, "POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/projects/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ name?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, name }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/projects/:id/members",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ memberId?: unknown }>(req, res);
-      if (!p) return;
-      const memberId = typeof p.memberId === "string" ? p.memberId.trim() : "";
-      if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
-      return relayCore(
-        res,
-        "POST",
-        `/v1/projects/${encodeURIComponent(id)}/members`,
-        JSON.stringify({ principalId: user, memberId }),
-      );
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ channel?: unknown }>(req, res);
-      if (!p) return;
-      const channel = typeof p.channel === "string" ? p.channel.trim().slice(0, 200) : "";
-      if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user, channel }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/members/:memberId",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      const memberId = c.params.memberId!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  })),
+  relayRoute("DELETE", "/api/projects/:id/slack-channel", { principal: true }),
+  relayRoute("DELETE", "/api/projects/:id/members/:memberId", { principal: true }),
   {
     method: "GET",
     path: "/api/directory/resolve",
@@ -1671,34 +1501,10 @@ const apiRoutes: readonly WebRoute[] = [
       return json(c.res, response.status, JSON.parse(response.text));
     },
   },
-  {
-    method: "GET",
-    path: "/api/surface-config",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCore(res, "GET", "/v1/surface-config");
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const key = url.searchParams.get("key") ?? "";
-      const qs = new URLSearchParams({ principalId: user, key });
-      return relayCore(res, "GET", `/v1/ui-state?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
-    },
-  },
+  relayRoute("GET", "/api/ui-state", {
+    query: (c) => ({ principalId: c.user, key: c.url.searchParams.get("key") ?? "" }),
+  }),
+  relayRoute("PUT", "/api/ui-state", { read: "json", shape: (p, c) => ({ ...p, principalId: c.user }) }),
   ...adminRoutes({
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
@@ -1720,19 +1526,9 @@ const apiRoutes: readonly WebRoute[] = [
     json,
     readJson,
   }),
-  {
-    method: "GET",
-    path: "/api/inbox",
-    handle: async (c) => {
-      const { res, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["cursor", "cronId", "view", "itemId", "filter"]) {
-        const value = c.url.searchParams.get(key);
-        if (value) qs.set(key, value);
-      }
-      return relayCore(res, "GET", `/v1/inbox?${qs}`);
-    },
-  },
+  relayRoute("GET", "/api/inbox", {
+    query: (c) => copyParams(c, ["cursor", "cronId", "view", "itemId", "filter"]),
+  }),
   {
     method: "POST",
     path: "/api/inbox/sent-chat",
@@ -1742,106 +1538,40 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "POST", "/v1/inbox/sent-chat", await readBody(req));
     },
   },
-  {
-    method: "POST",
-    path: "/api/inbox/selection",
-    handle: async (c) =>
-      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
-  },
-  {
-    method: "POST",
-    path: "/api/inbox/sync-cron",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(res, "POST", `/v1/inbox/sync-cron?principalId=${encodeURIComponent(user)}`, await readBody(req));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/crons/:id/items",
-    handle: async (c) => {
-      const { res, user, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      const state = url.searchParams.get("state");
-      if (state) qs.set("state", state);
-      return relayCore(res, "GET", `/v1/crons/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/crons/:id/items/:itemId",
-    handle: async (c) => {
-      const { res, user, params, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/inbox/selection", { core: "/v1/inbox", to: "PUT", who: "principalId", raw: true }),
+  relayRoute("POST", "/api/inbox/sync-cron", { who: "principalId", raw: true }),
+  relayRoute("GET", "/api/crons/:id/items", { query: (c) => copyParams(c, ["state"]) }),
+  relayRoute("GET", "/api/crons/:id/items/:itemId", {
+    query: (c) => copyParams(c, c.url.searchParams.get("refreshSource") === "1" ? ["refreshSource"] : []),
+  }),
   {
     method: "GET",
     path: "/api/crons/:id/items/:itemId/image",
     handle: serveInboxItemImage,
   },
-  ...(["action", "followup"] as const).map((leaf): WebRoute => ({
-    method: "POST",
-    path: `/api/crons/:id/items/:itemId/${leaf}`,
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
+  ...["action", "followup"].map((leaf) =>
+    relayRoute("POST", `/api/crons/:id/items/:itemId/${leaf}`, { who: "principalId", raw: true }),
+  ),
+  ...["runtime-config", "channel-header-pin"].flatMap((leaf): WebRoute[] => [
+    {
+      method: "GET",
+      path: `/api/${leaf}`,
+      handle: (c) => {
+        const scopeId = c.url.searchParams.get("scopeId") || `personal:${c.user}`;
+        const qs = new URLSearchParams({ principalId: c.user, scopeId });
+        if (leaf === "runtime-config" && c.url.searchParams.get("account") === "company") qs.set("account", "company");
+        return relayCore(c.res, "GET", `/v1/${leaf}?${qs.toString()}`);
+      },
     },
-  })),
-  {
-    method: "GET",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      if (url.searchParams.get("account") === "company") qs.set("account", "company");
-      return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      return relayCore(res, "GET", `/v1/channel-header-pin?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/channel-header-pin", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
+    relayRoute("PUT", `/api/${leaf}`, {
+      read: "json",
+      shape: (p, c) => ({
+        ...p,
+        principalId: c.user,
+        scopeId: typeof p.scopeId === "string" && p.scopeId ? p.scopeId : `personal:${c.user}`,
+      }),
+    }),
+  ]),
   {
     method: "GET",
     path: "/api/scope-resources",
@@ -1853,82 +1583,19 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
     },
   },
-  {
-    method: "GET",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
-      return relayCore(res, "GET", `/v1/skills?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown; description?: unknown; body?: unknown; scopeId?: unknown }>(req, res);
-      if (!p) return;
-      const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
-      if (typeof p.name === "string") draft.name = p.name;
-      if (typeof p.description === "string") draft.description = p.description;
-      if (typeof p.body === "string") draft.body = p.body;
-      if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
-      return relayCore(res, "POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
-      if (!p) return;
-      const patch: { description?: string; body?: string } = {};
-      if (typeof p.description === "string") patch.description = p.description;
-      if (typeof p.body === "string") patch.body = p.body;
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/skills/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/skills/:id/restore",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/skills/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  relayRoute("GET", "/api/skills", {
+    query: (c) => copyParams(c, c.url.searchParams.get("includeShadowed") === "1" ? ["includeShadowed"] : []),
+  }),
+  relayRoute("GET", "/api/skills/:id", { who: "principalId" }),
+  relayRoute("POST", "/api/skills", {
+    principal: true,
+    pick: ["name", "description", "body", "scopeId"],
+    strings: true,
+    read: "json",
+  }),
+  relayRoute("PUT", "/api/skills/:id", { principal: true, pick: ["description", "body"], strings: true, read: "json" }),
+  relayRoute("DELETE", "/api/skills/:id", { principal: true }),
+  relayRoute("POST", "/api/skills/:id/restore", { principal: true }),
   {
     method: "POST",
     path: "/api/sessions/:id/share",
@@ -1944,77 +1611,15 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/title",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/title`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/detach",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/detach`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/goal/cancel",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/goal/cancel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/fork",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ upToSeq?: unknown }>(req, res);
-      if (!p) return;
-      const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/approvals",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/sessions/:id/title", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/detach", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/goal/cancel", { principal: true }),
+  relayRoute("POST", "/api/sessions/:id/fork", {
+    principal: true,
+    read: "json",
+    shape: (p) => (typeof p.upToSeq === "number" ? { upToSeq: p.upToSeq } : {}),
+  }),
+  relayRoute("GET", "/api/sessions/:id/approvals", { who: "viewer" }),
   {
     method: "GET",
     path: "/api/sessions/:id/background/:pid/output",
@@ -2030,19 +1635,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
+  relayRoute("GET", "/api/sessions/:id/background", { who: "viewer" }),
   {
     method: "GET",
     path: "/api/sessions/:id/items/:seq",
@@ -2102,49 +1695,12 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/files/:id/content/:name",
     handle: serveFileContent,
   },
-  {
-    method: "GET",
-    path: "/api/files",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ viewer: user });
-      const limit = url.searchParams.get("limit");
-      if (limit) qs.set("limit", limit);
-      const cursor = url.searchParams.get("cursor");
-      if (cursor) qs.set("cursor", cursor);
-      const scope = url.searchParams.get("scope");
-      if (scope) qs.set("scope", scope);
-      return relayCore(res, "GET", `/v1/files?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ facts?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "PATCH", "/v1/memory", JSON.stringify({ principalId: user, facts: p.facts }));
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ ids?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "DELETE", "/v1/memory", JSON.stringify({ principalId: user, ids: p.ids }));
-    },
-  },
+  relayRoute("GET", "/api/files", {
+    query: (c) => copyParams(c, ["limit", "cursor", "scope"], { viewer: c.user }),
+  }),
+  relayRoute("GET", "/api/memory", { who: "principalId" }),
+  relayRoute("PATCH", "/api/memory", { principal: true, pick: ["facts"], read: "strict" }),
+  relayRoute("DELETE", "/api/memory", { principal: true, pick: ["ids"], read: "strict" }),
   {
     method: "POST",
     path: "/api/sessions/:id",
@@ -2188,14 +1744,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "GET",
-    path: "/api/connectors",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("GET", "/api/connectors", { core: "/v1/connectors/oauth/status", who: "principalId" }),
   {
     method: "POST",
     path: "/api/connectors/:provider/start",
@@ -2232,70 +1781,27 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
     },
   },
-  {
-    method: "GET",
-    path: "/api/keychain/credentials",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/credentials");
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/keychain/overview",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/overview");
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/keychain/approvals/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ decision?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/keychain/approvals/${encodeURIComponent(c.params.id!)}`,
-        JSON.stringify({ principalId: user, decision: p.decision }),
-      );
-    },
-  },
+  relayRoute("GET", "/api/keychain/credentials", { cap: true }),
+  relayRoute("GET", "/api/keychain/overview", { cap: true }),
+  relayRoute("POST", "/api/keychain/approvals/:id", { principal: true, pick: ["decision"], read: "strict" }),
   {
     method: "POST",
     path: "/api/keychain/grants/:id/revoke",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      return relayCap(res, "POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
-    },
+    handle: (c) => relayCap(c.res, "POST", `/v1/keychain/grants/${enc(c.params.id!)}/revoke`, "{}"),
   },
-  {
-    method: "POST",
-    path: "/api/keychain/drops",
-    handle: async (c) => {
-      const { req, res } = c;
-      const p = await readJson<{ service?: unknown; purpose?: unknown; envKey?: unknown }>(req, res, false);
-      if (!p) return;
-      const draft = {
-        ...(typeof p.service === "string" ? { service: p.service } : {}),
-        ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
-        ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
-      };
-      return relayCap(res, "POST", "/v1/keychain/drops", JSON.stringify(draft));
-    },
-  },
+  relayRoute("POST", "/api/keychain/drops", {
+    cap: true,
+    pick: ["service", "purpose", "envKey"],
+    strings: true,
+    read: "strict",
+  }),
   {
     method: "DELETE",
     path: "/api/keychain/credentials/:id",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      if (!id) return json(res, 400, { error: "bad_request", message: "credential id required" });
-      return relayCap(res, "DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
-    },
+    handle: (c) =>
+      c.params.id
+        ? relayCap(c.res, "DELETE", `/v1/keychain/credentials/${enc(c.params.id)}`)
+        : json(c.res, 400, { error: "bad_request", message: "credential id required" }),
   },
   {
     method: "GET",
@@ -2344,111 +1850,29 @@ const apiRoutes: readonly WebRoute[] = [
       }
     },
   },
-  {
-    method: "GET",
-    path: "/api/deployments/:id/share",
-    handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/share",
-    handle: async ({ req, res, params }) => {
-      const body = await readJson<{
-        scope?: unknown;
-        recipient?: unknown;
-        email?: unknown;
-        access?: unknown;
-        public?: unknown;
-      }>(req, res, false);
-      if (!body) return;
-      return relayCap(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({
-          scope: body.scope,
-          recipient: body.recipient,
-          email: body.email,
-          access: body.access,
-          public: body.public,
-        }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/display-name",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ displayName?: unknown }>(req, res, false);
-      if (!p) return;
-      const displayName = String(p.displayName ?? "");
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/display-name`,
-        JSON.stringify({ displayName }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/name",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ name?: unknown }>(req, res, false);
-      if (!p) return;
-      const name = String(p.name ?? "");
-      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/embed-ancestors",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const p = await readJson<{ embedAncestors?: unknown }>(req, res, false);
-      if (!p) return;
-      const embedAncestors = Array.isArray(p.embedAncestors) ? p.embedAncestors : [];
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/embed-ancestors`,
-        JSON.stringify({ embedAncestors }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/archive",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/deployments/:id/restore",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      if (!(await gateManageDeployment(res, user, id))) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
+  relayRoute("GET", "/api/deployments/:id/share", { cap: true }),
+  relayRoute("POST", "/api/deployments/:id/share", {
+    cap: true,
+    pick: ["scope", "recipient", "email", "access", "public"],
+    read: "strict",
+  }),
+  relayRoute("POST", "/api/deployments/:id/display-name", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ displayName: String(p.displayName ?? "") }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/name", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ name: String(p.name ?? "") }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/embed-ancestors", {
+    gate: managesDeployment,
+    read: "strict",
+    shape: (p) => ({ embedAncestors: Array.isArray(p.embedAncestors) ? p.embedAncestors : [] }),
+  }),
+  relayRoute("POST", "/api/deployments/:id/archive", { gate: managesDeployment }),
+  relayRoute("POST", "/api/deployments/:id/restore", { gate: managesDeployment, principal: true }),
   {
     method: "POST",
     path: "/api/approvals/:requestId",
@@ -2727,15 +2151,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "PATCH",
-    path: "/api/runs/:id/input",
-    handle: async (c) => {
-      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
-    },
-  },
+  relayRoute("PATCH", "/api/runs/:id/input", { read: "strict" }),
   {
     method: "POST",
     path: "/api/runs/:id/withdraw",
@@ -2834,14 +2250,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
     },
   },
-  {
-    method: "GET",
-    path: "/api/webhooks",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("GET", "/api/webhooks", { who: "viewer" }),
   {
     method: "GET",
     path: "/api/webhooks/:id/events",
@@ -3045,19 +2454,7 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/crons/:id/disable",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
+  relayRoute("POST", "/api/crons/:id/disable", { who: "principalId" }),
   {
     method: "POST",
     path: "/api/crons/:id/enable",
@@ -3072,24 +2469,8 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   },
-  {
-    method: "POST",
-    path: "/api/crons/:id/run",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "POST", `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/crons/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-    },
-  },
+  relayRoute("POST", "/api/crons/:id/run", { who: "principalId" }),
+  relayRoute("DELETE", "/api/crons/:id", { who: "principalId" }),
 ];
 
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
