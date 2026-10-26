@@ -2,14 +2,11 @@ import { readFile } from "node:fs/promises";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp(maxContextTokens?: number) {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")), maxContextTokens }));
+  return buildApp(testConfig({ maxContextTokens }));
 }
 
 test("document uploads survive follow-up turns and stay isolated to their conversation", async () => {

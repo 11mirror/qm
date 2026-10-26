@@ -2,21 +2,11 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("a run executing on another instance still reports alive", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "liveness-")),
-      workers: 0,
-      leaseTtlMs: 60_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
+  const built = buildApp(testConfig({ workers: 0, leaseTtlMs: 60_000, reaperIntervalMs: 60_000 }));
   try {
     const { run } = await built.runs.enqueue({
       sessionId: "t1",
@@ -41,14 +31,7 @@ test("a run executing on another instance still reports alive", async () => {
 });
 
 test("a run whose lease has lapsed is not alive", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "liveness-")),
-      workers: 0,
-      leaseTtlMs: 1,
-      reaperIntervalMs: 60_000,
-    }),
-  );
+  const built = buildApp(testConfig({ workers: 0, leaseTtlMs: 1, reaperIntervalMs: 60_000 }));
   try {
     const { run } = await built.runs.enqueue({
       sessionId: "t2",

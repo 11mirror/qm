@@ -3,9 +3,6 @@ import { settle } from "./support/settle.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
@@ -19,7 +16,7 @@ const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
 
 function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
+  const built = buildApp(testConfig());
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
     ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })

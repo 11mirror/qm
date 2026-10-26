@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
@@ -22,7 +19,7 @@ const RANDO = { "x-admin-actor": "rando@default-org" };
 const ORG = "org:default-org";
 
 function start(sessions?: SessionStore) {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spend-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: sessions ?? built.sessions,

@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { messageRevision } from "../src/core/message-revisions.ts";
@@ -29,7 +26,7 @@ function channelTurn(text: string, messageTs: string): TurnRequest {
 }
 
 test("an edit the ingest path could not record is caught up at the end of the next turn", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rev-")) }));
+  const built = buildApp(testConfig());
   try {
     const first = await built.app.turn(channelTurn("hello there", rootTs));
     assert.equal(first.status, "ok");

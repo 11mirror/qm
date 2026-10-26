@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -18,9 +15,7 @@ test(
   "pg: a linked identity manages its own cron in a private channel whose roster lists the linked email",
   { skip, timeout: 60_000 },
   async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pg-linked-")), databaseUrl: databaseUrl! }),
-    );
+    const built = buildApp(testConfig({ databaseUrl: databaseUrl! }));
     try {
       const control = createControlService(built.app, built.scheduler, built.admin);
       const email = "person@example.com";

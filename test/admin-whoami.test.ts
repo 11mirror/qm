@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -15,7 +12,7 @@ import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
+  const built = buildApp(testConfig());
   const deps = {
     ...(withAdmin ? { admin: built.admin } : {}),
     auditLog: built.auditLog,

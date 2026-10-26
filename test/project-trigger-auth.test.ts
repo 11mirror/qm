@@ -1,11 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -52,7 +49,7 @@ async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scop
 }
 
 test("Project trigger access follows current membership while Slack-group owner access is unchanged", async (t) => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-trigger-auth-")) }));
+  const built = buildApp(testConfig());
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },

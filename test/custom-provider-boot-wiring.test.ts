@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
@@ -17,10 +14,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 afterEach(() => setCustomProviders([]));
 
 test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
-    modelId: "custom/acme-gateway/acme-large",
-  });
+  const config = testConfig({ modelId: "custom/acme-gateway/acme-large" });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
   const deps = serverDeps(config, built);
   assert.equal(deps.customProviders, built.customProviders);

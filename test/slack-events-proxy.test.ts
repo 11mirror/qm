@@ -3,9 +3,6 @@ import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -36,7 +33,7 @@ before(async () => {
   });
   await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
 
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-events-proxy-")) }));
+  const built = buildApp(testConfig());
   core = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SOURCE_SECRET,

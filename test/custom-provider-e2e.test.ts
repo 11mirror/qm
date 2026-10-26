@@ -6,9 +6,6 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -59,7 +56,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
 
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
@@ -192,7 +189,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
 test("QA: openai-responses custom provider serves a real turn through the generated Pi registry", async () => {
   const upstream = await verificationUpstream();
   const upstreamUrl = `${upstream.url}/v1`;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
@@ -303,7 +300,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-ant-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
@@ -417,7 +414,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
   });
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-own-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,

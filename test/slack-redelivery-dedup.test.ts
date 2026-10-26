@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -24,7 +21,7 @@ function slackTurn(text: string, ts: string, threadRef = "ch:C1:t1"): TurnReques
 }
 
 function fresh() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rd-")) }));
+  return buildApp(testConfig());
 }
 
 test("a redelivered Slack message collapses onto the run its first delivery enqueued", async () => {

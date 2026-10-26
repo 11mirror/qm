@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -17,12 +14,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "discovery-test-secret".repeat(3);
 
 async function start() {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "agent-apis-")),
-      signingSecret: SECRET,
-    }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,

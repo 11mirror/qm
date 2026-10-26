@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -13,11 +10,7 @@ import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
 
 function freshApp() {
-  const config: Config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-skvis-")),
-    orgId: "acme",
-    seedSkills: false,
-  });
+  const config: Config = testConfig({ orgId: "acme", seedSkills: false });
   return buildApp(config);
 }
 

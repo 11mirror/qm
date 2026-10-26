@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
@@ -244,7 +241,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-")), signingSecret: SECRET }));
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -375,7 +372,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
   let built: BuiltApp;
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
+    built = buildApp(testConfig());
     await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
     await built.identity.refresh(true);
     server = createInsecureTestServer(built.app, {
@@ -477,7 +474,7 @@ describe("link mutation serialization", () => {
 describe("canonical portal claims retain proof of the original sign-in", () => {
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
-    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
+    const app = buildApp(testConfig());
     await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
     await app.identity.refresh(true);
     const server = createInsecureTestServer(app.app, {

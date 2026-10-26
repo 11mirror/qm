@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
@@ -16,7 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
+  const config = testConfig({ ...overrides });
   const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, {
     config: built.config,

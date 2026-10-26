@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { cronIsActive } from "../src/cron/cron-store.ts";
@@ -30,7 +27,7 @@ function dm(text: string, threadRef: string): TurnRequest {
 }
 
 async function setup() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-session-")) }));
+  const built = buildApp(testConfig());
   const control = createControlService(built.app, built.scheduler, built.admin);
   const session = await built.app.turn(dm("watch CI for me", THREAD));
   await built.app.turn(dm("unrelated", "web:U1:other"));

@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
@@ -40,9 +37,7 @@ test("wiring: an unreachable fail-open MCP memory provider still serves turns vi
     { KNOWLEDGE_ID: "id", KNOWLEDGE_SECRET: "secret" },
   );
   assert.ok(memoryProviderConfig);
-  const { app, runtime } = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "mem-unreachable-")), memoryProviderConfig }),
-  );
+  const { app, runtime } = buildApp(testConfig({ memoryProviderConfig }));
   try {
     const actor = { externalId: "U1" };
     const dm = (text: string, thread: string): TurnRequest => ({

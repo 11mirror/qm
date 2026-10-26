@@ -47,7 +47,6 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   let assumes = 0;
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "legacy-selected-broker-")),
       signingSecret: "legacy-selected-signing",
       deploymentLayerDir: acmecliBrokeredLayer(),
       maxAttempts: 1,
@@ -101,7 +100,6 @@ test("selected broker execute honors deployment approval rules before vending cr
   let assumes = 0;
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "dfp-credexec-approval-")),
       signingSecret: "device-flow-test-secret",
       deploymentLayerDir: acmecliBrokeredLayer("env", [
         { pattern: "\\benv\\b\\s+tool\\b", reason: "mutating subcommand" },

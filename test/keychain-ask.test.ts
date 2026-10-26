@@ -3,9 +3,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildTestApp } from "./support/test-app.ts";
@@ -625,7 +622,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   };
 
   before(async () => {
-    built = buildTestApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
+    built = buildTestApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
@@ -1190,13 +1187,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 });
 
 test("turn e2e: trigger-fired turns mint `triggered` into the capability token; threadRef is carried", async () => {
-  const built = buildTestApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "kc-claims-")),
-      signingSecret: SECRET,
-      apiBaseUrl: "http://core.test",
-    }),
-  );
+  const built = buildTestApp(testConfig({ signingSecret: SECRET, apiBaseUrl: "http://core.test" }));
   // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
   // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
   const extractToken = (since: number): CapabilityClaims | null => {

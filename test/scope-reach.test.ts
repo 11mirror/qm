@@ -1,9 +1,6 @@
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
@@ -315,10 +312,7 @@ test("Trap 1: a reach result prefixes provenance", async () => {
 });
 
 function freshApp(extra: Partial<Config> = {}) {
-  const config: Config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-reach-")),
-    ...extra,
-  });
+  const config: Config = testConfig({ ...extra });
   return buildApp(config);
 }
 

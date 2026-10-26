@@ -3,9 +3,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
@@ -16,7 +13,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+const built = buildApp(testConfig());
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,

@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -62,7 +59,7 @@ test("computeUsers includes a grant-holder who has never participated", () => {
 });
 
 function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
@@ -247,12 +244,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
 });
 
 test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty query → []; non-admin denied", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")),
-      emailAuthPrincipals: ["new@example.com"],
-    }),
-  );
+  const built = buildApp(testConfig({ emailAuthPrincipals: ["new@example.com"] }));
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,

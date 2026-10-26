@@ -4,9 +4,6 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
@@ -190,10 +187,7 @@ test("flag ON: the description advertises the routing policy truthfully", () => 
 });
 
 async function freshApp(extra: Partial<Config> = {}) {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-scratch-")),
-    ...extra,
-  });
+  const config = testConfig({ ...extra });
   const built = buildApp(config);
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "scoped");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);

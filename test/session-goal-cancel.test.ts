@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createGoalRecord, openGoal } from "../src/harness/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
@@ -13,7 +10,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
+  return buildApp(testConfig());
 }
 
 function runRequest(): OrchestratorInput {

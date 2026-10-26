@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
@@ -36,9 +33,7 @@ function memoryLedger() {
 }
 
 function build() {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-tool-ctx-")), signingSecret: SECRET }),
-  );
+  const built = buildApp(testConfig({ signingSecret: SECRET }));
   const control = createControlService(built.app, built.scheduler);
   return { built, control };
 }

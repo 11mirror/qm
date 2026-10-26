@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -44,7 +41,7 @@ async function settle(predicate: () => boolean): Promise<void> {
 }
 
 test("core requests are named by route template and carry no URL, query or header values", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-")) }));
+  const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

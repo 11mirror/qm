@@ -7,9 +7,6 @@ import { setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
 import { oauthProvider, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -80,7 +77,7 @@ test("a portal identity naming another tenant is reported and still accepted whi
 test("the API reports a capability token minted for another tenant", async (t) => {
   const reports = t.mock.method(console, "error", () => {});
   const secret = "tenant-capability-secret".repeat(2);
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "tenant-cap-")), signingSecret: secret }));
+  const built = buildApp(testConfig({ signingSecret: secret }));
   const server = createServer(built.app, {
     admin: built.admin,
     memory: built.memory,

@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
@@ -20,13 +17,7 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
         { id: "deepseek/deepseek-chat-v3.1", name: "DeepSeek: DeepSeek V3.1", supported_parameters: ["tools"] },
       ],
     });
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "webui-model-allowlist-")),
-      openrouterApiKey: "deployment-openrouter-key",
-    }),
-    { modelCredentialFetch },
-  );
+  const built = buildApp(testConfig({ openrouterApiKey: "deployment-openrouter-key" }), { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,

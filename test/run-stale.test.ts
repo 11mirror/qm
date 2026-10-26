@@ -2,20 +2,12 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { STALE_LEASE_GRACE_MS } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "run-stale-")),
-      backgroundWorkEnabled: false,
-    }),
-  );
+  const built = buildApp(testConfig({ backgroundWorkEnabled: false }));
   const ack = await built.app.turn({
     surface: "test",
     actor: { externalId: "U1" },

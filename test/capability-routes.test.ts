@@ -2,9 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
@@ -62,12 +59,7 @@ describe("capability-token control plane (SOUL)", () => {
     );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "cap-routes-")),
-        signingSecret: SECRET,
-      }),
-    );
+    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),

@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildTestApp, type TestApp } from "./support/test-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -47,9 +44,7 @@ function claims(
 }
 
 function setup(): { built: TestApp; control: ControlService } {
-  const built = buildTestApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }),
-  );
+  const built = buildTestApp(testConfig({ signingSecret: SECRET }));
   const control = createControlService(built.app, built.scheduler, built.admin);
   return { built, control };
 }

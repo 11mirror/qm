@@ -2,9 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
@@ -17,16 +14,12 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "test-signing-secret".repeat(3);
 
 test("the normal server refuses to start without source-auth material", () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-required-")) }));
+  const built = buildApp(testConfig());
   assert.throws(() => createServer(built.app), /CORE_SIGNING_SECRET must be at least 32 characters/);
 });
 
 function start(signingSecret?: string): { base: string; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "auth-")),
-    }),
-  );
+  const built = buildApp(testConfig({}));
   const server = signingSecret
     ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret })
     : createInsecureTestServer(built.app);
@@ -168,7 +161,7 @@ test("the explicit insecure test server leaves the boundary open", async () => {
 });
 
 test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")) }));
+  const built = buildApp(testConfig());
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
@@ -203,7 +196,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
 });
 
 test("egress-audit ingest requires source auth: unsigned is 401, signed lands — including under portal-identity enforcement", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-egress-")) }));
+  const built = buildApp(testConfig());
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,

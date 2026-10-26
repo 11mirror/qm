@@ -1,9 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -24,13 +21,9 @@ const oxAlphaCatalog: typeof fetch = async () =>
   });
 
 test("web turns hydrate persisted OpenRouter catalog models before runtime resolution", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "dynamic-openrouter-model-")),
-      openrouterApiKey: "deployment-openrouter-key",
-    }),
-    { modelCredentialFetch: oxAlphaCatalog },
-  );
+  const built = buildApp(testConfig({ openrouterApiKey: "deployment-openrouter-key" }), {
+    modelCredentialFetch: oxAlphaCatalog,
+  });
   await built.config.setRuntimeSelection("org:default-org", {
     modelId: "stealth/ox-alpha",
   });
