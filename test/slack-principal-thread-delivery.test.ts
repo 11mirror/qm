@@ -19,7 +19,6 @@ test("a threaded principal post lands in the DM thread and returns that thread",
     core: {} as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => undefined } as never,
-    clientForIdentity: () => client,
     defaultClient: client,
   });
 

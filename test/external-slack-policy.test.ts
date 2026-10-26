@@ -294,9 +294,6 @@ test("a recovered private result posts only through its originating account", as
     core: {} as never,
     flow: { inFlightRuns: new Set() } as never,
     threads: { mark: () => {} } as never,
-    clientForIdentity: () => {
-      throw new Error("wrong identity route");
-    },
     clientForAccount: (id) => {
       assert.equal(id, "partner");
       return client;
@@ -343,7 +340,6 @@ test("an external account's sender neither borrows a missing default identity no
       core: {} as never,
       flow: { inFlightRuns: new Set() } as never,
       threads: {} as never,
-      clientForIdentity: () => client,
       clientForAccount: (id) => {
         assert.equal(id, "default");
         return hasDefault ? client : undefined;

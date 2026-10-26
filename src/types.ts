@@ -227,7 +227,6 @@ export interface Destination extends DestinationSource, LegacySlackDestination {
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
   pin?: { messageTs: string; remove?: boolean };
-  identity?: string;
   webTranscript?: { kind: "reply" };
 }
 
