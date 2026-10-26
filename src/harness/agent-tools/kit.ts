@@ -243,6 +243,17 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const recordFail = (callId: string, summary: Record<string, unknown>, body: string) =>
     recordResult(callId, summary, text(body), true);
 
+  const unavailable = (callId: string, tool: string) =>
+    recordFail(
+      callId,
+      { tool, error: "control_unavailable" },
+      `[error] control-plane tools (crons, webhooks, standing instructions, sharing) aren't available on this turn.`,
+    );
+  const isUnavailable = (r: unknown): r is { ok: false; code: "control_unavailable" } =>
+    isObj(r) && r.code === "control_unavailable";
+  const refused = (callId: string, tool: string, r: { code: string; message?: string }) =>
+    isUnavailable(r) ? unavailable(callId, tool) : recordFail(callId, { tool, error: r.code }, `[error] ${r.message}`);
+
   return {
     ref,
     opts,
@@ -269,6 +280,9 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     recordExternalResult,
     recordText,
     recordFail,
+    unavailable,
+    isUnavailable,
+    refused,
   };
 }
 
