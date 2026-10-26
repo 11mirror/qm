@@ -243,12 +243,11 @@ test("a handle's later calls follow its backend under the resource lock", async 
   );
 });
 
-test("profileFor reports the resolved resource's provider, explicit id first", async () => {
+test("profileFor reports the resolved resource's provider", async () => {
   const { router } = build({ "personal:m": resource("m", "sprites") }, [resource("x", "aws")]);
   assert.ok(supportsScopeProfile(router));
   if (!supportsScopeProfile(router)) return;
   assert.equal((await router.profileFor("personal:m")).backend, "sprites");
-  assert.equal((await router.profileFor("personal:m", "x")).backend, "aws");
 });
 
 test("profileFor with no default resource advertises the default backend for bootstrap", async () => {

@@ -23,7 +23,6 @@ import {
   recordTurnError,
   runTurnInput,
   runStopFor,
-  assertSwarmClaimBudget,
 } from "../runs/worker.ts";
 import type { TurnQueue } from "./absurd-schema.ts";
 import { TURN_EXTEND_INTERVAL_MS, type TurnLedger, type TurnOutcome } from "./turn-ledger.ts";
@@ -223,7 +222,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         await yieldHeld(held, "person");
         return;
       }
-      assertSwarmClaimBudget(run);
       if (deps.maxClaims !== undefined && countedClaims(run) > deps.maxClaims)
         throw new NonRetryableTurnError(crashLoopReason(countedClaims(run) - 1));
       ended = {

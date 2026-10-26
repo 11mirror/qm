@@ -20,7 +20,6 @@ const request = (text: string, over: Partial<OrchestratorInput> = {}): Orchestra
 const cron = (text: string) => request(text, { origin: { kind: "automation" } });
 const subagentOf = (parent: Run, text: string) =>
   request(text, { origin: { kind: "automation" }, delegatingRunId: parent.id });
-const swarm = { swarmId: "s", messageId: "m", recipientId: "r" };
 
 const backends: Array<{ name: string; skip: string | false; make: () => Promise<RunStore> }> = [
   { name: "memory", skip: false, make: async () => createMemoryRunStore().runs },
@@ -58,7 +57,6 @@ for (const backend of backends) {
         const child = (await runs.enqueue({ sessionId: "c", request: subagentOf(human, "subagent") })).run;
         await runs.enqueue({ sessionId: "g", request: subagentOf(child, "sub-subagent") });
         await runs.enqueue({ sessionId: "nc", request: subagentOf(nightly, "cron subagent") });
-        await runs.enqueue({ sessionId: "sw", request: { ...subagentOf(human, "swarm worker"), swarm } });
         await runs.enqueue({ sessionId: "shared", request: cron("background first in its conversation") });
         await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") });
         assert.equal(await runs.personWaiting(Date.now() - 60_000), false, "only turns past the grace period count");
@@ -69,7 +67,6 @@ for (const backend of backends) {
           "sub-subagent",
           "cron",
           "cron subagent",
-          "swarm worker",
           "background first in its conversation",
           "person second in its conversation",
         ]);
@@ -185,7 +182,7 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
     const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
     await until(status(runs, parent, "done"));
     const capped = (
-      await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } })
+      await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), turnWallClockMs: 60_000 } })
     ).run;
     for (let i = 0; i < 3; i++) {
       const lease = (await runs.claim("w", 60_000))!;
@@ -196,7 +193,7 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
     await until(status(runs, child, "running"));
     await runs.enqueue({ sessionId: "dm", request: request("quick person") });
     assert.equal(await sweep(), false);
-    assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend a swarm worker's claim budget");
+    assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend the claim budget");
   }));
 
 test("a tool result written after a park records the park, not a deploy", () => {

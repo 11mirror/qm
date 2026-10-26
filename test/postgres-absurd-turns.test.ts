@@ -5,12 +5,8 @@ import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import type { Run, RunPriority, RunStore } from "../src/runs/run-store.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createSwarmStore, type SwarmStorage } from "../src/swarms/swarm-store.ts";
+import type { Run, RunPriority } from "../src/runs/run-store.ts";
 import { routeTurns } from "../src/turns/turn-engine.ts";
-import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "../src/turns/absurd-schema.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
@@ -376,51 +372,6 @@ test("a turn over the crash-loop claim cap fails instead of running again", { sk
   assert.match(run?.result?.reason ?? "", /crash loop/);
 });
 
-test("swarm operations accept an Absurd turn's live claim and refuse it after handback", { skip }, async () => {
-  const factory = createPostgresMapFactory(URL!);
-  const backing = factory.map<SwarmStorage>("swarms");
-  const routing = routeTurns(runStore.runs, ledger, { enabled: async () => true });
-  const runs: RunStore = {
-    ...runStore.runs,
-    ...routing,
-    enqueue: async (input) => (await routing.admit(input))!,
-    claimById: async () => (await claim()).run,
-  };
-  const store = createSwarmStore(backing, { runs, sessions, pg: factory.pool });
-  const fixture = await swarmFixture({ store, sessions, runs, lock: createPostgresAdvisoryLock(factory.pool) });
-  try {
-    if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
-    const run = (await runStore.runs.get(fixture.caller.claims.runId!))!;
-    assert.equal(run.engine, "absurd");
-    assert.equal(run.status, "running");
-    await fixture.service.spawn(fixture.caller, { requestId: "live", text: "Work" });
-    assert.ok(await store.get(fixture.root.id));
-    const claims = fixture.caller.claims;
-    const fence = {
-      runId: claims.runId!,
-      attempt: claims.runAttempt!,
-      leaseToken: claims.runLeaseToken!,
-      sessionId: fixture.root.id,
-      threadRef: fixture.root.threadRef,
-      actorId: claims.actorId,
-      scopeId: fixture.root.scopeId,
-    };
-    await store.update(fixture.root.id, () => {}, fence);
-    assert.equal(
-      await ledger.handBack(run, fixture.caller.claims.runLeaseToken!, { stop: { kind: "shutdown" } }),
-      true,
-    );
-    await assert.rejects(fixture.service.inspect(fixture.caller), /active capability run required/);
-    await assert.rejects(
-      store.update(fixture.root.id, () => {}, fence),
-      /active capability run required/,
-    );
-  } finally {
-    await backing.delete(fixture.root.id);
-    await factory.pool.close();
-  }
-});
-
 function gate() {
   const started: OrchestratorInput[] = [];
   const releases = new Map<string, () => void>();
@@ -636,21 +587,22 @@ test("a person's message parks a background turn that is not running and starts 
   await ready.close?.();
 });
 
-async function admitSwarm(swarmId: string, thread: string, text: string) {
+async function admitBackground(owner: string, thread: string, text: string) {
+  const base = request(thread, text);
   const result = await ledger.admit({
     sessionId: thread,
-    request: { ...request(thread, text), swarm: { swarmId, messageId: randomUUID(), recipientId: thread } },
-    priority: 1,
+    request: { ...base, actor: { ...base.actor, id: owner } },
+    priority: 2,
   });
   assert.ok(result);
   return result;
 }
 
-test("a swarm's ninth active turn waits for a slot, then starts when one ends", { skip }, async () => {
-  const swarmId = randomUUID();
+test("an owner's ninth active background turn waits for a slot, then starts when one ends", { skip }, async () => {
+  const owner = `${randomUUID()}@example.com`;
   const members = [];
   for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitSwarm(swarmId, `swarm:${swarmId}:${i}`, `member ${i}`));
+    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
   assert.deepEqual(
     members.map((m) => m.run.status),
     [...Array(FAIR_ACTIVE_CAP).fill("pending"), "queued"],
@@ -667,10 +619,10 @@ test("a swarm's ninth active turn waits for a slot, then starts when one ends", 
 });
 
 test("a person's message is not held behind a capped background turn", { skip }, async () => {
-  const swarmId = randomUUID();
+  const owner = `${randomUUID()}@example.com`;
   const members = [];
   for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitSwarm(swarmId, `swarm:${swarmId}:${i}`, `member ${i}`));
+    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
   const capped = members.at(-1)!.run;
   const person = await admit(capped.sessionId, "person", undefined, 0);
   assert.equal(person.run.status, "pending");
@@ -680,10 +632,10 @@ test("a person's message is not held behind a capped background turn", { skip },
 });
 
 test("withdrawing a capped head moves its conversation on", { skip }, async () => {
-  const swarmId = randomUUID();
+  const owner = `${randomUUID()}@example.com`;
   const members = [];
   for (let i = 0; i < FAIR_ACTIVE_CAP + 1; i++)
-    members.push(await admitSwarm(swarmId, `swarm:${swarmId}:${i}`, `member ${i}`));
+    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
   const capped = members.at(-1)!.run;
   const next = await admit(capped.sessionId, "after the capped turn", undefined, 1);
   assert.equal(next.run.status, "queued");
@@ -734,10 +686,10 @@ test("stopping a tree stops every turn in its conversations in one step", { skip
 });
 
 test("slots freed together by one owner are refilled without waiting for the sweep", { skip }, async () => {
-  const swarmId = randomUUID();
+  const owner = `${randomUUID()}@example.com`;
   const members = [];
   for (let i = 0; i < FAIR_ACTIVE_CAP + 4; i++)
-    members.push(await admitSwarm(swarmId, `swarm:${swarmId}:${i}`, `member ${i}`));
+    members.push(await admitBackground(owner, `web:cron:${owner}:${i}`, `turn ${i}`));
   const active = members.slice(0, FAIR_ACTIVE_CAP);
   const capped = members.slice(FAIR_ACTIVE_CAP);
   assert.ok(capped.every((m) => m.run.status === "queued"));

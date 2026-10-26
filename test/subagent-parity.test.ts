@@ -149,7 +149,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     runs,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
+    sandbox: { profile: { backend: "fake", writablePersistence: "resident_disk" } } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),

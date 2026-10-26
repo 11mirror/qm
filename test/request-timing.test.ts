@@ -76,7 +76,7 @@ test("core requests are named by route template and carry no URL, query or heade
   }
 });
 
-test("a run stores the request's trace context, and never a swarm's", async () => {
+test("a run stores the request's trace context", async () => {
   const request = {
     actor: { id: "U1", type: "internal" as const },
     conversation: { kind: "dm" as const, threadRef: "dm:U1:carrier", audience: [] },
@@ -88,6 +88,5 @@ test("a run stores the request's trace context, and never a swarm's", async () =
   assert.equal(withTraceCarrier(request).trace, undefined, "a copied trace is dropped outside a request");
   await Sentry.startSpan({ name: "producer", op: "test" }, (span) => {
     assert.equal(withTraceCarrier(request).trace?.sentryTrace.split("-")[0], span.spanContext().traceId);
-    assert.equal(withTraceCarrier({ ...request, swarm: { id: "s" } } as never).trace, undefined);
   });
 });

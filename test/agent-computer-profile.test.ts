@@ -28,9 +28,7 @@ function awsSandbox(extraTools: string[]) {
     ...singleProcessDeps(),
     region: "us-west-2",
     imageIdentifier: "img",
-    s3Bucket: "bucket",
     api: fake.api,
-    s3: fake.s3,
     fetchImpl: fake.fetchImpl,
     extraTools,
   });
@@ -40,7 +38,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
   await withWorkspace(async (dir) => {
     const workspace = createLocalWorkspaceStore(dir);
     const sprites = createSpritesSandbox(workspace, {
-      initializationStore: testMap(),
+      store: testMap(),
       advisoryLock: testAdvisoryLock(),
       token: "test-token",
     });
@@ -79,7 +77,7 @@ test("a layer that advertises a tool removes it from notInstalled (no install/no
 test("egress enforcement is effective only when core can mint a reachable proxy token", async () => {
   await withWorkspace((dir) => {
     const sprites = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-      initializationStore: testMap(),
+      store: testMap(),
       advisoryLock: testAdvisoryLock(),
       token: "test-token",
       egressProxyUrl: "https://egress-proxy.example.com",

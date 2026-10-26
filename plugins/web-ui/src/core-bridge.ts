@@ -1148,83 +1148,6 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
   return submit.runId;
 }
 
-export async function runApprovalTurn(
-  agent: Agent,
-  decision: ApprovalDecision,
-  onWork: WorkObserver | undefined,
-  slot?: RunSlot,
-): Promise<void> {
-  if (decision.requestId.startsWith("keychain:")) {
-    await resolveApproval(decision);
-    return;
-  }
-  const stream = createAssistantMessageEventStream();
-  await driveApproval(stream, agent.state.model, decision, onWork, slot);
-  const outcome = await stream.result();
-  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
-}
-
-const APPROVAL_GONE_MESSAGE = "This approval is no longer available — it may have expired or already been handled.";
-const APPROVAL_NOT_APPLIED_MESSAGE =
-  "This approval couldn't be applied right now — the conversation is waiting on a different approval.";
-
-async function driveApproval(
-  stream: AssistantMessageEventStream,
-  model: Model<Api>,
-  decision: ApprovalDecision,
-  onWork?: WorkObserver,
-  slot?: RunSlot,
-): Promise<void> {
-  const gen = beginSubmit(slot);
-  const partial = baseAssistant(model);
-  const work: WorkBlock = { status: "thinking", activity: [] };
-  (partial as AssistantWork).work = work;
-  const notify = (): void => onWork?.(work);
-  try {
-    notify();
-    stream.push({ type: "start", partial });
-    stream.push({ type: "text_start", contentIndex: 0, partial });
-    const submit = await api<{ status?: string; runId?: string; reply?: string; reason?: string }>(
-      `/api/approvals/${encodeURIComponent(decision.requestId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          approved: decision.approved,
-          ...(decision.scope ? { scope: decision.scope } : {}),
-          idempotencyKey: mintSendKey(),
-        }),
-      },
-    );
-    if (submit.runId) {
-      await followRun(stream, partial, submit.runId, undefined, notify, undefined, slot, gen);
-      return;
-    }
-    if (submit.status === "pending_approval") {
-      throw new Error(submit.reason?.trim() ? submit.reason : APPROVAL_NOT_APPLIED_MESSAGE);
-    }
-    work.status = "complete";
-    work.finishedAt = Date.now();
-    notify();
-    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
-  } catch (e) {
-    work.status = "failed";
-    work.finishedAt = Date.now();
-    notify();
-    fail(stream, partial, approvalFailureMessage(e));
-  } finally {
-    dropStopForGeneration(slot, gen);
-  }
-}
-
-function approvalFailureMessage(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.status === 404) return APPROVAL_GONE_MESSAGE;
-    const reason = (e.body as { reason?: unknown } | null)?.reason;
-    if (typeof reason === "string" && reason.trim()) return reason;
-  }
-  return errMessage(e);
-}
-
 export function makeOpenerStreamFn(
   threadRef: string,
   agent: Agent,
@@ -1658,7 +1581,7 @@ export interface SessionStateEvent {
 }
 
 export interface InboxItemEvent {
-  loopId: string;
+  cronId: string;
   itemId: string;
   op: string;
 }
@@ -1692,7 +1615,7 @@ export function subscribeDeliveries(
   es.addEventListener("inbox_item", (e: MessageEvent) => {
     try {
       const ev = JSON.parse(e.data) as InboxItemEvent;
-      if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
+      if (typeof ev.cronId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
     } catch (err) {
       swallow("web-ui: handle inbox-item frame", err);
     }

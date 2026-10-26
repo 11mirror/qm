@@ -1,4 +1,3 @@
-import { swarmFixture } from "./support/swarm-fixture.ts";
 import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../src/harness/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -89,7 +88,7 @@ function fakeSandbox(): Sandbox {
   return {
     profile: {
       backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
+      writablePersistence: "resident_disk",
       processSessions: false,
     },
     provision: unreached as never,
@@ -104,17 +103,12 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildOrchestrator(
-  harness: Harness,
-  maxContextTokens?: number,
-  defaultTurnWallClockMs?: number,
-  swarm?: Awaited<ReturnType<typeof swarmFixture>>,
-) {
+function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultTurnWallClockMs?: number) {
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
-  const sessions = swarm?.sessions ?? createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -132,8 +126,7 @@ function buildOrchestrator(
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: swarm?.sandbox ?? fakeSandbox(),
-    ...(swarm ? { swarms: swarm.service, sandboxResources: swarm.sandboxes } : {}),
+    sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
     errors,
@@ -1102,7 +1095,7 @@ test("only a cron automation receives task-runtime authority and each fire start
   assert.equal(resumed, 2);
 });
 
-test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
+test("cron dispatch uses purpose defaults while task handoffs and later fires stay isolated", async () => {
   const base = createMockHarness();
   const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
@@ -1138,12 +1131,12 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     effortLevel: "high",
   });
   await built.config.setPurposeRuntime("cron", category);
-  for (const surface of ["cron", "loop"]) {
+  for (const runId of ["first-fire", "later-fire"]) {
     const result = await built.orch.handleTurn({
-      ...turn(surface),
-      surface,
+      ...turn("cron"),
+      surface: "cron",
       origin: { kind: "automation" },
-      runId: surface,
+      runId,
       surfaceTools: false,
     });
     assert.equal(result.status, "ok");
@@ -1191,120 +1184,6 @@ test("human child continuations respect non-fast category defaults", async () =>
     surfaceTools: false,
   });
   assert.deepEqual(seen, [category]);
-});
-
-test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
-  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
-  const handoff = { ...category, modelId: "gpt-6-sol" };
-  for (const configured of [false, true]) {
-    const f = await swarmFixture({
-      runtime: {
-        model: inherited.modelId,
-        thinkingLevel: inherited.effortLevel,
-        fastMode: inherited.fastMode,
-      },
-    });
-    const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
-    await f.service.sweep();
-    const worker = await f.workerCaller(peer!.id);
-    assert.equal(worker.kind, "agent");
-    if (worker.kind !== "agent") throw new Error("expected worker");
-    const run = (await f.runs.get(worker.claims.runId!))!;
-    const base = createMockHarness();
-    const seen: unknown[] = [];
-    const adapter: Harness = {
-      ...base,
-      turns: {
-        ...base.turns,
-        runTurn: async (input) => {
-          seen.push(input.runtime);
-          if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-          return { reply: "done" };
-        },
-      },
-    };
-    const router = withResolvedRuntime(adapter, (input) =>
-      resolveRuntimeChoiceDurable(
-        built.config,
-        "org:default-org",
-        input.scopeLabel,
-        inherited,
-        input.runtime,
-        undefined,
-        input.runtimePurpose,
-      ),
-    );
-    const built = buildOrchestrator(router, undefined, undefined, f);
-    if (configured) await built.config.setPurposeRuntime("subagent", category);
-    const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
-    assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [configured ? category : { modelId: inherited.modelId }, handoff]);
-    assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
-  }
-});
-
-test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
-  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
-  for (const configured of [false, true]) {
-    const f = await swarmFixture({
-      runtime: {
-        model: inherited.modelId,
-        thinkingLevel: inherited.effortLevel,
-        fastMode: inherited.fastMode,
-      },
-    });
-    const [full] = await f.service.spawn(f.caller, {
-      requestId: "full",
-      text: "work",
-      model: "gpt-6-sol",
-      effort: "medium",
-      fastMode: false,
-    });
-    const [partial] = await f.service.spawn(f.caller, { requestId: "partial", text: "work", effort: "medium" });
-    await f.service.sweep();
-    const seen = new Map<string, unknown>();
-    for (const peer of [full!, partial!]) {
-      const worker = await f.workerCaller(peer.id);
-      if (worker.kind !== "agent") throw new Error("expected worker");
-      const run = (await f.runs.get(worker.claims.runId!))!;
-      const base = createMockHarness();
-      const adapter: Harness = {
-        ...base,
-        turns: {
-          ...base.turns,
-          runTurn: async (input) => {
-            seen.set(peer.id, input.runtime);
-            return { reply: "done" };
-          },
-        },
-      };
-      const router = withResolvedRuntime(adapter, (input) =>
-        resolveRuntimeChoiceDurable(
-          built.config,
-          "org:default-org",
-          input.scopeLabel,
-          inherited,
-          input.runtime,
-          undefined,
-          input.runtimePurpose,
-        ),
-      );
-      const built = buildOrchestrator(router, undefined, undefined, f);
-      if (configured) await built.config.setPurposeRuntime("subagent", category);
-      assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
-    }
-    assert.deepEqual(seen.get(full!.id), {
-      modelId: "gpt-6-sol",
-      effortLevel: "medium",
-      fastMode: false,
-    });
-    assert.deepEqual(
-      seen.get(partial!.id),
-      configured ? { ...category, effortLevel: "medium" } : { modelId: inherited.modelId, effortLevel: "medium" },
-    );
-  }
 });
 
 for (const explicit of [false, true]) {

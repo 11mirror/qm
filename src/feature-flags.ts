@@ -14,14 +14,12 @@ export const FEATURES = {
     hint: "Persistent subagents are available for personal scopes only.",
   },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
-  inbox_loops: { label: "Inbox Loops" },
+  inbox_loops: { label: "Inbox" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
-  loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  swarms: { label: "Swarms", personalOnly: true },
   absurd_turns: {
     label: "Turns on Absurd (experimental)",
     hint: "Runs new turns in the selected conversations on the Absurd durable-execution queue instead of the legacy run queue. A conversation switches once its legacy turns have finished. Turning this off sends new turns back to the legacy queue; turns already on Absurd finish there. Turn it on only after every instance runs a build that knows about it.",

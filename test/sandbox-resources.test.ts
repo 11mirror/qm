@@ -126,16 +126,13 @@ test("provisioning a running computer does not wait behind a long-running comman
   await running;
 });
 
-test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
+test("an explicit sandbox id must name a real sandbox, and creating one leaves the default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
   const resources = createSandboxResources({ ...options, backends });
   const router = createSandboxRouter({ backends, defaultBackend: "local", resources });
-  const worker = await resources.create("alice", "personal:alice", "modal", "Worker");
-  assert.equal((await router.profileFor!("personal:alice")).backend, "local");
-  assert.equal((await router.profileFor!("personal:alice", worker.id)).backend, "modal");
-  await assert.rejects(router.profileFor!("personal:alice", ""), /sandbox not found/);
+  await resources.create("alice", "personal:alice", "modal", "Worker");
   await assert.rejects(
     router.provision([{ scopeId: "personal:alice", mode: "rw", mountPath: "" }], { sandboxId: "" }),
     /sandbox not found/,

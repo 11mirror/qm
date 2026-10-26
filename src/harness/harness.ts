@@ -126,7 +126,6 @@ export interface HarnessTurnInput {
   goalContinuation?: boolean;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
-  goalInbox?: import("./goal.ts").GoalInbox;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   commandCredentialHandles?: readonly string[];

@@ -10,8 +10,8 @@ const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Dat
 
 function advertised(): Array<{ method: string; path: string }> {
   const listings = [
-    renderAgentApis({ ...base, liveAuthor: true }, { isAdmin: true }, { swarmsEnabled: true }),
-    renderAgentApis({ ...base, grants: [...UNATTENDED_ADMIN_GRANTS] }, { isAdmin: false }, { swarmsEnabled: false }),
+    renderAgentApis({ ...base, liveAuthor: true }, { isAdmin: true }),
+    renderAgentApis({ ...base, grants: [...UNATTENDED_ADMIN_GRANTS] }, { isAdmin: false }),
   ];
   return listings.flatMap((listing) =>
     listing.endpoints.flatMap(({ method, path }) => {

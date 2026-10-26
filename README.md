@@ -239,7 +239,6 @@ upstream source history to merge.
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
-- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, portal)
 

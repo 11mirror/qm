@@ -93,8 +93,6 @@ test("stored harness choices are dropped while their runtime selections stay rec
     const crons = await rows(admin, "crons");
     assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
     assert.equal(crons.c2?.runtime, null);
-    const swarms = await rows(admin, "swarms");
-    assert.deepEqual(swarms.s1?.template, { model: "m" });
-    assert.deepEqual(swarms.s2?.template, { model: "m" });
+    assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, null);
   });
 });

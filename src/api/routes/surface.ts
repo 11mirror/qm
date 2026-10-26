@@ -701,11 +701,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
   return sendJson(
     res,
     200,
-    renderAgentApis(
-      capability,
-      { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
-      { swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)) },
-    ),
+    renderAgentApis(capability, { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) }),
   );
 }
 

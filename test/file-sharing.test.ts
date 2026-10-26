@@ -536,7 +536,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: testMap(),
+    store: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
@@ -561,7 +561,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: testMap(),
+    store: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

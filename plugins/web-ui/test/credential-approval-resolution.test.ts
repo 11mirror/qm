@@ -4,11 +4,10 @@ import {
   attachPendingApprovals,
   fetchSessionApprovals,
   resolveApproval,
-  runApprovalTurn,
   unresolvedApprovals,
   type PendingApproval,
 } from "../src/core-bridge.ts";
-import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 const approval = (id: string): PendingApproval => ({
   requestId: `keychain:${id}`,
@@ -68,21 +67,6 @@ test("failed and still-pending decisions remain retryable", async () => {
     globalThis.fetch = (async () => Response.json({ ask: { status: "declined" } })) as typeof fetch;
     await resolveApproval({ requestId: pending.requestId, approved: false });
     assert.deepEqual(unresolvedApprovals([pending]), []);
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test("read-only approval turns use the credential endpoint and preserve duration", async () => {
-  const original = globalThis.fetch;
-  const calls: Array<[string, unknown]> = [];
-  globalThis.fetch = (async (url, init) => {
-    calls.push([String(url), JSON.parse(String(init?.body))]);
-    return Response.json({ ask: { status: "approved" } });
-  }) as typeof fetch;
-  try {
-    await runApprovalTurn({} as Agent, { requestId: "keychain:readonly", approved: true, scope: "once" }, undefined);
-    assert.deepEqual(calls, [["/api/keychain/approvals/readonly", { decision: "once" }]]);
   } finally {
     globalThis.fetch = original;
   }

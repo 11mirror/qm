@@ -13,12 +13,12 @@ export const MAX_PREEMPTIONS = 3;
 
 export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput {
   const { trace: _stale, ...rest } = request;
-  const trace = request.swarm ? undefined : traceCarrier();
+  const trace = traceCarrier();
   return trace ? { ...rest, trace } : rest;
 }
 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
-  if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
+  if (request.delegatingRunId && delegating === null) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
   return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
 }

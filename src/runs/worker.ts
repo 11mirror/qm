@@ -4,10 +4,9 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator, OrchestratorInput } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { isNonRetryable, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import {
-  countedClaims,
   errorParks,
   handbackStop,
   MAX_PREEMPTIONS,
@@ -32,7 +31,6 @@ export interface ProcessDeps {
 export const LEASE_LOST_CONSECUTIVE = 3;
 
 export const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
-const SWARM_CLAIM_BUDGET = 3;
 
 export async function processRun(
   deps: ProcessDeps,
@@ -104,7 +102,6 @@ async function attemptRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    assertSwarmClaimBudget(run);
     started = true;
     const result = await deps.orchestrator.handleTurn(
       runTurnInput(run, {
@@ -166,11 +163,6 @@ export function runTurnInput(
     ...(opts.shutdown ? { shutdown: opts.shutdown } : {}),
     ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
   };
-}
-
-export function assertSwarmClaimBudget(run: Pick<Run, "request" | "attempts" | "preemptions">): void {
-  if (run.request.swarm && countedClaims(run) > SWARM_CLAIM_BUDGET)
-    throw new NonRetryableTurnError("swarm claim budget exhausted");
 }
 
 export function recordTurnError(errors: ErrorLog | undefined, run: Run, err: unknown): void {

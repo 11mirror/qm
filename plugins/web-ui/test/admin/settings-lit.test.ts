@@ -87,7 +87,7 @@ test("feature flag picker offers every server feature and limits personal-only f
     await dom.window.eval(`settingsUI.loadFlags(
       { featureFlags: [
         { featureName: "persistent_subagents", label: "Persistent subagents", personalOnly: true, hint: "People only.", enabledScopes: [] },
-        { featureName: "swarms", label: "Swarms", personalOnly: true, enabledScopes: [] },
+        { featureName: "ui_canvas", label: "UI canvas", personalOnly: true, enabledScopes: [] },
         { featureName: "team_scopes", label: "Team scopes", enabledScopes: [] },
       ] },
       "org:test",
@@ -97,7 +97,7 @@ test("feature flag picker offers every server feature and limits personal-only f
     const select = doc.getElementById("feature-flag-name") as HTMLSelectElement;
     assert.deepEqual(
       [...select.options].map((option) => option.textContent),
-      ["Persistent subagents", "Swarms", "Team scopes"],
+      ["Persistent subagents", "UI canvas", "Team scopes"],
     );
     assert.equal(select.value, "persistent_subagents");
     assert.equal(doc.getElementById("offered")!.textContent, "personal:ada");

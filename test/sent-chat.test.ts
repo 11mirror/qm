@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ensureSentChat, loopItemRoutes } from "../src/api/routes/loop-items.ts";
-import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
+import { ensureSentChat, cronItemRoutes } from "../src/api/routes/cron-items.ts";
+import { buildGmailReplyMime } from "../src/inbox/sources/gmail.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
-import { createLoopStore } from "../src/loops/loop-store.ts";
-import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { createInboxLedger } from "../src/inbox/ledger.ts";
+import { inboxApp } from "./support/inbox-app.ts";
 import { testMap } from "./support/test-database.ts";
 
 test("sent chats are durable, idempotent, and isolated to the signed-in owner", async () => {
-  const store = createLoopStore(testMap());
-  const items = createLoopItemLedger(testMap());
+  const { crons, app } = inboxApp();
+  const items = createInboxLedger(testMap());
   let previewEnabled = false;
   let status = 0;
-  let response: { item: { id: string; loopId: string; state: string; thread: { text: string }[] } };
+  let response: { item: { id: string; cronId: string; state: string; thread: { text: string }[] } };
   const ctx = {
     actor: { p: "alice" },
     url: new URL("http://localhost/?principalId=bob"),
     body: { threadId: "sent-only-thread", subject: "No inbox match", from: "Alice", text: "The sent email body" },
-    deps: { loops: { store, items }, featureFlags: { enabled: async () => previewEnabled } },
+    app,
+    deps: { inbox: { items, record: async () => {} }, featureFlags: { enabled: async () => previewEnabled } },
     res: {
       setHeader() {},
       getHeader() {},
@@ -31,13 +32,13 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   } as unknown as ApiCtx;
   await ensureSentChat(ctx);
   assert.equal(status, 403);
-  assert.equal((await store.list()).length, 0);
+  assert.equal((await crons.list()).length, 0);
   previewEnabled = true;
   await ensureSentChat(ctx);
   assert.equal(status, 200);
   const original = response!.item;
   assert.equal(original.state, "held");
-  assert.equal((await store.get(original.loopId))!.owner, "alice");
+  assert.equal((await crons.get(original.cronId))!.owner, "alice");
   assert.equal((await items.get(original.id))!.sourcePayload!.snippet, "The sent email body");
   await items.appendThread(original.id, [{ role: "human", text: "Summarize this" }]);
   await ensureSentChat(ctx);
@@ -73,9 +74,9 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
 });
 
 test("a sent email draft saves and sends into the original Gmail thread exactly once", async () => {
-  const store = createLoopStore(testMap());
-  const items = createLoopItemLedger(testMap());
-  let response: { item: { id: string; loopId: string; proposal?: { at: number; data: { body: string } } } };
+  const { app } = inboxApp();
+  const items = createInboxLedger(testMap());
+  let response: { item: { id: string; cronId: string; proposal?: { at: number; data: { body: string } } } };
   let status = 0;
   const ctx = {
     actor: { p: "alice" },
@@ -89,15 +90,11 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
       rfcMessageId: "<original@example.com>",
       text: "Original sent message",
     },
+    app,
     deps: {
-      loops: { store, items },
-      loopSourceTokens: { connectorAccessToken: async () => "test-token" },
+      inbox: { items, record: async () => {} },
+      inboxSourceTokens: { connectorAccessToken: async () => "test-token" },
       featureFlags: { enabled: async () => true },
-    },
-    app: {
-      membershipControlsScope: async () => false,
-      samePerson: async (a: string, b: string) => a === b,
-      managesScope: async () => false,
     },
     res: {
       setHeader() {},
@@ -111,8 +108,8 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
     },
   } as unknown as ApiCtx;
   await ensureSentChat(ctx);
-  const { id, loopId } = response!.item;
-  const found = findRoute(loopItemRoutes, "POST", `/v1/loops/${loopId}/items/${id}/action`)!;
+  const { id, cronId } = response!.item;
+  const found = findRoute(cronItemRoutes, "POST", `/v1/crons/${cronId}/items/${id}/action`)!;
   const action = async (kind: string, args = {}) => {
     ctx.body = { kind, args };
     await run(found.route, found.params, ctx);
@@ -157,8 +154,8 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
 });
 
 test("sent chat preserves long quoted recipient headers and rejects oversized input", async () => {
-  const store = createLoopStore(testMap());
-  const items = createLoopItemLedger(testMap());
+  const { app } = inboxApp();
+  const items = createInboxLedger(testMap());
   let status = 0;
   let id = "";
   const to = [
@@ -169,7 +166,8 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
   const ctx = {
     actor: { p: "alice" },
     body: { threadId: "t", to, cc },
-    deps: { loops: { store, items }, featureFlags: { enabled: async () => true } },
+    app,
+    deps: { inbox: { items, record: async () => {} }, featureFlags: { enabled: async () => true } },
     res: {
       setHeader() {},
       getHeader() {},

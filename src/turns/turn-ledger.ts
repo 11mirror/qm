@@ -111,7 +111,6 @@ const BACKGROUND_PRIORITY: RunPriority = 2;
 const cappedHead = (alias: string): string => `${alias}.status = 'queued' AND ${alias}.fair_key IS NOT NULL`;
 
 function fairKeyFor(request: EnqueueInput["request"], priority: RunPriority): string | null {
-  if (request.swarm) return `swarm:${request.swarm.swarmId}`;
   if (priority === BACKGROUND_PRIORITY && !request.delegatingRunId) return `owner:${request.actor.id}`;
   return null;
 }

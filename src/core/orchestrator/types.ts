@@ -1,5 +1,4 @@
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
-import type { GoalCreateInput } from "../../harness/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
@@ -69,7 +68,6 @@ import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
 import type { ToolOutputStore } from "../../sessions/tool-output.ts";
 import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
-import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 
@@ -111,15 +109,12 @@ export interface OrchestratorInput extends Omit<
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
-  swarm?: SwarmTurn;
   wakeCause?: "child_done";
-  swarmGoal?: GoalCreateInput & { assignedAt: number };
   trace?: TraceCarrier;
 }
 
 export interface OrchestratorDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
-  swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
   resolution: ResolutionService;
@@ -252,7 +247,6 @@ export interface Orchestrator {
     actor: Principal;
     conversation: Conversation;
     sessionId?: string;
-    verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
   regenerateTitle(
     sessionId: string,

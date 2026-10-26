@@ -1,0 +1,552 @@
+import { type DurableMapSelect } from "../src/persistence/durable-map.ts";
+import type { InboxItem } from "../src/types.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { agentDraftOf, createInboxLedger, inboxItemId, type IngestEntryInput } from "../src/inbox/ledger.ts";
+import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/inbox/view.ts";
+import { testMap } from "./support/test-database.ts";
+
+const CRON = "cron-1";
+
+function entry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
+  return {
+    cronId: CRON,
+    dedupeKey: "gmail:thread-1",
+    source: "gmail",
+    summary: "can you look at this?",
+    sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "can you look at this?" },
+    sourceAt: 1_000,
+    ...over,
+  };
+}
+
+test("ingest creates pending items and holds the ones that arrive with a proposal", async () => {
+  const ledger = createInboxLedger(testMap());
+  const outcome = await ledger.ingest([
+    entry(),
+    entry({ dedupeKey: "gmail:thread-2", proposal: { data: { body: "on it" }, by: "agent" } }),
+  ]);
+  assert.deepEqual(outcome, { created: 2, updated: 0, skipped: 0 });
+  const items = await ledger.byCron(CRON);
+  assert.equal(items.length, 2);
+  const [pending, held] = [
+    items.find((i) => i.sourceKey === "gmail:thread-1")!,
+    items.find((i) => i.sourceKey === "gmail:thread-2")!,
+  ];
+  assert.equal(ledgerState(pending), "pending");
+  assert.equal(ledgerState(held), "held");
+  assert.equal(held.proposal?.by, "agent");
+  assert.ok(held.proposal?.at);
+});
+
+test("the ledger id is the dedupe key scoped to its loop", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry(), entry({ cronId: "loop-2" })]);
+  assert.equal((await ledger.byCron(CRON)).length, 1);
+  assert.equal((await ledger.byCron("loop-2")).length, 1);
+  assert.notEqual(inboxItemId(CRON, "k"), inboxItemId("loop-2", "k"));
+});
+
+test("re-ingesting the same source event with nothing new is skipped", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  assert.deepEqual(await ledger.ingest([entry()]), { created: 0, updated: 0, skipped: 1 });
+});
+
+test("a newer source event refreshes the payload and the proposal", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "first" }, by: "agent" } })]);
+  const outcome = await ledger.ingest([
+    entry({
+      sourceAt: 2_000,
+      sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "bumping this" },
+      proposal: { data: { body: "second" }, by: "agent" },
+    }),
+  ]);
+  assert.deepEqual(outcome, { created: 0, updated: 1, skipped: 0 });
+  const [item] = await ledger.byCron(CRON);
+  assert.equal(item?.sourceAt, 2_000);
+  assert.equal(item?.sourcePayload?.snippet, "bumping this");
+  assert.deepEqual(item?.proposal?.data, { body: "second" });
+});
+
+test("a proposal the person edited survives a sync that brings no newer message", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
+  const [before] = await ledger.byCron(CRON);
+  await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
+  await ledger.ingest([entry({ proposal: { data: { body: "agent rewrite" }, by: "agent" } })]);
+  const [after] = await ledger.byCron(CRON);
+  assert.deepEqual(after?.proposal?.data, { body: "my own words" });
+  assert.equal(after?.proposal?.by, "human");
+});
+
+test("a newer message overrides even an edited proposal", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
+  const [before] = await ledger.byCron(CRON);
+  await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
+  await ledger.ingest([entry({ sourceAt: 5_000, proposal: { data: { body: "fresh draft" }, by: "agent" } })]);
+  const [after] = await ledger.byCron(CRON);
+  assert.deepEqual(after?.proposal?.data, { body: "fresh draft" });
+});
+
+test("actioned items are never resurrected by a stale sync", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned", result: "sent" });
+  assert.deepEqual(await ledger.ingest([entry()]), { created: 0, updated: 0, skipped: 1 });
+  const [after] = await ledger.byCron(CRON);
+  assert.equal(ledgerState(after!), "actioned");
+  assert.equal(after?.actionResult, "sent");
+});
+
+test("a newer message revives a dismissed item", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
+  assert.equal(ledgerState((await ledger.get(item!.id))!), "dismissed");
+  await ledger.ingest([entry({ sourceAt: 9_000, proposal: { data: { body: "reply" }, by: "agent" } })]);
+  const revived = await ledger.get(item!.id);
+  assert.equal(ledgerState(revived!), "held");
+  assert.equal(revived?.actedAt, undefined);
+});
+
+test("an actioned item cannot be actioned or edited again", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned" }), null);
+  assert.equal(await ledger.setProposal(item!.id, { data: { body: "late" }, by: "human" }), null);
+  assert.equal(await ledger.reopen(item!.id), null);
+});
+
+test("reopen brings a dismissed item back to held when it holds a proposal", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "reply" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
+  const reopened = await ledger.reopen(item!.id);
+  assert.equal(ledgerState(reopened!), "held");
+});
+
+test("the thread accumulates chat turns and stays bounded", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.appendThread(item!.id, [{ role: "human", text: "make it shorter", actorId: "josh" }]);
+  const after = await ledger.appendThread(item!.id, [{ role: "agent", text: "done" }]);
+  assert.deepEqual(
+    after?.thread?.map((m) => [m.role, m.text]),
+    [
+      ["human", "make it shorter"],
+      ["agent", "done"],
+    ],
+  );
+  assert.ok(after?.thread?.every((m) => m.id && m.at));
+  for (let i = 0; i < 210; i++) await ledger.appendThread(item!.id, [{ role: "agent", text: `turn ${i}` }]);
+  const bounded = await ledger.get(item!.id);
+  assert.equal(bounded?.thread?.length, 200);
+  assert.equal(bounded?.thread?.at(-1)?.text, "turn 209");
+});
+
+test("setProposal promotes a pending item to held", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  const held = await ledger.setProposal(item!.id, { data: { body: "draft" }, by: "agent", sessionId: "s1" });
+  assert.equal(ledgerState(held!), "held");
+  assert.equal(held?.proposal?.sessionId, "s1");
+});
+
+test("annotate merges into the source payload, leaving the item's state and proposal alone", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "on it" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  const annotated = await ledger.annotate(item!.id, { reactions: ["eyes"] });
+  assert.equal(ledgerState(annotated!), "held");
+  assert.deepEqual(annotated?.proposal?.data, { body: "on it" });
+  assert.deepEqual(annotated?.sourcePayload, {
+    source: "gmail",
+    title: "Budget",
+    from: "Ada",
+    snippet: "can you look at this?",
+    reactions: ["eyes"],
+  });
+  assert.equal(await ledger.annotate("no-such-item", { reactions: [] }), null);
+});
+
+test("a newer source event replaces the payload the annotation lived in", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.annotate(item!.id, { reactions: ["eyes"] });
+  await ledger.ingest([entry({ sourceAt: 2_000 })]);
+  assert.equal((await ledger.get(item!.id))?.sourcePayload?.reactions, undefined);
+});
+
+test("prune drops resolved items past retention and over the cap, never open ones", async () => {
+  const ledger = createInboxLedger(testMap());
+  const now = Date.now();
+  await ledger.ingest([
+    entry({ dedupeKey: "a" }),
+    entry({ dedupeKey: "b" }),
+    entry({ dedupeKey: "c" }),
+    entry({ dedupeKey: "d" }),
+  ]);
+  const items = await ledger.byCron(CRON);
+  const byKey = new Map(items.map((i) => [i.sourceKey, i]));
+  await ledger.recordAction(byKey.get("b")!.id, { kind: "send", outcome: "actioned" });
+  await ledger.recordAction(byKey.get("c")!.id, { kind: "dismiss", outcome: "dismissed" });
+  await ledger.recordAction(byKey.get("d")!.id, { kind: "dismiss", outcome: "dismissed" });
+  const dropped = await ledger.prune(CRON, { maxItems: 3, retentionMs: 1, now: now + 10 });
+  assert.equal(dropped, 3);
+  const left = await ledger.byCron(CRON);
+  assert.deepEqual(
+    left.map((i) => i.sourceKey),
+    ["a"],
+  );
+});
+
+test("prune keeps resolved items inside retention while under the cap", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ dedupeKey: "a" }), entry({ dedupeKey: "b" })]);
+  const items = await ledger.byCron(CRON);
+  await ledger.recordAction(items[0]!.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.prune(CRON, { maxItems: 50, retentionMs: 60_000 }), 0);
+});
+
+test("open items sort ahead of resolved ones, newest source event first", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([
+    entry({ dedupeKey: "old", sourceAt: 1 }),
+    entry({ dedupeKey: "new", sourceAt: 100 }),
+    entry({ dedupeKey: "done", sourceAt: 500 }),
+  ]);
+  const items = await ledger.byCron(CRON);
+  await ledger.recordAction(items.find((i) => i.sourceKey === "done")!.id, { kind: "send", outcome: "actioned" });
+  const sorted = sortLedgerItems(await ledger.byCron(CRON));
+  assert.deepEqual(
+    sorted.map((i) => i.sourceKey),
+    ["new", "old", "done"],
+  );
+});
+
+test("the ledger view exposes the generic shape and never leaks decision tokens", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "hi" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  const view = ledgerItemView(item!);
+  assert.equal(view.dedupeKey, "gmail:thread-1");
+  assert.equal(view.state, "held");
+  assert.equal(view.source, "gmail");
+  assert.deepEqual(view.sourcePayload, item!.sourcePayload);
+  assert.deepEqual(view.thread, []);
+  assert.equal("decisionToken" in view, false);
+});
+
+test("a failed item reads as failed, not dismissed, and keeps its reason", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.recordAction(item!.id, { kind: "fail", outcome: "failed", result: "connector down" });
+  const failed = (await ledger.get(item!.id))!;
+  assert.equal(ledgerState(failed), "failed");
+  assert.equal(failed.parkedReason, "connector down");
+});
+
+test("a person's edit keeps the agent drafts alongside it, and new agent drafts accumulate", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  assert.equal(item!.proposal?.by, "agent");
+  await ledger.setProposal(item!.id, { data: { body: "my words" }, by: "human" });
+  let after = (await ledger.get(item!.id))!;
+  assert.equal(after.proposal?.by, "human");
+  assert.deepEqual(
+    after.agentDrafts?.map((d) => d.data),
+    [{ body: "agent v1" }],
+  );
+  await ledger.setProposal(item!.id, { data: { body: "my words 2" }, by: "human" });
+  after = (await ledger.get(item!.id))!;
+  assert.deepEqual(
+    after.agentDrafts?.map((d) => d.data),
+    [{ body: "agent v1" }],
+    "a second edit adds nothing",
+  );
+  await ledger.setProposal(item!.id, { data: { body: "agent v2" }, by: "agent" });
+  after = (await ledger.get(item!.id))!;
+  assert.deepEqual(
+    after.agentDrafts?.map((d) => d.data),
+    [{ body: "agent v1" }, { body: "agent v2" }],
+  );
+  assert.equal(after.proposal?.by, "agent");
+  for (let i = 3; i < 20; i++) await ledger.setProposal(item!.id, { data: { body: `agent v${i}` }, by: "agent" });
+  assert.equal((await ledger.get(item!.id))!.agentDrafts?.length, 10, "history is bounded");
+});
+
+test("a re-ingested agent draft becomes the draft authorship is judged against, even after a human edit", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  await ledger.setProposal(item!.id, { data: { body: "my words" }, by: "human" });
+  await ledger.ingest([entry({ sourceAt: 2_000, proposal: { data: { body: "agent v2 <!here>" }, by: "agent" } })]);
+  const after = (await ledger.get(item!.id))!;
+  assert.deepEqual(agentDraftOf(after)?.data, { body: "agent v2 <!here>" });
+  assert.deepEqual(
+    after.agentDrafts?.map((d) => d.data),
+    [{ body: "agent v1" }, { body: "agent v2 <!here>" }],
+  );
+  await ledger.setProposal(item!.id, { data: { body: "mine again" }, by: "human" });
+  assert.deepEqual(agentDraftOf((await ledger.get(item!.id))!)?.data, { body: "agent v2 <!here>" });
+});
+
+test("setProposal can be conditioned on the draft version the caller saw", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  const seenAt = item!.proposal!.at;
+  assert.equal(
+    await ledger.setProposal(item!.id, { data: { body: "late" }, by: "human" }, { expectedAt: seenAt - 1 }),
+    null,
+  );
+  assert.deepEqual((await ledger.get(item!.id))!.proposal!.data, { body: "agent v1" }, "a stale write changes nothing");
+  assert.ok(await ledger.setProposal(item!.id, { data: { body: "on time" }, by: "human" }, { expectedAt: seenAt }));
+});
+
+test("an item ingested without a draft still carries an empty agent-draft history", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  assert.deepEqual(item!.agentDrafts, []);
+});
+
+test("mention identities the agent ever wrote are kept even after the draft history rolls over", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "team <!here> look" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  for (let i = 0; i < 12; i++) await ledger.setProposal(item!.id, { data: { body: `calm v${i}` }, by: "agent" });
+  const after = (await ledger.get(item!.id))!;
+  assert.equal(after.agentDrafts?.length, 10);
+  assert.ok(!after.agentDrafts!.some((d) => JSON.stringify(d.data).includes("<!here>")));
+  assert.deepEqual(after.agentMentionKeys, ["!here"]);
+});
+
+test("re-ingesting the identical agent draft does not bump its timestamp", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "same" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  const at = item!.proposal!.at;
+  await new Promise((r) => setTimeout(r, 3));
+  await ledger.ingest([entry({ proposal: { data: { body: "same" }, by: "agent" } })]);
+  assert.equal((await ledger.get(item!.id))!.proposal!.at, at);
+});
+
+test("draft identity ignores key order, as stored JSON does not preserve it", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "hi", to: ["a@x"], subject: "s" }, by: "agent" } })]);
+  const [item] = await ledger.byCron(CRON);
+  const at = item!.proposal!.at;
+  await new Promise((r) => setTimeout(r, 3));
+  await ledger.ingest([entry({ proposal: { data: { subject: "s", to: ["a@x"], body: "hi" }, by: "agent" } })]);
+  const after = (await ledger.get(item!.id))!;
+  assert.equal(after.proposal!.at, at);
+  assert.equal(after.agentDrafts!.length, 1);
+});
+
+test("continuing a sent reply clears the old draft without losing chat or allowing a second reset", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([
+    entry({ sourcePayload: { sentChat: true }, proposal: { data: { body: "First reply" }, by: "human" } }),
+  ]);
+  const item = (await ledger.byCron(CRON))[0]!;
+  await ledger.appendThread(item.id, [{ role: "human", text: "Help with this thread" }]);
+  await ledger.recordAction(item.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.reopen(item.id), null);
+  const reply = await ledger.reopen(item.id, { sentReply: true });
+  assert.equal(reply!.proposal!.data.body, "");
+  assert.ok(reply!.proposal!.at > item.proposal!.at);
+  assert.equal(reply!.thread![0]!.text, "Help with this thread");
+  assert.equal(ledgerState(reply!), "held");
+  assert.equal(await ledger.reopen(item.id, { sentReply: true }), null);
+  assert.equal(
+    await ledger.setProposal(
+      item.id,
+      { data: { body: "Stale resend" }, by: "human" },
+      { expectedAt: item.proposal!.at },
+    ),
+    null,
+  );
+  await ledger.ingest([entry({ dedupeKey: "ordinary" })]);
+  const ordinary = (await ledger.byCron(CRON)).find((item) => item.sourceKey === "ordinary")!;
+  await ledger.recordAction(ordinary.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
+});
+
+test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
+  const backing = testMap<InboxItem>();
+  const ledger = createInboxLedger(backing);
+  await ledger.ingest([
+    entry({
+      sourcePayload: { automated: true, privateDetail: "hidden" },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    }),
+    entry({ cronId: "unselected", sourcePayload: { automated: true } }),
+  ]);
+  const stored = structuredClone(await ledger.get(inboxItemId(CRON, "gmail:thread-1")));
+  t.mock.method(backing, "all", async () => {
+    assert.fail("summaries must not scan the full ledger");
+  });
+  const originalSelect = backing.select.bind(backing);
+  t.mock.method(backing, "select", async (query: DurableMapSelect<InboxItem, keyof InboxItem>) => {
+    assert.deepEqual(query.where, { field: "cronId", anyOfFold: [CRON] });
+    assert.ok(query.omit?.includes("proposal"));
+    assert.ok(query.omit?.includes("thread"));
+    if (!query.omit?.includes("sourcePayload"))
+      assert.deepEqual(query.pickNested, {
+        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
+      });
+    const rows = await originalSelect(query);
+    for (const row of rows) assert.equal((row as InboxItem).sourcePayload?.privateDetail, undefined);
+    return rows;
+  });
+  const before = await ledger.summaries([CRON]);
+  assert.equal(before.length, 1);
+  assert.equal(before[0]!.inboxPreview!.automated, undefined);
+  const classified = await ledger.summaries([CRON], { includeInboxMetadata: true });
+  assert.equal(classified.length, 1);
+  assert.equal(classified[0]!.inboxPreview!.automated, true);
+  assert.equal(classified[0]!.inboxPreview!.privateDetail, undefined);
+  for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
+  assert.deepEqual(await ledger.summaries([CRON]), before);
+  assert.deepEqual(await ledger.get(inboxItemId(CRON, "gmail:thread-1")), stored);
+});
+
+test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
+  const before = await ledger.summaries([CRON]);
+  const [classified] = await ledger.summaries([CRON], { includeInboxMetadata: true });
+  assert.equal(classified!.source, "gmail");
+  assert.equal(classified!.inboxPreview!.automated, true);
+  assert.deepEqual(await ledger.summaries([CRON]), before);
+  assert.equal((await ledger.byCron(CRON))[0]!.source, undefined);
+});
+
+test("ingest batches writes while resolving legacy IDs and duplicate events", async () => {
+  const backing = testMap<InboxItem>();
+  const seed = createInboxLedger(backing);
+  await seed.ingest([entry()]);
+  const original = (await seed.byCron(CRON))[0]!;
+  await backing.delete(original.id);
+  await backing.put("legacy", { ...original, id: "legacy" });
+  let selects = 0;
+  let writes = 0;
+  const ledger = createInboxLedger({
+    ...backing,
+    select: async (query) => {
+      selects++;
+      return backing.select(query);
+    },
+    get: async () => {
+      throw new Error("per-item read");
+    },
+    mutateMany: async (updates) => {
+      writes++;
+      return backing.mutateMany(updates);
+    },
+  });
+  const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
+  const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
+  assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
+  assert.deepEqual({ selects, writes }, { selects: 1, writes: 1 });
+  assert.equal((await backing.all()).length, 101);
+  assert.ok(await backing.get("legacy"));
+  assert.equal(await backing.get(original.id), null);
+});
+
+test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
+  t.mock.method(Date, "now", () => 1000);
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  const snapshot = structuredClone(item!.sourcePayload!);
+  const first = await ledger.annotate(
+    item!.id,
+    { participants: [{ id: "U1", name: "Alex" }] },
+    { expectedSourcePayload: snapshot },
+  );
+  assert.ok(first);
+  assert.equal(first.updatedAt, item!.updatedAt);
+  const stale = await ledger.annotate(item!.id, { participants: [] }, { expectedSourcePayload: snapshot });
+  assert.equal(stale, null);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload!.participants, [{ id: "U1", name: "Alex" }]);
+  const current = structuredClone(first.sourcePayload!);
+  assert.ok(
+    await ledger.annotate(
+      item!.id,
+      { participants: [{ id: "U2", name: "Taylor" }] },
+      { expectedSourcePayload: current },
+    ),
+  );
+});
+
+test("agent ledger views omit cosmetic Slack data without changing UI data or task images", async () => {
+  const ledger = createInboxLedger(testMap());
+  const payload = {
+    source: "slack",
+    slackAvatarsRefreshAt: 12345,
+    participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+    context: [
+      {
+        author: "Alex",
+        authorId: "U1",
+        avatarUrl: "https://example.com/avatar.png",
+        images: ["https://example.com/task.png"],
+      },
+    ],
+    task: { avatarUrl: "keep this task data" },
+  };
+  await ledger.ingest([entry({ source: "slack", sourcePayload: payload })]);
+  const [item] = await ledger.byCron(CRON);
+  const agent = ledgerItemView(item!, true);
+  assert.deepEqual(agent.sourcePayload, {
+    source: "slack",
+    participants: [{ id: "U1", name: "Alex" }],
+    context: [{ author: "Alex", authorId: "U1", images: ["https://example.com/task.png"] }],
+    task: { avatarUrl: "keep this task data" },
+  });
+  assert.deepEqual(ledgerItemView(item!).sourcePayload, payload);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload, payload);
+  assert.deepEqual(ledgerItemView({ ...item!, source: "gmail" }, true).sourcePayload, payload);
+});
+
+test("ordinary ledger annotations leave previews unchanged and do not project avatar metadata", async () => {
+  const ledger = createInboxLedger(testMap());
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byCron(CRON);
+  const before = structuredClone(item!.inboxPreview);
+  const updated = await ledger.annotate(item!.id, {
+    title: "Updated title",
+    participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+    slackAvatarsRefreshAt: 12345,
+  });
+  assert.equal(updated!.sourcePayload!.title, "Updated title");
+  assert.deepEqual(updated!.inboxPreview, before);
+  const [summary] = await ledger.summaries([CRON]);
+  assert.deepEqual(summary!.inboxPreview, before);
+  const [inboxSummary] = await ledger.summaries([CRON], { includeInboxMetadata: true });
+  assert.equal(inboxSummary!.inboxPreview?.participants, undefined);
+  await ledger.ingest([entry({ source: "slack", dedupeKey: "slack", sourcePayload: updated!.sourcePayload })]);
+  const ordinary = (await ledger.summaries([CRON])).find((item) => item.source === "slack")!;
+  assert.equal(ordinary.inboxPreview?.participants, undefined);
+  const projected = (await ledger.summaries([CRON], { includeInboxMetadata: true })).find(
+    (item) => item.source === "slack",
+  )!;
+  assert.deepEqual(projected.inboxPreview?.participants, updated!.sourcePayload!.participants);
+  assert.equal(projected.inboxPreview?.slackAvatarsRefreshAt, 12345);
+  assert.equal("sourcePayload" in projected, false);
+});

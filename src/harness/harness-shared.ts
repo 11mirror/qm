@@ -108,7 +108,6 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     ...(turn.goalMeter ? { goalMeter: turn.goalMeter } : {}),
     ...(turn.goalContinuation || turn.continueTurn ? { goalRound: 1 } : {}),
     saveGoal: turn.saveGoal,
-    ...(turn.goalInbox ? { goalInbox: turn.goalInbox } : {}),
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,

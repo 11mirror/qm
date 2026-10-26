@@ -25,8 +25,6 @@ import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
-import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
-import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
@@ -93,18 +91,15 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
-import { slackUserClientFactory } from "./loops/sources/slack.ts";
+import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
   Cron,
-  Loop,
-  LoopItem,
-  LoopOutput,
+  InboxItem,
   Monitor,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,
@@ -120,18 +115,15 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
-import { createLoopStore } from "./loops/loop-store.ts";
-import { createLoopItemLedger } from "./loops/item-ledger.ts";
-import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
-import { createInboxRealtime } from "./loops/inbox-realtime.ts";
-import { createLoopOutputStore } from "./loops/output-store.ts";
-import { createShipGrantStore } from "./loops/ship-grant-store.ts";
-import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
-import type { LoopServiceDeps } from "./api/routes/loops.ts";
+import { createInboxLedger, type InboxEventSink } from "./inbox/ledger.ts";
+import { createPostgresLedgerEventBus, type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
+import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
+import { createInboxRealtime } from "./inbox/realtime.ts";
+import { createInboxChat } from "./inbox/item-chat.ts";
+import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
 import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
 import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
 import { wireRunResultPosts } from "./runs/run-results.ts";
@@ -189,10 +181,10 @@ import {
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
-import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
+import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
+import { createAgent37Sandbox, type StoredAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
   createConfigEpochResolver,
   createSuperserveSandbox,
@@ -208,10 +200,9 @@ import {
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createPorterSandbox, type StoredPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
@@ -321,8 +312,6 @@ import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
-import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSlackSurface } from "./chat-surface/slack.ts";
 import { createHttpChatSurface } from "./chat-surface/http-chat.ts";
@@ -455,9 +444,8 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
-  loops: LoopServiceDeps;
+  inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
-  loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -775,127 +763,77 @@ export function buildApp(
       },
       error,
     );
-  const buildLocal = (): Sandbox =>
-    createLocalSandbox(workspace, {
-      ...config.localSandbox,
-      onError: sandboxOnError,
-    });
-  const buildSprites = (): Sandbox => {
-    const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
-    return createSpritesSandbox(workspace, {
-      ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
-      advisoryLock,
-      ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
-        : {}),
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
-  };
-  const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
-  const buildSmolmachines = (): Sandbox => {
-    const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
-    return createSmolmachinesSandbox(workspace, {
-      ...smol,
-      ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: smolmachinesBodies,
-      advisoryLock,
-      ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
-        : {}),
-      onError: sandboxOnError,
-    });
+  const sandboxShared = {
+    ...config.sandbox,
+    keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
+    advisoryLock,
+    blobTransfer,
+    extraTools: deploymentLayer.advertisedTools,
+    credentialPaths: deploymentLayer.credentialPaths,
+    layerToolFiles: () => deploymentLayer.installFiles,
+    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    onError: sandboxOnError,
   };
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
+  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
+  const buildLocal = (): Sandbox =>
+    createLocalSandbox(workspace, {
+      ...sandboxShared,
+      ...config.localSandbox,
+      store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
+    });
+  const buildSprites = (): Sandbox =>
+    createSpritesSandbox(workspace, {
+      ...sandboxShared,
+      ...config.spritesSandbox,
+      store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
+      connectorSdk: loadConnectorSdk,
+    });
+  const buildSmolmachines = (): Sandbox =>
+    createSmolmachinesSandbox(workspace, {
+      ...sandboxShared,
+      ...config.smolmachinesSandbox,
+      store: artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies"),
+    });
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey)
       throw new Error(`${use === "apps" ? "DEPLOY_PROVIDER" : "SANDBOX_BACKEND"}=e2b requires E2B_API_KEY`);
-    const ttlSec = use === "apps" ? E2B_DEPLOY_IDLE_TIMEOUT_SEC : e2b.sandboxTtlSec;
     return createSdkE2bClient({
       apiKey: e2b.apiKey,
       ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
-      ...(ttlSec ? { sandboxTtlMs: ttlSec * 1000 } : {}),
-      ...(e2b.maxLifetimeSec ? { maxLifetimeMs: e2b.maxLifetimeSec * 1000 } : {}),
-      ...(e2b.proxy ? { proxy: e2b.proxy } : {}),
-      ...(use === "computers" && e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
+      ...(use === "apps" ? { sandboxTtlMs: E2B_DEPLOY_IDLE_TIMEOUT_SEC * 1000 } : {}),
+      ...(use === "computers" && config.sandbox.idleParkSec ? { sandboxTtlMs: config.sandbox.idleParkSec * 1000 } : {}),
+      ...(config.sandbox.maxLifetimeSec ? { maxLifetimeMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
+      ...(use === "computers" && config.sandbox.egressProxyUrl
+        ? { egressProxyUrl: config.sandbox.egressProxyUrl }
+        : {}),
     });
   };
-  const buildE2b = (): Sandbox => {
-    const e2b = config.e2bSandbox;
-    return createE2bSandbox(workspace, {
-      advisoryLock,
+  const buildE2b = (): Sandbox =>
+    createE2bSandbox(workspace, {
+      ...sandboxShared,
       client: e2bClient("computers"),
-      ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
-      keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
-      ...(e2b.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: e2b.snapshotIntervalSec * 1000 } : {}),
-      ...(e2b.nativeSnapshotIntervalSec !== undefined
-        ? { nativeSnapshotIntervalMs: e2b.nativeSnapshotIntervalSec * 1000 }
-        : {}),
-      ...(e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
-      extraTools: [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      extraTools: [...(config.e2bSandbox.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       store: e2bBodies,
-      ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
-        : {}),
-      onError: sandboxOnError,
     });
-  };
-  const managedAgentsBodies = artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies");
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox(workspace, {
+      ...sandboxShared,
       client: createSdkManagedAgentsClient({
         apiToken: managedAgents.apiToken,
-        ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
         ...(managedAgents.template ? { template: managedAgents.template } : {}),
-        ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
-        ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
-        ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
+        ...(config.sandbox.idleParkSec ? { idleTimeoutSec: config.sandbox.idleParkSec } : {}),
+        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
-      ...(managedAgents.namePrefix ? { namePrefix: managedAgents.namePrefix } : {}),
-      ...(managedAgents.snapshotIntervalSec !== undefined
-        ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
-        : {}),
-      ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: managedAgentsBodies,
-      ...(managedAgents.snapshotS3Bucket
-        ? {
-            snapshots: createS3SnapshotStore({ bucket: managedAgents.snapshotS3Bucket, prefix: "managed-agents-home" }),
-          }
-        : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
     });
   };
   const buildModal = (): Sandbox => {
@@ -903,135 +841,64 @@ export function buildApp(
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
-      advisoryLock,
+      ...sandboxShared,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
         appName: modal.appName ?? "qm",
         ...(modal.image ? { image: modal.image } : {}),
         ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
-        ...(modal.regions?.length ? { regions: modal.regions } : {}),
-        ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
-        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
-        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
-        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
+        ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
+        ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),
+        ...(config.sandbox.maxLifetimeSec ? { sandboxTimeoutMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
+        ...(config.sandbox.idleParkSec ? { idleTimeoutMs: 2 * config.sandbox.idleParkSec * 1000 } : {}),
+        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
-      ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
-      ...(modal.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: modal.snapshotIntervalSec * 1000 } : {}),
-      nativeSnapshotsEnabled: modal.nativeSnapshotsEnabled ?? false,
-      ...(modal.nativeSnapshotIntervalSec !== undefined
-        ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
-        : {}),
-      ...(modal.rotateAfterSec ? { rotateAfterMs: modal.rotateAfterSec * 1000 } : {}),
-      ...(modal.reapIdleSec ? { reapIdleMs: modal.reapIdleSec * 1000 } : {}),
-      ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
-      ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
-        : {}),
-      onError: sandboxOnError,
     });
   };
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
+      ...sandboxShared,
       ...config.agent37Sandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredAgent37Sandbox>("agent37_sandbox_bodies"),
     });
-  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
   const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
-    const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
     const generationKey = createHash("sha256")
       .update(
         JSON.stringify([
           config.buildSha ?? "",
           ss.template,
-          ss.namePrefix ?? "",
-          ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
-          ss.retentionSec ?? null,
-          keepWarmSec,
-          [...(ss.egressAllow ?? [])].sort(),
-          [...(ss.egressDeny ?? [])].sort(),
+          sandboxShared.namePrefix ?? "",
+          sandboxShared.idleParkSec ?? null,
+          sandboxShared.maxLifetimeSec ?? null,
+          sandboxShared.keepWarmSec,
+          sandboxShared.egressProxyUrl ?? "",
         ]),
       )
       .digest("hex")
       .slice(0, 32);
     return createSuperserveSandbox(workspace, {
-      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
-      ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
+      ...sandboxShared,
+      configEpoch: createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
+      client: createSdkSuperserveClient({ apiKey: ss.apiKey }),
       template: ss.template,
-      ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
-      ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
-      ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
-      ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: superserveBodies,
-      onError: sandboxOnError,
     });
   };
-  const buildAws = (): Sandbox => {
-    if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
-      ...config.awsSandbox,
-      s3Bucket: config.awsSandbox.s3Bucket,
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: awsBodies,
-      onError: sandboxOnError,
-    });
-  };
+  const buildAws = (): Sandbox =>
+    createAwsSandbox(workspace, { ...sandboxShared, ...config.awsSandbox, store: awsBodies });
   const buildPorter = (): Sandbox =>
     createPorterSandbox(workspace, {
+      ...sandboxShared,
       ...config.porterSandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredPorterSandbox>("porter_sandbox_bodies"),
     });
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
     local: buildLocal,
@@ -1081,8 +948,12 @@ export function buildApp(
           ]);
           return [
             ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+            ...modal.flatMap(([scopeId, body]) =>
+              body.sandboxId ? [{ scopeId, backend: "modal" as const, machineId: body.sandboxId }] : [],
+            ),
+            ...aws.flatMap(([scopeId, body]) =>
+              body.microvmId ? [{ scopeId, backend: "aws" as const, machineId: body.microvmId }] : [],
+            ),
             ...superserve.map(([scopeId, body]) => ({
               scopeId,
               backend: "superserve" as const,
@@ -1504,32 +1375,6 @@ export function buildApp(
       return advisoryLock.withLock("session-run-admission", enqueue);
     },
   };
-  const swarms =
-    config.swarmsEnabled !== false && runStoreKind === "postgres"
-      ? createSwarmService({
-          defaults: config.swarmDefaults,
-          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
-            runs,
-            sessions,
-            pg: pgArtifactMap.pool,
-          }),
-          sessions,
-          runs,
-          sandboxes: sandboxResources,
-          lock: advisoryLock,
-          signals: runSignals,
-          enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
-          authorize: async (claims) => {
-            if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
-            await identity.refresh();
-            return (
-              identity.isInternal(identity.classify(claims.actorId)) &&
-              (claims.members ?? []).every((member) => identity.isInternal(identity.classify(member.id))) &&
-              app.authorizesCapabilityScope(claims)
-            );
-          },
-        })
-      : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
   const ledger = runStore.ledger;
@@ -1596,7 +1441,6 @@ export function buildApp(
   const buildAwsDeploy = (): DeployProvider =>
     createAwsDeployProvider({
       ...config.awsDeploy,
-      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
       store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
       onError: sandboxOnError,
@@ -1611,21 +1455,19 @@ export function buildApp(
         store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
         onError: sandboxOnError,
       }),
-    e2b: () => {
-      const e2b = config.e2bSandbox;
-      return createE2bDeployProvider({
+    e2b: () =>
+      createE2bDeployProvider({
         client: e2bClient("apps"),
-        ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
+        ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
         advisoryLock,
         store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
         onError: sandboxOnError,
-      });
-    },
+      }),
   };
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
-  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
+  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket) {
     console.warn(
-      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
+      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
     );
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
@@ -1767,30 +1609,21 @@ export function buildApp(
   });
   const environments = createPostgresEnvironmentStore(databaseUrl);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
-  const loopStore = createLoopStore(artifactMap<Loop>("loops"));
-  const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
-  const loopOwnerCache = new Map<string, string>();
-  const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
+  const cronOwnerCache = new Map<string, string>();
+  const publishInboxEvent = (event: LedgerEvent): void => {
     void (async () => {
-      let owner = loopOwnerCache.get(event.loopId);
+      let owner = cronOwnerCache.get(event.cronId);
       if (owner === undefined) {
-        owner = (await loopStore.get(event.loopId))?.owner ?? "";
-        loopOwnerCache.set(event.loopId, owner);
+        owner = (await crons.get(event.cronId))?.owner ?? "";
+        cronOwnerCache.set(event.cronId, owner);
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
   };
-  const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
-    lock: advisoryLock,
-    accepts: async (id) => {
-      const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
-    },
-  });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
-    publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
-  );
-  const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
+  const inboxItems = createInboxLedger(artifactMap<InboxItem>("cron_items", ["cronId"]), publishInboxEvent);
+  const recordInboxEvent: InboxEventSink = async (item, event) => {
+    if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
+  };
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
@@ -1813,8 +1646,13 @@ export function buildApp(
       await cronsBase.setEnabled(id, enabled);
       cronChanged.notify?.(id);
     },
+    async delete(id) {
+      await cronsBase.delete(id);
+      await inboxItems.deleteByCron(id);
+    },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -1850,6 +1688,15 @@ export function buildApp(
       `DO $$ BEGIN IF to_regclass('auto_flagger_configs') IS NOT NULL THEN UPDATE auto_flagger_configs SET json = json - 'harnessId' WHERE json ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('crons') IS NOT NULL THEN UPDATE crons SET json = json #- '{runtime,harnessId}' WHERE (json -> 'runtime') ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/swarms/0002-drop",
+    statements: [
+      `DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE runs SET status = 'failed', result = json_build_object('status', 'failed', 'sessionId', session_id, 'reason', 'swarms were removed')::text, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, finished_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint WHERE status IN ('pending', 'running') AND (session_id LIKE 'swarm:%' OR request LIKE '%"swarm":%'); END IF; END $$`,
+      "DROP TABLE IF EXISTS swarms",
+      "DELETE FROM durable_map_versions WHERE tbl = 'swarms'",
+      "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });
   pgArtifactMap.pool.registerMigration({
@@ -1990,7 +1837,6 @@ export function buildApp(
     toolOutput,
     sandbox,
     sandboxResources,
-    swarms,
     connectorTokens,
     modelGateway,
     auditLog,
@@ -2169,7 +2015,6 @@ export function buildApp(
     admittedWork,
     shutdown: () => inlineShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
-    swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
@@ -2244,9 +2089,9 @@ export function buildApp(
     inlineTurns: config.roles.includes("harness"),
   });
   const inboxRealtime = createInboxRealtime({
-    loops: loopStore,
-    items: loopItems,
-    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
+    crons,
+    items: inboxItems,
+    record: recordInboxEvent,
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -2466,53 +2311,26 @@ export function buildApp(
           drop,
         )
     : undefined;
-  const loopFire: LoopFireService = createLoopFireService({
-    admittedWork,
-    crons,
-    samePerson: (a, b) => app.samePerson(a, b),
-    triageEnabledFor: (owner) => featureFlags.enabled("loop_triage", scopeId("personal", owner)),
+  const inbox: InboxServiceDeps = {
     lock: advisoryLock,
-    loops: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    grants: loopGrants,
-    trigger: {
-      outbound,
-      idempotency,
-      identity,
-      run: (req) => app.turn(req),
-      directory,
-      currentScopeMembers,
-      sessions,
-      resolveRecipient,
-    },
-  });
-  const loopIngress = createLoopIngress({
-    enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
-    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
-    loops: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    fire: loopFire,
-    lock: advisoryLock,
-    ...(config.gmailPubSub && keychain
-      ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
-      : {}),
-  });
-  const loops: LoopServiceDeps = {
-    lock: advisoryLock,
-    store: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    grants: loopGrants,
-    fire: loopFire,
-    crons,
-    config: configStore,
+    items: inboxItems,
+    record: recordInboxEvent,
+    chat: createInboxChat({
+      items: inboxItems,
+      trigger: {
+        outbound,
+        idempotency,
+        identity,
+        run: (req) => app.turn(req),
+        directory,
+        currentScopeMembers,
+        sessions,
+        resolveRecipient,
+      },
+    }),
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
@@ -2537,18 +2355,8 @@ export function buildApp(
     currentScopeMembers,
     sessions,
     resolveRecipient,
-    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
-    sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
-    },
+    ...(sweepAsks ? { sweepAsks } : {}),
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
@@ -2813,7 +2621,6 @@ export function buildApp(
       deployMaintenanceSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
-      swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
       runResultSweeper.start();
@@ -2847,7 +2654,6 @@ export function buildApp(
       composioReturnSweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
-      swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
@@ -2972,9 +2778,8 @@ export function buildApp(
     skillFetcher,
     auditLog,
     scheduler,
-    loops,
+    inbox,
     webhookReceiver,
-    loopIngress,
     admin,
     rateLimiter,
     errors,
@@ -3109,7 +2914,7 @@ export function serverDeps(
     auditLog: built.auditLog,
     errors: built.errors,
     crons: built.crons,
-    loops: built.loops,
+    inbox: built.inbox,
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
@@ -3120,7 +2925,6 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
-    loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
@@ -3158,19 +2962,19 @@ export function serverDeps(
     uiState: built.uiState,
     ...(built.keychain
       ? {
-          loopSourceTokens: built.keychain,
+          inboxSourceTokens: built.keychain,
           inboxSourceRefresh: createInboxSourceRefresh({
             featureFlags: built.featureFlags,
-            items: built.loops.items,
+            items: built.inbox.items,
             errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
+            record: built.inbox.record,
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),
         }
       : {}),
-    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+    inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,

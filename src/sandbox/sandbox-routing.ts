@@ -104,8 +104,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const router: Sandbox = {
     profile: fallback.profile,
 
-    async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
-      const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
+    async profileFor(scopeId: string): Promise<AgentComputerProfile> {
+      const resource = await resources.resolve(scopeId);
       return resource ? backendFor(resource.backend).profile : fallback.profile;
     },
 

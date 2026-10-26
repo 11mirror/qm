@@ -21,7 +21,6 @@ import {
   MessageSquare,
   PanelLeft,
   Plus,
-  Repeat,
   Rocket,
   Search,
   Settings,
@@ -87,7 +86,6 @@ import {
   startNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, routeCronsHistory } from "./crons";
-import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
@@ -234,7 +232,6 @@ const ICON = {
   deploys: Rocket,
   webhooks: Webhook,
   crons: Clock,
-  loops: Repeat,
   memory: Brain,
   skills: Box,
   home: House,
@@ -751,9 +748,6 @@ export function switchView(v: View): void {
     case "crons":
       void renderCronsPage();
       break;
-    case "loops":
-      void renderLoopsPage();
-      break;
     case "contexts":
       void renderContexts();
       break;
@@ -783,9 +777,6 @@ function resetActiveDetail(v: View): void {
     case "inbox":
       resetActiveInboxItem();
       break;
-    case "loops":
-      resetActiveLoop();
-      break;
   }
 }
 
@@ -811,9 +802,6 @@ function refreshActiveView(v: View): void {
       break;
     case "crons":
       void renderCronsPage();
-      break;
-    case "loops":
-      void renderLoopsPage();
       break;
     case "files":
       void renderFiles();

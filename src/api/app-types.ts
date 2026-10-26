@@ -6,7 +6,6 @@ import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
-import type { SwarmService } from "../swarms/swarm-service.ts";
 import type {
   DeliveryProvenance,
   Grant,
@@ -35,7 +34,7 @@ import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
-import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
+import type { LedgerEventBus, OwnedLedgerEvent } from "../inbox/events.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
@@ -272,7 +271,6 @@ export interface SessionSearchHit {
 }
 
 export interface App {
-  swarms?: SwarmService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -625,7 +623,6 @@ export interface AppDeps {
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
   resourceSearch: ResourceSearchStore;
-  swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
   inviteMailer?: Mailer;

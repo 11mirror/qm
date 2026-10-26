@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
-for (const surface of ["web", "slack", "swarm"]) {
+for (const surface of ["web", "slack"]) {
   test(`HTTP ${surface} tool screening carries current request on every output chunk`, async () => {
     const calls: Parameters<SecurityScreener["classify"]>[0][] = [];
     const built = buildApp(testConfig({ securityPosture: "auto" }), {
@@ -35,7 +35,7 @@ for (const surface of ["web", "slack", "swarm"]) {
             actor: { externalId: "U1" },
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
-            ...(surface === "swarm" ? { triggered: true, securityScreenData: "assigned task" } : { liveActor: true }),
+            liveActor: true,
           }),
         });
         assert.equal(response.status, 200);
@@ -46,7 +46,7 @@ for (const surface of ["web", "slack", "swarm"]) {
       assert.ok(outputs.length >= 3);
       for (const call of outputs) {
         assert.deepEqual(call.metadata?.request, {
-          origin: surface === "swarm" ? "automation" : "human",
+          origin: "human",
           text: request,
           truncated: false,
         });

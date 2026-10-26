@@ -761,29 +761,6 @@ test("private session replies stay read-only, queue behind running work, and do 
   assert.equal((await exhausted.write({ target: child.id, text: "loop" })).ok, false);
 });
 
-test("session tools cannot bypass swarm worker admission or message budgets", async () => {
-  const r = await rig();
-  const worker = await r.sessions.getOrCreateByThread("swarm:root:worker", "dm", scope);
-  await r.sessions.addParticipant(worker.id, actor.id);
-  assert.equal((await r.syscallsFor(worker).open({ task: "escape" })).ok, false);
-  assert.equal((await r.syscallsFor(worker).write({ target: r.room.id, text: "escape" })).ok, false);
-  assert.equal((await r.syscallsFor(r.room).write({ target: worker.id, text: "escape" })).ok, false);
-  const factory = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    advisoryLock: r.advisoryLock,
-    maxAttempts: 3,
-  });
-  const rootNotification = factory.forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: { actor, conversation, swarm: { swarmId: "root", messageId: "message", recipientId: "root" } },
-  });
-  assert.equal((await rootNotification.open({ task: "escape" })).ok, false);
-});
-
 test("retrying open after an uncertain enqueue recovers one child and rejects a changed request", async (t) => {
   const r = await rig();
   const enqueue = r.runs.enqueue.bind(r.runs);

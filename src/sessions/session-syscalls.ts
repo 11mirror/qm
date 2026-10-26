@@ -29,12 +29,11 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 }
 
 export function requiresDelegation(
-  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation">,
   enabled: boolean,
 ): boolean {
   return (
     enabled &&
-    !request.swarm &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
   );
@@ -51,7 +50,6 @@ export async function delegatedAuthorizationOrigin(
       current.origin.kind === "automation" ||
       current.readOnly ||
       current.privateSessionMessage ||
-      current.swarm ||
       !current.delegatingRunId ||
       !current.sessionSenderId ||
       seen.has(current.delegatingRunId)
@@ -83,7 +81,6 @@ export async function delegatedAuthorizationOrigin(
       parent.actor.type !== "internal" ||
       parent.readOnly ||
       parent.privateSessionMessage ||
-      parent.swarm ||
       sender.scopeId !== child.scopeId ||
       child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
       child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
@@ -198,7 +195,6 @@ interface SessionSyscallBinding {
     | "unattendedGrants"
     | "privateSessionMessage"
     | "sessionMessageDepth"
-    | "swarm"
     | "runId"
     | "conversation"
     | "actor"
@@ -528,14 +524,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
       function sidebarRefusal(): string | null {
         if (binding.request.surface !== "web") return WEB_ONLY;
-        if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }
 
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
-        if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
+        if (target.parentSessionId || isSubagentThreadRef(target.threadRef))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
@@ -629,8 +624,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async open(input) {
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
-              if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
-                throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
@@ -729,8 +722,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async write(input) {
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionWriteResult> => {
-              if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
-                throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
               const target = await resolveTarget(input.target);
@@ -741,8 +732,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               const refusal = input.peer ? peerRefusal(target) : null;
               if (refusal) return { ok: false, message: refusal };
-              if (target.threadRef.startsWith("swarm:"))
-                throw new Error("send messages to swarm workers through the swarm API");
               if (target.id === binding.session.id)
                 return { ok: false, message: "a session cannot message itself — just continue your turn." };
               if (target.scopeId !== binding.scopeId)
@@ -950,11 +939,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             : [binding.request.actor];
           const candidates = (await conversations.list(binding.request.actor.id)).filter(
             (s) =>
-              s.scopeId === binding.scopeId &&
-              !s.parentSessionId &&
-              !isSubagentThreadRef(s.threadRef) &&
-              !s.threadRef.startsWith("swarm:") &&
-              !s.archived,
+              s.scopeId === binding.scopeId && !s.parentSessionId && !isSubagentThreadRef(s.threadRef) && !s.archived,
           );
           const visible: Session[] = [];
           for (const session of candidates) {
@@ -1044,7 +1029,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
   if (!parent) return true;
-  if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
@@ -1126,7 +1110,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "privateSessionMessage",
     "sessionMessageDepth",
     "delegatingRunId",
-    "swarm",
     "approval",
     "proactiveOpener",
     "redeliveryKey",

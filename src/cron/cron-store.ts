@@ -10,6 +10,7 @@ import {
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
+import { renderSourceInboxTask } from "../inbox/sync-task.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
@@ -20,7 +21,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   action?: string;
   message?: string;
   unattendedGrants?: string[];
-  loopId?: string;
+  inbox?: Cron["inbox"];
   sessionRef?: string;
 }
 
@@ -112,7 +113,7 @@ export function createCronStore(
         contentPart(input.destination),
         contentPart(input.unattendedGrants),
         contentPart(title),
-        ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
+        ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
@@ -124,7 +125,7 @@ export function createCronStore(
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.message !== undefined ? { message: input.message } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
-        ...(input.loopId ? { loopId: input.loopId } : {}),
+        ...(input.inbox ? { inbox: input.inbox } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
       }));
@@ -293,5 +294,57 @@ export const DROP_RUN_AS_MIGRATION = {
     `UPDATE crons SET json = jsonb_set(json, '{owner}', to_jsonb('system:' || (json ->> 'ownerScopeId'))) WHERE json ->> 'runAs' = 'scopeFloor' AND json ->> 'loopId' IS NULL AND json ->> 'ownerScopeId' NOT LIKE 'personal:%'`,
     "UPDATE crons SET json = json - 'runAs' - 'ownerResourcesRequireOpen' - 'members' WHERE json ?| array['runAs', 'ownerResourcesRequireOpen', 'members']",
     "UPDATE loops SET json = json - 'runAs' WHERE json ? 'runAs'",
+  ],
+};
+
+function sqlText(text: string): string {
+  if (text.includes("$qm_text$")) throw new Error("migration text contains its own quote tag");
+  return `$qm_text$${text}$qm_text$`;
+}
+
+const loopInboxSource = "substring(l.json ->> 'surface' from 7)";
+
+function loopsToCrons(tenant: boolean): string {
+  const col = tenant ? "tenant_id, " : "";
+  const same = (a: string, b: string) => (tenant ? ` AND ${a}.tenant_id = ${b}.tenant_id` : "");
+  return `INSERT INTO cron_items (${col}id, json)
+     SELECT ${tenant ? "i.tenant_id, " : ""}i.id,
+            (i.json - 'loopId' - 'previousLoopId' - 'triage' - 'attempts' - 'runIds' - 'outputIds' - 'claimedAt' - 'claimToken' - 'guidance')
+            || jsonb_build_object('cronId', c.id, 'status', CASE WHEN i.json ->> 'status' = 'in_progress' THEN 'queued' ELSE i.json ->> 'status' END)
+     FROM loop_items i
+     JOIN loops l ON l.id = i.json ->> 'loopId'${same("l", "i")}
+     JOIN crons c ON c.id = l.json ->> 'cronId' AND c.json ->> 'loopId' = l.id${same("c", "l")}
+     WHERE l.json ->> 'state' <> 'archived'
+     ON CONFLICT DO NOTHING;
+    UPDATE crons c SET json = (c.json - 'loopId') || jsonb_build_object(
+       'enabled', COALESCE((c.json ->> 'enabled')::boolean, false) AND l.json ->> 'state' = 'enabled',
+       'title', CASE WHEN l.json ->> 'surface' LIKE 'inbox:%' THEN c.json ->> 'title' ELSE l.json ->> 'name' END,
+       'action', CASE
+         WHEN l.json ->> 'surface' = 'inbox:gmail' THEN ${sqlText(renderSourceInboxTask("gmail"))}
+         WHEN l.json ->> 'surface' = 'inbox:slack' THEN ${sqlText(renderSourceInboxTask("slack"))}
+         ELSE replace(replace(replace(l.json ->> 'playbook', '/v1/loops/$LOOP_ID', '/v1/crons/' || c.id), '/v1/loops/' || l.id, '/v1/crons/' || c.id), '$LOOP_ID', c.id)
+       END,
+       'inbox', CASE WHEN l.json ->> 'surface' LIKE 'inbox:%' THEN jsonb_build_object('source', ${loopInboxSource}) ELSE '{}'::jsonb END)
+     FROM loops l
+     WHERE c.json ->> 'loopId' = l.id${same("c", "l")} AND l.json ->> 'state' <> 'archived';`;
+}
+
+export const LOOPS_TO_CRONS_MIGRATION = {
+  id: "durable-map/crons/0002-loops-to-crons",
+  statements: [
+    ...["crons", "loops", "loop_items", "cron_items"].map(
+      (table) => `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    ),
+    `DO $loops_to_crons$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'loops'::regclass AND attname = 'tenant_id' AND NOT attisdropped) THEN
+         ALTER TABLE cron_items ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
+         ${loopsToCrons(true)}
+       ELSE
+         ${loopsToCrons(false)}
+       END IF;
+     END
+     $loops_to_crons$`,
+    "DELETE FROM crons WHERE json ? 'loopId'",
   ],
 };

@@ -44,8 +44,8 @@ import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
-import type { ConversationEvent } from "../loops/sources/adapter.ts";
-import { slackConversationRef } from "../loops/sources/slack.ts";
+import type { ConversationEvent } from "../inbox/sources/adapter.ts";
+import { slackConversationRef } from "../inbox/sources/slack.ts";
 import { tenant } from "../tenant.ts";
 
 interface SlackRunHooks {

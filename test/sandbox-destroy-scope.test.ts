@@ -28,6 +28,8 @@ test("Local scope deletion removes deterministic resources without provisioning,
   const calls: string[][] = [];
   let fail = false;
   const sandbox = createLocalSandbox(workspace(), {
+    ...singleProcessDeps(),
+    store: testMap(),
     dockerExec: async (args) => {
       calls.push(args);
       return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
@@ -48,6 +50,8 @@ test("Local scope deletion fails a refused core disconnect only while the core i
   const fake = installFakeDocker(0);
   const network = localNetworkName(localContainerName("scope"));
   const sandbox = createLocalSandbox(workspace(), {
+    ...singleProcessDeps(),
+    store: testMap(),
     coreContainer: "qm-core",
     dockerExec: async (args) =>
       args[1] === "disconnect" ? { code: 1, stdout: "", stderr: "is not connected" } : fake.dockerExec(args),
@@ -64,7 +68,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   const fake = installFakeSprites();
   try {
     const sandbox = createSpritesSandbox(workspace(), {
-      initializationStore: testMap(),
+      store: testMap(),
       advisoryLock: testAdvisoryLock(),
       token: "test",
       baseUrl: fake.baseUrl,
@@ -128,6 +132,8 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   const calls: string[][] = [];
   let volumeBusy = true;
   const sandbox = createLocalSandbox(workspace(), {
+    ...singleProcessDeps(),
+    store: testMap(),
     dockerExec: async (args) => {
       calls.push(args);
       return args[0] === "volume" && volumeBusy

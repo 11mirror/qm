@@ -6,14 +6,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
+import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../src/inbox/events.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
-  return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
+  return { cronId: "cron-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
 }
 
 test("ledger events cross bus instances and an unsubscribed listener hears nothing more", async () => {
@@ -25,7 +25,7 @@ test("ledger events cross bus instances and an unsubscribed listener hears nothi
     let off = (): void => {};
     const ready = new Promise<void>((resolve) => {
       off = b.subscribe((e) => {
-        if (e.loopId === "loop-xbus") {
+        if (e.cronId === "cron-xbus") {
           got.push(e);
           resolve();
         }
@@ -33,7 +33,7 @@ test("ledger events cross bus instances and an unsubscribed listener hears nothi
     });
     const deadline = Date.now() + 5_000;
     for (;;) {
-      a.emit(event({ loopId: "loop-xbus", itemId: "item-9", op: "shipped", at: 42, owner: "ada" }));
+      a.emit(event({ cronId: "cron-xbus", itemId: "item-9", op: "action", at: 42, owner: "ada" }));
       const landed = await Promise.race([
         ready.then(() => true),
         new Promise((r) => setTimeout(r, 250)).then(() => false),
@@ -42,13 +42,13 @@ test("ledger events cross bus instances and an unsubscribed listener hears nothi
       if (Date.now() > deadline) assert.fail("event never crossed instances");
     }
     assert.equal(got[0]?.itemId, "item-9");
-    assert.equal(got[0]?.op, "shipped");
+    assert.equal(got[0]?.op, "action");
     assert.equal(got[0]?.owner, "ada");
     assert.equal(got[0]?.at, 42);
     off();
     await new Promise((r) => setTimeout(r, 300));
     const heard = got.length;
-    a.emit(event({ loopId: "loop-xbus", op: "reopen" }));
+    a.emit(event({ cronId: "cron-xbus", op: "reopen" }));
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(got.length, heard, "an unsubscribed listener hears nothing");
   } finally {
@@ -57,7 +57,7 @@ test("ledger events cross bus instances and an unsubscribed listener hears nothi
   }
 });
 
-test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped with the loop owner", async () => {
+test("GET /v1/cron-items/events streams inbox writes as SSE frames, stamped with the cron owner", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-ledger-sse-"));
   const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
   built.runtime.start();
@@ -65,19 +65,19 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/v1/loop-items/events`, { signal: AbortSignal.timeout(15_000) });
+    const res = await fetch(`${base}/v1/cron-items/events`, { signal: AbortSignal.timeout(15_000) });
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
-    const { loop } = await built.loops.store.create({
+    const cron = await built.app.createCron({
       owner: "josh",
       createdBy: "josh",
       ownerScopeId: "personal:josh",
-      name: "Sentry triage",
-      playbook: "triage",
-      successCondition: "fixed",
+      schedule: { everyMs: 3_600_000 },
+      action: "triage",
+      inbox: {},
     });
-    await built.loops.items.ingest([{ loopId: loop.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } }]);
+    await built.inbox.items.ingest([{ cronId: cron.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } }]);
 
     const reader = res.body!.getReader();
     let buf = "";
@@ -88,7 +88,7 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
       if (done) break;
       buf += new TextDecoder().decode(value);
       for (const chunk of buf.split("\n\n")) {
-        if (!chunk.split("\n").includes("event: loop_item")) continue;
+        if (!chunk.includes("event: inbox_item")) continue;
         const data = chunk
           .split("\n")
           .find((l) => l.startsWith("data: "))
@@ -98,9 +98,9 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
     }
     await reader.cancel().catch(() => {});
     assert.ok(frame, "a ledger write reached the SSE stream");
-    assert.equal(frame!.loopId, loop.id);
+    assert.equal(frame!.cronId, cron.id);
     assert.equal(frame!.op, "ingest");
-    assert.equal(frame!.owner, "josh", "the frame carries the loop owner the BFF routes by");
+    assert.equal(frame!.owner, "josh", "the frame carries the cron owner the BFF routes by");
   } finally {
     await new Promise<void>((r) => core.close(() => r()));
     await built.runtime.stop();

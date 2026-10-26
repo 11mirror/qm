@@ -20,7 +20,7 @@ import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
-import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
@@ -40,16 +40,11 @@ import {
   goalIsOpen,
   goalReport,
   GOAL_STEP_BACK_PROMPT,
-  GOAL_WAIT_MAX_MS,
   type GoalGovernor,
-  GOAL_INBOX_POLL_MS,
-  type GoalInbox,
   type GoalRecord,
   type GovernorVerdict,
   GovernorUndecided,
   resumeGoal,
-  takeGoalMessages,
-  waitForGoalMessages,
 } from "./goal.ts";
 import {
   toolLabelOf,
@@ -131,7 +126,6 @@ export interface ToolContextRef {
   goalRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
-  goalInbox?: GoalInbox;
   modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
   /** The agent's recent work for the governor, newest last. */
@@ -436,7 +430,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
-  let goalInboxCheckedAt = 0;
   const recordResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
     summary: Record<string, unknown>,
@@ -560,18 +553,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ret.content.push({ type: "text", text });
         result += `\n\n${text}`;
         delivered.push(message.id);
-      }
-      const goal = ref.goal;
-      const goalInbox =
-        goal?.status === "active" && Date.now() - goalInboxCheckedAt >= GOAL_INBOX_POLL_MS ? ref.goalInbox : undefined;
-      if (goalInbox) goalInboxCheckedAt = Date.now();
-      const arrived =
-        goal && goalInbox
-          ? await takeGoalMessages(goalInbox, goal, ref.goalMeter).catch(swallowAs("goal: read the inbox", undefined))
-          : undefined;
-      if (arrived) {
-        ret.content.push({ type: "text", text: arrived });
-        result += `\n\n${arrived}`;
       }
       await log("ToolResult", {
         ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
@@ -2538,6 +2519,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
         }),
       ),
+      inbox: Type.Optional(
+        Type.Boolean({
+          description:
+            "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
+        }),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
       archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
       limit: Type.Optional(
@@ -2590,6 +2577,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+            ...(params.inbox === true ? { inbox: true } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
@@ -4023,15 +4011,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
       "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
     parameters: Type.Object({
-      status: Type.Union([
-        Type.Literal("complete"),
-        Type.Literal("resume"),
-        Type.Literal("cancel"),
-        Type.Literal("wait"),
-      ]),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
       note: Type.String({
         description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request. wait: what you are waiting on.",
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -4043,7 +4026,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       const p = params as {
-        status?: "complete" | "resume" | "cancel" | "wait";
+        status?: "complete" | "resume" | "cancel";
         note: string;
         files?: string[];
         sandbox_id?: string;
@@ -4084,55 +4067,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "The goal is cancelled at the user's request: it is no longer enforced and was not completed. A new goal can be registered now if the user asked for one.",
           ),
         );
-      }
-      if (status === "wait") {
-        if (!ref.goalInbox || goal?.status !== "active") {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "wait_unavailable" },
-            text(
-              goal?.status === "active"
-                ? "Waiting is only for swarm workers on a goal sent in a swarm message; this goal stays active. Keep working, or poll the swarm for the reply you need."
-                : "No active goal to wait on.",
-            ),
-            true,
-          );
-        }
-        if (!p.note?.trim()) {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "note_required" },
-            text("Say who or what you are waiting on, and what you asked them for."),
-            true,
-          );
-        }
-        const signal = ref.abortSignal;
-        const interrupted = () => !!signal?.aborted || !!ref.shutdown?.aborted;
-        let arrived: string | undefined;
-        try {
-          arrived = await waitForGoalMessages(
-            ref.goalInbox,
-            goal,
-            ref.goalMeter ?? createGrindMeter(),
-            p.note.trim(),
-            interrupted,
-          );
-        } catch (e) {
-          await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a failed wait", undefined));
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "inbox_unavailable", goal },
-            text(
-              `Your swarm messages could not be read (${errMessage(e)}), so the wait ended and the goal is active again. Check for the reply with GET /v1/swarm?read=1, or wait again.`,
-            ),
-            true,
-          );
-        }
-        await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a wait", undefined));
-        let outcome = `No swarm message reached you in ${GOAL_WAIT_MAX_MS / 60_000} minutes, so the goal is active again. Check on what you were waiting for, work around it if you can, or wait again.`;
-        if (interrupted()) outcome = "The wait was interrupted; the goal is active again.";
-        if (arrived) outcome = `The goal is active again; this reached you while you waited:\n\n${arrived}`;
-        return recordCoreAuthoredResult(callId, { tool: "goal", action: "update", goal }, text(outcome));
       }
       if (status === "resume") {
         if (goal?.status !== "paused") {
@@ -4188,7 +4122,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
       }
-      const assignedAt = goal.createdAt;
       const evidence = [
         p.note ?? "",
         ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
@@ -4209,16 +4142,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { tool: "goal", action: "update", error: "governor_undecided", goal },
           text(
             `The governor could not reach a decision (${errMessage(e)}). This is not a rejection and nothing was recorded against the goal; it stays active. Request completion again with the same evidence.`,
-          ),
-          true,
-        );
-      }
-      if (goal.createdAt !== assignedAt) {
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", error: "goal_replaced", droppedVerdict: verdict, goal },
-          text(
-            `A new goal replaced this one while the governor was deciding, so its decision (${verdict.verdict}: ${verdict.reasons}) was dropped. Your goal is now:\n${goalReport(goal, ref.goalMeter ?? createGrindMeter())}`,
           ),
           true,
         );
