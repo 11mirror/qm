@@ -8,7 +8,7 @@ import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -555,7 +555,9 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
   const { res, deps, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
   const admin: { isAdmin: boolean; role?: string } = deps.admin
-    ? await deps.admin.adminStatusOf({ id: capability.actorId, type: "internal" }).catch(() => ({ isAdmin: false }))
+    ? await deps.admin
+        .adminStatusOf({ id: capability.actorId, type: "internal" })
+        .catch(swallowAs("apis: admin status", { isAdmin: false }))
     : { isAdmin: false };
   audit(deps, {
     principalId: capability.actorId,

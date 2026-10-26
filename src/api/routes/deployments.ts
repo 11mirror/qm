@@ -12,7 +12,7 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
+import { errMessage, reportFailureAs, swallow, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { refusal, sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
@@ -1248,7 +1248,8 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
       ...(text ? {} : { encoding: "base64" }),
       truncated: response.truncated,
     });
-  } catch {
+  } catch (error) {
+    swallow(`deployment fetch: ${params.id}`, error);
     return sendJson(res, 502, { error: "upstream_unreachable" });
   }
 }

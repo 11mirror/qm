@@ -35,6 +35,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { isBackendFailure } from "../http.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -266,6 +267,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           change = ["decision.rule.save", `${parsed.rule.id}:${parsed.rule.mode}`];
         } else return { error: "send provider, removeProvider, rule or removeRule" };
       } catch (error) {
+        if (isBackendFailure(error)) throw error;
         return { error: errMessage(error) };
       }
       auditAs(ctx.deps, actor.id, change[0], change[1], scope);

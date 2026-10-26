@@ -904,6 +904,7 @@ export function createMockHarness(): Harness {
     },
 
     judge(_systemPrompt: string, prompt: string): Promise<string | undefined> {
+      if (/!judge-down\b/i.test(prompt)) return Promise.reject(new Error("judge model unavailable"));
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
         const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];

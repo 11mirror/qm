@@ -22,7 +22,7 @@ import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "..
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { refusal, sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
@@ -280,7 +280,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { status: "authorize", authorizeUrl: consentUrl });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
 }
 
@@ -316,7 +316,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   try {
     client = await resolverFor(deps)(provider, { accountType });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
   if (base) {
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri))
@@ -387,7 +387,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       authorizeUrl: consentUrl,
     });
   } catch (e) {
-    return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
+    throw refusal(501, "oauth_not_configured", e);
   }
 }
 

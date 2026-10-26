@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import pg from "pg";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
@@ -76,7 +76,8 @@ export function pipeToResponse(
   stream: NodeJS.ReadableStream & { destroy?: () => void },
   errorMessage: string,
 ): void {
-  stream.on("error", () => {
+  stream.on("error", (error) => {
+    reportFailure(`stream: ${errorMessage}`, error);
     if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
     else res.destroy();
   });
@@ -104,7 +105,7 @@ export class HttpError extends Error {
   }
 }
 
-function backendFailure(error: unknown): boolean {
+export function isBackendFailure(error: unknown): boolean {
   return (
     error instanceof TypeError ||
     error instanceof ReferenceError ||
@@ -114,7 +115,7 @@ function backendFailure(error: unknown): boolean {
 }
 
 export function refusal(status: number, error: string, cause: unknown): Error {
-  return cause instanceof HttpError || backendFailure(cause)
+  return cause instanceof HttpError || isBackendFailure(cause)
     ? (cause as Error)
     : new HttpError(status, { error, message: errMessage(cause) });
 }

@@ -1,7 +1,7 @@
 import { refusal, sendJson } from "../../http.ts";
 import { orgAdmin } from "./common.ts";
 import type { ApiCtx } from "../route.ts";
-import { errMessage } from "../../../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
@@ -43,7 +43,8 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
           statusUrl: new URL("/api/admin/slack-installation", origin).href,
         };
       }
-    } catch {
+    } catch (error) {
+      swallow("slack installation: setup status", error);
       setupUnavailable = true;
     }
     return sendJson(ctx.res, 200, {
@@ -137,7 +138,8 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
     if (step !== "setup" && step !== "install") return sendJson(ctx.res, 400, { error: "invalid_step" });
     const result = await ctx.deps.managedSlack.start(step);
     return sendJson(ctx.res, 200, result);
-  } catch {
+  } catch (error) {
+    reportFailure("slack installation: start", error);
     return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
   }
 }

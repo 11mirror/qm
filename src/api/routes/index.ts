@@ -1,3 +1,4 @@
+import { swallow } from "../../util/errors.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
@@ -62,7 +63,8 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
       try {
         await Promise.race([Promise.resolve().then(() => deps.checkReadiness?.(controller.signal)), deadline]);
         sendJson(res, 200, { ok: true });
-      } catch {
+      } catch (error) {
+        swallow("readiness", error);
         sendJson(res, 503, { ok: false });
       } finally {
         clearTimeout(timer);

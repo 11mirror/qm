@@ -1,6 +1,7 @@
 import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
+import { swallow } from "../../../util/errors.ts";
 import type { ApiCtx } from "../route.ts";
 import { badRequest, notFound, orgAdmin } from "./common.ts";
 
@@ -16,7 +17,8 @@ export async function apiKeyAccepted(ctx: ApiCtx, url: string, anthropic: boolea
     : { authorization: `Bearer ${apiKey}` };
   try {
     return (await (ctx.deps.modelCredentialFetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(5_000) })).ok;
-  } catch {
+  } catch (error) {
+    swallow("model provider key check", error);
     return false;
   }
 }

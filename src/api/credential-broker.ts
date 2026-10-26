@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -241,7 +241,8 @@ export async function brokerCredentialCall(
       headers,
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
-  } catch {
+  } catch (error) {
+    swallow(`credential broker: ${rec.host} unreachable`, error);
     recordBrokerOutcome(opts, claims, "broker", { slug, host: rec.host, status: "error" });
     return {
       status: 502,

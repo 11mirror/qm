@@ -220,7 +220,8 @@ async function catalog(ctx: ApiCtx): Promise<void> {
       ];
     });
     return sendJson(ctx.res, 200, { items, nextCursor: nextCursor(data) });
-  } catch {
+  } catch (error) {
+    reportComposioFailure("composio: catalog", access.key, error);
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
   }
 }
@@ -399,7 +400,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
     }));
     ctx.res.setHeader("Cache-Control", "no-store");
     return sendJson(ctx.res, 200, { items, nextCursor: nextCursor(data) });
-  } catch {
+  } catch (error) {
+    reportComposioFailure("composio: connections", access.key, error);
     return sendJson(ctx.res, 502, {
       error: "composio_unavailable",
       message: "Could not check connected apps. Please try again.",
@@ -462,7 +464,8 @@ async function tools(ctx: ApiCtx): Promise<void> {
         input_parameters: item.input_parameters,
       }));
     return sendJson(ctx.res, 200, { items, nextCursor: nextCursor(data) });
-  } catch {
+  } catch (error) {
+    reportComposioFailure("composio: tools", access.key, error);
     return sendJson(ctx.res, 502, { error: "composio_unavailable" });
   }
 }
@@ -817,6 +820,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
   } catch (error) {
+    if (!(error instanceof PrincipalLinkError)) reportComposioFailure("composio: slack link", access.key, error);
     return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {
       error: "slack_link_failed",
       message:

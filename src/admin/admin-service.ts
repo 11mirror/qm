@@ -50,7 +50,10 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
     const separator = entry.lastIndexOf(":");
     const principalId = entry.slice(0, separator).trim();
     const role = entry.slice(separator + 1).trim();
-    if (!principalId || role !== "org_admin") continue;
+    if (!principalId || role !== "org_admin") {
+      console.warn("[admin] ignoring ADMIN_GRANTS entry %s: expected <principal>:org_admin", JSON.stringify(entry));
+      continue;
+    }
     grants.push({ principalId, scopeId: scopeId("org", orgId), role });
   }
   return grants;

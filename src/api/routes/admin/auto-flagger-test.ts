@@ -1,3 +1,4 @@
+import { swallow } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";
 import { badRequest, orgAdmin } from "./common.ts";
@@ -56,7 +57,8 @@ async function replay(
           scopeLabel: sample.scopeLabel,
           signal: AbortSignal.timeout(PER_SAMPLE_TIMEOUT_MS),
         });
-      } catch {
+      } catch (error) {
+        swallow("auto-flagger test: probe", error);
         verdict = undefined;
       }
       if (!verdict) totals.errors += 1;

@@ -338,6 +338,24 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
   }
 });
 
+test("a judge failure leaves the batch unjudged so the next pass judges it again", async () => {
+  const built = freshApp();
+  try {
+    const container = "C-judge-down";
+    await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "!judge-down", createdAt: 1 }]);
+    assert.equal((await built.app.judgeAmbientContainer("slack", container)).act, false);
+    assert.deepEqual(await built.ambientJudgments!.list({ container }), [], "a failed judge records no judgment");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "launch moved", createdAt: 1 }]);
+    await built.app.judgeAmbientContainer("slack", container);
+    const rows = await built.ambientJudgments!.list({ container });
+    assert.ok(rows.length > 0, "the batch the failed judge skipped is judged on the next pass");
+    assert.ok(rows.every((r: { decision: string; tsFrom?: string }) => r.decision === "ignore" && r.tsFrom === "1.0"));
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("mirror read interface: ingest is queryable by search + readMessages", async () => {
   const built = freshApp();
   try {
