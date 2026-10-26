@@ -54,7 +54,7 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
@@ -461,12 +461,12 @@ export interface BuiltApp {
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
-  keychain?: Keychain;
+  keychain: Keychain;
   serviceCreds: ServiceCredentialStore;
   outbound: Outbound;
-  keychainApprovals?: KeychainApprovals;
-  fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
-  fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
+  keychainApprovals: KeychainApprovals;
+  fireAskResolution: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
+  fireDropResolution: (drop: DropResolution) => Promise<unknown>;
   workspace: WorkspaceStore;
   memory: MemoryService;
   sandbox: Sandbox;
@@ -486,7 +486,7 @@ export interface BuiltApp {
   processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
-  browserSessionStore?: BrowserSessionStore;
+  browserSessionStore: BrowserSessionStore;
   monitorPoller?: MonitorPoller;
   ambientJudgments: AmbientJudgmentStore;
   ackEmojiPicks: AckEmojiPickStore;
@@ -521,7 +521,8 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
-  if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
+  const connectorSecretKey = config.connectorSecretKey;
+  if (!connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
     // Tenancy sets qm.tenant_id per session, which a transaction-mode pooler would leak between clients.
@@ -539,7 +540,7 @@ export function buildApp(
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
     ["PORTAL_IDENTITY_SECRET", config.portalIdentitySecret],
-  ].find(([, value]) => config.connectorSecretKey && config.connectorSecretKey === value)?.[0];
+  ].find(([, value]) => connectorSecretKey === value)?.[0];
   if (reusedConnectorKey) {
     throw new Error(`CONNECTOR_SECRET_KEY must differ from ${reusedConnectorKey}`);
   }
@@ -560,7 +561,7 @@ export function buildApp(
   const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
-    keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+    keyMaterial: connectorSecretKey,
     fallback: {
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
       ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
@@ -593,7 +594,7 @@ export function buildApp(
     ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
-    ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
+    connectorSecretKey,
   });
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
@@ -634,7 +635,7 @@ export function buildApp(
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
-    config.connectorSecretKey ?? randomBytes(32),
+    connectorSecretKey,
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -1028,13 +1029,12 @@ export function buildApp(
       secrets: secretSource,
     }),
   );
-  const keychainKeyMaterial = config.connectorSecretKey;
   const legacyCredentialKey =
-    keychainKeyMaterial && config.signingSecret && config.signingSecret !== keychainKeyMaterial
+    config.signingSecret && config.signingSecret !== connectorSecretKey
       ? deriveConnectorKey(config.signingSecret, "keychain")
       : undefined;
   const credentialKey: SecretKey = {
-    ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
+    ...deriveConnectorKey(connectorSecretKey, "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
   pgArtifactMap.pool.registerMigration({
@@ -1086,7 +1086,7 @@ export function buildApp(
   // same encryption, ownership, admin visibility, and removal flows as
   // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
-  const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
+  const keychain: Keychain = credentialStore;
   const serviceCreds = withDeploymentCredentials(
     credentialStore,
     scopeId("org", config.orgId),
@@ -1107,7 +1107,7 @@ export function buildApp(
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
-    ...(keychain ? { userTokens: keychain } : {}),
+    userTokens: keychain,
     ...(config.publicWebUrl
       ? {
           signInUrl: (id: string) =>
@@ -1115,9 +1115,10 @@ export function buildApp(
         }
       : {}),
   });
-  const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
-    : undefined;
+  const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
+    sessions: artifactMap<StoredBrowserSession>("browser_sessions"),
+    key: credentialKey,
+  });
   const connectorTokens = credentialStore;
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
@@ -1139,7 +1140,7 @@ export function buildApp(
   const customProviders = createCustomProviderStore({
     write: writeModelRegistry,
     backing: artifactMap("custom_model_providers"),
-    keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+    keyMaterial: connectorSecretKey,
   });
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
@@ -1185,10 +1186,9 @@ export function buildApp(
       ...customKeys,
     };
   };
-  const companyChatGPTAuth: CompanyChatGPTAuth | undefined =
-    config.codexAuthCredential && keychain
-      ? keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential })
-      : undefined;
+  const companyChatGPTAuth: CompanyChatGPTAuth | undefined = config.codexAuthCredential
+    ? keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential })
+    : undefined;
   const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
     if (!companyChatGPTAuth) return {};
     try {
@@ -1199,13 +1199,9 @@ export function buildApp(
       return {};
     }
   };
-  const companyClaudeAuthEnv =
-    config.claudeAuthCredential && keychain
-      ? keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
-          "CLAUDE_CODE_OAUTH_TOKEN",
-          "ANTHROPIC_AUTH_TOKEN",
-        ])
-      : undefined;
+  const companyClaudeAuthEnv = config.claudeAuthCredential
+    ? keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
+    : undefined;
   const resolveCompanyClaudeKeys = async (): Promise<ProviderKeys> => {
     if (!companyClaudeAuthEnv) return {};
     const env = await companyClaudeAuthEnv();
@@ -1269,9 +1265,9 @@ export function buildApp(
           }
         : {}),
       credential: async (slug) => {
-        const rec = keychain
-          ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
-          : null;
+        const rec = nonDeploymentCredential(
+          await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+        );
         return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
       },
     }),
@@ -1900,7 +1896,7 @@ export function buildApp(
     credentialUsage,
     connectorStatusCache,
     resolveConnectorClient: resolveClient,
-    ...(keychain ? { keychain } : {}),
+    keychain,
     serviceCreds,
     outbound,
     recentDmPosts,
@@ -1937,27 +1933,23 @@ export function buildApp(
     sessions,
     postsImmediately: (surface) => chatSurfaces.get(surface)?.normalize !== undefined,
   });
-  const skillFetcher = createGitFetcher(
-    keychain
-      ? {
-          allowLocalRepos: !config.production,
-          resolveAuth: (pack) =>
-            resolvePackAuth(
-              {
-                serviceCredential: async (slug) => {
-                  const record = nonDeploymentCredential(
-                    await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
-                  );
-                  return record && record.delivery !== "env" ? record : undefined;
-                },
-                connectorToken: async (host, principalId) =>
-                  (await keychain.connectorAccessToken(host, principalId)) ?? undefined,
-              },
-              pack,
-            ),
-        }
-      : { allowLocalRepos: !config.production },
-  );
+  const skillFetcher = createGitFetcher({
+    allowLocalRepos: !config.production,
+    resolveAuth: (pack) =>
+      resolvePackAuth(
+        {
+          serviceCredential: async (slug) => {
+            const record = nonDeploymentCredential(
+              await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+            );
+            return record && record.delivery !== "env" ? record : undefined;
+          },
+          connectorToken: async (host, principalId) =>
+            (await keychain.connectorAccessToken(host, principalId)) ?? undefined,
+        },
+        pack,
+      ),
+  });
   const reaper: Reaper = createReaper(runs, sessions, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
@@ -2080,17 +2072,15 @@ export function buildApp(
     items: inboxItems,
     record: recordInboxEvent,
   });
-  const keychainApprovals = keychain
-    ? createKeychainApprovals({
-        keychain,
-        app,
-        identity,
-        sessions,
-        audit: auditLog,
-        outbound,
-        resume: (ask, grant) => askResolution!(ask, grant),
-      })
-    : undefined;
+  const keychainApprovals = createKeychainApprovals({
+    keychain,
+    app,
+    identity,
+    sessions,
+    audit: auditLog,
+    outbound,
+    resume: (ask, grant) => askResolution(ask, grant),
+  });
   const slackCore = createSlackCoreClient({
     identity,
     memory,
@@ -2206,19 +2196,14 @@ export function buildApp(
     },
     { intervalMs: config.reaperIntervalMs, leaderLease },
   );
-  orchestratorDeps.surfaceContext = createSurfaceContextPuller(
-    app,
-    keychain
-      ? {
-          searchToken: async (source, viewer) =>
-            source === "slack" && viewer
-              ? ((await keychain.connectorAccessToken("slack.com", viewer, "personal")) ??
-                (await keychain.connectorAccessToken("slack.com", viewer)) ??
-                keychain.connectorAccessToken("slack.com", viewer, "company"))
-              : null,
-        }
-      : {},
-  );
+  orchestratorDeps.surfaceContext = createSurfaceContextPuller(app, {
+    searchToken: async (source, viewer) =>
+      source === "slack" && viewer
+        ? ((await keychain.connectorAccessToken("slack.com", viewer, "personal")) ??
+          (await keychain.connectorAccessToken("slack.com", viewer)) ??
+          keychain.connectorAccessToken("slack.com", viewer, "company"))
+        : null,
+  });
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const triggerDeps = {
     outbound,
@@ -2229,20 +2214,18 @@ export function buildApp(
     resolveRecipient,
   };
   const scopedTriggerDeps = { ...triggerDeps, currentScopeMembers, sessions };
-  const askResolution = keychain
-    ? (ask: KeychainAsk, grant?: KeychainGrant) =>
-        fireAskResolution(
-          {
-            ...scopedTriggerDeps,
-            getCron: (id) => crons.get(id),
-            getAsk: (id) => keychain.getAsk(id),
-            getGrant: (id) => keychain.getGrant(id),
-          },
-          ask,
-          grant,
-        )
-    : undefined;
-  const dropResolution = keychain ? (drop: DropResolution) => fireDropResolution(triggerDeps, drop) : undefined;
+  const askResolution = (ask: KeychainAsk, grant?: KeychainGrant) =>
+    fireAskResolution(
+      {
+        ...scopedTriggerDeps,
+        getCron: (id) => crons.get(id),
+        getAsk: (id) => keychain.getAsk(id),
+        getGrant: (id) => keychain.getGrant(id),
+      },
+      ask,
+      grant,
+    );
+  const dropResolution = (drop: DropResolution) => fireDropResolution(triggerDeps, drop);
   const inbox: InboxServiceDeps = {
     lock: advisoryLock,
     items: inboxItems,
@@ -2252,8 +2235,7 @@ export function buildApp(
       trigger: scopedTriggerDeps,
     }),
   };
-  const sweepAsks =
-    keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
+  const sweepAsks = createAskExpirySweep({ keychain, fire: askResolution, auditLog });
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
@@ -2272,7 +2254,7 @@ export function buildApp(
     ...scopedTriggerDeps,
     leaderLease,
     jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
-    ...(sweepAsks ? { sweepAsks } : {}),
+    sweepAsks,
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
@@ -2313,7 +2295,7 @@ export function buildApp(
     app,
   );
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
+    finishProcessCredentials({ sandbox, processes: processes!, keychain }, handle, processId);
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
@@ -2701,12 +2683,12 @@ export function buildApp(
     composioReturns,
     workspace,
     memory,
-    ...(keychain ? { keychain } : {}),
+    keychain,
     serviceCreds,
     outbound,
-    ...(keychainApprovals ? { keychainApprovals } : {}),
-    ...(askResolution ? { fireAskResolution: askResolution } : {}),
-    ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
+    keychainApprovals,
+    fireAskResolution: askResolution,
+    fireDropResolution: dropResolution,
     sandbox,
     sandboxResources,
     advisoryLock,
@@ -2724,7 +2706,7 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     ...(appPageViews ? { appPageViews } : {}),
     monitors,
-    ...(browserSessionStore ? { browserSessionStore } : {}),
+    browserSessionStore,
     ...(monitorPoller ? { monitorPoller } : {}),
     ambientJudgments,
     ackEmojiPicks,
@@ -2794,7 +2776,7 @@ export function serverDeps(
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
-    ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
+    fireDropResolution: built.fireDropResolution,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
     ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
@@ -2831,10 +2813,10 @@ export function serverDeps(
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
     composioReturns: built.composioReturns,
-    ...(built.keychain ? { keychain: built.keychain } : {}),
+    keychain: built.keychain,
     serviceCreds: built.serviceCreds,
     outbound: built.outbound,
-    ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
+    keychainApprovals: built.keychainApprovals,
     runs: built.runs,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,
@@ -2854,27 +2836,23 @@ export function serverDeps(
     sandbox: built.sandbox,
     advisoryLock: built.advisoryLock,
     ...(built.processes ? { processes: built.processes } : {}),
-    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
+    browserSessionStore: built.browserSessionStore,
     directory: built.directory,
     ambientJudgments: built.ambientJudgments,
     ackEmojiPicks: built.ackEmojiPicks,
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain
-      ? {
-          inboxSourceTokens: built.keychain,
-          inboxSourceRefresh: createInboxSourceRefresh({
-            featureFlags: built.featureFlags,
-            items: built.inbox.items,
-            errors: built.errors,
-            record: built.inbox.record,
-            tokens: built.keychain,
-            directory: built.directory,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-          }),
-        }
-      : {}),
+    inboxSourceTokens: built.keychain,
+    inboxSourceRefresh: createInboxSourceRefresh({
+      featureFlags: built.featureFlags,
+      items: built.inbox.items,
+      errors: built.errors,
+      record: built.inbox.record,
+      tokens: built.keychain,
+      directory: built.directory,
+      ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+    }),
     inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
