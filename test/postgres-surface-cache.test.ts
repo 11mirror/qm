@@ -114,6 +114,40 @@ test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not
   }
 });
 
+test("pg surface-cache: one ingest batch folds container state and keeps the last file list", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    await cache.ingest([
+      { container: "CB1", ts: "1000.1", text: "a", createdAt: 1, containerName: "general", kind: "channel" },
+      { container: "CB1", ts: "999.1", text: "b", createdAt: 2, files: [{ fileId: "F1", name: "one.txt" }] },
+      {
+        container: "CB1",
+        ts: "999.1",
+        text: "b2",
+        editedAt: 5,
+        createdAt: 2,
+        files: [{ fileId: "F2", name: "two.txt" }],
+      },
+      { container: "CB2", ts: "5.0", text: "other", createdAt: 3 },
+    ]);
+    const st = await cache.containerState("CB1");
+    assert.equal(st?.oldestTs, "999.1");
+    assert.equal(st?.lastTs, "999.1", "last_ts keeps the text-wise greatest ts, as GREATEST always did");
+    assert.equal(st?.name, "general", "a later event without a name keeps the earlier one");
+    const msgs = await cache.readMessages("CB1", { noFallback: true });
+    const edited = msgs.find((m) => m.ts === "999.1")!;
+    assert.equal(edited.text, "b2");
+    assert.deepEqual(
+      edited.files?.map((f) => f.fileId),
+      ["F2"],
+      "the later accepted event replaces the message's files",
+    );
+    assert.equal((await cache.containerState("CB2"))?.lastTs, "5.0");
+  } finally {
+    await cache.close();
+  }
+});
+
 test("pg channel-policy: set + get + list", { skip }, async () => {
   const store = createPostgresChannelPolicyStore(URL!);
   try {

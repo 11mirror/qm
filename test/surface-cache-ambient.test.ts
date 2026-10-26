@@ -22,8 +22,8 @@ function freshApp() {
 }
 
 async function judged(store: any, container: string, ready: (rows: any[]) => boolean = (rows) => rows.length > 0) {
-  await settle(async () => ready(await listFull(store, { container })));
-  return listFull(store, { container });
+  await settle(async () => ready(await listFull(store, { scope: container })));
+  return listFull(store, { scope: container });
 }
 
 async function pollDeliveries(
@@ -215,9 +215,9 @@ test("no standing orders → an informal address does NOT engage (mention-only d
         createdAt: 1,
       },
     ]);
-    await settle(async () => (await built.ambientJudgments!.list({ container })).length > 0);
+    await settle(async () => (await built.ambientJudgments!.list({ scope: container })).length > 0);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "an unwatched room is mention-only");
-    const rows = await built.ambientJudgments!.list({ container });
+    const rows = await built.ambientJudgments!.list({ scope: container });
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.decision, "ignore");
     assert.match(rows[0]!.reason ?? "", /defaults off/);
@@ -309,9 +309,11 @@ test("a message that @mentions ANOTHER person (not the bot) is judged normally, 
       { name: "bot", mentionId: "UBOT" },
     );
     await settle(async () =>
-      (await listFull(built.ambientJudgments!, { container })).some((r: any) => r.decision === "ignore" && r.prompt),
+      (await listFull(built.ambientJudgments!, { scope: container })).some(
+        (r: any) => r.decision === "ignore" && r.prompt,
+      ),
     );
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.ok(
       rows.some((r: any) => r.decision === "ignore" && r.prompt),
       "the other-person mention was judged, not excluded",
@@ -445,14 +447,14 @@ test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
         createdAt: i + 1,
       })),
     );
-    await settle(async () => (await built.ambientJudgments!.list({ container })).length > 0);
+    await settle(async () => (await built.ambientJudgments!.list({ scope: container })).length > 0);
     await built.app.ingestSurfaceEvents([{ container, ts: "1013.0", authorId: "U13", text: "m13", createdAt: 13 }]);
     await settle(async () =>
-      (await listFull(built.ambientJudgments!, { container })).some(
+      (await listFull(built.ambientJudgments!, { scope: container })).some(
         (r: any) => r.prompt?.includes("m13") && r.prompt?.includes("EARLIER CONTEXT"),
       ),
     );
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     const last = rows.find((r: any) => r.prompt?.includes("m13") && r.prompt?.includes("EARLIER CONTEXT"))!;
     const backdrop = last.prompt!.slice(last.prompt!.indexOf("EARLIER CONTEXT"), last.prompt!.indexOf("NEW MESSAGES"));
     const backdropCount = (backdrop.match(/^U\d+: m\d+$/gm) ?? []).length;
@@ -471,7 +473,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.decision, "act");
     assert.ok(rows[0]!.prompt && rows[0]!.prompt.includes("NEW MESSAGES"));
@@ -495,7 +497,7 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.model, "claude-sonnet-5", "the judge model is recorded, not the detect model");
   } finally {
@@ -512,7 +514,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.model, "gpt-5.6-luna", "the auxiliary follows the configured base model's provider");
   } finally {
@@ -530,7 +532,7 @@ test("an admin-set org base model drives the auxiliary, not just the PI_MODEL en
     await built.app.setChannelPolicy(container, "!engage !post ahoy", "U-admin");
     await built.app.ingestSurfaceEvents([{ container, ts: "5.0", authorId: "U1", text: "need help", createdAt: 5 }]);
     await pollDeliveries(built.posts);
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(
       rows[0]!.model,
@@ -554,9 +556,9 @@ test("a formal-mention fastlane records a fastlane row (§2.2)", async () => {
       { name: "bot", mentionId: "UBOT" },
     );
     await settle(async () =>
-      (await listFull(built.ambientJudgments!, { container })).some((r: any) => r.decision === "fastlane"),
+      (await listFull(built.ambientJudgments!, { scope: container })).some((r: any) => r.decision === "fastlane"),
     );
-    const rows = await listFull(built.ambientJudgments!, { container });
+    const rows = await listFull(built.ambientJudgments!, { scope: container });
     assert.ok(
       rows.some((r: any) => r.decision === "fastlane"),
       "the mention-routed batch recorded a fastlane row",
@@ -611,7 +613,7 @@ test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and
     await sleep(300);
     assert.equal(((await built.posts.pending("slack")) as any[]).length, 0, "an ignored bot never triggers a post");
     assert.equal(
-      (await built.ambientJudgments!.list({ container })).length,
+      (await built.ambientJudgments!.list({ scope: container })).length,
       0,
       "an ignored-bot-only delta records no judgment row",
     );
@@ -638,11 +640,11 @@ test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag;
     ]);
     await settle(async () => {
       for (const container of ["C-botact", "C-botuser", "C-botunlisted"]) {
-        if (!(await listFull(built.ambientJudgments!, { container }))[0]?.prompt) return false;
+        if (!(await listFull(built.ambientJudgments!, { scope: container }))[0]?.prompt) return false;
       }
       return true;
     });
-    const act = (await listFull(built.ambientJudgments!, { container: "C-botact" }))[0]!;
+    const act = (await listFull(built.ambientJudgments!, { scope: "C-botact" }))[0]!;
     assert.ok(
       act.prompt!.includes('Posts from bot "DeployBot" are triggers you should act on.'),
       "action bot is tagged as a trigger",
@@ -651,10 +653,10 @@ test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag;
       act.prompt!.includes("DeployBot (bot): deploy finished"),
       "action bot still renders with the (bot) suffix",
     );
-    const user = (await listFull(built.ambientJudgments!, { container: "C-botuser" }))[0]!;
+    const user = (await listFull(built.ambientJudgments!, { scope: "C-botuser" }))[0]!;
     assert.ok(user.prompt!.includes("HelperBot: hello team"), "a user-mode bot renders like a person");
     assert.ok(!user.prompt!.includes("HelperBot (bot)"), "a user-mode bot sheds the (bot) suffix");
-    const unlisted = (await listFull(built.ambientJudgments!, { container: "C-botunlisted" }))[0]!;
+    const unlisted = (await listFull(built.ambientJudgments!, { scope: "C-botunlisted" }))[0]!;
     assert.ok(unlisted.prompt!.includes("RandomBot (bot): beep boop"), "an unlisted bot keeps the (bot) suffix");
   } finally {
     await built.runtime.stop();
@@ -670,14 +672,18 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "NewsBot", text: "item 1", bot: true, createdAt: 1 },
     ]);
-    await settle(async () => (await built.ambientJudgments!.list({ container })).length > 0);
-    assert.equal((await built.ambientJudgments!.list({ container })).length, 1, "the first rollup post is judged");
+    await settle(async () => (await built.ambientJudgments!.list({ scope: container })).length > 0);
+    assert.equal(
+      (await built.ambientJudgments!.list({ scope: container })).length,
+      1,
+      "the first rollup post is judged",
+    );
     await built.app.ingestSurfaceEvents([
       { container, ts: "2.0", authorName: "NewsBot", text: "item 2", bot: true, createdAt: 2 },
     ]);
     await sleep(300);
     assert.equal(
-      (await built.ambientJudgments!.list({ container })).length,
+      (await built.ambientJudgments!.list({ scope: container })).length,
       1,
       "a rollup-only delta within the window is held (no new row)",
     );

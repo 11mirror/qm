@@ -1,3 +1,4 @@
+import type { DecisionLogStore } from "../../../surface-cache/decision-log-store.ts";
 import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
 import { badRequest, limitParam, notFound, orgAdmin } from "./common.ts";
@@ -80,20 +81,13 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, mode: "timeline", container, messages, hasMore, limit });
 }
 
-interface DecisionLog {
-  get(id: number): Promise<object | null>;
-  list(opts: { limit: number }): Promise<object[]>;
-  counts(opts?: { container?: string; channel?: string }): Promise<object>;
-}
-
-async function listDecisionLog(
+async function listDecisionLog<Outcome extends string>(
   ctx: ApiCtx,
-  store: DecisionLog | undefined,
+  store: DecisionLogStore<object, Outcome, object> | undefined,
   log: {
     action: string;
-    filter: string;
     param: string;
-    values: readonly string[];
+    values: readonly Outcome[];
     one: string;
     many: string;
     empty: object;
@@ -116,15 +110,15 @@ async function listDecisionLog(
   const values = (url.searchParams.get(log.param) ?? "")
     .split(",")
     .map((d) => d.trim())
-    .filter((d) => log.values.includes(d));
+    .filter((d): d is Outcome => (log.values as readonly string[]).includes(d));
   const before = Math.floor(Number(url.searchParams.get("before"))) || undefined;
   const beforeId = Math.floor(Number(url.searchParams.get("beforeId"))) || undefined;
   const limit = limitParam(url, 100, 200);
-  const where = container ? { [log.filter]: container } : {};
+  const where = container ? { scope: container } : {};
   const [rows, counts] = await Promise.all([
     store.list({
       ...where,
-      ...(values.length ? { [log.param]: values } : {}),
+      ...(values.length ? { outcomes: values } : {}),
       ...(before ? { before } : {}),
       ...(beforeId ? { beforeId } : {}),
       limit: limit + 1,
@@ -144,7 +138,6 @@ async function listDecisionLog(
 export const listAmbientJudgments = (ctx: ApiCtx): Promise<void> =>
   listDecisionLog(ctx, ctx.deps.ambientJudgments, {
     action: "ambient_judgments",
-    filter: "container",
     param: "decision",
     values: ["act", "ignore", "fastlane"],
     one: "judgment",
@@ -155,7 +148,6 @@ export const listAmbientJudgments = (ctx: ApiCtx): Promise<void> =>
 export const listAckEmojiPicks = (ctx: ApiCtx): Promise<void> =>
   listDecisionLog(ctx, ctx.deps.ackEmojiPicks, {
     action: "ack_emoji_picks",
-    filter: "channel",
     param: "outcome",
     values: ["picked", "declined"],
     one: "pick",
