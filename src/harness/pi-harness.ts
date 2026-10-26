@@ -1,19 +1,18 @@
+import { finishTurn } from "./turn-finish.ts";
 import { watchTurnSignals, type TurnStop } from "./turn-signals.ts";
 import { createTurnRecovery } from "./turn-recovery.ts";
 import {
   piFailedAssistant,
   FALLBACK_CODES,
   documentsDroppedNote,
-  piLastAssistantTextOrThrow,
   piRoundFailed,
   piTurnError,
   refusalFallbackModelId,
   type AssistantTextSession,
 } from "./turn-recovery.ts";
-import { createCallTelemetry, sumCacheUsage } from "./call-telemetry.ts";
+import { createCallTelemetry } from "./call-telemetry.ts";
 import {
   recordSteerIntake,
-  recordStoppedTurn,
   imageRefs,
   resumeInterruptedToolCall,
   type BridgedTool,
@@ -127,7 +126,6 @@ import { errMessage } from "../util/errors.ts";
 import { createGrindMeter } from "./grind.ts";
 import {
   createFloorCapPolicy,
-  bankGoalTurn,
   enforceGoal,
   goalPausedNote,
   goalSteeringNote,
@@ -632,7 +630,7 @@ export function sanitizeLlmPayload(
   return withTransport({ envelope: redacted, truncated: false });
 }
 
-function textFromContent(content: unknown): string {
+export function textFromContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
@@ -1520,12 +1518,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         let wallClock!: TurnWallClockOutcome;
         const messagesBefore = entry.agentSession.messages.length;
         entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
-        const freshAssistantStopReason = (): string | undefined => {
-          const fresh = entry.agentSession.messages.slice(messagesBefore);
-          const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
-            { stopReason?: string } | undefined;
-          return last?.stopReason;
-        };
         const stop: TurnStop = { userAborted: false };
         let recoveryDead = false;
         entry.ref.abortSignal = toolAbort.signal;
@@ -1698,82 +1690,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
-        const settleGoal = async (pause = false): Promise<void> => {
-          const g = entry.ref.goal;
-          if (!g) return;
-          bankGoalTurn(g, grindMeter.startedAt);
-          if (pause && g.status === "active") {
-            g.status = "paused";
-            g.updatedAt = Date.now();
-          }
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        };
-        if (entry.ref.runtimeHandoff && !stop.userAborted && !turn.cancel?.aborted) {
-          steps.flush();
-          await thinkTail;
-          if (persistError) throw persistError;
-          await settleGoal();
-          return {
-            reply: "",
-            runtimeHandoff: entry.ref.runtimeHandoff,
-            modelCalls: entry.ref.modelCalls ?? 0,
-            cacheUsage: sumCacheUsage(callStats) ?? undefined,
-          };
-        }
-        const freshStopReason = freshAssistantStopReason();
-        const cancelStoppedCleanly =
-          turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
-        if (stop.userAborted || cancelStoppedCleanly) {
-          const freshMessages = entry.agentSession.messages.slice(messagesBefore);
-          const lastFreshAssistant = [...freshMessages]
-            .reverse()
-            .find((m) => (m as { role?: string }).role === "assistant");
-          const partial = lastFreshAssistant
-            ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
-            : "";
-          const reply = partial.trim() ? partial : "(stopped)";
-          await settleGoal(stop.userAborted);
-          await recordStoppedTurn(
-            turn,
-            partial,
-            stop.userAborted ? stop.abortReason : "because the run was cancelled",
-            steps.closing(reply),
-          );
-          const cacheUsage = sumCacheUsage(callStats);
-          const base = {
-            reply,
-            stopped: true as const,
-            modelCalls: entry.ref.modelCalls ?? 0,
-          };
-          return cacheUsage ? { ...base, cacheUsage } : base;
-        }
-
-        await settleGoal();
-        const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-        // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
-        const reply = entry.ref.silentRequested ? "" : closingText;
-        const closing = steps.closing(reply);
-        await turn.emit({
-          kind: "AgentMessage",
-          text: reply,
-          step: closing?.step ?? null,
-          body: closing?.body ?? {},
+        return await finishTurn({
+          turn,
+          entry,
+          steps,
+          grindMeter,
+          stop,
+          callStats,
+          messagesBefore,
+          recoveryDead,
+          settled: async () => {
+            await thinkTail;
+            if (persistError) throw persistError;
+          },
         });
-        const pendingApprovals = entry.ref.pendingApprovals ?? [];
-        const modelCalls = entry.ref.modelCalls ?? 0;
-        const cacheUsage = sumCacheUsage(callStats);
-        const silent = entry.ref.silentRequested ? { silent: true as const } : {};
-        const base = pendingApprovals.length
-          ? {
-              reply,
-              pendingApprovals,
-              ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
-              modelCalls,
-              ...silent,
-            }
-          : { reply, modelCalls, ...silent };
-        return cacheUsage ? { ...base, cacheUsage } : base;
       } finally {
         removeIsolatedDirs(entry);
       }
