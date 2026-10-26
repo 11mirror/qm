@@ -135,6 +135,10 @@ export interface ToolContextRef {
   approvedToolCalls?: Map<string, string>;
 }
 
+const optionalString = (description: string) => Type.Optional(Type.String({ description }));
+const optionalBoolean = (description: string) => Type.Optional(Type.Boolean({ description }));
+const optionalInteger = (description: string) => Type.Optional(Type.Integer({ description }));
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }], details: {} };
 }
@@ -603,11 +607,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
-    background: Type.Optional(
-      Type.Boolean({
-        description:
-          "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
-      }),
+    background: optionalBoolean(
+      "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
     ),
     sandbox_id: Type.Optional(
       Type.String({
@@ -871,7 +872,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        durable: Type.Optional(Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored when reaching a room.` })),
+        durable: optionalBoolean(`${DURABLE_PARAM_DESC} Ignored when reaching a room.`),
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
@@ -910,8 +911,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "Exact sandbox ID; null is allowed only for set_default.",
         }),
       ),
-      backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
-      name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
+      backend: optionalString("create only: provider from list."),
+      name: optionalString("create only: human-readable name."),
       purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
     }),
     async execute(callId, params) {
@@ -1003,11 +1004,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(search
           ? { query: Type.String({ minLength: 1, description: "Words to find in skill names or descriptions." }) }
           : {}),
-        source: Type.Optional(
-          Type.String({
-            description:
-              "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
-          }),
+        source: optionalString(
+          "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
         ),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -1035,15 +1033,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Load a skill by name before relying on it; use list or search for any left out of the per-turn index. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name from the skills index, list, or search." }),
-      source: Type.Optional(
-        Type.String({ description: "Use the same source as the discovery call to read that exact skill." }),
-      ),
-      path: Type.Optional(
-        Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
-      ),
-      sandbox_id: Type.Optional(
-        Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
-      ),
+      source: optionalString("Use the same source as the discovery call to read that exact skill."),
+      path: optionalString("Relative file within the skill to return instead of SKILL.md."),
+      sandbox_id: optionalString("Sync the skill's files into this sandbox instead of the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1215,40 +1207,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
       "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
-      dir: Type.Optional(
-        Type.String({
-          description:
-            "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
-        }),
+      dir: optionalString(
+        "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
       ),
-      entrypoint: Type.Optional(
-        Type.String({
-          description:
-            'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
-        }),
+      entrypoint: optionalString(
+        'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
       ),
-      name: Type.Optional(
-        Type.String({
-          description: "Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens.",
-        }),
-      ),
-      renameFrom: Type.Optional(
-        Type.String({ description: "Existing deployment name to rename to `name`; this is a name, not an ID." }),
-      ),
+      name: optionalString("Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens."),
+      renameFrom: optionalString("Existing deployment name to rename to `name`; this is a name, not an ID."),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:
             "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
         }),
       ),
-      rollbackTo: Type.Optional(
-        Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
-      ),
-      alwaysOn: Type.Optional(
-        Type.Boolean({
-          description:
-            "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
-        }),
+      rollbackTo: optionalInteger("Flip the deployment named `name` back to this version number."),
+      alwaysOn: optionalBoolean(
+        "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
       ),
       embedAncestors: Type.Optional(
         Type.Array(Type.String(), {
@@ -1336,20 +1311,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ],
         { description: "search facts, read this notebook, or add, edit, or delete facts." },
       ),
-      query: Type.Optional(
-        Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
-      scope: Type.Optional(
-        Type.String({
-          description:
-            "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
-        }),
+      query: optionalString("search only: words to look for among your remembered facts (all must match)."),
+      limit: optionalInteger("search only: max facts to return (default 20)."),
+      scope: optionalString(
+        "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
       ),
       facts: Type.Optional(
         Type.Array(
           Type.Object({
-            id: Type.Optional(Type.String({ description: "edit only: the fact's id, e.g. #42." })),
+            id: optionalString("edit only: the fact's id, e.g. #42."),
             text: Type.String({
               description: "one short self-contained fact — a pointer to data, never the data itself.",
             }),
@@ -1470,13 +1440,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "kind#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
       "to follow a kind#seq pointer from a search hit or an earlier-conversation summary.",
     parameters: Type.Object({
-      query: Type.Optional(
-        Type.String({ description: "Words to look for in this conversation's transcript (all must match)." }),
-      ),
-      seq: Type.Optional(
-        Type.Integer({ description: "Reopen the single entry with this seq in full, instead of searching." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "Max entries to return (default 20, query mode only)." })),
+      query: optionalString("Words to look for in this conversation's transcript (all must match)."),
+      seq: optionalInteger("Reopen the single entry with this seq in full, instead of searching."),
+      limit: optionalInteger("Max entries to return (default 20, query mode only)."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1551,35 +1517,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("followup_task"),
         Type.Literal("wait"),
       ]),
-      requestId: Type.Optional(
-        Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
+      requestId: optionalString("open: stable request key to reuse when retrying the same delegation."),
+      task: optionalString("open and followup_task: the short task brief, with relevant context and real limits."),
+      name: optionalString("open: short title for the subagent (default: from task)."),
+      noComputer: optionalBoolean(
+        "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
       ),
-      task: Type.Optional(
-        Type.String({
-          description: "open and followup_task: the short task brief, with relevant context and real limits.",
-        }),
+      model: optionalString("open: model override; fails closed if unavailable."),
+      thinkingLevel: optionalString("open: reasoning effort override."),
+      fastMode: optionalBoolean("open: fast mode override."),
+      target: optionalString(
+        "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
       ),
-      name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
-      noComputer: Type.Optional(
-        Type.Boolean({
-          description:
-            "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
-        }),
-      ),
-      model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode override." })),
-      target: Type.Optional(
-        Type.String({
-          description:
-            "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
-        }),
-      ),
-      text: Type.Optional(Type.String({ description: "send_message: the message to deliver." })),
-      interrupt: Type.Optional(
-        Type.Boolean({ description: "send_message: abort the target's current run instead of delivering text." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+      text: optionalString("send_message: the message to deliver."),
+      interrupt: optionalBoolean("send_message: abort the target's current run instead of delivering text."),
+      limit: optionalInteger("read: max transcript entries to show (default 30)."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1730,18 +1682,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("new"),
         Type.Literal("fork"),
       ]),
-      query: Type.Optional(Type.String({ description: "search: words to find across visible conversations." })),
-      target: Type.Optional(Type.String({ description: "read and send_message: a sessionId from list." })),
-      text: Type.Optional(
-        Type.String({
-          description:
-            "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
-        }),
+      query: optionalString("search: words to find across visible conversations."),
+      target: optionalString("read and send_message: a sessionId from list."),
+      text: optionalString(
+        "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
       ),
-      title: Type.Optional(Type.String({ description: "new and fork: optional sidebar title." })),
-      limit: Type.Optional(
-        Type.Integer({ description: "read: max entries (default 30). search: max matches (default 20, maximum 100)." }),
-      ),
+      title: optionalString("new and fork: optional sidebar title."),
+      limit: optionalInteger("read: max entries (default 30). search: max matches (default 20, maximum 100)."),
     }),
     async execute(callId, params) {
       const syscalls = ref.current?.sessionSyscalls;
@@ -1936,20 +1883,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
       ),
-      purpose: Type.Optional(
-        Type.String({
-          description:
-            "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
-        }),
+      purpose: optionalString(
+        "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
       ),
-      process_id: Type.Optional(
-        Type.String({ description: "poll/send_input/stop/watch only: the process_id execute returned." }),
-      ),
-      data: Type.Optional(
-        Type.String({
-          description:
-            "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
-        }),
+      process_id: optionalString("poll/send_input/stop/watch only: the process_id execute returned."),
+      data: optionalString(
+        "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
       ),
       since_cursor: Type.Optional(
         Type.Integer({
@@ -1958,18 +1897,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
         }),
       ),
-      pattern: Type.Optional(
-        Type.String({
-          description:
-            'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
-        }),
+      pattern: optionalString(
+        'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
       ),
-      instructions: Type.Optional(
-        Type.String({
-          description: "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
-        }),
+      instructions: optionalString(
+        "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
       ),
-      monitor_id: Type.Optional(Type.String({ description: "unwatch only: the monitor id watch returned." })),
+      monitor_id: optionalString("unwatch only: the monitor id watch returned."),
       wait_seconds: Type.Optional(
         Type.Integer({
           minimum: 0,
@@ -2239,55 +2173,29 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, retarget where it delivers, or note — leave a short shift-change note for its next fire.",
         },
       ),
-      id: Type.Optional(
-        Type.String({ description: "get/runs/patch/delete/run/disable/retarget/note only: the cron id." }),
-      ),
-      title: Type.Optional(
-        Type.String({
-          description:
-            'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
-        }),
+      id: optionalString("get/runs/patch/delete/run/disable/retarget/note only: the cron id."),
+      title: optionalString(
+        'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
       ),
       schedule: Type.Optional(
         Type.Object(
           {
-            cron: Type.Optional(
-              Type.String({ description: "5-field cron expression: minute hour day-of-month month day-of-week." }),
+            cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
+            timezone: optionalString('IANA timezone for a cron schedule, e.g. "America/Los_Angeles".'),
+            everyMs: optionalInteger(
+              "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
             ),
-            timezone: Type.Optional(
-              Type.String({ description: 'IANA timezone for a cron schedule, e.g. "America/Los_Angeles".' }),
-            ),
-            everyMs: Type.Optional(
-              Type.Integer({
-                description:
-                  "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
-              }),
-            ),
-            firstFireAt: Type.Optional(
-              Type.Integer({
-                description: "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
-              }),
+            firstFireAt: optionalInteger(
+              "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
             ),
           },
           { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
         ),
       ),
-      task: Type.Optional(
-        Type.String({
-          description: "create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text.",
-        }),
-      ),
-      text: Type.Optional(
-        Type.String({
-          description: "create/patch: exact words to send verbatim (a reminder/relay). Use this OR task.",
-        }),
-      ),
-      recipient: Type.Optional(
-        Type.String({
-          description: "create: a teammate's name to DM (core resolves it; you can't author a raw address).",
-        }),
-      ),
-      channel: Type.Optional(Type.String({ description: "create: a channel name to post to (core resolves it)." })),
+      task: optionalString("create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text."),
+      text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
+      recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
+      channel: optionalString("create: a channel name to post to (core resolves it)."),
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
@@ -2300,20 +2208,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create: a group DM's other member ids (you're added automatically); a group DM has no name, so core matches it by exact membership, and the group must already exist — reach it once first, which opens it.",
         }),
       ),
-      destinationKey: Type.Optional(
-        Type.String({ description: 'create/retarget: a key from the "Where scheduled tasks post" menu.' }),
+      destinationKey: optionalString('create/retarget: a key from the "Where scheduled tasks post" menu.'),
+      session: optionalBoolean(
+        "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
       ),
-      session: Type.Optional(
-        Type.Boolean({
-          description:
-            "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
-        }),
-      ),
-      unfurlLinks: Type.Optional(
-        Type.Boolean({
-          description:
-            "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-        }),
+      unfurlLinks: optionalBoolean(
+        "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
       ),
       note: Type.Optional(
         Type.String({
@@ -2345,14 +2245,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
         }),
       ),
-      inbox: Type.Optional(
-        Type.Boolean({
-          description:
-            "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
-        }),
+      inbox: optionalBoolean(
+        "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
       ),
-      enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
-      archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
+      enabled: optionalBoolean("patch only: false pauses the cron, true resumes it."),
+      archived: optionalBoolean("patch only: true archives the cron."),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -2571,12 +2468,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create an inbound webhook, list yours, update one's task in place by id (URL and secret unchanged), or disable one by id.",
         },
       ),
-      id: Type.Optional(Type.String({ description: "update and disable: the webhook id." })),
-      task: Type.Optional(
-        Type.String({
-          description: "create and update: what to do on each event (the payload is appended automatically).",
-        }),
-      ),
+      id: optionalString("update and disable: the webhook id."),
+      task: optionalString("create and update: what to do on each event (the payload is appended automatically)."),
       verification: Type.Optional(
         Type.Object(
           {
@@ -2602,9 +2495,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { description: "create only: skip the turn unless the event matches (cheap pre-gating)." },
         ),
       ),
-      destinationKey: Type.Optional(
-        Type.String({ description: 'create only: a key from the "Where scheduled tasks post" menu.' }),
-      ),
+      destinationKey: optionalString('create only: a key from the "Where scheduled tasks post" menu.'),
       limit: Type.Optional(Type.Integer({ minimum: 1, description: "list only: page size (default 25, max 100)." })),
       offset: Type.Optional(
         Type.Integer({
@@ -2711,11 +2602,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     parameters: Type.Object({
       action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: Type.Optional(Type.String({ description: "replace: the full new guidance for the scope." })),
-      old: Type.Optional(
-        Type.String({ description: "edit: an exact passage that appears once in the scope's current guidance." }),
-      ),
-      new: Type.Optional(Type.String({ description: "edit: the text that takes the place of `old`." })),
+      content: optionalString("replace: the full new guidance for the scope."),
+      old: optionalString("edit: an exact passage that appears once in the scope's current guidance."),
+      new: optionalString("edit: the text that takes the place of `old`."),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
@@ -2890,28 +2779,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
         toScope:
           type === "deploy" && !move
-            ? Type.Optional(
-                Type.String({
-                  description:
-                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
-                }),
+            ? optionalString(
+                'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
               )
             : Type.String({
                 description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
               }),
         ...(type === "deploy" && !move
           ? {
-              email: Type.Optional(
-                Type.String({
-                  description:
-                    "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
-                }),
+              email: optionalString(
+                "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
               ),
-              public: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
-                }),
+              public: optionalBoolean(
+                "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
               ),
             }
           : {}),
@@ -3123,39 +3003,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               : ""),
         }),
       ),
-      channel: Type.Optional(
-        Type.String({
-          description:
-            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
-        }),
+      channel: optionalString(
+        "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
       ),
-      recipient: Type.Optional(Type.String({ description: "reach: DM this teammate (by name). NOT valid on post." })),
+      recipient: optionalString("reach: DM this teammate (by name). NOT valid on post."),
       participants: Type.Optional(
         Type.Array(Type.String(), {
           description:
             "reach: send to the group DM whose other members are exactly these (a group DM has no name; it's opened if it doesn't exist yet, so never ask someone to create one). react/edit/delete: the group DM the target message is in.",
         }),
       ),
-      ts: Type.Optional(
-        Type.String({
-          description:
-            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
-        }),
+      ts: optionalString(
+        "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
       ),
-      broadcast: Type.Optional(
-        Type.Boolean({
-          description:
-            "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
-        }),
+      broadcast: optionalBoolean(
+        "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
       ),
       sandbox_id: outboundSandboxSchema,
       files: Type.Optional(outboundFilesSchema),
-      emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
-      ref: Type.Optional(
-        Type.String({
-          description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
-        }),
+      emoji: optionalString('react: emoji name without colons (e.g. "eyes", "tada").'),
+      ref: optionalString(
+        "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
       ),
       limit: Type.Optional(
         Type.Integer({
@@ -3164,7 +3032,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "read_thread: how many recent messages to fetch. search: max hits to return (default: a small window).",
         }),
       ),
-      query: Type.Optional(Type.String({ description: "search: words to look for in this place's messages." })),
+      query: optionalString("search: words to look for in this place's messages."),
       source: Type.Optional(
         Type.Union([Type.Literal("mirror"), Type.Literal("slack")], {
           description:
@@ -3177,11 +3045,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
         }),
       ),
-      since: Type.Optional(
-        Type.String({
-          description:
-            "whats_new: only count what's newer than this message marker (from an earlier pull). Omit for the recent window.",
-        }),
+      since: optionalString(
+        "whats_new: only count what's newer than this message marker (from an earlier pull). Omit for the recent window.",
       ),
     }),
     async execute(callId, params) {
@@ -3514,11 +3379,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "this is not needed. Keeps the audit log and any messages already posted. " +
       "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({
-          description:
-            "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
-        }),
+      reason: optionalString(
+        "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
       ),
     }),
     async execute(callId, params) {
@@ -3947,12 +3809,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Inspect or change your model, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
-      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
-      effort: Type.Optional(
-        Type.String({
-          description:
-            "Use modelCatalog[modelId].effortLevels from get. adaptive = native Auto; default = provider default; auto = legacy default, not adaptive reasoning.",
-        }),
+      model: optionalString("Model ID or exact display name from get, such as Astra."),
+      effort: optionalString(
+        "Use modelCatalog[modelId].effortLevels from get. adaptive = native Auto; default = provider default; auto = legacy default, not adaptive reasoning.",
       ),
       fastMode: Type.Optional(Type.Boolean()),
       lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
@@ -4129,11 +3988,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
 const RETRY_SAFE_FIELD = "retrySafe";
 
-const RETRY_SAFE_SCHEMA = Type.Optional(
-  Type.Boolean({
-    description:
-      "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
-  }),
+const RETRY_SAFE_SCHEMA = optionalBoolean(
+  "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
 );
 const RERUN_INPUT_MAX_CHARS = 4_000;
 
