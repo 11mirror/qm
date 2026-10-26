@@ -28,12 +28,18 @@ async function withStores(fn: (store: SessionStore) => Promise<void>): Promise<v
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  let failure: unknown;
   try {
     await fn(createPostgresSessionStore(url.toString()));
-  } finally {
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
+  } catch (error) {
+    failure = error;
   }
+  const cleanup = await Promise.allSettled([admin.query(`DROP SCHEMA ${schema} CASCADE`).finally(() => admin.end())]);
+  const cleanupErrors = cleanup.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : []));
+  if (failure !== undefined && cleanupErrors.length)
+    throw new AggregateError([failure, ...cleanupErrors], "test and cleanup failed");
+  if (failure !== undefined) throw failure;
+  if (cleanupErrors.length) throw cleanupErrors[0];
 }
 
 test("an imported transcript becomes a private web conversation with its original times", async () => {
