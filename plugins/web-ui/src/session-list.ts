@@ -11,7 +11,7 @@ import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
-type RecentGroupKind = "personal" | "project" | "channel" | "group";
+export type RecentGroupKind = "personal" | "project" | "channel" | "group";
 
 export interface RecentProjectSeed {
   scopeId: string;

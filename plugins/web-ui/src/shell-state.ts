@@ -56,3 +56,11 @@ export function canView(view: View): boolean {
   if (view === "inbox" || view === "calendar") return can("inbox");
   return true;
 }
+
+export function quietly<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
+}

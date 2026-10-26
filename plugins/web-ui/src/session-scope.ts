@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
+import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket, type IconNode } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
@@ -32,14 +32,8 @@ const toolCountInFlight = new Set<string>();
 const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<number>>> = {
   crons: async (scope) => {
     const r = await api<{ crons?: CronLite[]; visible?: CronLite[] }>("/api/crons");
-    const seen = new Set<string>();
-    let count = 0;
-    for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
-    }
-    return count;
+    const unique = new Map([...(r.visible ?? []), ...(r.crons ?? [])].map((c) => [c.id, c]));
+    return [...unique.values()].filter((c) => c.ownerScopeId === scope && c.enabled && !c.archived).length;
   },
   apps: async (scope) => {
     const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
@@ -71,6 +65,15 @@ export function scopeToolCount(tool: SessionTool, scope: string, onReady: () => 
 }
 
 export type SessionTool = "crons" | "files" | "memory" | "apps" | "skills" | "keychain";
+
+export const SESSION_TOOLS: { tool: SessionTool; glyph: IconNode; label: string }[] = [
+  { tool: "crons", glyph: Clock3, label: "Crons" },
+  { tool: "apps", glyph: Rocket, label: "Apps" },
+  { tool: "files", glyph: Files, label: "Files" },
+  { tool: "skills", glyph: Box, label: "Skills" },
+  { tool: "memory", glyph: Brain, label: "Memory" },
+  { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
+];
 
 export interface SessionTopbarOpts {
   sessionId?: string | null;
@@ -120,37 +123,9 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
         : nothing
     }
   `;
-  const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
+  const countTpl = (t: SessionTool) => {
     const count = t === "crons" || t === "apps" ? (o.toolCount?.(t) ?? null) : null;
-    return html`
-      <button
-        class="session-tool ${o.activeTool === t ? "active" : ""}"
-        type="button"
-        aria-label=${hint}
-        ${tip(hint)}
-        @click=${() => o.onTool(t)}
-      >
-        ${icon(glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-      </button>
-    `;
-  };
-  const sheetTool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
-    const count = t === "crons" || t === "apps" ? (o.toolCount?.(t) ?? null) : null;
-    return html`
-      <button
-        class="menu-option ${o.activeTool === t ? "active" : ""}"
-        type="button"
-        role="menuitem"
-        @click=${() => {
-          closeFormMenus();
-          o.onTool(t);
-        }}
-      >
-        ${icon(glyph, 17)}
-        <span class="menu-option-copy"><span class="menu-option-label">${hint}</span></span>
-        ${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-      </button>
-    `;
+    return count ? html`<span class="session-tool-count">${count}</span>` : nothing;
   };
   return html`
     <header class="chat-topbar session-topbar">
@@ -176,9 +151,19 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading">${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, "Crons")} ${tool("apps", Rocket, "Apps")} ${tool("files", Files, "Files")}
-        ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}
-        ${tool("keychain", KeyRound, "Your keychain")}
+        ${SESSION_TOOLS.map(
+          ({ tool, glyph, label }) => html`
+            <button
+              class="session-tool ${o.activeTool === tool ? "active" : ""}"
+              type="button"
+              aria-label=${label}
+              ${tip(label)}
+              @click=${() => o.onTool(tool)}
+            >
+              ${icon(glyph, 15)}${countTpl(tool)}
+            </button>
+          `,
+        )}
       </div>
       <div class="topbar-actions form-menu-control session-tools-more" data-align="right" data-drop="down">
         <button
@@ -193,9 +178,23 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
         </button>
         <div class="menu-popover" role="menu" hidden>
           <div class="menu-title">This conversation's workspace</div>
-          ${sheetTool("crons", Clock3, "Crons")} ${sheetTool("apps", Rocket, "Apps")}
-          ${sheetTool("files", Files, "Files")} ${sheetTool("skills", Box, "Skills")}
-          ${sheetTool("memory", Brain, "Memory")} ${sheetTool("keychain", KeyRound, "Your keychain")}
+          ${SESSION_TOOLS.map(
+            ({ tool, glyph, label }) => html`
+              <button
+                class="menu-option ${o.activeTool === tool ? "active" : ""}"
+                type="button"
+                role="menuitem"
+                @click=${() => {
+                  closeFormMenus();
+                  o.onTool(tool);
+                }}
+              >
+                ${icon(glyph, 17)}
+                <span class="menu-option-copy"><span class="menu-option-label">${label}</span></span>
+                ${countTpl(tool)}
+              </button>
+            `,
+          )}
         </div>
       </div>
     </header>
