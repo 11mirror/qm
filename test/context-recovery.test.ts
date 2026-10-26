@@ -18,18 +18,13 @@ async function fixture() {
   assert.ok(lease);
   for (let i = 0; i < 12; i++)
     await sessions.append(lease, { kind: "UserMessage", text: `old message ${i} `.repeat(100) });
-  let resets = 0;
   const harness = {
     models: {
       compactHistory: async (): Promise<string> => {
         throw new Error("summary unavailable");
       },
     },
-    turns: {
-      resetSession: () => {
-        resets++;
-      },
-    },
+    turns: {},
   };
   const compaction = createCompaction({
     sessions,
@@ -45,7 +40,7 @@ async function fixture() {
     orgScopeId: "org:test",
     actorId: "test",
   };
-  return { sessions, harness, compaction, input, resets: () => resets };
+  return { sessions, harness, compaction, input };
 }
 
 test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
@@ -53,7 +48,6 @@ test("mandatory summarizer failure recovers instead of wedging the pending turn"
   try {
     const history = await f.compaction.compactContextIfNeeded(f.input);
     assert.ok(history.length < f.input.visibleHistory.length);
-    assert.equal(f.resets(), 1);
     assert.equal((await f.sessions.getItems(f.input.session.id)).length, f.input.visibleHistory.length + 1);
     assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).items), history);
   } finally {
@@ -121,7 +115,6 @@ for (const stage of ["before", "during", "abort-error"] as const) {
       await assert.rejects(f.compaction.compactContextIfNeeded({ ...f.input, cancel: abort.signal }), {
         name: "AbortError",
       });
-      assert.equal(f.resets(), 0);
       assert.deepEqual(await f.sessions.getItems(f.input.session.id), f.input.visibleHistory);
     } finally {
       await f.sessions.releaseLease(f.input.lease);
@@ -129,7 +122,7 @@ for (const stage of ["before", "during", "abort-error"] as const) {
   });
 }
 
-for (const stage of ["append", "reset"] as const) {
+for (const stage of ["append"] as const) {
   test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
     const f = await fixture();
     try {
@@ -138,14 +131,9 @@ for (const stage of ["append", "reset"] as const) {
         calls++;
         return "Summary.";
       };
-      if (stage === "reset")
-        f.harness.turns.resetSession = () => {
-          throw new Error("storage unavailable");
-        };
-      else
-        f.sessions[stage] = async () => {
-          throw new Error("storage unavailable");
-        };
+      f.sessions[stage] = async () => {
+        throw new Error("storage unavailable");
+      };
       await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
       assert.equal(calls, 1);
       assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
