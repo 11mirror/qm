@@ -7,6 +7,10 @@ import {
   stripReactionDirectives,
 } from "./reactions.ts";
 import { SLACK_TEXT_LIMIT, botIdentityArgs } from "./delivery.ts";
+import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
+import type { Directory } from "./directory.ts";
+import type { ActorAssertion } from "../types.ts";
 
 import type { SlackConversationKind } from "./message-gating.ts";
 export type { SlackConversationKind } from "./message-gating.ts";
@@ -29,6 +33,41 @@ export async function updateSlackMessage(
     blocks: blocks ?? [],
   });
   return true;
+}
+
+export type ActionApp = { action(pattern: RegExp, handler: (args: any) => Promise<void>): void };
+
+export function registerDecisionButtons<T extends string>(
+  app: ActionApp,
+  pattern: RegExp,
+  actionIds: readonly T[],
+  opts: { directory: Directory; ready?: () => boolean; failure: string; label: string },
+  decide: (
+    actionId: T,
+    value: string,
+    actor: ActorAssertion,
+    client: any,
+  ) => Promise<{ text: string; blocks: Array<Record<string, unknown>> }>,
+): void {
+  app.action(pattern, async ({ ack, body, action, client }) => {
+    await ack();
+    const parsed = parseBlockAction(action, actionIds);
+    const { clickerId, channel, messageTs } = parseInteractionBody(body);
+    if (!parsed || !clickerId || !channel || !messageTs || opts.ready?.() === false) return;
+    try {
+      const actor = await opts.directory.classifyActor(client, clickerId);
+      const card = await decide(parsed.actionId, parsed.value, actor, client);
+      await updateSlackMessage(client, channel, messageTs, card.text, card.blocks);
+    } catch (error) {
+      await client.chat
+        .postEphemeral({
+          channel,
+          user: clickerId,
+          text: `${opts.failure}: ${errMessage(error)} You can try the button again.`,
+        })
+        .catch(swallowAs(opts.label, undefined));
+    }
+  });
 }
 
 export const HANDOFF_INSTRUCTION =

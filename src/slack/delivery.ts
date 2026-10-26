@@ -19,13 +19,12 @@ export interface BotIdentityOverride {
   icon_emoji?: string;
 }
 
+function botIdentity(username: string | undefined, icon_emoji: string | undefined): BotIdentityOverride {
+  return { ...(username ? { username } : {}), ...(icon_emoji ? { icon_emoji } : {}) };
+}
+
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
-  const username = (env.SLACK_BOT_DISPLAY_NAME ?? "").trim();
-  const icon_emoji = (env.SLACK_BOT_ICON_EMOJI ?? "").trim();
-  return {
-    ...(username ? { username } : {}),
-    ...(icon_emoji ? { icon_emoji } : {}),
-  };
+  return botIdentity(env.SLACK_BOT_DISPLAY_NAME?.trim(), env.SLACK_BOT_ICON_EMOJI?.trim());
 }
 
 let defaultIdentity: BotIdentityOverride = {};
@@ -34,11 +33,7 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
-  return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
-  };
+  return botIdentity(defaultIdentity.username, defaultIdentity.icon_emoji);
 }
 
 export function slackReplyArgs(
@@ -67,23 +62,14 @@ export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: str
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
 }
 
-export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId: string): string | undefined {
-  return scopeSurfaceUrl(webUiPublicUrl, `channel:${channelId}`);
-}
-
 export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
-  if (!surfaceUrl) {
-    return "QM here, ready to assist.";
-  }
-  return `QM here, ready to assist. Access my data and channel settings <${surfaceUrl}|here>.`;
+  return `QM here, ready to assist.${surfaceUrl ? ` Access my data and channel settings <${surfaceUrl}|here>.` : ""}`;
 }
 
 export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
-  const model = (facts.modelName ?? "").trim();
-  const url = (projectUrl ?? "").trim();
-  const modelText = model ? `Using ${model} here.` : "";
-  const link = url ? `<${url}|More settings>` : "";
-  return [modelText, link].filter(Boolean).join(" ") || undefined;
+  const model = facts.modelName?.trim();
+  const url = projectUrl?.trim();
+  return [model && `Using ${model} here.`, url && `<${url}|More settings>`].filter(Boolean).join(" ") || undefined;
 }
 
 function unwrapSlackLinks(text: string): string {
@@ -126,8 +112,7 @@ export interface PinnedItem {
 
 export function isSurfaceHeaderMessage(text: string | undefined): boolean {
   const t = (text ?? "").trim();
-  if (!t) return false;
-  return /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
+  return !!t && /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
 }
 
 export function findHeaderPin(
@@ -231,7 +216,7 @@ export async function onBotJoinedChannel(opts: {
 }): Promise<void> {
   const { client, channel, joinerUserId, botUserId, webUiPublicUrl, syncDirectory, ensureHeader } = opts;
   if (!channel || !joinerUserId || joinerUserId !== botUserId) return;
-  const surfaceUrl = channelSurfaceUrl(webUiPublicUrl, channel);
+  const surfaceUrl = scopeSurfaceUrl(webUiPublicUrl, `channel:${channel}`);
   try {
     const info = (await client.conversations.info({ channel })).channel;
     if (!isExternallyShared(info)) {
@@ -243,11 +228,7 @@ export async function onBotJoinedChannel(opts: {
   } catch {
     void 0;
   }
-  try {
-    await syncDirectory();
-  } catch {
-    void 0;
-  }
+  await syncDirectory().catch(() => undefined);
 }
 
 export function encodeDeliveryTarget(channel: string, threadTs?: string): string {
@@ -317,26 +298,20 @@ export interface DeliveryMetadata {
 export function deliveryMetadata(idempotencyKey: string): DeliveryMetadata {
   return { event_type: "qm_delivery", event_payload: { idempotency_key: idempotencyKey } };
 }
+type ScanArgs = {
+  channel: string;
+  limit: number;
+  include_all_metadata: boolean;
+  oldest: string;
+  inclusive: boolean;
+  cursor?: string;
+};
+
 export interface PostVerifyClient {
   chat: { postMessage(args: PostMessageArgs): Promise<unknown> };
   conversations: {
-    history(args: {
-      channel: string;
-      limit: number;
-      include_all_metadata: boolean;
-      oldest: string;
-      inclusive: boolean;
-      cursor?: string;
-    }): Promise<unknown>;
-    replies(args: {
-      channel: string;
-      ts: string;
-      limit: number;
-      include_all_metadata: boolean;
-      oldest: string;
-      inclusive: boolean;
-      cursor?: string;
-    }): Promise<unknown>;
+    history(args: ScanArgs): Promise<unknown>;
+    replies(args: ScanArgs & { ts: string }): Promise<unknown>;
   };
 }
 
@@ -399,10 +374,6 @@ export interface PostedPart {
   text: string;
 }
 
-function splitPostKey(idempotencyKey: string, partIndex: number): string {
-  return partIndex === 0 ? idempotencyKey : `${idempotencyKey}#p${partIndex + 1}`;
-}
-
 export async function postWithVerify(
   client: PostVerifyClient,
   args: PostMessageArgs,
@@ -427,7 +398,7 @@ export async function postWithVerify(
     const parts: PostedPart[] = [];
     for (const [i, batch] of batches.entries()) {
       const text = batch.text ?? "";
-      const res = await postWithVerify(client, batch, splitPostKey(idempotencyKey, i), {
+      const res = await postWithVerify(client, batch, i === 0 ? idempotencyKey : `${idempotencyKey}#p${i + 1}`, {
         ...opts,
         verifyFirst: true,
         verifyBestEffort: !opts?.verifyFirst,
@@ -468,20 +439,13 @@ export async function postWithVerify(
       lastErr = err;
       const code = (err as { code?: string }).code;
       if (code === "slack_webapi_platform_error") throw err;
-      if (code === "slack_webapi_rate_limited_error") {
-        const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
-        await sleep(retryAfter * 1000);
-        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(() => undefined);
-        if (found) return { ...found, reused: true };
-        continue;
-      }
-      let found: { ts: string; channel: string } | undefined;
-      try {
-        found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-      } catch {
+      const limited = code === "slack_webapi_rate_limited_error";
+      if (limited) await sleep(((err as { retryAfter?: number }).retryAfter ?? 1) * 1000);
+      const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(() => {
+        if (limited) return undefined;
         throw err;
-      }
-      if (found) return found;
+      });
+      if (found) return limited ? { ...found, reused: true } : found;
     }
   }
   throw lastErr;
