@@ -1779,16 +1779,6 @@ const apiRoutes: readonly WebRoute[] = [
     if (p == null) return bad("bad_request", "expected JSON body");
     const action = String(p.action ?? "").trim();
     const v = p.verification;
-    if (v !== undefined && typeof v?.scheme !== "string")
-      return bad("unsupported_verification", "verification requires a scheme");
-    const validFilter = (f: any) =>
-      typeof f?.path === "string" &&
-      f.path.trim().length > 0 &&
-      Array.isArray(f.in) &&
-      f.in.length > 0 &&
-      f.in.every((value: unknown) => typeof value === "string" && value.trim().length > 0);
-    if (p.filters !== undefined && !(Array.isArray(p.filters) && p.filters.every(validFilter)))
-      return bad("invalid_filters", "every filter requires a path and at least one value");
     if (p.destination !== undefined)
       return bad(
         "invalid_destination",
@@ -1808,17 +1798,7 @@ const apiRoutes: readonly WebRoute[] = [
     });
     return relayCore(res, "POST", "/v1/webhooks", reqBody);
   }),
-  ...["disable", "enable"].map((verb) =>
-    relayRoute("POST", `/api/webhooks/:id/${verb}`, {
-      who: "principalId",
-      gate: async ({ res, user, params }) => {
-        const r = await coreFetch("GET", `/v1/webhooks?viewer=${enc(user)}`);
-        if (r.status < 200 || r.status >= 300) return (relay(res, r), false);
-        const webhooks = tryParse<{ webhooks?: Array<{ id?: unknown }> }>(r.text)?.webhooks ?? [];
-        return webhooks.some((w) => w.id === params.id) || (json(res, 404, { error: "not_found" }), false);
-      },
-    }),
-  ),
+  ...["disable", "enable"].map((verb) => relayRoute("POST", `/api/webhooks/:id/${verb}`, { who: "principalId" })),
   route("GET", "/api/crons", async ({ res, user }) => {
     const r = await coreFetch("GET", `/v1/crons?viewer=${enc(user)}`);
     if (r.status < 200 || r.status >= 300) return relay(res, r);
@@ -1826,34 +1806,10 @@ const apiRoutes: readonly WebRoute[] = [
     return json(res, 200, { crons: parsed?.crons ?? [], visible: parsed?.visible ?? [] });
   }),
   relayRoute("GET", "/api/crons/:id/runs", { query: (c) => ({ principalId: c.user, limit: "20" }) }),
-  route("PATCH", "/api/crons/:id", async (c) => {
-    const patch: Record<string, unknown> = {};
-    const bad = (message: string) => json(c.res, 400, { error: "bad_request", message });
-    const p = tryParse<Record<string, unknown>>(await readBody(c.req));
-    if (typeof p !== "object" || p === null) return bad("expected JSON body");
-    if ("runtime" in p) patch.runtime = p.runtime;
-    if ("title" in p) {
-      if (typeof p.title !== "string") return bad("title must be a string");
-      patch.title = p.title.trim();
-    }
-    if ("task" in p) {
-      if (typeof p.task !== "string" || !p.task.trim()) return bad("task must be a non-empty string");
-      patch.task = p.task.trim();
-    }
-    if ("schedule" in p) patch.schedule = p.schedule;
-    for (const key of ["enabled", "archived"]) {
-      if (!(key in p)) continue;
-      if (typeof p[key] !== "boolean") return bad(`${key} must be a boolean`);
-      patch[key] = p[key];
-    }
-    if (Object.keys(patch).length === 0) return bad("expected title, task, schedule, enabled, archived, or runtime");
-    if (patch.archived === true) patch.enabled = false;
-    return relayCore(
-      c.res,
-      "PATCH",
-      `/v1/crons/${enc(c.params.id!)}?principalId=${enc(c.user)}`,
-      JSON.stringify(patch),
-    );
+  relayRoute("PATCH", "/api/crons/:id", {
+    who: "principalId",
+    read: "strict",
+    pick: ["runtime", "title", "task", "schedule", "enabled", "archived"],
   }),
   relayRoute("POST", "/api/crons/:id/disable", { who: "principalId" }),
   relayRoute("POST", "/api/crons/:id/enable", {
