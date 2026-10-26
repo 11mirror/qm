@@ -399,7 +399,7 @@ export function createTurnHandler(deps: {
     const { attachments, issues } = await processInboundFiles(
       inboundFiles,
       (f) => downloadSlackFile(f, compact({ token: deps.botToken, trustedHost: deps.trustedFileHost || undefined })),
-      (bytes) => core.stageBlob(bytes),
+      (source) => core.stageBlob(source),
       async (userId) => (userId ? (await classifyUserCached(client, userId)).actor.displayName : undefined),
     );
 
