@@ -29,51 +29,31 @@ export function schedulingTools(kit: ToolKit) {
     name: "cron",
     label: "cron",
     description:
-      "Schedule future or recurring work, and manage what you've scheduled. ALWAYS confirm the timing " +
-      "with the user before you create a schedule. ONE recurring job = ONE cron: before creating, " +
-      "action=list and if a cron for this job already exists, action=patch it in place — never create a " +
-      "second.\n" +
-      "action=create schedules it. Always set a `title`: a 2-5 word label naming what the cron is FOR " +
-      '(e.g. "Gmail unread digest", "GitLab CI watch", "DoorDash retry") — not the command it runs, ' +
-      'not a generic word like "Run" or "First". It sits in a list next to the owner\'s other crons, ' +
-      'so make it distinctive and scannable. Provide EITHER `task` (a prompt re-evaluated at fire time — "check Gmail and ' +
-      'summarize anything notable; if nothing changed, call finish_silently") OR `text` (exact words to send ' +
-      "verbatim, a reminder/relay), not both. `schedule` is one of: {cron,timezone} for calendar times " +
-      "(`cron` is a 5-field expression `minute hour day-of-month month day-of-week`; `timezone` is an IANA " +
-      'name like "America/Los_Angeles" — if the user gave a local time use the timezone from "The user\'s ' +
-      "local time\" unless they name another; omit to use this turn's timezone — do NOT compute future epochs " +
-      "for daily/weekly/monthly). DEFAULT to {cron,timezone} for anything that should happen at a time of day " +
-      "or on a calendar (digests, reminders, reports) — think about the timezone and the actual helpful hour. " +
-      "{everyMs} is ONLY for genuine sub-day polling where wall-clock time does not matter (first run one " +
-      "interval from now, not immediately; an everyMs of 24h+ is rejected — use {cron,timezone} instead), or " +
-      '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
-      "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
-      "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
-      "The only other destination is a named Slack target: set `recipient` " +
-      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched) or `channel` " +
-      "(a channel name → that channel). Don't bury \"send this to Slack\" inside `task`. A cron's destination is fixed at create; " +
-      "to move one, create the new cron and delete the old. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
-      "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
-      "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
-      "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
-      "If the owner leaves the conversation, the cron is deleted.\n" +
-      'A cron whose fires read admin data (admin tool or API) needs `unattendedGrants`, and many admin reads have none: before creating it, follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list.\n' +
-      "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
-      "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
-      "action=get inspects one in full; " +
-      "action=runs reads the retained fire log when a fresh run needs older history — fires appear the moment " +
-      'they start (status "running", updated with the outcome when they end), so an empty-looking log never ' +
-      "means nothing is running; " +
-      "action=patch edits IN PLACE (rename via `title`, change `schedule`/`task`/`text`, `enabled:false` " +
-      "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
-      "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
-      "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
-      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
-      "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
-      "still running — repeating it never double-fires; action=disable pauses it.\n" +
-      "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +
-      `reads before it starts — one or two sentences, max ${CRON_FIRE_NOTE_MAX_CHARS} chars: the outcome plus ` +
-      "anything the next fire must know. It overwrites the previous fire's note.",
+      "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. " +
+      "One job = one cron: list first and patch an existing one rather than creating a second.\n" +
+      'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), ' +
+      "never the command or a generic word. Give either `task` (a prompt re-evaluated at each fire, e.g. " +
+      '"summarize anything notable in Gmail; if nothing changed, call finish_silently") or `text` (exact words to relay). ' +
+      "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local " +
+      "one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one " +
+      "interval from now; 24h or more is rejected), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). " +
+      "Never compute future epochs for calendar times.\n" +
+      "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work " +
+      "started here, and don't pick a DM just because this is one. Otherwise set `recipient` (a teammate → DM) or " +
+      "`channel`; never put the destination inside `task`. It is fixed at create: to move one, create the new cron " +
+      "and delete the old.\n" +
+      "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change " +
+      "it unless shared with permission=write; it is deleted if the owner leaves the conversation. A cron whose " +
+      "fires read admin data needs `unattendedGrants`, and many admin reads have none: first follow the admin " +
+      'skill\'s "Scheduling admin-reading work", which fetches the live grant list.\n' +
+      "list: 25 per page, enabled and newest first; a footer names the next offset. get: one in full. runs: the " +
+      'fire log (a fire shows as "running" from the moment it starts). patch: edit in place. delete: remove for ' +
+      "good. run: fire once now (refused while a fire is running). disable: pause.\n" +
+      "`task` is the standing instructions for every fire. Durable run-state belongs in this conversation's Files " +
+      "(verify the upload, leave the file ID in the note), never only in `task` or on sandbox disk; small progress " +
+      "state can live in the note itself, never credentials.\n" +
+      "note (inside a fire): a one- or two-sentence shift-change note " +
+      `(max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; it overwrites the previous one.`,
     parameters: Type.Object({
       action: Type.Union(
         [
