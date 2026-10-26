@@ -4,7 +4,7 @@ import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
-import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
+import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
 import { resolveBrowserModel } from "../model/browser-model.ts";
@@ -219,6 +219,7 @@ export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextP
 
 class ProjectRosterChanged extends Error {}
 
+const countSkills = (listed: { skills: readonly unknown[] }) => ({ "qm.skills": listed.skills.length });
 const ACTIVITY_ENTRY_TYPES = new Set<EntryType>([
   "text",
   "tool_call",
@@ -1170,7 +1171,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-        const current = await context.listSkills(sources);
+        const current = await tracePhase("turn.skills", () => context.listSkills(sources), countSkills);
         const resolved = filterConnectorSkills(current.skills, configuredProviders);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
@@ -1242,7 +1243,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         return allowed;
       };
-      const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
+      const skillSourceContext = await tracePhase(
+        "turn.skills",
+        () => context.listSkills([scopeId, resolution.orgScopeId]),
+        countSkills,
+      );
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
@@ -1526,7 +1531,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerKeychainCredentials(addCredentialToCatalog);
+      await tracePhase("turn.credentials", () => registerKeychainCredentials(addCredentialToCatalog));
       const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (!external && !strictReadOnly && deps.connectorTokens && ownCredentialsAllowed) {
           const tokens = deps.connectorTokens;
@@ -1567,7 +1572,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerConnectorCredentials(addCredentialToCatalog);
+      await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
@@ -1840,7 +1845,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerServiceCredentials(addCredentialToCatalog, []);
+      await tracePhase("turn.credentials", () => registerServiceCredentials(addCredentialToCatalog, []));
       if (!strictReadOnly && actor.type === "internal") {
         for (const tool of brokeredTools) {
           const broker = deps.layerBrokerFor?.(tool);
@@ -3045,7 +3050,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }
         const turnStart = Date.now();
-        let firstTokenMarked = false;
+        let dispatchTrace: DispatchTrace | undefined;
         const emittedEntries: SessionEntry[] = [];
         let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
@@ -3323,6 +3328,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 })
               : undefined;
           const goalInbox = swarmHandoff?.inbox;
+          dispatchTrace ??= startDispatchTrace();
           const mcpTools = await mcpToolsReady;
           const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           const turnResult = await deps.harness.turns.runTurn({
@@ -3644,11 +3650,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(goalInbox ? { goalInbox } : {}),
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
+            onModelRequest: () => dispatchTrace?.modelRequest(),
             onDelta: (chunk: string) => {
-              if (!firstTokenMarked) {
-                firstTokenMarked = true;
-                markFirstToken();
-              }
+              dispatchTrace?.firstToken();
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
@@ -3697,6 +3701,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             },
           });
+          dispatchTrace.end();
           if (!turnResult.stopped && !turnAbort.signal.aborted) await swarmHandoff?.settle();
           return turnResult;
         };

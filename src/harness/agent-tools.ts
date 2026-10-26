@@ -122,6 +122,7 @@ export interface ToolContextRef {
   pendingPrepareNextTurn?: number;
   pendingTransformContext?: number;
   onGapWork?: (work: GapWork) => void;
+  onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
   shutdown?: AbortSignal;
