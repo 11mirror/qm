@@ -471,11 +471,8 @@ export async function postWithVerify(
       if (code === "slack_webapi_rate_limited_error") {
         const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
         await sleep(retryAfter * 1000);
-
-        try {
-          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-          if (found) return { ...found, reused: true };
-        } catch {}
+        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(() => undefined);
+        if (found) return { ...found, reused: true };
         continue;
       }
       let found: { ts: string; channel: string } | undefined;
