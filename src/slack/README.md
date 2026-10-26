@@ -146,7 +146,7 @@ the tokens, core simply runs without Slack.
   The **bot token never leaves the plugin**. Names are normalized against the
   **complete Slack emoji set** — `:eyes:`, `eyes`, or a literal char all work, including the ~1900
   standard emoji, ZWJ sequences (`🧑‍💻` → `technologist`), the `❤️`/`❤` variation-selector forms,
-  and skin tones (`👍🏽` → `+1::skin-tone-4`). That table (`src/emoji-map.ts`) is built at module load
+  and skin tones (`👍🏽` → `+1::skin-tone-4`). That table (`src/slack/reactions.ts`) is built at module load
   from the [`emoji-datasource`](https://www.npmjs.com/package/emoji-datasource) package
   (iamcal/emoji-data, the dataset Slack itself uses) — bump the dependency to refresh it. Names are
   deduped and capped; a per-emoji failure (or a missing
