@@ -298,6 +298,7 @@ import {
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createPeriodicJobs } from "./util/periodic-jobs.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -2165,7 +2166,6 @@ export function buildApp(
       for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
-  let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock
       .withLock("session-tree-admission", async () => {
@@ -2201,53 +2201,6 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const approvalDeliverySweeper = createSweeper(
-    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
-    30_000,
-    {
-      label: "approval-deliveries",
-      immediate: true,
-    },
-  );
-  const sessionReturnSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("session-return-sweep", sweepSessionReturns)
-        : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
-    1_000,
-    { label: "session-returns", immediate: true },
-  );
-  const queuedPostSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("queued-post-retry", () => outbound.retryQueued())
-        : advisoryLock.withLock("queued-post-retry", () => outbound.retryQueued()),
-    30_000,
-    { label: "queued-posts" },
-  );
-  const runResultSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
-        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
-    60_000,
-    { label: "run-results" },
-  );
-  const orphanedSignalSweeper = createSweeper(
-    async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-      }
-      if (Date.now() - lastSignalPrune > 60 * 60_000) {
-        lastSignalPrune = Date.now();
-        await runSignals.prune(7 * 24 * 60 * 60_000);
-      }
-    },
-    config.reaperIntervalMs,
-    { label: "orphaned-signals" },
-  );
   const wakeSweep: WakeSweep = createWakeSweep(
     {
       async engagedSessions() {
@@ -2489,19 +2442,6 @@ export function buildApp(
       canClaim: canClaimRunSlot,
     }),
   );
-  const turnPointerRepair = turnLedger
-    ? createSweeper(
-        () =>
-          leaderLease.hold("turns:pointer-repair", () => repairStaleTurns({ ledger: turnLedger, sessions, errors })),
-        60_000,
-        { label: "turn-pointer-repair" },
-      )
-    : null;
-  const turnCleanup = turnLedger
-    ? createSweeper(() => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()), 60 * 60_000, {
-        label: "turn-cleanup",
-      })
-    : null;
   const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
@@ -2513,69 +2453,117 @@ export function buildApp(
         leaderLease,
       })
     : null;
-  const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
-  const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
-  const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
-  const spendSweeper = sessions.refreshSpendRollup
-    ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
-        label: "spend-refresh",
-        immediate: true,
-      })
-    : null;
-  const llmCaptureSweeper = sessions.purgeLlmCaptures
-    ? createSweeper(
-        () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
-            let leaseLost = false;
-            void lost.then(() => (leaseLost = true));
-            const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-              deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
-              stop: () => leaseLost,
-            });
-            if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-          }),
-        LLM_CAPTURE_SWEEP_MS,
-        { label: "llm-capture-retention" },
-      )
-    : null;
-  const monitorRetentionSweeper = createSweeper(
-    () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
-    MONITOR_RETENTION_SWEEP_MS,
-    { label: "monitor-retention", immediate: true },
-  );
-  const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
-  const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-    },
-    30 * 60_000,
-    { label: "Composio consent returns", immediate: true },
-  );
-  const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
-  const BLOB_TRANSFER_EXPIRY_DAYS = 1;
-  void blobTransfer
-    .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
-    .catch((e) =>
-      console.error("[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):", errMessage(e)),
-    );
-  const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
-  const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && (deepIdleMachineMs > 0 || devIdleMachineMs > 0));
-  const deepIdleSweeper = deepIdleReapEnabled
-    ? createSweeper(
-        () =>
-          leaderLease.hold("sandbox:deep-idle-reaper", () =>
-            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
-          ),
-        SANDBOX_MAINTENANCE_INTERVAL_MS,
-        { immediate: true },
-      )
-    : null;
+  const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
+  const periodicJobs = createPeriodicJobs(
+    [
+      {
+        name: "monitor:retention:sweep",
+        everyMs: 24 * 60 * 60_000,
+        lock: "leader",
+        immediate: true,
+        run: () => monitors.deleteDefunct(Date.now()),
+      },
+      {
+        name: "spend:refresh",
+        everyMs: 60_000,
+        lock: "leader",
+        immediate: true,
+        run: () => sessions.refreshSpendRollup(),
+      },
+      {
+        name: "llm-capture:retention",
+        everyMs: 5 * 60_000,
+        lock: "leader",
+        run: async (lost) => {
+          let leaseLost = false;
+          void lost.then(() => (leaseLost = true));
+          const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
+            deadline: Date.now() + 30_000,
+            stop: () => leaseLost,
+          });
+          if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
+        },
+      },
+      { name: "blob-transfer", everyMs: 30 * 60_000, lock: "none", run: () => blobTransfer.sweep(6 * 60 * 60_000) },
+      {
+        name: "Composio consent returns",
+        everyMs: 30 * 60_000,
+        lock: "none",
+        immediate: true,
+        run: async () => {
+          for (const [id, entry] of await composioReturns.entries())
+            if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+        },
+      },
+      { name: "deploy-maintenance", everyMs: 5 * 60_000, lock: "none", run: () => app.maintainDeployments() },
+      ...(reapDeepIdle
+        ? [
+            {
+              name: "sandbox:deep-idle-reaper",
+              everyMs: 5 * 60_000,
+              lock: "leader",
+              immediate: true,
+              run: () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs),
+            } as const,
+          ]
+        : []),
+      {
+        name: "orphaned-signals",
+        everyMs: config.reaperIntervalMs,
+        lock: "none",
+        run: async () => {
+          for (const runId of await runSignals.pendingRunIds()) {
+            const run = await runs.get(runId);
+            if (!run || isTerminal(run.status))
+              await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+          }
+        },
+      },
+      {
+        name: "run-signals:prune",
+        everyMs: 60 * 60_000,
+        lock: "none",
+        run: () => runSignals.prune(7 * 24 * 60 * 60_000),
+      },
+      { name: "session-return-sweep", everyMs: 1_000, lock: "advisory", immediate: true, run: sweepSessionReturns },
+      { name: "run-result-sweep", everyMs: 60_000, lock: "advisory", run: () => runResultRecovery.sweep() },
+      { name: "queued-post-retry", everyMs: 30_000, lock: "advisory", run: () => outbound.retryQueued() },
+      {
+        name: "approval-deliveries",
+        everyMs: 30_000,
+        lock: "advisory",
+        immediate: true,
+        run: () => approvals.deliverPending(),
+      },
+      ...(turnLedger
+        ? [
+            {
+              name: "turns:pointer-repair",
+              everyMs: 60_000,
+              lock: "leader",
+              run: () => repairStaleTurns({ ledger: turnLedger, sessions, errors }),
+            } as const,
+            { name: "turns:cleanup", everyMs: 60 * 60_000, lock: "leader", run: () => turnLedger.cleanup() } as const,
+          ]
+        : []),
+    ],
+    { createSweeper, leaderLease, advisoryLock },
+  );
+  // Started together once background work is admitted, and stopped together.
+  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [
+    reaper,
+    ...(processReaper ? [processReaper] : []),
+    semanticMemory,
+    ...(config.skillSyncPollMs > 0
+      ? [{ start: () => skillSyncEngine.start(config.skillSyncPollMs), stop: () => skillSyncEngine.stop() }]
+      : []),
+    ...(fileUploads ? [fileUploads] : []),
+    wakeSweep,
+    periodicJobs,
+  ];
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
@@ -2600,32 +2588,13 @@ export function buildApp(
     turnRunner?.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      reaper.start();
-      processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
         .then(() => {
           if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(config.monitorPollMs);
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
-      monitorRetentionSweeper.start();
-      spendSweeper?.start();
-      llmCaptureSweeper?.start();
-      semanticMemory.start();
-      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
-      blobSweeper.start();
-      composioReturnSweeper.start();
-      fileUploads?.start();
-      deployMaintenanceSweeper.start();
-      deepIdleSweeper?.start();
-      wakeSweep.start();
-      orphanedSignalSweeper.start();
-      sessionReturnSweeper.start();
-      runResultSweeper.start();
-      queuedPostSweeper.start();
-      approvalDeliverySweeper.start();
-      turnPointerRepair?.start();
-      turnCleanup?.start();
+      for (const service of periodicServices) service.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2639,27 +2608,8 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      reaper.stop(),
-      processReaper?.stop(),
-      monitorRetentionSweeper.stop(),
-      spendSweeper?.stop(),
-      llmCaptureSweeper?.stop(),
-      semanticMemory.stop(),
-      skillSyncEngine.stop(),
-      deployMaintenanceSweeper.stop(),
-      deepIdleSweeper?.stop(),
-      blobSweeper.stop(),
-      composioReturnSweeper.stop(),
-      fileUploads?.stop(),
-      wakeSweep.stop(),
-      orphanedSignalSweeper.stop(),
-      sessionReturnSweeper.stop(),
-      runResultSweeper.stop(),
-      queuedPostSweeper.stop(),
-      approvalDeliverySweeper.stop(),
+      ...periodicServices.map((service) => service.stop()),
       preemptionSweeper.stop(),
-      turnPointerRepair?.stop(),
-      turnCleanup?.stop(),
       turnRunner?.stopClaims(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
@@ -2685,6 +2635,14 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      void blobTransfer
+        .ensureExpiry?.(1)
+        .catch((e) =>
+          console.error(
+            "[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):",
+            errMessage(e),
+          ),
+        );
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
