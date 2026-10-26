@@ -1,4 +1,4 @@
-import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import { slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow } from "../util/errors.ts";
 import { type ActorAssertion } from "./identity.ts";

@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { test } from "node:test";
 import { WebClient, LogLevel } from "@slack/web-api";
 import { HISTORY_NO_RETRY, slackPluginConfigFromEnv, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
-import { slackHistoryRateLimitMessage } from "../src/slack/history-rate-limit.ts";
+import { slackHistoryRateLimitMessage } from "../src/slack/rate-limit-notice.ts";
 
 test("managed history throttling gives retry timing and workspace app setup without leaking the error", () => {
   const message = slackHistoryRateLimitMessage(

@@ -4,16 +4,6 @@ import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts
 import { utcMinute } from "../util/time.ts";
 import { MAX_ATTACHMENTS_PER_TURN } from "./attachments.ts";
 
-export interface ContextWireMessage {
-  ts: string;
-  time?: string;
-  author: string;
-  text: string;
-  threadTs?: string;
-  files?: string[];
-  reactions?: ReactionTally[];
-}
-
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
 
 export function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
@@ -25,7 +15,7 @@ export function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): nu
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
   opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
-): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
+) {
   const asc = [...scanned].sort(compareSlackTimestamps);
   const needle = opts.match?.trim().toLowerCase();
   const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
@@ -138,15 +128,6 @@ export interface OverheardMessage {
   files?: string[];
 }
 
-export interface RenderedConversation {
-  header: string;
-  priorTurns: ConversationTurn[];
-  overheard: OverheardMessage[];
-  allowedTs: Set<string>;
-  detectContext: string;
-  detectOpener?: string;
-}
-
 const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => {
   const s = (t ?? "").replace(/\s+/g, " ").trim();
   return s.length > max ? `${s.slice(0, max)}…` : s;
@@ -158,7 +139,7 @@ export function formatSlackTs(ts: string): string {
   return utcMinute(sec * 1000);
 }
 
-export function renderConversationView(view: ConversationView): RenderedConversation {
+export function renderConversationView(view: ConversationView) {
   const msgs = view.messages.filter(isUsable);
   const allowedTs = new Set<string>(msgs.map((m) => m.ts));
   const shown = (m: RecentMessage, max?: number): string =>

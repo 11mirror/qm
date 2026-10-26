@@ -1,5 +1,5 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
-import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
@@ -153,11 +153,9 @@ export function createSurfaceContextFulfiller(deps: {
         return { error: "I'm not allowed to open group DMs in this workspace (the app needs the mpim:write scope)" };
       return { error: `I couldn't open that group DM: ${(err as Error).message}` };
     }
-    try {
-      void directory.forceDirectorySync(client).catch(swallowAs("slack: sync after opening a group DM", undefined));
-    } catch (err) {
-      swallow("slack: sync after opening a group DM", err);
-    }
+    void (async () => directory.forceDirectorySync(client))().catch(
+      swallowAs("slack: sync after opening a group DM", undefined),
+    );
     return { group: { groupId } };
   }
 
@@ -213,7 +211,7 @@ export function createSurfaceContextFulfiller(deps: {
         deps.readHistory(client, channel, undefined, before, false, q.live === true),
         threadTs
           ? deps.readHistory(client, channel, threadTs, before, false, q.live === true)
-          : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
+          : Promise.resolve({ raw: [] as SlackHistoryMessage[], hasMore: false, note: undefined }),
       ]);
       const byTs = new Map<string, SlackHistoryMessage>();
       const notes = new Set<string>();
@@ -229,7 +227,7 @@ export function createSurfaceContextFulfiller(deps: {
         }
         for (const message of outcome.value.raw) if (message.ts) byTs.set(message.ts, message);
         hasMore ||= outcome.value.hasMore;
-        if ("note" in outcome.value && outcome.value.note) notes.add(outcome.value.note);
+        if (outcome.value.note) notes.add(outcome.value.note);
       }
       const raw = [...byTs.values()];
       const failure = outcomes.find((outcome) => outcome.status === "rejected");

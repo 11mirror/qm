@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EMOJI_NAME_BY_CHAR } from "../src/slack/emoji-map.ts";
 import {
+  EMOJI_NAME_BY_CHAR,
   normalizeReaction,
   normalizeReactions,
   applyReactions,
