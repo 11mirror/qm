@@ -1,6 +1,7 @@
 import * as governanceUI from "./admin.ts";
 import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./sections.ts";
 import { ADMIN_MARKUP } from "./markup.ts";
+import { itemFields } from "../items.ts";
 
 function backArrow() {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -284,7 +285,6 @@ export function startAdmin(host, env) {
   const scopeKind = (scopeId) => String(scopeId || "").split(":")[0] || "scope";
   const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
   const statusBadge = (status) => badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
-  const entryIsNoise = (e) => ["tool_call", "tool_result", "soul", "system"].includes(e.type);
   function fileKind(path) {
     const name = String(path || "");
     return name.includes(".") ? "." + name.split(".").pop().toLowerCase() : "file";
@@ -671,12 +671,10 @@ export function startAdmin(host, env) {
     });
     return el("div.shell-search admin-search", {}, input, icon, clear);
   }
-  function transcriptEntryHidden(entryTypes, hasDelivery, visibility = transcriptVisibility) {
+  function transcriptEntryHidden(kinds, visibility = transcriptVisibility) {
     return (
-      (!visibility.thinking && entryTypes.includes("thinking")) ||
-      (!visibility.toolResults &&
-        !hasDelivery &&
-        entryTypes.some((type) => type === "tool_call" || type === "tool_result"))
+      (!visibility.thinking && kinds.includes("Reasoning")) ||
+      (!visibility.toolResults && kinds.some((kind) => kind === "ToolCall" || kind === "ToolResult"))
     );
   }
   function linkClick(go) {
@@ -1972,14 +1970,6 @@ export function startAdmin(host, env) {
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
   };
-  function payloadText(p) {
-    if (p == null) return "";
-    if (typeof p === "string") return p;
-    if (typeof p === "object" && typeof p.text === "string") return p.text;
-    if (typeof p === "object" && typeof p.thinking === "string")
-      return p.thinking || (p.redacted ? "[redacted thinking]" : "");
-    return stringify(p);
-  }
   function stringify(x) {
     try {
       return JSON.stringify(x, null, 2);
@@ -2108,9 +2098,6 @@ export function startAdmin(host, env) {
     const compact = line.trim().replace(/\s+/g, " ");
     return compact.length > max ? compact.slice(0, Math.max(0, max - 3)) + "..." : compact;
   }
-  function payloadName(p) {
-    return p && typeof p === "object" && typeof p.name === "string" ? p.name.trim() : "";
-  }
   function toolName(callPayload, resultPayload) {
     return String(callPayload.tool || resultPayload.tool || callPayload.name || resultPayload.name || "tool");
   }
@@ -2125,7 +2112,7 @@ export function startAdmin(host, env) {
     if (!hasResult) return [metaChip("pending result")];
     if (resultPayload.blocked === "needs_approval") return [metaChip("approval needed", "danger")];
     if (resultPayload.denied === true) return [metaChip("denied", "danger")];
-    if (resultPayload.error) return [metaChip("error", "danger")];
+    if (resultPayload.error || resultPayload.isError === true) return [metaChip("error", "danger")];
     const out = [];
     if (tool === "execute" && typeof resultPayload.code === "number") {
       out.push(metaChip("exit " + resultPayload.code, resultPayload.code === 0 ? "" : "danger"));
@@ -2158,7 +2145,7 @@ export function startAdmin(host, env) {
       }
     }
     if (hasResult) {
-      for (const key of ["stdout", "stderr", "output", "chunks", "result", "error", "reason"]) {
+      for (const key of ["stdout", "stderr", "text", "output", "chunks", "result", "error", "reason"]) {
         const text = toolTextValue(resultPayload[key]);
         if (text) return text;
       }
@@ -2166,15 +2153,11 @@ export function startAdmin(host, env) {
     const fallback = hasResult ? resultPayload : callPayload;
     return toolTextValue(fallback);
   }
-  function toolCopyText(callEntry, resultEntry) {
-    const parts = [];
-    if (callEntry)
-      parts.push(`tool_call #${callEntry.seq} · ${fmtTime(callEntry.createdAt)}\n${payloadText(callEntry.payload)}`);
-    if (resultEntry)
-      parts.push(
-        `tool_result #${resultEntry.seq} · ${fmtTime(resultEntry.createdAt)}\n${payloadText(resultEntry.payload)}`,
-      );
-    return parts.join("\n\n");
+  function toolCopyText(...items) {
+    return items
+      .filter(Boolean)
+      .map((item) => `${item.kind} #${item.seq} · ${fmtTime(item.createdAt)}\n${stringify(itemFields(item))}`)
+      .join("\n\n");
   }
   async function copyText(text) {
     try {
@@ -2210,9 +2193,9 @@ export function startAdmin(host, env) {
     };
     return btn;
   }
-  function renderToolEntry(callEntry, resultEntry, contextBtn = null, timingEl = null, delivery = null) {
-    const callPayload = callEntry?.payload ?? {};
-    const resultPayload = resultEntry?.payload ?? {};
+  function renderToolEntry(callEntry, resultEntry, contextBtn = null, timingEl = null) {
+    const callPayload = callEntry ? itemFields(callEntry) : {};
+    const resultPayload = resultEntry ? itemFields(resultEntry) : {};
     const tool = toolName(callPayload, resultPayload);
     const block = el("div.entry tool-entry");
     const who = el("div.who");
@@ -2253,33 +2236,6 @@ export function startAdmin(host, env) {
       };
       syncExpanded();
       body.appendChild(card);
-    }
-    if (delivery) {
-      const drow = el("div.who", {}, el("span.entry-label important", deliveryLabel(delivery)));
-      if (delivery.shadow) {
-        const title = "Recorded for observability, never sent to the human (shadow-mode rollout)";
-        drow.appendChild(el("span.entry-label", { title, textContent: "not sent" }));
-      }
-      drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
-      const mirror = slackMirrorRef(delivery);
-      if (mirror) {
-        const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
-        ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
-        drow.appendChild(ml);
-      }
-      drow.appendChild(el("span.when", `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`));
-      const from = delivery.destination?.onBehalfOf ? `from ${delivery.destination.onBehalfOf}\n` : "";
-      const to = delivery.destination?.target ? `to ${delivery.destination.target}\n` : "";
-      const recipientLine = delivery.recipientThreadRef ? `recipient thread ${delivery.recipientThreadRef}\n` : "";
-      const dv = el(
-        "div.tool-delivery",
-        {},
-        drow,
-        el("pre", `${from}${to}${recipientLine}${delivery.text || ""}`.trim()),
-      );
-      const files = deliveryFileBadges(delivery.attachments);
-      if (files) dv.appendChild(files);
-      body.appendChild(dv);
     }
     block.append(who, body);
     return { block, sync: () => {} };
@@ -2407,16 +2363,6 @@ export function startAdmin(host, env) {
       });
     });
     return frag;
-  }
-  function deliverySurfaceLabel(event) {
-    const type = event?.destination?.type;
-    return pick({ principal: "Slack DM", slack: "Slack", web: "Web" }, type, type || "Unknown surface");
-  }
-  const deliveryLabel = (event) => (event.shadow ? "Shadow delivery" : `${deliverySurfaceLabel(event)} delivery`);
-  function slackMirrorRef(event) {
-    const d = event?.destination || {};
-    if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
-    return { container: d.target.split(":")[0], ts: d.editRef };
   }
   function transcriptServices() {
     return {
@@ -2675,17 +2621,11 @@ export function startAdmin(host, env) {
       toolStatusMeta,
       toolCopyText,
       copyButton,
-      payloadText,
-      payloadName,
       isXmlishText,
       renderXmlish,
       renderMarkdown,
-      entryIsNoise,
       brandSelfLabel,
       wakeOriginLabel,
-      deliveryLabel,
-      deliverySurfaceLabel,
-      slackMirrorRef,
       metaChip,
       deliveryFileBadges,
       contextSections,

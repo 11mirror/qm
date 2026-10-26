@@ -109,3 +109,19 @@ export function activityCreatedAt(entry: WorkActivity): number {
 }
 
 export const isHidden = (item: Pick<Item, "hidden">): boolean => item.hidden === true;
+
+export function itemFields(item: Item): Record<string, unknown> {
+  const {
+    sessionId: _s,
+    seq: _q,
+    createdAt: _c,
+    kind: _k,
+    turnId: _t,
+    step: _p,
+    truncated: _x,
+    body,
+    ...columns
+  } = item;
+  const { wire: _w, ...rest } = body ?? {};
+  return { ...Object.fromEntries(Object.entries(columns).filter(([, value]) => value != null)), ...rest };
+}
