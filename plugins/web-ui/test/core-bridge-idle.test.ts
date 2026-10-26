@@ -5,14 +5,8 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
-import {
-  makeRunResumeStreamFn,
-  pollRun,
-  setClock,
-  RUN_IDLE_MS,
-  type Acc,
-  type AssistantWork,
-} from "../src/core-bridge.ts";
+import { makeRunResumeStreamFn, pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/run-stream.ts";
+import type { AssistantWork } from "../src/transcript-messages.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 

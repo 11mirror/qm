@@ -2,16 +2,9 @@ import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { Agent } from "@earendil-works/pi-agent-core";
-import {
-  continuableMessages,
-  makeCoreStreamFn,
-  makeRunResumeStreamFn,
-  messagesWithStreaming,
-  resumeAnchor,
-  RUN_IDLE_MS,
-  setClock,
-  userSendMessage,
-} from "../src/core-bridge.ts";
+import { continuableMessages, messagesWithStreaming, resumeAnchor } from "../src/transcript-messages.ts";
+import { makeCoreStreamFn, makeRunResumeStreamFn, RUN_IDLE_MS, setClock } from "../src/run-stream.ts";
+import { userSendMessage } from "../src/core-bridge.ts";
 import type { Api, Context, Model } from "@earendil-works/pi-ai";
 
 const model = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;

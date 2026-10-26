@@ -15,25 +15,24 @@ import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "l
 import {
   api,
   ApiError,
-  editQueuedRun,
   approvalBlocksComposer,
-  MAX_ATTACHMENT_BYTES,
-  MAX_FILES_PER_MESSAGE,
   mintSendKey,
-  oversizeAttachmentNote,
-  PENDING_APPROVAL_REASON,
-  queueTurn,
-  tooManyFilesNote,
-  uploadAttachments,
   userSendMessage,
-  withdrawRun,
   type ApprovalDecision,
-  type CoreAttachment,
   type PendingApproval,
   type QueuedRun,
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
+import { editQueuedRun, PENDING_APPROVAL_REASON, queueTurn, withdrawRun } from "./run-stream";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILES_PER_MESSAGE,
+  oversizeAttachmentNote,
+  tooManyFilesNote,
+  uploadAttachments,
+  type CoreAttachment,
+} from "./attachments";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
 import { icon } from "./icons";

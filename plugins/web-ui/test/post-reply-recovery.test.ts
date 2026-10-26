@@ -6,7 +6,8 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import { metadata } from "./model-metadata.ts";
 import type { Conversation } from "../src/conv-types.ts";
-import type { AssistantWork, WorkBlock } from "../src/core-bridge.ts";
+import type { AssistantWork } from "../src/transcript-messages.ts";
+import type { WorkBlock } from "../src/core-bridge.ts";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -154,7 +155,8 @@ test("post replies remain visible in new and continuing conversations", async (t
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation, disposeConversation, ensureDeliveryStream } =
       await vite.ssrLoadModule("/src/conversations.ts");
-    const { itemsToMessages, userSendMessage } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { itemsToMessages } = await vite.ssrLoadModule("/src/transcript-messages.ts");
+    const { userSendMessage } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());

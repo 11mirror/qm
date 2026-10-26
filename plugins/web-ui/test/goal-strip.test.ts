@@ -3,7 +3,7 @@ import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { goalElapsedLabel, goalWorkedLabel, goalFloorLabel, goalObjectiveLabel } from "../src/goal-strip.ts";
-import { itemsToMessages } from "../src/core-bridge.ts";
+import { itemsToMessages } from "../src/transcript-messages.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<typeof itemsToMessages>[1];
 

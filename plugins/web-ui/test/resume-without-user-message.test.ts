@@ -2,7 +2,8 @@ import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-web-ui";
-import { continuableMessages, itemsToMessages, resumeAnchor, runIsTerminal } from "../src/core-bridge.ts";
+import { continuableMessages, itemsToMessages, resumeAnchor } from "../src/transcript-messages.ts";
+import { runIsTerminal } from "../src/run-stream.ts";
 
 const assistant = (text: string): AgentMessage =>
   ({ role: "assistant", content: [{ type: "text", text }] }) as unknown as AgentMessage;

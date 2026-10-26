@@ -1,7 +1,7 @@
 import { createChatSurface } from "./chat";
 import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
-import { subscribeDeliveries } from "./core-bridge";
+import { subscribeDeliveries } from "./run-stream";
 import { applySessionState } from "./session-list";
 import { refreshSessions, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";

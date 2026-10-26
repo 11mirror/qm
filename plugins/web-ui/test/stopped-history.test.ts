@@ -2,7 +2,7 @@ import type { Item } from "../src/items.ts";
 import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/transcript-messages.ts";
 import { workSeconds } from "../src/work-duration.ts";
 
 for (const text of ["", "Partial answer", "(stopped)"]) {

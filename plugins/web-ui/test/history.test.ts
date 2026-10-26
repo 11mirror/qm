@@ -22,8 +22,8 @@ import {
   inheritedTranscript,
   loadInheritedTranscript,
   type AssistantWork,
-  type PendingApproval,
-} from "../src/core-bridge.ts";
+} from "../src/transcript-messages.ts";
+import type { PendingApproval } from "../src/core-bridge.ts";
 
 test("approval decisions remain visible history events instead of unresolved tool rows", () => {
   const messages = itemsToMessages([

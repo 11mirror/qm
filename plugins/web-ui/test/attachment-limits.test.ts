@@ -1,12 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createRunSlot,
-  MAX_ATTACHMENT_BYTES,
-  oversizeAttachmentNote,
-  requestStop,
-  uploadAttachments,
-} from "../src/core-bridge.ts";
+import { createRunSlot, requestStop } from "../src/run-stream.ts";
+import { MAX_ATTACHMENT_BYTES, oversizeAttachmentNote, uploadAttachments } from "../src/attachments.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {

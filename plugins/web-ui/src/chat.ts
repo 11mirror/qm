@@ -1,19 +1,17 @@
 import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
+import { createBackgroundPanel } from "./background-panel";
+import { createSubagentStrip } from "./subagent-strip";
+import { createChatAttachments, type UserAttachmentView } from "./chat-attachments";
+import { approvalMarker, approvalSummaryView, createToolRows, SUBAGENT_MAIL_NOTES } from "./tool-rows";
+import { liveWorkSummary, timelineKey, usedToolsSuffix, workLabel } from "./work-summary";
 import { assistantSidebar, messageRow, userBubble } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./connect-apps";
-import {
-  activityDescription,
-  activityLabel,
-  activityGroupSummary,
-  activityGroups,
-  thinkingPresentation,
-  sessionPresentation,
-} from "./activity-presentation";
+import { activityGroupSummary, activityGroups, thinkingPresentation } from "./activity-presentation";
 import { dismissGeneratedActivity, loadGeneratedActivities } from "./generated-activities";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -23,38 +21,26 @@ import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
-  Activity,
   Ban,
   BookOpen,
   Search,
   Brain,
-  Bot,
   Check,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Clock3,
   Copy,
-  FileImage,
   Files,
   GitFork,
   Link2,
   Maximize2,
-  MessageSquare,
-  Paperclip,
   Pause,
-  Pencil,
   Pin,
-  Radar,
   RefreshCw,
   Target,
-  Rocket,
-  ScrollText,
   SquareTerminal as Terminal,
-  TriangleAlert,
   Wrench,
   X,
   type IconNode,
@@ -65,72 +51,64 @@ import {
   messagesWithStreaming,
   userItemMessage,
   appendConsumedSteers,
-  withBase,
-  type SessionPin,
-  activeRunForThread,
-  api,
-  approvalBlocksComposer,
-  createRunSlot,
-  hasLiveRun,
-  requestStop,
   resumeAnchor,
-  runIsTerminal,
-  signalLiveRun,
   attachPendingApprovals,
   itemsToMessages,
-  fetchItem,
-  fetchTranscript,
-  fetchSessionApprovals,
   currentEarlierCount,
   forkOriginDetails,
   forkCutSeq,
-  forkSession,
-  cancelSessionGoal,
   inheritedRefreshItems,
   inheritedTranscript,
   loadInheritedTranscript,
-  makeCoreStreamFn,
-  makeOpenerStreamFn,
-  makeRunResumeStreamFn,
+  type AssistantWork,
+  type HistorySystemNote,
+  type HistoryApprovalDecision,
+  type SubagentMailRef,
+} from "./transcript-messages";
+import {
+  withBase,
+  type SessionPin,
+  api,
+  approvalBlocksComposer,
+  fetchItem,
+  fetchTranscript,
+  fetchSessionApprovals,
+  forkSession,
+  cancelSessionGoal,
   resolveApproval,
   unresolvedApprovals,
   type RunPoll,
   TAIL_TURNS,
   type ApprovalDecision,
-  type AssistantWork,
   type CoreSession,
   type DeliveredFile,
-  type HistorySystemNote,
-  type HistoryApprovalDecision,
   type PendingApproval,
-  type SessionBackgroundOutput,
-  type SessionBackgroundView,
-  type SubagentMailRef,
   type TurnOptions,
   type TranscriptPage,
   type TurnRuntime,
   type WorkBlock,
-  fileContentUrl,
   onChatPrefsChange,
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
 import {
-  buildTimeline,
-  rowArgs,
-  rowTool,
-  toolBody,
+  activeRunForThread,
+  createRunSlot,
+  hasLiveRun,
+  requestStop,
+  runIsTerminal,
+  signalLiveRun,
+  makeCoreStreamFn,
+  makeOpenerStreamFn,
+  makeRunResumeStreamFn,
+} from "./run-stream";
+import {
   messageWorkTimeline,
   workTimelineSegments,
   streamedAnswer,
   currentTextPhase,
   postSpeechText,
-  toolCategory,
-  toolRowKind,
-  sessionToolView,
   type TimelineItem,
-  type ToolPayload,
-  type ToolRowModel,
 } from "./timeline";
 import { activityItems, type Item } from "./items";
 import "./slack-setup";
@@ -138,7 +116,7 @@ import { connectorCard, connectorLinksIn, setupContent, stripConnectorLinks } fr
 import type { ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
-import { errMessage, swallow } from "../../chassis/src/errors";
+import { errMessage } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
 import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
@@ -150,13 +128,9 @@ import {
   brandMark,
   brandName,
   browserRenderableImage,
-  chipBadge,
   copyText,
-  formatBytes,
-  relTime,
   sheenLabel,
   waveLoader,
-  workingWave,
 } from "./ui";
 import { icon } from "./icons";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
@@ -164,8 +138,6 @@ import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
   addPendingSession,
-  onSessionDragStart,
-  endSessionDrag,
   dropPendingSession,
   replacePendingSession,
   groupDmTitle,
@@ -174,35 +146,14 @@ import {
   sessionsState,
   sessionSlackUrl,
   openSession,
-  syncWorkingPulse,
 } from "./sessions";
-import {
-  backgroundLabel,
-  clearWorking,
-  conversationBackground,
-  cronRowMeta,
-  isAbandonedNewChat,
-  shouldStartProactiveOpener,
-  markWorking,
-  surfaceOf,
-  watchActivityLabel,
-} from "./session-list";
+import { clearWorking, isAbandonedNewChat, shouldStartProactiveOpener, markWorking, surfaceOf } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
 import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, type GoalStripState } from "./goal-strip";
-import {
-  ackKey,
-  peekLines,
-  subagentRows,
-  subagentSummary,
-  visibleSubagents,
-  type PeekLine,
-  type SubagentRow,
-} from "./subagent-activity";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
-import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
-import { goalWorked, workSeconds, workedLabel } from "./work-duration";
+import { goalWorked, workSeconds } from "./work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -227,7 +178,6 @@ const APPROVED_LABELS: Record<string, string> = {
   session: "Approved for this session",
   always: "Approved always",
 };
-type JobOutput = { text: string; cursor: number; state: "running" | "exited"; exitCode?: number };
 type MessageFields = Partial<{
   role: string;
   opener: boolean;
@@ -243,9 +193,6 @@ type MessageFields = Partial<{
   timestamp: number;
   entrySeq: number;
 }>;
-const GENERIC_DETAIL_KEYS =
-  "command path query pattern glob url name action file filename database filter repository resource title".split(" ");
-
 function nextChatCta(): string {
   let index = 0;
   try {
@@ -1997,7 +1944,7 @@ export function createChatSurface(
   function syncWorkTicker(): void {
     const goalTicking = Boolean(chatState.agent?.state.isStreaming && currentGoal()?.status === "active");
     const active =
-      (chatState.liveWork?.status === "working" && !chatState.liveWork.stale) || goalTicking || subagentUi.ticking;
+      (chatState.liveWork?.status === "working" && !chatState.liveWork.stale) || goalTicking || subagentsTicking();
     if (active && !workTicker) {
       workTicker = setInterval(() => drawActiveChat(), 1000);
     } else if (!active && workTicker) {
@@ -2023,424 +1970,21 @@ export function createChatSurface(
 
   let readonlyRedraw: (() => void) | null = null;
 
-  const bgPanel = {
-    requested: null as { sessionId: string | null; threadRef: string | null } | null,
-    open: false,
-    loading: false,
-    error: "",
-    detail: null as SessionBackgroundView | null,
-    openJob: null as string | null,
-    output: new Map<string, JobOutput>(),
-    timer: null as ReturnType<typeof setInterval> | null,
-    fetchSeq: 0,
-    epoch: 0,
-  };
-
-  function requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void {
-    const mounted = sessionId ? sessionId === chatState.sessionId : threadRef === chatState.threadRef;
-    if (mounted) {
-      openBackgroundPanel();
-      return;
-    }
-    bgPanel.requested = { sessionId, threadRef };
-  }
+  const background = createBackgroundPanel({ chatState, redrawTranscript });
+  const { backgroundActivityStrip, consumeBackgroundPanelRequest, requestBackgroundPanel } = background;
 
   function resetBackgroundPanel(): void {
-    stopBackgroundPanel();
-    Object.assign(bgPanel, { loading: false, error: "", detail: null });
-    bgPanel.output.clear();
-    bgPanel.fetchSeq++;
-    bgPanel.epoch++;
+    background.resetBackgroundPanel();
     readonlyRedraw = null;
   }
 
-  function consumeBackgroundPanelRequest(): void {
-    const req = bgPanel.requested;
-    bgPanel.requested = null;
-    if (!req) return;
-    const matches = req.sessionId ? req.sessionId === chatState.sessionId : req.threadRef === chatState.threadRef;
-    if (matches) openBackgroundPanel();
-  }
-
-  function openBackgroundPanel(): void {
-    if (bgPanel.open) return;
-    bgPanel.open = true;
-    void refreshBackgroundDetail();
-    bgPanel.timer = setInterval(() => void backgroundPanelTick(), 2_500);
-    redrawTranscript();
-  }
-
-  function stopBackgroundPanel(): void {
-    if (bgPanel.timer) clearInterval(bgPanel.timer);
-    Object.assign(bgPanel, { timer: null, open: false, openJob: null });
-  }
-
-  function toggleBackgroundPanel(): void {
-    if (!bgPanel.open) return openBackgroundPanel();
-    stopBackgroundPanel();
-    redrawTranscript();
-  }
-
-  async function refreshBackgroundDetail(): Promise<void> {
-    const id = chatState.sessionId;
-    if (!id) {
-      bgPanel.detail = { jobs: [], watches: [], crons: [] };
-      return;
-    }
-    const seq = ++bgPanel.fetchSeq;
-    bgPanel.loading = !bgPanel.detail;
-    try {
-      const d = await api<SessionBackgroundView>(`/api/sessions/${encodeURIComponent(id)}/background`);
-      if (seq !== bgPanel.fetchSeq) return;
-      bgPanel.detail = d;
-      bgPanel.error = "";
-    } catch (e) {
-      if (seq !== bgPanel.fetchSeq) return;
-      bgPanel.error = errMessage(e, "Failed to load background activity.");
-    } finally {
-      if (seq === bgPanel.fetchSeq) {
-        bgPanel.loading = false;
-        redrawTranscript();
-      }
-    }
-  }
-
-  async function backgroundPanelTick(): Promise<void> {
-    await refreshBackgroundDetail();
-    if (bgPanel.openJob) await pollJobOutput(bgPanel.openJob);
-    const d = bgPanel.detail;
-    if (d) {
-      const row = sessionsState.list.find((r) =>
-        chatState.sessionId ? r.id === chatState.sessionId : r.threadRef === chatState.threadRef,
-      );
-      if (
-        row &&
-        ((row.backgroundJobs ?? 0) !== d.jobs.length ||
-          (row.watches ?? 0) !== d.watches.length ||
-          (row.crons ?? 0) !== d.crons.length)
-      ) {
-        await refreshSessions({ silent: true });
-        redrawTranscript();
-      }
-    }
-  }
-
-  function toggleJobOutput(processId: string): void {
-    bgPanel.openJob = bgPanel.openJob === processId ? null : processId;
-    if (bgPanel.openJob && !bgPanel.output.has(processId)) void pollJobOutput(processId);
-    redrawTranscript();
-  }
-
-  async function pollJobOutput(processId: string): Promise<void> {
-    const id = chatState.sessionId;
-    if (!id) return;
-    const epoch = bgPanel.epoch;
-    const out: JobOutput = { text: "", cursor: 0, state: "running", ...bgPanel.output.get(processId) };
-    try {
-      for (let i = 0; i < 8; i++) {
-        const read = await api<SessionBackgroundOutput>(
-          `/api/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(processId)}/output?sinceCursor=${out.cursor}`,
-        );
-        const text = (out.text + read.chunk).slice(-16_384);
-        Object.assign(out, { text, cursor: read.cursor, state: read.state, exitCode: read.exitCode });
-        if (read.chunk.length < 60_000) break;
-      }
-      if (epoch !== bgPanel.epoch) return;
-      bgPanel.output.set(processId, out);
-    } catch (e) {
-      swallow("web-ui: background job output read", e);
-    }
-    if (epoch !== bgPanel.epoch) return;
-    redrawTranscript();
-  }
-
-  function timeLeft(expiresAt: number): string {
-    const mins = Math.round((expiresAt - Date.now()) / 60_000);
-    if (mins <= 0) return "expiring";
-    if (mins < 60) return `${mins}m left`;
-    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
-  }
-
-  function backgroundActivityStrip(): TemplateResult | typeof nothing {
-    const counts = conversationBackground(sessionsState.list, chatState.sessionId, chatState.threadRef);
-    const row = counts ? backgroundLabel(counts.jobs, counts.watches, counts.crons) : null;
-    const live =
-      bgPanel.open && bgPanel.detail
-        ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length, bgPanel.detail.crons.length)
-        : null;
-    const label = (live ?? row)?.label;
-    if (!label && !bgPanel.open) return nothing;
-    return html`
-      <section class="bg-activity ${bgPanel.open ? "expanded" : ""}">
-        <button
-          type="button"
-          class="bg-activity-strip"
-          aria-expanded=${String(bgPanel.open)}
-          @click=${toggleBackgroundPanel}
-        >
-          ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
-          <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
-        </button>
-        ${bgPanel.open ? backgroundPanelBody() : nothing}
-      </section>
-    `;
-  }
-
-  function backgroundPanelBody(): TemplateResult {
-    const d = bgPanel.detail;
-    const empty = d && d.jobs.length === 0 && d.watches.length === 0 && d.crons.length === 0;
-    return html`<div class="bg-panel" role="region" aria-label="Background activity">
-      ${bgPanel.error ? html`<div class="bg-panel-note">${bgPanel.error}</div>` : nothing}
-      ${!d && bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
-      ${empty && !bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
-      ${d ? d.jobs.map((j) => backgroundJobRow(j)) : nothing}
-      ${d ? d.watches.map((w) => backgroundWatchRow(w)) : nothing}
-      ${d ? d.crons.map((c) => backgroundCronRow(c)) : nothing}
-    </div>`;
-  }
-
-  function backgroundJobRow(j: SessionBackgroundView["jobs"][number]): TemplateResult {
-    const open = bgPanel.openJob === j.processId;
-    const out = bgPanel.output.get(j.processId);
-    const status =
-      out?.state === "exited"
-        ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}`
-        : timeLeft(j.expiresAt);
-    return html`
-      <div class="bg-row ${open ? "open" : ""}">
-        <button
-          type="button"
-          class="bg-row-head"
-          aria-expanded=${String(open)}
-          ${tip(open ? "Hide output" : "Show live output")}
-          @click=${() => toggleJobOutput(j.processId)}
-        >
-          ${icon(Terminal, 13)}
-          ${
-            j.purpose
-              ? html`<span class="bg-row-cmd bg-job-purpose">${j.purpose}</span>`
-              : html`<code class="bg-row-cmd">${j.command}</code>`
-          }
-          <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
-          <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
-        </button>
-        ${open ? html`<pre class="bg-row-output">${j.purpose ? `${j.command}\n\n` : ""}${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
-      </div>
-    `;
-  }
-
-  function backgroundCronRow(c: SessionBackgroundView["crons"][number]): TemplateResult {
-    return html`
-      <div class="bg-row watch">
-        <a class="bg-row-head" href=${deepLinkPath(UI_BASE, "crons", null, null, c.id)}>
-          ${icon(Clock3, 13)}
-          <span class="bg-row-cmd">Cron: <bdi>${c.title ?? "scheduled task"}</bdi></span>
-          <span class="bg-row-meta">${cronRowMeta(c)}</span>
-        </a>
-      </div>
-    `;
-  }
-
-  function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {
-    const what = w.pattern ? `output matching /${w.pattern}/` : "any new output";
-    const note = w.instructions?.trim();
-    return html`
-      <div class="bg-row watch">
-        <div class="bg-row-head static">
-          ${icon(Radar, 13)}
-          <span class="bg-row-cmd">Watch: wakes on ${what}${note ? ` · “${note}”` : ""}</span>
-          <span class="bg-row-meta"
-            >armed ${relTime(w.createdAt)} · ${watchActivityLabel(w)} · ${timeLeft(w.expiresAt)}</span
-          >
-        </div>
-      </div>
-    `;
-  }
-
-  const SUBAGENT_ACK_KEY = "qm.subagentAck";
-  const subagentUi = {
-    expanded: false,
-    peekId: null as string | null,
-    peek: null as PeekLine[] | null,
-    ticking: false,
-    timer: null as ReturnType<typeof setInterval> | null,
-    approvals: new Map<string, PendingApproval[]>(),
-    approvalsKey: "",
-    acknowledged: new Set<string>(
-      (() => {
-        try {
-          return JSON.parse(localStorage.getItem(SUBAGENT_ACK_KEY) ?? "[]") as string[];
-        } catch {
-          return [];
-        }
-      })(),
-    ),
-  };
-
-  function stopSubagentPeek(): void {
-    if (subagentUi.timer) clearInterval(subagentUi.timer);
-    subagentUi.timer = null;
-    subagentUi.peekId = null;
-    subagentUi.peek = null;
-  }
-
-  async function refreshSubagentPeek(id: string): Promise<void> {
-    const page = await fetchTranscript(id, { tailTurns: 1 }).catch(() => null);
-    if (subagentUi.peekId !== id) return;
-    subagentUi.peek = page ? peekLines(page.items) : [];
-    drawActiveChat();
-  }
-
-  function toggleSubagentPeek(row: SubagentRow): void {
-    const id = row.session.id;
-    const same = subagentUi.peekId === id;
-    stopSubagentPeek();
-    if (same) return drawActiveChat();
-    subagentUi.peekId = id;
-    void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), 4000);
-    drawActiveChat();
-  }
-
-  function acknowledgeSubagent(row: SubagentRow): void {
-    subagentUi.acknowledged.add(ackKey(row));
-    try {
-      localStorage.setItem(SUBAGENT_ACK_KEY, JSON.stringify([...subagentUi.acknowledged].slice(-200)));
-    } catch {
-      return drawActiveChat();
-    }
-    if (subagentUi.peekId === row.session.id) stopSubagentPeek();
-    drawActiveChat();
-  }
-
-  function syncSubagentApprovals(rows: readonly SubagentRow[]): void {
-    const waiting = rows.filter((row) => row.state === "waiting").map((row) => row.session.id);
-    const key = waiting.join(",");
-    if (key === subagentUi.approvalsKey) return;
-    subagentUi.approvalsKey = key;
-    for (const id of subagentUi.approvals.keys()) if (!waiting.includes(id)) subagentUi.approvals.delete(id);
-    for (const id of waiting)
-      void fetchSessionApprovals(id).then((r) => {
-        if (!subagentUi.approvalsKey.split(",").includes(id)) return;
-        subagentUi.approvals.set(id, r?.approvals ?? []);
-        drawActiveChat();
-      });
-  }
-
-  function resolveSubagentApproval(childId: string, decision: ApprovalDecision): void {
-    if (chatState.resolvingApprovals.has(decision.requestId)) return;
-    chatState.resolvingApprovals.add(decision.requestId);
-    ctx.composer.state.error = "";
-    drawActiveChat();
-    void resolveApproval(decision)
-      .then(() => {
-        subagentUi.approvals.set(
-          childId,
-          (subagentUi.approvals.get(childId) ?? []).filter((a) => a.requestId !== decision.requestId),
-        );
-      })
-      .catch((err: unknown) => {
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
-      })
-      .finally(() => {
-        chatState.resolvingApprovals.delete(decision.requestId);
-        subagentUi.approvalsKey = "";
-        void refreshSessions({ silent: true }).finally(() => drawActiveChat());
-      });
-  }
-
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
-    const now = Date.now();
-    const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
-    const peeking = subagentUi.peekId === row.session.id;
-    const approvals = unresolvedApprovals(subagentUi.approvals.get(row.session.id) ?? []);
-    const title = row.session.title?.trim() || "Subagent";
-    return html`<div
-      class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
-      style=${`--subagent-depth:${row.depth - 1}`}
-    >
-      <button
-        type="button"
-        class="subagent-row-head"
-        aria-expanded=${String(peeking)}
-        @click=${() => toggleSubagentPeek(row)}
-      >
-        ${row.state === "working" ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
-        ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
-        ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
-        <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${row.state} · ${elapsed}</span>
-      </button>
-      ${
-        row.state === "failed"
-          ? html`<button type="button" class="subagent-row-action" @click=${() => acknowledgeSubagent(row)}>
-              Dismiss
-            </button>`
-          : nothing
-      }
-      <button type="button" class="subagent-row-action" @click=${() => void openSessionById(row.session.id)}>
-        Open
-      </button>
-      ${
-        approvals.length
-          ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
-              resolveSubagentApproval(row.session.id, decision),
-            )
-          : nothing
-      }
-      ${peeking ? subagentPeekTpl() : nothing}
-    </div>`;
-  }
-
-  function subagentPeekTpl(): TemplateResult {
-    const lines = subagentUi.peek;
-    if (!lines) return html`<div class="subagent-peek bg-panel-note">Loading…</div>`;
-    if (!lines.length) return html`<div class="subagent-peek bg-panel-note">No activity yet</div>`;
-    return html`<ol class="subagent-peek" aria-live="polite">
-      ${lines.map(
-        (line) =>
-          html`<li class="subagent-peek-line ${line.kind}">
-            ${line.kind === "tool" ? icon(Wrench, 11) : nothing}<span dir="auto">${line.text}</span>
-          </li>`,
-      )}
-    </ol>`;
-  }
-
-  function subagentStrip(): TemplateResult | typeof nothing {
-    const rootId = chatState.sessionId;
-    if (!rootId) return nothing;
-    const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
-    if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
-    syncSubagentApprovals(rows);
-    subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
-    syncWorkTicker();
-    if (!rows.length) return nothing;
-    const single = rows.length === 1;
-    const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
-    const failed = rows.some((row) => row.state === "failed");
-    return html`
-      <section class="bg-activity subagent-activity ${expanded ? "expanded" : ""} ${failed ? "has-failed" : ""}">
-        ${
-          single
-            ? nothing
-            : html`<button
-                type="button"
-                class="bg-activity-strip"
-                aria-expanded=${String(expanded)}
-                @click=${() => {
-                  subagentUi.expanded = !subagentUi.expanded;
-                  if (!subagentUi.expanded) stopSubagentPeek();
-                  drawActiveChat();
-                }}
-              >
-                ${icon(Bot, 13)}<span class="bg-activity-label">${subagentSummary(rows)}</span>
-                <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
-              </button>`
-        }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
-      </section>
-    `;
-  }
+  const { subagentStrip, subagentsTicking } = createSubagentStrip({
+    ctx,
+    chatState,
+    drawActiveChat,
+    openSessionById,
+    syncWorkTicker,
+  });
 
   async function cancelGoal(agent: Agent, goal: GoalStripState): Promise<void> {
     const sessionId = chatState.sessionId;
@@ -2526,77 +2070,6 @@ export function createChatSurface(
         </button>
       </section>
     `;
-  }
-
-  function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
-    if (work.stale) {
-      const active = activeToolRow(work);
-      const call = toolBody(active?.call);
-      const tool = active?.call?.tool ?? "";
-      const verb = active ? (TOOL_META[toolCategory(active.call?.tool ?? null, call)] ?? UNKNOWN_TOOL).active : null;
-      return {
-        icon: RefreshCw,
-        label: verb ? `${verb} interrupted, resuming…` : "Interrupted, resuming…",
-        detail: active ? toolDetail(tool, call, toolBody(active.result)) : "",
-      };
-    }
-    const active = activeToolRow(work);
-    return active ? activeToolSummary(active, work) : null;
-  }
-
-  function activeToolRow(work: WorkBlock): ToolRowModel | null {
-    const timeline = buildTimeline(work);
-    for (let i = timeline.length - 1; i >= 0; i--) {
-      const item = timeline[i]!;
-      if (item.kind === "tool" && toolRowKind(item.row, work.status) === "running") return item.row;
-    }
-    return null;
-  }
-
-  function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode; label: string; detail: string } {
-    const call = toolBody(row.call);
-    const result = toolBody(row.result);
-    const tool = rowTool(row) ?? "unknown";
-    const meta = TOOL_META[toolCategory(rowTool(row), rowArgs(row))] ?? UNKNOWN_TOOL;
-    const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
-    const posting = postSpeechText(row, true);
-    if (posting) {
-      return {
-        icon: MessageSquare,
-        label: secs > 0 ? `Posting message for ${secs}s` : "Posting message",
-        detail: firstLine(posting, 60),
-      };
-    }
-    return {
-      icon: meta.icon,
-      label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
-      detail: toolDetail(tool, call, result),
-    };
-  }
-
-  function elapsedSeconds(startedAt: number | null | undefined): number {
-    if (typeof startedAt !== "number" || startedAt <= 0) return 0;
-    return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-  }
-
-  function usedToolsSuffix(work: WorkBlock): string {
-    const n = activityItems(work.activity).filter((item) => item.kind === "ToolCall").length;
-    return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
-  }
-
-  function workLabel(work: WorkBlock): string {
-    if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted, resuming…";
-    if (currentTextPhase(work)?.phase === "final_answer") return workedLabel("Worked", workSeconds(work));
-    if (work.status === "thinking") return "Thinking";
-    const secs = workSeconds(work);
-    return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
-  }
-
-  function timelineKey(item: TimelineItem): string {
-    if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
-    if (item.kind === "approval") return `approval:${item.approval.requestId}`;
-    if (item.kind === "thinking") return `thinking:${item.step ?? item.seq}`;
-    return `${item.kind}:${item.item.seq}`;
   }
 
   function workBlock(
@@ -2693,46 +2166,6 @@ export function createChatSurface(
     })}`;
   }
 
-  function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
-    const summary = firstLine(a.command, 80);
-    const truncated = a.command.includes("\n") || a.command.length > 80;
-    return html`
-      <div class="approval-head">
-        <span class="approval-title">Approval needed</span>
-        ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
-      </div>
-      ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
-      ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
-      ${
-        expanded
-          ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
-          : html`<code class="approval-summary" ${tip(a.command)}>${summary}</code>`
-      }
-      ${
-        a.matched
-          ? html`<div class="approval-match">
-              <span class="approval-match-label">Triggered by</span
-              ><code class="approval-match-snippet">${a.matched}</code>
-            </div>`
-          : nothing
-      }
-      ${
-        !expanded && truncated
-          ? html`<details class="approval-full">
-              <summary>Show full command</summary>
-              <code class="approval-cmd">${a.command}</code>
-            </details>`
-          : nothing
-      }
-    `;
-  }
-
-  function approvalMarker(a: PendingApproval): TemplateResult {
-    return html`<div class="approval-card inline-approval-marker">
-      <div class="approval-text">${approvalSummaryView(a)}</div>
-    </div>`;
-  }
-
   function waitingSteerRows(agent: Agent): TemplateResult[] {
     return ctx.composer.waitingSteers(agent).map(
       (q) =>
@@ -2783,235 +2216,7 @@ export function createChatSurface(
     return toolRow(item.row, work, status, stale);
   }
 
-  const toolMeta = (icon: IconNode, active: string, done: string, attempted: string) => ({
-    icon,
-    active,
-    done,
-    attempted,
-  });
-  const TOOL_META: Record<string, ReturnType<typeof toolMeta>> = {
-    execute: toolMeta(Terminal, "Running command", "Ran command", "Tried command"),
-    read: toolMeta(BookOpen, "Reading file", "Read file", "Tried reading file"),
-    skill: toolMeta(BookOpen, "Loading skill", "Loaded skill", "Tried loading skill"),
-    write: toolMeta(Pencil, "Writing file", "Wrote file", "Tried writing file"),
-    publish: toolMeta(Rocket, "Publishing", "Published", "Tried publishing"),
-    recall: toolMeta(Brain, "Searching memory", "Searched memory", "Tried searching memory"),
-    memory: toolMeta(Brain, "Using memory", "Used memory", "Tried using memory"),
-    history: toolMeta(ScrollText, "Searching history", "Searched history", "Tried searching history"),
-    background: toolMeta(Terminal, "Managing process", "Managed process", "Tried managing process"),
-  };
-  const UNKNOWN_TOOL = toolMeta(Wrench, "Working", "Finished step", "Tried step");
-
-  function toolName(tool: string): string {
-    const parts = tool.split(/__|[/:.]/).filter(Boolean);
-    const meaningful = ["mcp", "connector"].includes(parts[0]?.toLowerCase() ?? "") ? parts.slice(1) : parts;
-    const names: Record<string, string> = { github: "GitHub", api: "API", url: "URL", id: "ID" };
-    return meaningful
-      .flatMap((part) => part.split(/[-_]/))
-      .filter(Boolean)
-      .map((part) => names[part.toLowerCase()] ?? part[0]?.toUpperCase() + part.slice(1))
-      .join(" ");
-  }
-
-  const SUBAGENT_MAIL_NOTES: Record<string, string> = {
-    final_answer: "finished",
-    no_reply: "finished without a reply",
-    awaiting_input: "needs an approval",
-    errored: "failed",
-    refused: "was refused",
-  };
-
-  function subagentChip(title: string, sessionId?: string): TemplateResult {
-    const session = sessionsState.list.find((row) => row.id === sessionId);
-    const inner = html`<span dir="auto">${session?.title || title}</span>`;
-    if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
-    return html`<button
-      class="subagent-chip"
-      type="button"
-      title="Open subagent · Drag to the sidebar to make a top-level session"
-      draggable=${session ? "true" : "false"}
-      @dragstart=${(e: DragEvent) => {
-        if (session) onSessionDragStart(e, session);
-        else e.preventDefault();
-      }}
-      @dragend=${endSessionDrag}
-      @click=${(e: Event) => {
-        e.preventDefault();
-        e.stopPropagation();
-        void openSessionById(sessionId);
-      }}
-    >
-      ${inner}
-    </button>`;
-  }
-
-  function firstLine(s: string, max?: number): string {
-    const line = s.split("\n")[0] ?? "";
-    return max !== undefined && line.length > max ? `${line.slice(0, max - 1)}…` : line;
-  }
-
-  function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
-    if (typeof call.purpose === "string" && call.purpose.trim()) return call.purpose.trim();
-    const query = call.query ?? result.query ?? "";
-    const counted =
-      result.count === undefined ? query : `${query} · ${result.count} result${result.count === 1 ? "" : "s"}`;
-    switch (toolCategory(tool, { ...result, ...call })) {
-      case "execute":
-        return call.command ? firstLine(call.command) : "";
-      case "read":
-        return call.path ?? result.path ?? "";
-      case "skill": {
-        const name = call.name ?? result.name ?? "";
-        const path = call.path ?? result.path ?? "SKILL.md";
-        return path === "SKILL.md" ? name : `${name}/${path}`;
-      }
-      case "write": {
-        const path = call.path ?? result.path ?? "";
-        const bytes = result.bytes ?? call.bytes;
-        return bytes !== undefined ? `${path} · ${formatBytes(bytes)}` : path;
-      }
-      case "publish":
-        return result.url ?? result.name ?? call.name ?? "";
-      case "recall":
-      case "history": {
-        const seq = call.seq ?? result.seq;
-        if (seq !== undefined) return result.found === false ? `entry #${seq} · not found` : `entry #${seq}`;
-        return counted;
-      }
-      case "memory": {
-        const detail = result.count === undefined && result.added !== undefined ? `${result.added} saved` : counted;
-        return [call.action ?? result.action ?? "", detail].filter(Boolean).join(" ");
-      }
-      case "background": {
-        const action = call.action ?? result.action ?? "";
-        const target = call.command ? firstLine(call.command, 48) : (call.process_id ?? call.monitor_id ?? "");
-        return [action, target].filter(Boolean).join(" ");
-      }
-      default:
-        return genericToolDetail(call, result);
-    }
-  }
-
-  function genericToolDetail(call: ToolPayload, result: ToolPayload): string {
-    for (const source of [call, nestedToolInput(call), result, nestedToolInput(result)]) {
-      for (const key of GENERIC_DETAIL_KEYS) {
-        const value = (source as Record<string, unknown>)[key];
-        if (typeof value === "string" && value.trim()) return firstLine(value.trim());
-      }
-    }
-    return "";
-  }
-
-  function nestedToolInput(payload: ToolPayload): ToolPayload {
-    const record = payload as Record<string, unknown>;
-    for (const key of ["input", "arguments", "args"]) {
-      const value = record[key];
-      if (value && typeof value === "object" && !Array.isArray(value)) return value as ToolPayload;
-    }
-    return {};
-  }
-
-  function toolPayloadText(payload: ToolPayload): string {
-    const hidden = new Set(["tool", "callId", "workStartedAt", "workFinishedAt", "isError", "retrySafe", "rerun"]);
-    const entries = Object.entries(payload as Record<string, unknown>).filter(
-      ([key, value]) => !hidden.has(key) && value !== undefined,
-    );
-    if (!entries.length) return "";
-    if (entries.length === 1 && typeof entries[0]![1] === "string") return entries[0]![1] as string;
-    return JSON.stringify(Object.fromEntries(entries), null, 2);
-  }
-
-  function toolPayloadCard(label: string | null, text: string, loadFull?: () => void): TemplateResult | typeof nothing {
-    if (!text) return nothing;
-    return html`<div class="tool-payload-card">
-      ${label ? html`<div class="tool-payload-label">${label}</div>` : nothing}
-      <pre class="tool-payload-body">${text}</pre>
-      ${loadFull ? html`<div class="code-card-foot"><button class="show-full-btn" type="button" @click=${loadFull}>Show full ${label?.toLowerCase() ?? "command"}</button></div>` : nothing}
-    </div>`;
-  }
-
-  function toolDisclosure(
-    tool: string,
-    call: ToolPayload,
-    result: ToolPayload,
-    work: WorkBlock,
-    row: ToolRowModel,
-  ): TemplateResult {
-    const execution = toolCategory(tool, { ...result, ...call }) === "execute";
-    const input = execution ? (call.command ?? "") : toolPayloadText(call);
-    const text = row.result?.text ?? null;
-    const output = execution ? "" : toolPayloadText({ ...result, ...(text !== null ? { result: text } : {}) });
-    return html`<div class="tool-disclosure">
-      ${toolPayloadCard(execution ? null : "Input", input, row.call?.truncated ? () => void loadFullItem(work, row.call!) : undefined)}
-      ${toolPayloadCard("Result", output, row.result?.truncated ? () => void loadFullItem(work, row.result!) : undefined)}
-    </div>`;
-  }
-
-  function toolRow(row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale = false): TemplateResult {
-    if (row.approval) {
-      const p = toolBody(row.approval);
-      return html`<div class="tool-row tool-approval">
-        <span class="tool-icon">${icon(Wrench, 13)}</span>
-        <span class="tool-label"
-          >Approval
-          needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
-        >
-      </div>`;
-    }
-    const call = toolBody(row.call);
-    const result = toolBody(row.result);
-    const tool = rowTool(row) ?? "unknown";
-    const knownMeta = TOOL_META[toolCategory(tool, rowArgs(row))];
-    const meta = knownMeta ?? UNKNOWN_TOOL;
-    const name = toolName(tool) || "Tool";
-    const kind = toolRowKind(row, status);
-    let label = knownMeta ? meta.attempted : `Tried ${name}`;
-    if (kind === "approval") label = row.pending ? "Approval needed" : "Approval requested";
-    else if (kind === "running") {
-      const active = knownMeta ? meta.active : name;
-      label = stale ? `${active} — interrupted` : active;
-    } else if (kind === "ok") label = knownMeta ? meta.done : name;
-    else if (kind === "failed") label = `Failed ${name}`;
-    let why = "";
-    if (kind === "approval") why = firstLine(result.reason ?? "", 90);
-    else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
-    const base = kind === "approval" ? "" : toolDetail(tool, call, result);
-    const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
-    const detail = [base, why, attempts].filter(Boolean).join(" · ");
-    const semantic = activityLabel(row, status);
-    const visible = semantic
-      ? [semantic, why, attempts, stale && kind === "running" ? "interrupted" : ""].filter(Boolean).join(" · ")
-      : [label, detail].filter(Boolean).join(" ");
-    const description = activityDescription(row);
-    const session = sessionPresentation(row, status);
-    const sessionView = session ? sessionToolView(row, sessionsState.list) : null;
-    const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
-    const sessionText = session ? [session.label, sessionDetail].filter(Boolean).join(" ") : null;
-    const rowIcon = session
-      ? Bot
-      : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
-    const classes = ["tool-row", `tool-${kind}`].join(" ");
-    const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
-      ${session && sessionView?.chipTitle ? html`<span class="session-action">${session.label}</span>${subagentChip(sessionView.chipTitle, sessionView.sessionId)}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${sessionText ?? (detail ? `${label}: ${detail}` : label)}>${sessionText ?? visible}</span>`}`;
-    if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
-    const renderDisclosure = (details: HTMLDetailsElement): void => {
-      const host = details.querySelector<HTMLElement>(".tool-disclosure-host");
-      if (host) render(details.open ? toolDisclosure(tool, call, result, work, row) : nothing, host);
-    };
-    return html`<details
-      class="${classes} tool-expandable"
-      @toggle=${(event: Event) => renderDisclosure(event.currentTarget as HTMLDetailsElement)}
-    >
-      <summary class="tool-summary">${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span></summary>
-      <div
-        class="tool-disclosure-host"
-        ${ref((element) => {
-          const details = element?.closest<HTMLDetailsElement>("details");
-          if (details) renderDisclosure(details);
-        })}
-      ></div>
-    </details>`;
-  }
+  const { toolRow, subagentChip } = createToolRows({ loadFullItem, openSessionById });
 
   function redrawTranscript(): void {
     if (readonlyRedraw) readonlyRedraw();
@@ -3030,145 +2235,7 @@ export function createChatSurface(
     redrawTranscript();
   }
 
-  function inlineHtmlName(name?: string, mimeType?: string): boolean {
-    if (mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "text/html") return true;
-    return /\.html?$/i.test(name ?? "");
-  }
-
-  const dismissedHtmlPreviews = new Set<string>();
-
-  function inlineHtmlFrame(name: string, src: string, size?: number, href?: string): TemplateResult {
-    const key = `${chatState.sessionId ?? "new"}:${href ?? src}:${name}`;
-    const chip = chipBadge(Paperclip, name, size, href, false);
-    if (dismissedHtmlPreviews.has(key)) return chip;
-    return html`<span class="file-html-unfurl"
-      ><span class="file-html-header"
-        ><span dir="auto">${name}</span
-        ><button
-          type="button"
-          aria-label="Dismiss ${name} preview"
-          title="Dismiss preview"
-          @click=${() => {
-            dismissedHtmlPreviews.add(key);
-            redrawTranscript();
-          }}
-        >
-          ${icon(X, 14)}
-        </button></span
-      ><iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>${chip}</span
-    >`;
-  }
-
-  interface UserAttachmentView {
-    fileName: string;
-    mimeType?: string;
-    size?: number;
-    content?: string;
-    artifactId?: string;
-  }
-
-  const localAttachmentUrls = new Map<UserAttachmentView, string>();
-
-  function localContentUrl(a: UserAttachmentView): string | undefined {
-    if (!a.content) return undefined;
-    const cached = localAttachmentUrls.get(a);
-    if (cached) return cached;
-    try {
-      const b64 = a.content.startsWith("data:") ? (a.content.split(",")[1] ?? "") : a.content;
-      const bytes = base64ToBytes(b64);
-      const blob = new Blob([bytes as BlobPart], { type: a.mimeType || "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      localAttachmentUrls.set(a, url);
-      return url;
-    } catch {
-      return undefined;
-    }
-  }
-
-  let attachmentPeek: HTMLElement | null = null;
-
-  function unpeekAttachment(): void {
-    attachmentPeek?.remove();
-    attachmentPeek = null;
-    document.removeEventListener("scroll", unpeekAttachment, true);
-  }
-
-  function peekAttachment(e: Event): void {
-    const link = e.currentTarget as HTMLElement | null;
-    const img = link?.querySelector("img");
-    if (!link || !img || getComputedStyle(link).getPropertyValue("--attachment-compact").trim() !== "1") return;
-    unpeekAttachment();
-    const bounds = (link.closest(".split-pane-content") ?? document.documentElement).getBoundingClientRect();
-    const anchor = link.getBoundingClientRect();
-    const pad = 12;
-    const chrome = 12;
-    const maxW = Math.max(80, Math.min(360, bounds.width - pad * 2 - chrome));
-    const maxH = Math.max(60, Math.min(320, bounds.height - anchor.height - pad * 3 - chrome));
-    const natural = { w: img.naturalWidth || maxW, h: img.naturalHeight || maxH };
-    const scale = Math.min(maxW / natural.w, maxH / natural.h, 1);
-    const w = Math.round(natural.w * scale);
-    const h = Math.round(natural.h * scale);
-    const copy = Object.assign(document.createElement("img"), { src: img.currentSrc || img.src, alt: "" });
-    Object.assign(copy.style, { width: `${w}px`, height: `${h}px` });
-    const peek = Object.assign(document.createElement("div"), { className: "attachment-peek" });
-    peek.setAttribute("aria-hidden", "true");
-    peek.append(copy);
-    const below = anchor.bottom + 8;
-    const top =
-      below + h + chrome <= bounds.bottom - pad ? below : Math.max(bounds.top + pad, anchor.top - 8 - h - chrome);
-    const left = Math.max(bounds.left + pad, Math.min(anchor.right - w - chrome, bounds.right - pad - w - chrome));
-    Object.assign(peek.style, { top: `${top}px`, left: `${left}px` });
-    document.body.append(peek);
-    attachmentPeek = peek;
-    document.addEventListener("scroll", unpeekAttachment, true);
-  }
-
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
-    const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
-    if (a.mimeType?.startsWith("image/")) {
-      const dataUrl =
-        a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const href = artifactHref ?? localContentUrl(a) ?? dataUrl;
-      if (href && browserRenderableImage(a.mimeType)) {
-        return html`<a
-          class="file-image"
-          href=${href}
-          target="_blank"
-          rel="noreferrer"
-          ${tip(a.fileName)}
-          @mouseenter=${peekAttachment}
-          @mouseleave=${unpeekAttachment}
-          @focus=${peekAttachment}
-          @blur=${unpeekAttachment}
-          ><img src=${href} alt=${a.fileName} loading="lazy" /><span class="file-image-name" dir="auto"
-            >${a.fileName}</span
-          >${typeof a.size === "number" ? html`<small class="file-image-size">${formatBytes(a.size)}</small>` : nothing}</a
-        >`;
-      }
-      return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
-    }
-    if (inlineHtmlName(a.fileName, a.mimeType)) {
-      let src = artifactHref;
-      if (!src && a.content) {
-        src = a.content.startsWith("data:") ? a.content : `data:text/html;base64,${a.content}`;
-      }
-      if (src) return inlineHtmlFrame(a.fileName, src, a.size, artifactHref);
-    }
-    return chipBadge(Paperclip, a.fileName, a.size, artifactHref ?? localContentUrl(a), false, a.mimeType);
-  }
-
-  function deliveredFileBadge(file: DeliveredFile): TemplateResult {
-    if (!file.artifactId) return chipBadge(Paperclip, file.name, file.sizeBytes, undefined, false);
-    const href = fileContentUrl(file.artifactId, file.name);
-    if (file.mimetype?.startsWith("image/")) {
-      if (!browserRenderableImage(file.mimetype)) return chipBadge(FileImage, file.name, file.sizeBytes, href, true);
-      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(file.name)}
-        ><img src=${href} alt=${file.name} loading="lazy"
-      /></a>`;
-    }
-    if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
-    return chipBadge(Paperclip, file.name, file.sizeBytes, href, false, file.mimetype);
-  }
+  const { userAttachmentBadge, deliveredFileBadge } = createChatAttachments({ chatState, redrawTranscript });
 
   function scrollTranscript(force = false): void {
     if (preserveConnectionScroll) {
