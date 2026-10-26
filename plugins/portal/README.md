@@ -272,9 +272,7 @@ The OIDC client is generic, so Google is pure config. One-time setup:
 3. The Slack plugin keys on emails by default too (bot scope `users:read.email`, already in the
    repo manifest — reinstall the app if it predates the scope), so Slack turns and web logins
    resolve to the same principal.
-4. A deployment whose state predates email keying (Slack U… ids in the DB) must be re-keyed
-   **once**: `scripts/migrate-principals-to-email.mjs` (dry-run by default; see its header).
-   Update the core's `ADMIN_GRANTS` to emails in the same change.
+4. Update the core's `ADMIN_GRANTS` to emails.
 
 Secrets: `OIDC_CLIENT_SECRET`, `PORTAL_SESSION_SECRET`, and `PORTAL_IDENTITY_SECRET`; each must be
 distinct from `CORE_SIGNING_SECRET`.

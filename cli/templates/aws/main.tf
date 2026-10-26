@@ -435,21 +435,6 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.cluster_name}/*"]
       },
       {
-        Sid      = "RunDeploymentCanaries"
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask"]
-        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*"]
-        Condition = {
-          ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
-        }
-      },
-      {
-        Sid      = "InspectDeploymentCanaries"
-        Effect   = "Allow"
-        Action   = ["ecs:DescribeTasks"]
-        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.cluster_name}/*"]
-      },
-      {
         Sid       = "PassTaskRolesToEcs"
         Effect    = "Allow"
         Action    = ["iam:PassRole"]
