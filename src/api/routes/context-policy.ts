@@ -1,10 +1,41 @@
 import { parseScopeId } from "../../types.ts";
-import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
+import {
+  parseBotLedger,
+  type ChannelPolicy,
+  type ChannelPolicyStore,
+} from "../../surface-cache/channel-policy-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const MAX_ORDERS_CHARS = 20_000;
+
+export async function writeAmbientPolicy(
+  store: ChannelPolicyStore,
+  container: string,
+  input: { orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown },
+  setBy: string,
+  ordersRequired: string,
+): Promise<{ policy: ChannelPolicy } | { status: 400 | 409; message: string }> {
+  if (typeof input.orders !== "string") return { status: 400, message: ordersRequired };
+  if (input.orders.length > MAX_ORDERS_CHARS)
+    return {
+      status: 400,
+      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
+    };
+  const parsed = parseBotLedger(input.bots);
+  if ("error" in parsed) return { status: 400, message: parsed.error };
+  const { ambientEnabled } = input;
+  if (ambientEnabled !== undefined && ambientEnabled !== null && typeof ambientEnabled !== "boolean")
+    return { status: 400, message: "ambientEnabled must be a boolean or null (null = default rule)" };
+  const current = await store.get(container);
+  if (typeof input.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== input.baseUpdatedAt)
+    return {
+      status: 409,
+      message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
+    };
+  return { policy: await store.set(container, input.orders, { setBy, bots: parsed.bots, ambientEnabled }) };
+}
 
 async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
   const { res, deps } = ctx;
@@ -47,32 +78,19 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
   const container = await policyContainer(ctx, principalId, scope);
   if (!container) return;
-  if (typeof b.orders !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
-  if (b.orders.length > MAX_ORDERS_CHARS)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
+  const written = await writeAmbientPolicy(
+    deps.channelPolicy!,
+    container,
+    { ...b, bots: b.bots ?? {} },
+    principalId,
+    "orders (string) required",
+  );
+  if ("message" in written)
+    return sendJson(res, written.status, {
+      error: written.status === 409 ? "conflict" : "bad_request",
+      message: written.message,
     });
-  const parsed = parseBotLedger(b.bots ?? {});
-  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
-  if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambientEnabled must be a boolean or null (null = default rule)",
-    });
-  const current = await deps.channelPolicy!.get(container);
-  if (typeof b.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== b.baseUpdatedAt) {
-    return sendJson(res, 409, {
-      error: "conflict",
-      message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
-    });
-  }
-  const p = await deps.channelPolicy!.set(container, b.orders, {
-    setBy: principalId,
-    bots: parsed.bots,
-    ambientEnabled: b.ambientEnabled as boolean | null | undefined,
-  });
+  const p = written.policy;
   audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
   return sendJson(res, 200, {
     policy: { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled ?? null, updatedAt: p.updatedAt },
