@@ -180,14 +180,7 @@ export function createCronStore(
         applied = !(cron.lastFireNote && cron.lastFireNote.at > note.at);
         return applied ? { ...cron, lastFireNote: note } : cron;
       };
-      if (backing.update) {
-        if ((await backing.update(id, apply)) === null) return "missing";
-        return applied ? "applied" : "superseded";
-      }
-      const cron = await backing.get(id);
-      if (!cron) return "missing";
-      apply(cron);
-      if (applied) await backing.merge(id, { lastFireNote: note });
+      if ((await backing.update(id, apply)) === null) return "missing";
       return applied ? "applied" : "superseded";
     },
     async claimSlot(id, scheduledAt, at) {
@@ -203,16 +196,8 @@ export function createCronStore(
         const { nextFireAt: _dropped, deferUntil: _cleared, ...rest } = cron;
         return { ...rest, lastFiredAt: at, ...(next !== undefined ? { nextFireAt: next } : {}) };
       };
-      if (backing.update) {
-        await backing.update(id, transform);
-        return claimed;
-      }
-      const cron = await backing.get(id);
-      if (!cron) return false;
-      const next = transform(cron);
-      if (!claimed) return false;
-      await backing.merge(id, { lastFiredAt: next.lastFiredAt, nextFireAt: next.nextFireAt, deferUntil: undefined });
-      return true;
+      await backing.update(id, transform);
+      return claimed;
     },
     async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
       const restore = (cron: Cron): Cron => {
@@ -224,13 +209,7 @@ export function createCronStore(
           nextFireAt: scheduledAt,
         };
       };
-      if (backing.update) {
-        await backing.update(id, restore);
-        return;
-      }
-      const cron = await backing.get(id);
-      if (!cron || cron.lastFiredAt !== at) return;
-      await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
+      await backing.update(id, restore);
     },
     async defer(id, until) {
       await backing.merge(id, { deferUntil: until });
