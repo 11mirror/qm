@@ -96,8 +96,12 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     try {
       return await action(await connect(name));
     } catch (e) {
-      if (e instanceof ManagedAgentsCommandLostError || e instanceof ManagedAgentsSandboxGoneError) forget(name);
-      throw e;
+      if (!(e instanceof ManagedAgentsCommandLostError || e instanceof ManagedAgentsSandboxGoneError)) throw e;
+      forget(name);
+      const scope = e instanceof ManagedAgentsSandboxGoneError ? scopeOf(name) : undefined;
+      if (!scope || (await store.get(scope))?.initializationPending) throw e;
+      await sandbox.ensureResident(scope);
+      return action(await connect(name));
     }
   }
 
@@ -221,11 +225,11 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       forget,
       checkpoints: {
         machineBound: true,
-        capture: async (name) =>
-          (await withSession(name, (session) => session.createCheckpoint(CHECKPOINT_LABEL))).checkpointId,
+        capture: async (name) => (await (await connect(name)).createCheckpoint(CHECKPOINT_LABEL)).checkpointId,
         restore: rollback,
         async drop(name, checkpointId) {
-          await sessions.get(name)?.deleteCheckpoint(checkpointId);
+          const found = await findSession(name);
+          if (found) await client.deleteCheckpoint(found.sessionId, checkpointId);
         },
       },
     },
