@@ -93,11 +93,18 @@ test("the manifest explains absent tools", () => {
     clientTools: [],
   });
   const reason = (name: string) => entries.find((entry) => entry.name === name)?.reason;
-  assert.equal(reason("cron"), "The control API is not configured.");
-  assert.equal(reason("execute"), "Read-only turn.");
-  assert.equal(reason("acme_write"), "Read-only turn; this tool writes.");
+  assert.equal(
+    reason("cron"),
+    "Schedules future and recurring work. Off until an admin sets up this server's control API.",
+  );
+  assert.equal(
+    reason("web"),
+    "Lets the agent post, react and read messages in the web app on its own. Off in your conversations, where the agent's reply appears directly; on when it posts on its own, as in scheduled runs.",
+  );
+  assert.equal(reason("execute"), "Runs commands on a sandbox computer. Off because this run is read-only.");
+  assert.equal(reason("acme_write"), "Off because this run is read-only and this tool makes changes.");
   assert.equal(entries.find((entry) => entry.source === "connector" && entry.name === "memory")?.present, false);
-  assert.equal(reason("acme_search"), "Served by the acme connector.");
+  assert.equal(reason("acme_search"), "From the acme connector.");
   assert.deepEqual(
     entries.filter((entry) => entry.present).map((entry) => entry.name),
     ["memory", "history", "subagents", "sessions", "finish_silently", "runtime", "acme_search"],
