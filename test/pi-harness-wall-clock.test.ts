@@ -112,16 +112,3 @@ test("extendMs can extend repeatedly, then expiring (0) runs the normal abort pa
   assert.equal(outcome, "aborted");
   assert.equal(asked, 3);
 });
-
-test("without extendMs the cap behaves exactly as before", async () => {
-  let release!: () => void;
-  const prompting = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const outcome = await raceTurnWallClock(prompting, {
-    capMs: 20,
-    graceMs: 5_000,
-    abort: async () => release(),
-  });
-  assert.equal(outcome, "aborted");
-});

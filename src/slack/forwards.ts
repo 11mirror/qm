@@ -9,10 +9,6 @@ interface ForwardedMessage {
   attachments?: SlackMessageAttachment[];
 }
 
-interface SlackMessageBlock {
-  message?: ForwardedMessage;
-}
-
 interface SlackMessageAttachment extends ForwardedMessage {
   fallback?: string;
   author_name?: string;
@@ -23,18 +19,7 @@ interface SlackMessageAttachment extends ForwardedMessage {
   is_msg_unfurl?: boolean;
   is_share?: boolean;
   ts?: string | number;
-  message_blocks?: SlackMessageBlock[];
-}
-
-function isForwardedAttachment(attachment: SlackMessageAttachment): boolean {
-  return attachment.is_msg_unfurl === true || attachment.is_share === true;
-}
-
-function nestedMessages(attachment: SlackMessageAttachment): ForwardedMessage[] {
-  const messages = (attachment.message_blocks ?? []).flatMap((block) =>
-    block?.message && typeof block.message === "object" ? [block.message] : [],
-  );
-  return attachment.attachments?.length ? [...messages, { attachments: attachment.attachments }] : messages;
+  message_blocks?: Array<{ message?: ForwardedMessage }>;
 }
 
 export function messageWithForwardedContent(message: ForwardedMessage): { text: string; files: SlackFile[] } {
@@ -53,7 +38,12 @@ export function messageWithForwardedContent(message: ForwardedMessage): { text: 
   const visit = (current: ForwardedMessage, depth: number): void => {
     if (depth > MAX_FORWARD_DEPTH) return;
     for (const attachment of Array.isArray(current.attachments) ? current.attachments : []) {
-      if (!attachment || typeof attachment !== "object" || !isForwardedAttachment(attachment)) continue;
+      if (
+        !attachment ||
+        typeof attachment !== "object" ||
+        !(attachment.is_msg_unfurl === true || attachment.is_share === true)
+      )
+        continue;
       if (renderedForwards >= MAX_RENDERED_FORWARDS) return;
       renderedForwards += 1;
 
@@ -66,15 +56,14 @@ export function messageWithForwardedContent(message: ForwardedMessage): { text: 
       rendered.push(body ? `[${label}] ${body}` : `[${label}]`);
 
       for (const file of Array.isArray(attachment.files) ? attachment.files : []) addFile(file, attachment.author_id);
-      for (const nested of nestedMessages(attachment)) visit(nested, depth + 1);
+      for (const block of attachment.message_blocks ?? [])
+        if (block?.message && typeof block.message === "object") visit(block.message, depth + 1);
+      if (attachment.attachments?.length) visit({ attachments: attachment.attachments }, depth + 1);
     }
   };
 
   for (const file of Array.isArray(message.files) ? message.files : []) addFile(file);
   visit(message, 0);
 
-  const base = String(message.text ?? "");
-  let text = base;
-  if (rendered.length) text = base ? `${base}\n${rendered.join("\n")}` : rendered.join("\n");
-  return { text, files };
+  return { text: [String(message.text ?? ""), ...rendered].filter(Boolean).join("\n"), files };
 }

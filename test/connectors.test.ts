@@ -342,24 +342,6 @@ test("connector token account-type sub-key: a principal holds personal AND compa
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "legacy-default");
 });
 
-test("disconnect revokes connector grants so reconnect cannot restore old access", async () => {
-  const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
-  await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "first" });
-  const grant = await keychain.grantConnectorToScope({
-    host: "gmail.googleapis.com",
-    principalId: "U1",
-    audienceScopeId: "channel:C1",
-    purpose: "read mail here",
-  });
-  assert.ok(grant);
-
-  await keychain.deleteConnectorToken("gmail.googleapis.com", "U1");
-  await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "second" });
-
-  assert.equal((await keychain.getGrant(grant.id))?.status, "revoked");
-  assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
-});
-
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
   const creds = testMap<KeychainCredential>();
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });

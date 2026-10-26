@@ -1,9 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import bolt from "@slack/bolt";
-import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
-import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
+import type { Receiver, App as BoltApp } from "@slack/bolt";
+import { processEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
-import { errMessage } from "../util/errors.ts";
 import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
 const { isValidSlackRequest } = bolt;
@@ -11,26 +10,22 @@ const { isValidSlackRequest } = bolt;
 export const SLACK_EVENTS_PATH = "/slack/events";
 const MAX_BODY_BYTES = 5_000_000;
 
-export interface HttpEventsReceiverOptions {
+function respond(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent) return;
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(typeof body === "string" ? body : (JSON.stringify(body) ?? ""));
+}
+
+export function createHttpEventsReceiver(opts: {
   signingSecret: string;
   port: number;
   host?: string;
   path?: string;
-  capMs?: number;
-  staging?: EnvelopeStaging;
-}
-
-function respond(res: ServerResponse, status: number, body: unknown): void {
-  if (res.headersSent) return;
-  let payload = "";
-  if (typeof body === "string") payload = body;
-  else if (body !== undefined) payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(payload);
-}
-
-export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Receiver & { server: Server } {
+  capMs?: number | undefined;
+  staging?: EnvelopeStaging | undefined;
+}): Receiver & { server: Server } {
   const path = opts.path ?? SLACK_EVENTS_PATH;
+  const host = opts.host ?? "127.0.0.1";
   let app: BoltApp | undefined;
 
   const server = createServer((req, res) => {
@@ -70,28 +65,14 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     }
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
 
-    const label = describeEnvelope(body);
-    const { ack, gate } = createDeferredEnvelopeAck(async (response?: unknown) => respond(res, 200, response ?? {}), {
-      gated: isGatedEnvelope(body),
-      ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),
-      label,
-      onWithhold: () => respond(res, 503, { error: "not_persisted" }),
-      ...envelopeStageFor(opts.staging, body),
-    });
     const retryNum = Number(header(req, "x-slack-retry-num"));
-    const event: ReceiverEvent = {
-      body,
-      ack,
-      ...(Number.isFinite(retryNum) ? { retryNum } : {}),
-      ...(header(req, "x-slack-retry-reason") ? { retryReason: header(req, "x-slack-retry-reason") } : {}),
-      customProperties: { ackGate: gate },
-    };
-    try {
-      await app?.processEvent(event);
-      gate.persisted();
-    } catch (err) {
-      gate.failed(errMessage(err));
-    }
+    await processEnvelope(app, body, async (response?: unknown) => respond(res, 200, response ?? {}), {
+      capMs: opts.capMs,
+      staging: opts.staging,
+      onWithhold: () => respond(res, 503, { error: "not_persisted" }),
+      retryNum: Number.isFinite(retryNum) ? retryNum : undefined,
+      retryReason: header(req, "x-slack-retry-reason") || undefined,
+    });
   }
 
   return {
@@ -102,11 +83,9 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     start: () =>
       new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(opts.port, opts.host ?? "127.0.0.1", () => {
+        server.listen(opts.port, host, () => {
           server.removeListener("error", reject);
-          console.log(
-            `[slack-plugin] http events receiver listening on ${opts.host ?? "127.0.0.1"}:${opts.port}${path}`,
-          );
+          console.log(`[slack-plugin] http events receiver listening on ${host}:${opts.port}${path}`);
           resolve(undefined);
         });
       }),

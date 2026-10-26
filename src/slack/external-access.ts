@@ -48,13 +48,12 @@ export function companySlackActor(user: SlackUser | undefined, policy: ExternalS
     parts[0] &&
     policy.companyDomains.includes(parts[1]!),
   );
+  const displayName = user?.profile?.display_name || user?.real_name || user?.name;
   return {
     externalId: internal ? email : String(user?.id ?? "slack-unknown"),
     isExternalGuest: !internal,
     ...(user?.is_bot ? { isBot: true } : {}),
-    ...(user?.profile?.display_name || user?.real_name || user?.name
-      ? { displayName: user.profile?.display_name || user.real_name || user.name }
-      : {}),
+    ...(displayName ? { displayName } : {}),
   };
 }
 

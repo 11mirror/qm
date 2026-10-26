@@ -1,4 +1,5 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
+import { CREDENTIAL_HTTP_BROKER_PREFIXES } from "./credential-http-broker.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
@@ -94,54 +95,38 @@ interface Wiring {
   allowUnsignedSourceAuth: boolean;
 }
 
-declare module "fastify" {
-  interface FastifyContextConfig {
-    route?: Route<ApiCtx>;
-  }
-  interface FastifyRequest {
-    gate?: GateResult;
-  }
-}
-
 const rawBodies = new WeakMap<IncomingMessage, string>();
 
+const REFUSAL_ERRORS = { 400: "bad_request", 401: "unauthorized", 403: "forbidden" } as const;
+
+function refuse(res: ServerResponse, status: keyof typeof REFUSAL_ERRORS, message: string): null {
+  sendJson(res, status, { error: REFUSAL_ERRORS[status], message });
+  return null;
+}
+
 async function verifyCapability(
-  req: IncomingMessage,
-  res: ServerResponse,
-  { app, deps, secret }: Wiring,
-  method: string,
-  pathname: string,
+  { req, res, method, pathname, app, deps, secret }: BaseCtx,
   requiredAud: string | null,
 ): Promise<CapabilityClaims | null> {
   const capToken = capabilityFromHeaders(req);
-  if (!capToken) {
-    sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
-    return null;
-  }
+  if (!capToken) return refuse(res, 401, `${requiredAud} capability token required`);
   const capSecret = deps.capabilitySecret ?? secret;
   const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
-  if (!capability) {
-    sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
-    return null;
-  }
+  if (!capability) return refuse(res, 401, "invalid or expired capability token");
   reportForeignTenant(capability.orgId, "capability token");
   if (
     capability.externalSlack &&
     !(
       capability.aud === "credential-broker" &&
       ((method === "POST" && pathname === "/v1/credentials/broker") ||
-        ((method === "GET" || method === "POST") && pathname.startsWith("/v1/credentials/git/")))
+        CREDENTIAL_HTTP_BROKER_PREFIXES.some((prefix) => pathname.startsWith(prefix)))
     )
-  ) {
-    sendJson(res, 403, { error: "forbidden", message: "This operation requires a private conversation." });
-    return null;
-  }
+  )
+    return refuse(res, 403, "This operation requires a private conversation.");
   if (deps.identity) {
     await deps.identity.refresh();
-    if (deps.identity.classify(capability.actorId).type !== "internal") {
-      sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
-      return null;
-    }
+    if (deps.identity.classify(capability.actorId).type !== "internal")
+      return refuse(res, 401, "principal is no longer active");
   }
   if (capability.deployment !== undefined) {
     const deployment = await app.getDeployment(capability.deployment);
@@ -150,10 +135,8 @@ async function verifyCapability(
       deployment.id !== capability.deployment ||
       deployment.status !== "running" ||
       deployment.createdBy !== capability.actorId
-    ) {
-      sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
-      return null;
-    }
+    )
+      return refuse(res, 401, "the published app behind this token is not running");
   }
   if (
     !(capability.externalSlack
@@ -166,62 +149,39 @@ async function verifyCapability(
           ...(capability.liveActor ? { liveActor: true } : {}),
           ...(capability.members ? { members: capability.members } : {}),
         }))
-  ) {
-    sendJson(res, 403, {
-      error: "forbidden",
-      message: "the acting user is not currently authorized for this conversation",
-    });
-    return null;
-  }
-  if (requiredAud && capability.aud !== requiredAud) {
-    sendJson(res, 403, {
-      error: "forbidden",
-      message: `this route requires a capability token with audience "${requiredAud}"`,
-    });
-    return null;
-  }
+  )
+    return refuse(res, 403, "the acting user is not currently authorized for this conversation");
+  if (requiredAud && capability.aud !== requiredAud)
+    return refuse(res, 403, `this route requires a capability token with audience "${requiredAud}"`);
   return capability;
 }
 
 async function gate(
-  req: IncomingMessage,
-  res: ServerResponse,
+  base: BaseCtx,
   wiring: Wiring,
-  method: string,
-  pathname: string,
-  url: URL,
   raw: string,
   route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
+  const { req, res, method, pathname, url } = base;
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAud = typeof routeAuth === "object" ? routeAuth.aud : null;
   let capability: CapabilityClaims | null = null;
-  const capToken = capabilityFromHeaders(req);
-  if (isPublicRoute) {
-    void isPublicRoute;
-  } else if (requiredAud || capToken) {
-    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAud);
+  if (!isPublicRoute && (requiredAud || capabilityFromHeaders(req))) {
+    capability = await verifyCapability(base, requiredAud);
     if (!capability) return null;
     if (routeAuth === "either") {
-      if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
-        sendJson(res, 403, { error: "forbidden", message: "capability token audience not valid for this route" });
-        return null;
-      }
-      if (route?.admin) {
-        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config);
-        if (denied) {
-          sendJson(res, 403, { error: "forbidden", message: denied });
-          return null;
-        }
-      }
+      if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD)
+        return refuse(res, 403, "capability token audience not valid for this route");
+      const denied = route?.admin && (await capabilityAdminDenied(route.admin, params, url, capability, deps.config));
+      if (denied) return refuse(res, 403, denied);
     } else if (!requiredAud) {
-      sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
-      return null;
+      return refuse(res, 403, "capability token not valid for this route");
     }
   } else if (
+    !isPublicRoute &&
     !(await verifyOrReject(
       req,
       res,
@@ -239,8 +199,7 @@ async function gate(
     try {
       body = JSON.parse(raw);
     } catch {
-      sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
-      return null;
+      return refuse(res, 400, "invalid JSON body");
     }
   }
   if (
@@ -250,10 +209,8 @@ async function gate(
     !route?.allowedInStrict &&
     deps.config &&
     (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
-  ) {
-    sendJson(res, 403, { error: "forbidden", message: "Strict posture blocks direct control-plane mutations" });
-    return null;
-  }
+  )
+    return refuse(res, 403, "Strict posture blocks direct control-plane mutations");
 
   let actor: PortalIdentity | null = null;
   if (!capability) {
@@ -283,20 +240,15 @@ async function gate(
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
       const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
-        if (!psecret || !actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
-          return null;
-        }
+        if (!psecret || !actor) return refuse(res, 401, "portal identity required");
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
         let asserted: unknown = null;
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActorField(field, url, body);
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
-        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
-          sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
-          return null;
-        }
+        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted)))
+          return refuse(res, 403, "portal identity does not match the requested actor");
       }
     }
   }
@@ -334,54 +286,24 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
   else res.destroy();
 }
 
-function paramsSchema(path: string): object {
-  const names = path
-    .split("/")
-    .filter((seg) => seg.startsWith(":"))
-    .map((seg) => seg.slice(1));
-  return {
-    type: "object",
-    properties: Object.fromEntries(names.map((n) => [n, { type: "string" }])),
-    required: names,
-  };
-}
-
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
   const matchRoutes = apiRoutes.filter(
     (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
   );
 
-  const fallback = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const dispatch = async (request: FastifyRequest, reply: FastifyReply, route?: Route<ApiCtx>): Promise<void> => {
     reply.hijack();
     const req = request.raw;
     const res = reply.raw;
     try {
       const base = baseCtx(req, res, wiring);
-      const raw = rawBodies.get(req) ?? "";
-      const found = findRoute(matchRoutes, base.method, base.pathname);
-      const g = await gate(
-        req,
-        res,
-        wiring,
-        base.method,
-        base.pathname,
-        base.url,
-        raw,
-        found?.route,
-        found?.params ?? {},
-      );
-      if (!g) return;
-      if (found) {
-        const ctx: ApiCtx = {
-          ...base,
-          body: g.body,
-          capability: g.capability,
-          actor: g.actor,
-        };
-        await run(found.route, found.params, ctx);
-        return;
-      }
-      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      const found = route
+        ? { route, params: request.params as Record<string, string> }
+        : findRoute(matchRoutes, base.method, base.pathname);
+      const gated = await gate(base, wiring, rawBodies.get(req) ?? "", found?.route, found?.params ?? {});
+      if (!gated) return;
+      if (!found) return sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      await run(found.route, found.params, { ...base, ...gated });
     } catch (err) {
       respondError(req, res, err);
     }
@@ -397,7 +319,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
     exposeHeadRoutes: false,
     routerOptions: { maxParamLength: 100_000 },
     frameworkErrors: (_err, request, reply) => {
-      void fallback(request, reply);
+      void dispatch(request, reply);
     },
   });
 
@@ -405,7 +327,6 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   fastify.addContentTypeParser("*", (request, _payload, done) => {
     done(null, rawBodies.get(request.raw) ?? "");
   });
-  fastify.decorateRequest("gate", undefined);
 
   fastify.setErrorHandler((err, request, reply) => {
     reportBackendError(err);
@@ -413,57 +334,16 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });
 
-  const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const url = new URL(request.raw.url ?? "/", "http://localhost");
-    const raw = rawBodies.get(request.raw) ?? "";
-    const result = await gate(
-      request.raw,
-      reply.raw,
-      wiring,
-      request.raw.method ?? "GET",
-      url.pathname,
-      url,
-      raw,
-      request.routeOptions.config.route,
-      request.params as Record<string, string>,
-    );
-    if (!result) {
-      reply.hijack();
-      return;
-    }
-    request.gate = result;
-  };
-
-  const handler = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    reply.hijack();
-    const route = request.routeOptions.config.route!;
-    const g = request.gate!;
-    const ctx: ApiCtx = {
-      ...baseCtx(request.raw, reply.raw, wiring),
-      body: g.body,
-      capability: g.capability,
-      actor: g.actor,
-    };
-    try {
-      await run(route, request.params as Record<string, string>, ctx);
-    } catch (err) {
-      respondError(request.raw, reply.raw, err);
-    }
-  };
-
   for (const route of apiRoutes) {
-    if (!("path" in route)) continue;
-    fastify.route({
-      method: route.method as HTTPMethods,
-      url: route.path,
-      config: { route },
-      schema: { params: paramsSchema(route.path) },
-      preValidation: gateHook,
-      handler,
-    });
+    if ("path" in route)
+      fastify.route({
+        method: route.method as HTTPMethods,
+        url: route.path,
+        handler: (request, reply) => dispatch(request, reply, route),
+      });
   }
 
-  fastify.setNotFoundHandler(fallback);
+  fastify.setNotFoundHandler((request, reply) => dispatch(request, reply));
 
   return { fastify, routing };
 }
@@ -514,7 +394,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
-        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth.aud);
+        base.capability = await verifyCapability(base, routeAuth.aud);
         if (!base.capability) return void req.resume();
       }
       await run(raw.route, raw.params, base);

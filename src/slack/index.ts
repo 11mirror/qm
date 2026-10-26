@@ -10,7 +10,7 @@ import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
-import { createDeduper, createThreadTracker } from "./lib.ts";
+import { createDeduper, createThreadTracker } from "./message-gating.ts";
 import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
@@ -49,17 +49,13 @@ export async function startSlackPlugin(
 ): Promise<{ stop(): Promise<void> }> {
   const slackAccountClients = core.slack.accounts;
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
-  if (!cfg.botToken) {
-    throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
-  }
-  if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken) {
+  if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
+  if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
     throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  }
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort)) {
+  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort))
     throw new Error(
       "Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) and eventsPort (SLACK_EVENTS_PORT) in http events mode",
     );
-  }
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -69,25 +65,20 @@ export async function startSlackPlugin(
     attachOriginalToWebAPIRequestError: false,
     ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
   } as const;
-  const IDENTITY_TOKENS: Record<string, string | undefined> = {
-    copilot: cfg.copilotBotToken,
-  };
+  const IDENTITY_TOKENS: Record<string, string | undefined> = { copilot: cfg.copilotBotToken };
+  const webClient = (token: string, extra: Record<string, unknown> = {}) =>
+    new WebClient(token, { ...CLIENT_OPTIONS, ...extra });
   const identityClients = new Map<string, WebClient>();
   function clientForIdentity(identity: string): WebClient {
     const token = IDENTITY_TOKENS[identity];
     if (!token) throw new Error(`no token for post identity "${identity}" (set its *_BOT_TOKEN env)`);
     let c = identityClients.get(identity);
-    if (!c) {
-      c = new WebClient(token, { ...CLIENT_OPTIONS });
-      identityClients.set(identity, c);
-    }
+    if (!c) identityClients.set(identity, (c = webClient(token)));
     return c;
   }
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
-  const ENVELOPE_REPLAY_SWEEP_MS = 60_000;
-  const ENVELOPE_REPLAY_RETRY_NUM = 99;
   const configuredActorGate = createActorGate(cfg.allowFrom);
   const allowActor = cfg.externalAccess
     ? (actor: import("./identity.ts").ActorAssertion) =>
@@ -104,34 +95,23 @@ export async function startSlackPlugin(
     identityMode: cfg.identityEmail === "0" ? "slack-id" : "email",
   };
 
-  const ACK_OVERRIDE_CACHE_MS = 60_000;
   let ackOverrideCache: { names: string[] | null; fetchedAt: number } | undefined;
   function ackEmojiOverride(): readonly string[] | null {
-    if (!ackOverrideCache || Date.now() - ackOverrideCache.fetchedAt >= ACK_OVERRIDE_CACHE_MS) {
-      const prev = ackOverrideCache;
-      ackOverrideCache = { names: prev?.names ?? null, fetchedAt: Date.now() };
-      core
-        .ackEmojiOverride()
-        .then((names) => {
-          ackOverrideCache = { names: names?.length ? names : null, fetchedAt: Date.now() };
-        })
-        .catch((err) => {
-          swallow("slack: ack-emoji override read", err);
-        });
+    if (!ackOverrideCache || Date.now() - ackOverrideCache.fetchedAt >= 60_000) {
+      ackOverrideCache = { names: ackOverrideCache?.names ?? null, fetchedAt: Date.now() };
+      core.ackEmojiOverride().then(
+        (names) => void (ackOverrideCache = { names: names?.length ? names : null, fetchedAt: Date.now() }),
+        (err) => swallow("slack: ack-emoji override read", err),
+      );
     }
     return ackOverrideCache.names;
   }
 
-  const EXTERNAL_PARTICIPANTS_CACHE_MS = 30_000;
   let externalParticipantsCache: { on: boolean; fetchedAt: number } | undefined;
   async function externalParticipantsEnabled(): Promise<boolean> {
     if (cfg.externalAccess) return true;
-    if (
-      externalParticipantsCache &&
-      Date.now() - externalParticipantsCache.fetchedAt < EXTERNAL_PARTICIPANTS_CACHE_MS
-    ) {
+    if (externalParticipantsCache && Date.now() - externalParticipantsCache.fetchedAt < 30_000)
       return externalParticipantsCache.on;
-    }
     try {
       const on = await core.externalSlackParticipants();
       externalParticipantsCache = { on, fetchedAt: Date.now() };
@@ -152,15 +132,15 @@ export async function startSlackPlugin(
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
           port: cfg.eventsPort!,
-          ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
-          ...(staging ? { staging } : {}),
+          capMs: cfg.ackCapMs,
+          staging,
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,
-          ...(cfg.logLevel ? { logLevel: cfg.logLevel } : {}),
-          ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
-          ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
-          ...(staging ? { staging } : {}),
+          logLevel: cfg.logLevel,
+          slackApiUrl: SLACK_API_URL,
+          capMs: cfg.ackCapMs,
+          staging,
         });
   };
   const app = new App({
@@ -185,12 +165,12 @@ export async function startSlackPlugin(
               app.processEvent({
                 body,
                 ack: async () => {},
-                retryNum: ENVELOPE_REPLAY_RETRY_NUM,
+                retryNum: 99,
                 customProperties: { ackGate },
               }),
             ),
           ),
-        ENVELOPE_REPLAY_SWEEP_MS,
+        60_000,
         { label: "slack envelope replay" },
       )
     : undefined;
@@ -206,14 +186,14 @@ export async function startSlackPlugin(
   const flow = createTurnFlow(core);
   const ackEmoji = createAckEmojiPicker(core, { candidatesOverride: ackEmojiOverride });
   const directory = createDirectory({
-    ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
+    externalAccess: cfg.externalAccess,
     core,
     ids,
     coreSingleton: CORE_SINGLETON && !cfg.externalAccess,
-    ...(cfg.userSnapshotTtlMs ? { userSnapshotTtlMs: cfg.userSnapshotTtlMs } : {}),
-    ...(cfg.channelMembersTtlMs ? { channelMembersTtlMs: cfg.channelMembersTtlMs } : {}),
-    ...(cfg.maxPrivateChannels ? { maxPrivateChannels: cfg.maxPrivateChannels } : {}),
-    ...(cfg.userCacheTtlMs ? { userCacheTtlMs: cfg.userCacheTtlMs } : {}),
+    userSnapshotTtlMs: cfg.userSnapshotTtlMs || undefined,
+    channelMembersTtlMs: cfg.channelMembersTtlMs || undefined,
+    maxPrivateChannels: cfg.maxPrivateChannels || undefined,
+    userCacheTtlMs: cfg.userCacheTtlMs || undefined,
   });
   const mirror = cfg.externalAccess
     ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {} }
@@ -226,9 +206,9 @@ export async function startSlackPlugin(
   };
   const rateLimitNotice = createSlackRateLimitNotice({
     ...historyRateLimitOptions,
-    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY, timeout: 5000 }),
+    client: webClient(BOT_TOKEN, { ...HISTORY_NO_RETRY, timeout: 5000 }),
   });
-  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const historyApi = webClient(BOT_TOKEN, HISTORY_NO_RETRY);
   const historyClient = {
     conversations: Object.fromEntries(
       (["history", "replies"] as const).map((method) => [
@@ -270,46 +250,33 @@ export async function startSlackPlugin(
     webUiPublicUrl: cfg.webUiPublicUrl,
     ids,
   });
-  if (CORE_SINGLETON)
+  const channelHeader = (channel: string, pinNew?: boolean) =>
+    ensureHeader(
+      app.client as unknown as SurfaceHeaderClient,
+      channel,
+      `channel:${channel}`,
+      "channel",
+      ...(pinNew ? [{ pinNew }] : []),
+    );
+  const scopeChannel = (scope: string) => (scope.startsWith("channel:") ? scope.slice("channel:".length) : "");
+  if (CORE_SINGLETON) {
     core.onScopeModelChanged((scope) => {
-      const channel = scope.startsWith("channel:") ? scope.slice("channel:".length) : "";
-      if (channel) ensureHeader(app.client as unknown as SurfaceHeaderClient, channel, scope, "channel");
+      if (scopeChannel(scope)) channelHeader(scopeChannel(scope));
     });
-  if (CORE_SINGLETON)
     core.onChannelHeaderPinChanged((scope) => {
-      const channel = scope.startsWith("channel:") ? scope.slice("channel:".length) : "";
-      if (channel) {
-        ensureHeader(app.client as unknown as SurfaceHeaderClient, channel, scope, "channel", { pinNew: true });
-        return;
-      }
+      if (scopeChannel(scope)) return void channelHeader(scopeChannel(scope), true);
       if (!scope.startsWith("org:")) return;
-      // The org-wide default changed: re-ensure every channel the bot is in. The
-      // ensurer re-reads each scope's effective setting, so explicit per-channel
-      // overrides come out unchanged.
       void (async () => {
-        try {
-          for await (const res of app.client.paginate("conversations.list", {
-            types: "public_channel,private_channel",
-            exclude_archived: true,
-            limit: 1000,
-          })) {
-            for (const c of parseChannelPage(res)) {
-              if (!c?.id || !c.is_member) continue;
-              ensureHeader(app.client as unknown as SurfaceHeaderClient, c.id, `channel:${c.id}`, "channel", {
-                pinNew: true,
-              });
-            }
-          }
-        } catch (err) {
-          reportFailure("slack: channel header default sweep", err);
-        }
-      })();
+        for await (const res of app.client.paginate("conversations.list", {
+          types: "public_channel,private_channel",
+          exclude_archived: true,
+          limit: 1000,
+        }))
+          for (const c of parseChannelPage(res)) if (c?.id && c.is_member) channelHeader(c.id, true);
+      })().catch((err) => reportFailure("slack: channel header default sweep", err));
     });
-  const statusClient = new WebClient(BOT_TOKEN, {
-    ...CLIENT_OPTIONS,
-    timeout: 5_000,
-    rejectRateLimitedCalls: true,
-  });
+  }
+  const statusClient = webClient(BOT_TOKEN, { timeout: 5_000, rejectRateLimitedCalls: true });
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
@@ -322,10 +289,12 @@ export async function startSlackPlugin(
     return statusSync;
   };
   const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
+  const continuePrivate = (runId: string, task: string) =>
+    continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id));
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
-    ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    externalAccess: cfg.externalAccess,
+    continuePrivate,
     onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
         ?.start(statusClient, statusAccount(), runId, channel, threadTs)
@@ -350,58 +319,42 @@ export async function startSlackPlugin(
     threads,
     deduper,
     externalParticipantsEnabled,
-    ...(allowActor ? { allowActor } : {}),
-    ...(devIntrospection ? { markEvent: () => devIntrospection.markEvent() } : {}),
+    allowActor,
+    markEvent: devIntrospection ? () => devIntrospection.markEvent() : undefined,
     botToken: BOT_TOKEN,
-    ...(TRUSTED_FILE_HOST ? { trustedFileHost: TRUSTED_FILE_HOST } : {}),
+    trustedFileHost: TRUSTED_FILE_HOST,
     ensureHeader,
   });
   approvals.registerActions(app);
-  const inboxMessage = (
-    client: unknown,
-    msg: {
-      channel: string;
-      ts: string;
-      threadTs?: string;
-      text?: string;
-      senderSlackId?: string;
-      isDirectMessage: boolean;
-    },
-  ): void => {
-    void (async () => {
-      let senderEmail: string | undefined;
-      if (msg.senderSlackId) {
-        try {
-          const actor = await directory.classifyActor(client, msg.senderSlackId);
-          if (actor.externalId.includes("@")) senderEmail = actor.externalId;
-        } catch (e) {
-          swallow("slack: classify inbox message sender", e);
-          senderEmail = undefined;
-        }
-      }
-      await core.inboxSlackMessage({
-        channel: msg.channel,
-        ts: msg.ts,
-        isDirectMessage: msg.isDirectMessage,
-        ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
-        ...(msg.text ? { text: msg.text } : {}),
-        ...(senderEmail ? { senderEmail } : {}),
-      });
-    })().catch((e) => swallow("slack: forward message to inbox", e));
-  };
   registerSlackEvents(app, {
     handler,
     mirror,
     directory,
     ids,
     deduper,
-    ...(!cfg.externalAccess ? { inboxMessage } : {}),
-    ...(allowActor ? { allowActor } : {}),
-    ...(denyResponder ? { denyResponder } : {}),
-    ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
-    ...((cfg.contextSource ?? "live") === "mirror"
-      ? { backfillHistory: (client: unknown, channel: string) => readHistory(client, channel) }
-      : {}),
+    inboxMessage: cfg.externalAccess
+      ? undefined
+      : (client, msg) =>
+          void (async () => {
+            const actor = msg.senderSlackId
+              ? await directory
+                  .classifyActor(client, msg.senderSlackId)
+                  .catch(swallowAs("slack: classify inbox message sender", undefined))
+              : undefined;
+            await core.inboxSlackMessage({
+              channel: msg.channel,
+              ts: msg.ts,
+              isDirectMessage: msg.isDirectMessage,
+              threadTs: msg.threadTs,
+              text: msg.text,
+              senderEmail: actor?.externalId.includes("@") ? actor.externalId : undefined,
+            });
+          })().catch((e) => swallow("slack: forward message to inbox", e)),
+    allowActor,
+    denyResponder,
+    webUiPublicUrl: cfg.webUiPublicUrl || undefined,
+    backfillHistory:
+      cfg.contextSource === "mirror" ? (client: unknown, channel: string) => readHistory(client, channel) : undefined,
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
@@ -414,8 +367,8 @@ export async function startSlackPlugin(
     directory,
     serializer,
     botToken: BOT_TOKEN,
-    ...(TRUSTED_FILE_HOST ? { trustedFileHost: TRUSTED_FILE_HOST } : {}),
-    ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
+    trustedFileHost: TRUSTED_FILE_HOST,
+    userToken: cfg.userToken,
     clientOptions: CLIENT_OPTIONS,
   });
   const sendToSlack = createSlackSender({
@@ -428,7 +381,7 @@ export async function startSlackPlugin(
       const account = slackAccountClients.get(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
     },
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    continuePrivate,
     core,
     flow,
     threads,
@@ -439,6 +392,9 @@ export async function startSlackPlugin(
       flow.inFlightRuns.has(runId) || [...slackAccountClients.values()].some((a) => a.inFlightRuns?.has(runId)),
   });
 
+  const releaseAccount = (): void => {
+    if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+  };
   let auth: AuthTestResponse;
   try {
     auth = await app.client.auth.test();
@@ -447,16 +403,14 @@ export async function startSlackPlugin(
     ids.ownBotId = auth.bot_id ?? "";
     ids.botHandle = typeof auth.user === "string" ? auth.user : "";
     ids.ownWorkspaceUrl = typeof auth.url === "string" ? auth.url.replace(/\/+$/, "") : "";
-    if (!ids.ownTeamId || !ids.botUserId) {
+    if (!ids.ownTeamId || !ids.botUserId)
       throw new Error("auth.test returned no team_id/user_id — refusing to start (cannot classify members safely)");
-    }
     if (!cfg.identityEmail) {
       ids.identityMode = await directory.resolveAutoIdentityMode(app.client);
-      if (ids.identityMode === "slack-id") {
+      if (ids.identityMode === "slack-id")
         console.warn(
           "[slack] no member emails visible (users:read.email scope missing?) — keying principals on Slack ids; add the scope or set SLACK_IDENTITY_EMAIL=1 to force email keying",
         );
-      }
     }
     await directory.getUserSnapshot(app.client);
     if (slackAccountClients.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
@@ -469,7 +423,7 @@ export async function startSlackPlugin(
     await app.start();
     replaySweeper?.start();
   } catch (err) {
-    if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+    releaseAccount();
     stopped = true;
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
     try {
@@ -489,24 +443,20 @@ export async function startSlackPlugin(
   ackEmoji.refreshAckEmoji(app.client);
   ackEmojiOverride();
 
-  const EMOJI_CATALOG_REFRESH_MS = 6 * 60 * 60_000;
   const publishEmojiCatalog = (): void => {
     if (stopped) return;
     void Promise.resolve(app.client.emoji.list())
-      .then((res: { emoji?: Record<string, string> }) => {
-        const emoji: Record<string, string> = {};
-        for (const [name, url] of Object.entries(res.emoji ?? {})) {
-          if (typeof url === "string" && !url.startsWith("alias:")) emoji[name] = url;
-        }
-        return core.publishEmojiCatalog(emoji);
-      })
+      .then((res: { emoji?: Record<string, string> }) =>
+        core.publishEmojiCatalog(
+          Object.fromEntries(
+            Object.entries(res.emoji ?? {}).filter(([, url]) => typeof url === "string" && !url.startsWith("alias:")),
+          ),
+        ),
+      )
       .catch(swallowAs("slack: emoji catalog publish", undefined));
   };
-  let emojiCatalogTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON) {
-    publishEmojiCatalog();
-    emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
-  }
+  if (CORE_SINGLETON) publishEmojiCatalog();
+  const emojiCatalogTimer = CORE_SINGLETON ? setInterval(publishEmojiCatalog, 6 * 60 * 60_000) : undefined;
 
   statusSweep.start();
   const unregisterSender = core.slack.attach(sendToSlack);
@@ -529,14 +479,12 @@ export async function startSlackPlugin(
       .catch(swallowAs("slack: context request fulfillment", undefined))
       .finally(() => contextRequestsInFlight.delete(r.id));
   };
-  let unsubscribeContextRequests = (): void => {};
-  if (CORE_SINGLETON) {
-    unsubscribeContextRequests = core.onContextRequest(serviceContextRequest);
+  const unsubscribeContextRequests = CORE_SINGLETON ? core.onContextRequest(serviceContextRequest) : () => {};
+  if (CORE_SINGLETON)
     void core
       .pendingContextRequests()
       .then((pending) => pending.forEach(serviceContextRequest))
       .catch(swallowAs("slack: context request drain", undefined));
-  }
 
   return {
     async stop(): Promise<void> {
@@ -546,7 +494,7 @@ export async function startSlackPlugin(
         return;
       }
       stopped = true;
-      if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+      releaseAccount();
       await statusSweep.stop();
       await replaySweeper?.stop();
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);

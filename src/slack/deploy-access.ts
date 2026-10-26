@@ -4,9 +4,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { parseScopeId, scopeId, type ActorAssertion, type Destination } from "../types.ts";
 import type { Directory } from "./directory.ts";
-import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
-import { updateSlackMessage } from "./messaging.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { registerDecisionButtons, type ActionApp } from "./messaging.ts";
 
 const ACTIONS = ["deploy_access_approve", "deploy_access_decline"] as const;
 type Request = NonNullable<Destination["deploymentAccess"]>;
@@ -95,28 +93,17 @@ export async function decideDeploymentAccess(
 }
 
 export function registerDeployAccessActions(
-  app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void },
+  app: ActionApp,
   deps: { core: SlackCoreClient; directory: Directory },
 ): void {
-  app.action(/^deploy_access_/, async ({ ack, body, action, client }) => {
-    await ack();
-    const parsed = parseBlockAction(action, ACTIONS);
-    const { clickerId, channel, messageTs } = parseInteractionBody(body);
-    if (!parsed || !clickerId || !channel || !messageTs) return;
-    try {
-      const actor = await deps.directory.classifyActor(client, clickerId);
-      const text = await deps.core.decideDeploymentAccess(parsed.value, actor, parsed.actionId === ACTIONS[0]);
-      await updateSlackMessage(client, channel, messageTs, text, [
-        { type: "section", text: { type: "plain_text", text } },
-      ]);
-    } catch (error) {
-      await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: `Couldn't complete that: ${errMessage(error)} You can try the button again.`,
-        })
-        .catch(swallowAs("slack: app access decision failure", undefined));
-    }
-  });
+  registerDecisionButtons(
+    app,
+    /^deploy_access_/,
+    ACTIONS,
+    { directory: deps.directory, failure: "Couldn't complete that", label: "slack: app access decision failure" },
+    async (actionId, value, actor) => {
+      const text = await deps.core.decideDeploymentAccess(value, actor, actionId === ACTIONS[0]);
+      return { text, blocks: [{ type: "section", text: { type: "plain_text", text } }] };
+    },
+  );
 }

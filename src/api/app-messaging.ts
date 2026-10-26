@@ -1,7 +1,13 @@
-import type { ScopeId } from "../types.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import {
+  type ScopeId,
+  parseScopeId,
+  scopeId,
+  type Destination,
+  type SurfaceContextRequest,
+  type SurfaceContextResult,
+  type Cron,
+} from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
-import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
@@ -20,11 +26,9 @@ import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revis
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
-import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
-import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
-import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
+import { type App, type AppDeps, type ReachNowResult, CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 import { tenant } from "../tenant.ts";
@@ -46,7 +50,7 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
+    canSee: (c: Pick<Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
       allowed(c.ownerScopeId) &&
       (viewersOwn(c.owner) ||
         scopeNames.has(c.ownerScopeId) ||
@@ -54,75 +58,18 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   };
 }
 
-export function createMessagingMethods(
-  deps: AppDeps,
-  h: AppHelpers,
-  ambient: AmbientHelpers,
-): Pick<
-  App,
-  | "createCron"
-  | "getCron"
-  | "listCrons"
-  | "listCronsForViewer"
-  | "updateCron"
-  | "deleteCron"
-  | "setCronEnabled"
-  | "setCronFireNote"
-  | "listCronFires"
-  | "cronFiresByThreadRefs"
-  | "latestCronFireForThread"
-  | "setCronDestination"
-  | "setCronRuntime"
-  | "createWebhook"
-  | "getWebhook"
-  | "listWebhooks"
-  | "listWebhookEvents"
-  | "setWebhookEnabled"
-  | "updateWebhook"
-  | "postToSurface"
-  | "ingestSurfaceEvents"
-  | "searchSurface"
-  | "readSurfaceMessages"
-  | "activeSurfaceThreads"
-  | "listSurfaceContainers"
-  | "getChannelPolicy"
-  | "setChannelPolicy"
-  | "judgeAmbientContainer"
-  | "createContextRequest"
-  | "onContextRequestCreated"
-  | "getContextRequest"
-  | "deleteContextRequest"
-  | "pendingContextRequests"
-  | "fulfillContextRequest"
-  | "setRunDeliveryState"
-  | "upsertDirectory"
-  | "upsertChannels"
-  | "upsertGroups"
-  | "setDirectoryWorkspaceUrl"
-  | "directoryMeta"
-  | "channelMember"
-  | "channelVisibleTo"
-  | "resolveRecipient"
-  | "resolveChannel"
-  | "directoryMembers"
-  | "directoryChannels"
-  | "directoryMember"
-  | "samePerson"
-  | "personMatcher"
-  | "cronAdminUrl"
-  | "channelName"
-  | "ambientJudge"
-  | "reachNow"
-  | "resolveReachTarget"
-> {
+function settledContext(outcome: { result?: SurfaceContextResult; error?: string }): Partial<SurfaceContextRequest> {
+  return outcome.error !== undefined
+    ? { status: "failed", error: outcome.error }
+    : { status: "done", result: outcome.result ?? { messages: [] } };
+}
+
+export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: AmbientHelpers) {
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
-  // Principals identity knows about that the Slack directory never sees: the email
-  // allow-list, invited external users, and anyone who has signed in. On a Slack-less
-  // deployment these are the only members there are.
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
@@ -164,30 +111,14 @@ export function createMessagingMethods(
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
       const cron = await deps.crons.create(input);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: cron.createdBy,
-        action: "cron_create",
-        resource: cron.id,
-        scopeLabel: cron.ownerScopeId,
-      });
+      h.audit(cron.createdBy, "cron_create", cron.id, cron.ownerScopeId);
       return cron;
     },
-    getCron(id) {
-      return deps.crons.get(id);
-    },
-    listCronFires(id, opts) {
-      return deps.crons.listFires(id, opts);
-    },
-    cronFiresByThreadRefs(threadRefs) {
-      return deps.crons.firesByThreadRefs(threadRefs);
-    },
-    latestCronFireForThread(id, threadRef) {
-      return deps.crons.latestFireForThread(id, threadRef);
-    },
-    listCrons() {
-      return deps.crons.list();
-    },
+    getCron: (id) => deps.crons.get(id),
+    listCronFires: (id, opts) => deps.crons.listFires(id, opts),
+    cronFiresByThreadRefs: (threadRefs) => deps.crons.firesByThreadRefs(threadRefs),
+    latestCronFireForThread: (id, threadRef) => deps.crons.latestFireForThread(id, threadRef),
+    listCrons: () => deps.crons.list(),
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
@@ -210,42 +141,21 @@ export function createMessagingMethods(
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
       const updated = await deps.crons.update(id, guardedPatch);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: before.owner,
-        action: "cron_update",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      h.audit(before.owner, "cron_update", id, before.ownerScopeId);
       return updated;
     },
     async deleteCron(id) {
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
-      if (before)
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: before.owner,
-          action: "cron_delete",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
+      if (before) h.audit(before.owner, "cron_delete", id, before.ownerScopeId);
     },
-    setCronEnabled(id, enabled) {
-      return deps.crons.setEnabled(id, enabled);
-    },
+    setCronEnabled: (id, enabled) => deps.crons.setEnabled(id, enabled),
     async setCronFireNote(id, note) {
       const before = await deps.crons.get(id);
       if (!before) return "missing";
       const outcome = await deps.crons.setFireNote(id, note);
       if (outcome === "applied") {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: note.by ?? before.owner,
-          action: "cron_note",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
+        h.audit(note.by ?? before.owner, "cron_note", id, before.ownerScopeId);
       }
       return outcome;
     },
@@ -259,29 +169,15 @@ export function createMessagingMethods(
       const before = await deps.crons.get(id);
       if (!before) return null;
       await deps.crons.setDestination(id, destination);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: before.owner,
-        action: "cron_retarget",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      h.audit(before.owner, "cron_retarget", id, before.ownerScopeId);
       return deps.crons.get(id);
     },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: webhook.createdBy,
-        action: "webhook_create",
-        resource: webhook.id,
-        scopeLabel: webhook.ownerScopeId,
-      });
+      h.audit(webhook.createdBy, "webhook_create", webhook.id, webhook.ownerScopeId);
       return webhook;
     },
-    getWebhook(id) {
-      return deps.webhooks.get(id);
-    },
+    getWebhook: (id) => deps.webhooks.get(id),
     async listWebhookEvents(id, viewer) {
       const events = await deps.webhooks.listEvents(id);
       return Promise.all(
@@ -292,15 +188,9 @@ export function createMessagingMethods(
         }),
       );
     },
-    listWebhooks() {
-      return deps.webhooks.list();
-    },
-    setWebhookEnabled(id, enabled) {
-      return deps.webhooks.setEnabled(id, enabled);
-    },
-    updateWebhook(id, patch) {
-      return deps.webhooks.update(id, patch);
-    },
+    listWebhooks: () => deps.webhooks.list(),
+    setWebhookEnabled: (id, enabled) => deps.webhooks.setEnabled(id, enabled),
+    updateWebhook: (id, patch) => deps.webhooks.update(id, patch),
     async postToSurface(input) {
       await deps.outbound.send(input);
     },
@@ -318,33 +208,13 @@ export function createMessagingMethods(
       }
       return out;
     },
-    async searchSurface(queryText, opts) {
-      if (!deps.surfaceCache) return [];
-      return deps.surfaceCache.search(queryText, opts);
-    },
-    async readSurfaceMessages(container, opts) {
-      if (!deps.surfaceCache) return [];
-      return deps.surfaceCache.readMessages(container, opts);
-    },
-    async activeSurfaceThreads(opts) {
-      if (!deps.surfaceCache) return [];
-      return deps.surfaceCache.activeThreads(opts);
-    },
-    async listSurfaceContainers(opts) {
-      if (!deps.surfaceCache) return [];
-      return deps.surfaceCache.listContainers(opts);
-    },
-    async getChannelPolicy(container) {
-      if (!deps.channelPolicy) return null;
-      return deps.channelPolicy.get(container);
-    },
-    async setChannelPolicy(container, orders, setBy, bots, sessionId, ambientEnabled) {
-      if (!deps.channelPolicy) return null;
-      return deps.channelPolicy.set(container, orders, { setBy, bots, sessionId, ambientEnabled });
-    },
-    judgeAmbientContainer(surface, container, opts) {
-      return judgeAmbientContainer(surface, container, opts);
-    },
+    searchSurface: async (queryText, opts) => (await deps.surfaceCache?.search(queryText, opts)) ?? [],
+    readSurfaceMessages: async (container, opts) => (await deps.surfaceCache?.readMessages(container, opts)) ?? [],
+    listSurfaceContainers: async (opts) => (await deps.surfaceCache?.listContainers(opts)) ?? [],
+    getChannelPolicy: async (container) => (await deps.channelPolicy?.get(container)) ?? null,
+    setChannelPolicy: async (container, orders, setBy, bots, sessionId, ambientEnabled) =>
+      (await deps.channelPolicy?.set(container, orders, { setBy, bots, sessionId, ambientEnabled })) ?? null,
+    judgeAmbientContainer: (surface, container) => judgeAmbientContainer(surface, container),
     async createContextRequest(source, query) {
       const { viewerToken, ...storedQuery } = query;
       const request: SurfaceContextRequest = {
@@ -361,12 +231,7 @@ export function createMessagingMethods(
           deps.sessions,
           query,
         ).catch(() => ({ error: "the web conversation couldn't be read" }));
-        await contextRequests.merge(
-          request.id,
-          outcome.error !== undefined
-            ? { status: "failed", error: outcome.error }
-            : { status: "done", result: outcome.result ?? { messages: [] } },
-        );
+        await contextRequests.merge(request.id, settledContext(outcome));
         return request;
       }
       for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
@@ -376,9 +241,7 @@ export function createMessagingMethods(
       contextRequestListeners.add(listener);
       return () => contextRequestListeners.delete(listener);
     },
-    getContextRequest(id) {
-      return contextRequests.get(id);
-    },
+    getContextRequest: (id) => contextRequests.get(id),
     async deleteContextRequest(id) {
       contextRequestTokens.delete(id);
       return contextRequests.delete(id);
@@ -397,17 +260,9 @@ export function createMessagingMethods(
     },
     async fulfillContextRequest(id, outcome) {
       contextRequestTokens.delete(id);
-      const merged = await contextRequests.merge(
-        id,
-        outcome.error !== undefined
-          ? { status: "failed", error: outcome.error }
-          : { status: "done", result: outcome.result ?? { messages: [] } },
-      );
-      return merged != null;
+      return (await contextRequests.merge(id, settledContext(outcome))) != null;
     },
-    setRunDeliveryState(runId, state) {
-      return deps.runs.setDeliveryState(runId, null, state);
-    },
+    setRunDeliveryState: (runId, state) => deps.runs.setDeliveryState(runId, null, state),
 
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
@@ -417,24 +272,8 @@ export function createMessagingMethods(
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
       const outcome = await deps.identity.recordDirectorySync(removed, present);
       const orgScope = tenant().orgScope;
-      for (const id of outcome.deactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.deactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
-        });
-      }
-      for (const id of outcome.reactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.reactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
-        });
-      }
+      for (const id of outcome.deactivated) h.audit(id, "principal.deactivate", "directory-sync", orgScope);
+      for (const id of outcome.reactivated) h.audit(id, "principal.reactivate", "directory-sync", orgScope);
       return true;
     },
     async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
@@ -449,18 +288,12 @@ export function createMessagingMethods(
       await h.syncLinkedProjectRosters();
       return applied;
     },
-    async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
-      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
-    },
+    upsertGroups: (...args) => deps.directory.replaceGroups(...args),
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);
     },
-    directoryMeta() {
-      return deps.directory.meta();
-    },
-    channelMember(channelId, principalId) {
-      return deps.directory.channelMember(channelId, principalId);
-    },
+    directoryMeta: () => deps.directory.meta(),
+    channelMember: (channelId, principalId) => deps.directory.channelMember(channelId, principalId),
     channelVisibleTo(actorId, channelId, isPrivate) {
       return isVisible(deps.directory, actorId, {
         kind: "channel",
@@ -481,15 +314,9 @@ export function createMessagingMethods(
       if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
       return { kind: "none" };
     },
-    resolveChannel(query) {
-      return deps.directory.resolveChannel(query);
-    },
-    directoryMembers() {
-      return mergedDirectoryMembers();
-    },
-    directoryChannels() {
-      return deps.directory.listChannels();
-    },
+    resolveChannel: (query) => deps.directory.resolveChannel(query),
+    directoryMembers: () => mergedDirectoryMembers(),
+    directoryChannels: () => deps.directory.listChannels(),
     async directoryMember(principalId) {
       return (
         (await deps.directory.get(principalId)) ??
@@ -497,15 +324,9 @@ export function createMessagingMethods(
         null
       );
     },
-    samePerson(a, b) {
-      return samePersonInDirectory(deps.directory, a, b);
-    },
-    personMatcher(actorId) {
-      return samePersonMatcher(deps.directory, actorId);
-    },
-    cronAdminUrl(cron) {
-      return adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined;
-    },
+    samePerson: (a, b) => samePersonInDirectory(deps.directory, a, b),
+    personMatcher: (actorId) => samePersonMatcher(deps.directory, actorId),
+    cronAdminUrl: (cron) => (adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined),
     async channelName(channelId) {
       const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
@@ -574,18 +395,10 @@ export function createMessagingMethods(
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(!input.react && !input.delete && sender?.displayName ? { attributeAs: sender.displayName } : {}),
       });
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.senderId,
-        action: "reach_now",
-        resource: idempotencyKey,
-        scopeLabel: input.senderScope,
-      });
+      h.audit(input.senderId, "reach_now", idempotencyKey, input.senderScope);
       return { ok: true, ...extra };
     },
 
-    resolveReachTarget(target, authorityId, opts) {
-      return resolveReachTargetFor(target, authorityId, opts);
-    },
-  };
+    resolveReachTarget: (target, authorityId, opts) => resolveReachTargetFor(target, authorityId, opts),
+  } satisfies Partial<App>;
 }

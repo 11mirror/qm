@@ -2728,7 +2728,6 @@ export function buildApp(
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
-      await harness.turns.close?.();
       await semanticMemory.close();
       await errors.flush();
     },
@@ -2930,7 +2929,6 @@ export function serverDeps(
     serviceCreds: built.serviceCreds,
     outbound: built.outbound,
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
-    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,

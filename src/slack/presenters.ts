@@ -3,59 +3,14 @@ import { swallow } from "../util/errors.ts";
 
 export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
 
-export const CURATED_ACK_EMOJI = [
-  "bug",
-  "hammer_and_wrench",
-  "wrench",
-  "gear",
-  "rocket",
-  "package",
-  "robot_face",
-  "test_tube",
-  "computer",
-  "floppy_disk",
-  "bar_chart",
-  "chart_with_upwards_trend",
-  "chart_with_downwards_trend",
-  "lock",
-  "key",
-  "shield",
-  "closed_lock_with_key",
-  "memo",
-  "pencil2",
-  "page_facing_up",
-  "clipboard",
-  "books",
-  "scroll",
-  "bookmark_tabs",
-  "email",
-  "calendar",
-  "speech_balloon",
-  "telephone_receiver",
-  "bell",
-  "brain",
-  "thinking_face",
-  "bulb",
-  "microscope",
-  "sleuth_or_spy",
-  "moneybag",
-  "dollar",
-  "credit_card",
-  "airplane",
-  "world_map",
-  "globe_with_meridians",
-  "compass",
-  "car",
-  "crab",
-  "pirate_flag",
-  "sparkles",
-  "fire",
-  "zap",
-  "sunglasses",
-  "wave",
-  "art",
-  "coffee",
-] as const;
+export const CURATED_ACK_EMOJI: readonly string[] = (
+  "bug hammer_and_wrench wrench gear rocket package robot_face test_tube computer floppy_disk bar_chart " +
+  "chart_with_upwards_trend chart_with_downwards_trend lock key shield closed_lock_with_key memo " +
+  "pencil2 page_facing_up clipboard books scroll bookmark_tabs email calendar speech_balloon " +
+  "telephone_receiver bell brain thinking_face bulb microscope sleuth_or_spy moneybag dollar " +
+  "credit_card airplane world_map globe_with_meridians compass car crab pirate_flag sparkles fire zap " +
+  "sunglasses wave art coffee"
+).split(" ");
 
 export function stripAckPrefix(text: string, ack: string | undefined): string {
   if (!ack) return text;
@@ -151,9 +106,8 @@ export function renderGoalNotice(goal: GoalNoticeView): string {
     .trim();
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
   const objective = escapeSlackText(bounded);
-  if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
-  if (goal.status === "cancelled") return `✕ Goal cancelled: ${objective}`;
-  if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;
+  const ended = { complete: "✓ Goal complete", cancelled: "✕ Goal cancelled", paused: "⏸ Goal paused", active: "" };
+  if (ended[goal.status]) return `${ended[goal.status]}: ${objective}`;
   return `◐ Pursuing goal: ${objective}${goal.floor ? ` · at least ${goal.floor}` : ""}`;
 }
 
@@ -170,20 +124,15 @@ export function createGoalNoticePresenter(deps: {
   let messageTs: string | undefined;
   let lastText = "";
   let chain = Promise.resolve();
-  const blocksFor = (text: string): Array<Record<string, unknown>> => [
-    { type: "context", elements: [{ type: "mrkdwn", text }] },
-  ];
   return {
     async onGoal(goal) {
       chain = chain.then(async () => {
         const text = renderGoalNotice(goal);
         if (text === lastText) return;
+        const blocks = [{ type: "context", elements: [{ type: "mrkdwn", text }] }];
         try {
-          if (messageTs) {
-            await deps.update(messageTs, text, blocksFor(text));
-          } else {
-            messageTs = await deps.post(text, blocksFor(text));
-          }
+          if (messageTs) await deps.update(messageTs, text, blocks);
+          else messageTs = await deps.post(text, blocks);
           if (messageTs) lastText = text;
         } catch (error) {
           deps.onError?.(error);

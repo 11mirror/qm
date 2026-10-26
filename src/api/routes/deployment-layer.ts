@@ -3,10 +3,18 @@ import {
   DeploymentLayerPersistedError,
   DeploymentLayerValidationError,
   type DeploymentLayerBundle,
+  type StoredDeploymentLayer,
 } from "../../deployment/deployment-layer-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+
+const persisted = (record: StoredDeploymentLayer) => ({
+  version: record.version,
+  contentHash: record.contentHash,
+  durable: true,
+  resolved: record.resolved,
+});
 
 function bundleFrom(body: unknown): DeploymentLayerBundle | null {
   if (!isObj(body) || body.contract !== 1 || !Array.isArray(body.tools) || !Array.isArray(body.skills)) return null;
@@ -17,8 +25,8 @@ async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
   const store = ctx.deps.deploymentLayer;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
   const record = await store.get();
-  if (!record) {
-    const live = store.live();
+  const live = store.live();
+  if (!record)
     return sendJson(ctx.res, 200, {
       contract: 1,
       version: 0,
@@ -26,8 +34,6 @@ async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
       source: live.source,
       resolved: live.resolved,
     });
-  }
-  const live = store.live();
   return sendJson(ctx.res, 200, {
     contract: 1,
     version: record.version,
@@ -49,32 +55,19 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
   if (!bundle) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
   }
-  const updatedBy = "source-authenticated deployment CLI";
   try {
-    const record = await store.put(bundle, updatedBy);
-    return sendJson(ctx.res, 200, {
-      ok: true,
-      version: record.version,
-      contentHash: record.contentHash,
-      durable: true,
-      resolved: record.resolved,
-    });
+    const record = await store.put(bundle, "source-authenticated deployment CLI");
+    return sendJson(ctx.res, 200, { ok: true, ...persisted(record) });
   } catch (error) {
-    if (error instanceof DeploymentLayerPersistedError) {
-      const record = error.record;
+    if (error instanceof DeploymentLayerPersistedError)
       return sendJson(ctx.res, 202, {
         ok: true,
         status: "degraded",
         message: errMessage(error),
-        version: record.version,
-        contentHash: record.contentHash,
-        durable: true,
-        resolved: record.resolved,
+        ...persisted(error.record),
       });
-    }
-    if (error instanceof DeploymentLayerValidationError) {
+    if (error instanceof DeploymentLayerValidationError)
       return sendJson(ctx.res, 400, { error: "invalid_deployment_layer", message: errMessage(error) });
-    }
     throw error;
   }
 }

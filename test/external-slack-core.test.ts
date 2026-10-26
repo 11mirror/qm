@@ -312,7 +312,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       forwarded++;
       return { status: 200, contentType: "application/json", text: async () => '{"public":"ok"}' };
     },
-    gitHttpFetch: async () => {
+    credentialHttpFetch: async () => {
       forwarded++;
       return { status: 200, headers: {}, body: Readable.from(["0000"]) };
     },

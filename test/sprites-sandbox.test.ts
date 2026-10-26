@@ -14,9 +14,8 @@ import {
 } from "../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
+import { execFailureDetail, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
@@ -604,52 +603,6 @@ test("exportFiles keepContentCaches ships cache-named build output (publish pari
     got.some((e) => e.path === "site/.cache/bundle.js"),
     "cache-named build output crosses when publish asks for it",
   );
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(make()),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, sprites can move bytes by reference");
-});
-
-test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(layers);
-  await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /sprites stageOut/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
-  assert.ok(script, "the stageOut curl reached the guest");
-  assert.match(script, /--upload-file/, "streams from disk rather than buffering in the guest");
-  assert.doesNotMatch(script, /--data-binary/, "the OOM shape must never come back");
-  assert.match(script, /-X POST/, "--upload-file alone would send PUT");
-  assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
-});
-
-test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(layers);
-  await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /sprites stageIn/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
-  assert.match(script, /-o .*\.part/, "downloads to a temp file");
-  assert.match(script, /mv -f /, "and only then moves it into place");
-  assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
 test("a prep failure that writes nothing still names its cause", () => {

@@ -10,19 +10,20 @@ requiredCapabilities:
 Use this skill when the user asks for a Zoom meeting or link, wants to know what Zoom
 meetings they have coming up, or wants to move or cancel one.
 
-This is an OAuth connector. The resolved user's Zoom token already lives on your computer
-as an environment variable (the way a logged-in CLI's cached credential would):
+This is an OAuth connector used by proxy: the user's token never enters your computer.
+Select the connected-app credential for `api.zoom.us` in `execute.credentials` (for
+example `connector:api.zoom.us:default`); that command gets `$AGENT_CREDENTIAL_TOKEN`.
+Call `$AGENT_API_URL/v1/credentials/http/<host>/<path>` with `-H "x-agent-capability:
+$AGENT_CREDENTIAL_TOKEN"`; the credential broker adds the user's token and forwards the
+request to `https://<host>/<path>`. If you selected two accounts for the same host, put
+the credential handle where the host goes. Never ask the user for a token or use another
+principal's credential.
 
-- `$VAULT_TOKEN_API_ZOOM_US` — for `api.zoom.us`
-
-Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US"`. Never ask the user for a
-token, log it, or use another principal's credential.
-
-Per-user connector tokens are present in the user's own DM and personal scheduled tasks,
+Per-user connected apps are listed in the user's own DM and personal scheduled tasks,
 and in a shared room or channel automation only when the user has opened their connections
-there. If the variable is empty in a shared room, ask them to DM you instead of telling
-them to reconnect; empty in their DM means they haven't connected Zoom — point them to the
-Connectors page.
+there. If no Zoom credential is listed in a shared room, ask them to DM you instead of
+telling them to reconnect; none listed in their DM means they haven't connected Zoom — point
+them to the Connectors page.
 
 Zoom error codes: `124` (invalid access token) means they need to reconnect Zoom. `4711`
 ("does not contain scopes") means their token lacks that scope — if the org's Zoom app
@@ -44,16 +45,16 @@ the user. Responses that carry it go through `jq` below so it never reaches your
 Who the user is, and their default timezone:
 
 ```bash
-curl -sS 'https://api.zoom.us/v2/users/me' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US" | jq '{id, email, timezone, code, message}'
+curl -sS "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/users/me" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" | jq '{id, email, timezone, code, message}'
 ```
 
 Upcoming meetings (the next six months; keep fetching with `next_page_token` until it is
 empty; times are UTC):
 
 ```bash
-curl -sS --get 'https://api.zoom.us/v2/users/me/meetings' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US" \
+curl -sS --get "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/users/me/meetings" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   --data-urlencode 'type=upcoming' \
   --data-urlencode 'page_size=300' \
   | jq '{next_page_token, meetings: [.meetings[]? | {id, topic, type, start_time, duration, timezone, host_id, join_url}], code, message}'
@@ -63,8 +64,8 @@ One meeting — a recurring series appears once in the list; its `occurrences` (
 with `status: deleted`) come from here:
 
 ```bash
-curl -sS "https://api.zoom.us/v2/meetings/$MEETING_ID" \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US" \
+curl -sS "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/meetings/$MEETING_ID" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   | jq '{id, topic, type, start_time, duration, timezone, host_email, join_url, password, occurrences, code, message}'
 ```
 
@@ -81,8 +82,8 @@ that report Windows zone names ("Pacific Standard Time") need mapping to IANA
 (`America/Los_Angeles`). `duration` is in minutes.
 
 ```bash
-curl -sS -X POST 'https://api.zoom.us/v2/users/me/meetings' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/users/me/meetings" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"topic":"Team sync","type":2,"start_time":"2026-11-02T10:00:00","timezone":"America/Los_Angeles","duration":30}' \
   | jq '{id, join_url, password, start_time, duration, timezone, code, message, errors}' > zoom-meeting.json
@@ -110,8 +111,8 @@ the whole series changes.
 Reschedule, with the same time rules as create:
 
 ```bash
-curl -sS -w '\n%{http_code}\n' -X PATCH "https://api.zoom.us/v2/meetings/$MEETING_ID" \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US" \
+curl -sS -w '\n%{http_code}\n' -X PATCH "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/meetings/$MEETING_ID" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"start_time":"2026-11-02T11:00:00","timezone":"America/Los_Angeles","duration":45}'
 ```
@@ -122,8 +123,8 @@ confirm the new time before reporting it.
 Cancel (`204` means done):
 
 ```bash
-curl -sS -w '\n%{http_code}\n' -X DELETE "https://api.zoom.us/v2/meetings/$MEETING_ID" \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US"
+curl -sS -w '\n%{http_code}\n' -X DELETE "$AGENT_API_URL/v1/credentials/http/api.zoom.us/v2/meetings/$MEETING_ID" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN"
 ```
 
 Zoom doesn't notify attendees of either change.

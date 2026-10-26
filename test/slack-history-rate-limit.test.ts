@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { test } from "node:test";
 import { WebClient, LogLevel } from "@slack/web-api";
 import { HISTORY_NO_RETRY, slackPluginConfigFromEnv, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
-import { slackHistoryRateLimitMessage } from "../src/slack/history-rate-limit.ts";
+import { slackHistoryRateLimitMessage } from "../src/slack/rate-limit-notice.ts";
 
 test("managed history throttling gives retry timing and workspace app setup without leaking the error", () => {
   const message = slackHistoryRateLimitMessage(
@@ -159,6 +159,13 @@ for (const { managed, historyLimit } of [
       clientOptions: {},
       historyRateLimitOptions: { managed },
       historyLimit,
+      readHistory: (await import("../src/slack/history.ts")).createSlackHistoryReader({
+        core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
+        ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
+        source: "live",
+        managed,
+        historyLimit,
+      }),
     });
     const query = { conversationTarget: "C1:1.0" };
     await fulfiller.fulfillSurfaceContext(client, {

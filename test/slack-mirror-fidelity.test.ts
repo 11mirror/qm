@@ -15,38 +15,28 @@ const directory = {
   classifyUserCached: async (_client: unknown, user: string) => ({ actor: { displayName: user } }),
 } as unknown as Directory;
 
-for (const postgres of [false, true]) {
-  test(
-    `subtype roundtrip and stale/partial/deleted protection (${postgres ? "postgres" : "memory"})`,
-    {
-      skip: postgres && !process.env.DATABASE_URL,
-    },
-    async () => {
-      const cache = postgres
-        ? createPostgresSurfaceCache(process.env.DATABASE_URL!)
-        : createPostgresSurfaceCache(testDatabaseUrl());
-      const container = `fidelity-${Date.now()}-${postgres}`;
-      const read = async () => (await cache.readMessages(container, { at: "1", includeDeleted: true }))[0]!;
-      try {
-        await cache.ingest([{ container, ts: "1", text: "legacy" }]);
-        assert.equal((await read()).subtype, undefined);
-        await cache.ingest([{ container, ts: "1", text: "joined", subtype: "channel_join", editedAt: 10 }]);
-        await cache.ingest([{ container, ts: "1", text: "partial", editedAt: 20 }]);
-        assert.equal((await read()).subtype, "channel_join");
-        await cache.ingest([{ container, ts: "1", text: "stale", subtype: "", editedAt: 10, handled: true }]);
-        assert.equal((await read()).subtype, "channel_join");
-        await cache.ingest([{ container, ts: "1", text: "ordinary", subtype: "", editedAt: 30 }]);
-        assert.equal((await read()).subtype, "");
-        await cache.ingest([{ container, ts: "1", deleted: true, subtype: "tombstone" }]);
-        await cache.ingest([{ container, ts: "1", text: "resurrection", subtype: "bot_message", editedAt: 40 }]);
-        assert.equal((await read()).subtype, "");
-        assert.equal((await read()).deleted, true);
-      } finally {
-        await cache.close();
-      }
-    },
-  );
-}
+test(`subtype roundtrip and stale/partial/deleted protection`, async () => {
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
+  const container = `fidelity-${Date.now()}`;
+  const read = async () => (await cache.readMessages(container, { at: "1", includeDeleted: true }))[0]!;
+  try {
+    await cache.ingest([{ container, ts: "1", text: "legacy" }]);
+    assert.equal((await read()).subtype, undefined);
+    await cache.ingest([{ container, ts: "1", text: "joined", subtype: "channel_join", editedAt: 10 }]);
+    await cache.ingest([{ container, ts: "1", text: "partial", editedAt: 20 }]);
+    assert.equal((await read()).subtype, "channel_join");
+    await cache.ingest([{ container, ts: "1", text: "stale", subtype: "", editedAt: 10, handled: true }]);
+    assert.equal((await read()).subtype, "channel_join");
+    await cache.ingest([{ container, ts: "1", text: "ordinary", subtype: "", editedAt: 30 }]);
+    assert.equal((await read()).subtype, "");
+    await cache.ingest([{ container, ts: "1", deleted: true, subtype: "tombstone" }]);
+    await cache.ingest([{ container, ts: "1", text: "resurrection", subtype: "bot_message", editedAt: 40 }]);
+    assert.equal((await read()).subtype, "");
+    assert.equal((await read()).deleted, true);
+  } finally {
+    await cache.close();
+  }
+});
 
 test("canonical snapshots cross the HTTP mapper with explicit empty files, roots and bot identity", () => {
   const event = toEvent(
@@ -202,106 +192,96 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
   assert.equal(context.messages[0]!.text, "Hi @New name and <@U2> & welcome");
 });
 
-for (const postgres of [false, true]) {
-  test(
-    `bot and attachment presentation metadata roundtrip (${postgres ? "postgres" : "memory"})`,
-    {
-      skip: postgres && !process.env.DATABASE_URL,
-    },
-    async () => {
-      const cache = postgres
-        ? createPostgresSurfaceCache(process.env.DATABASE_URL!)
-        : createPostgresSurfaceCache(testDatabaseUrl());
-      const container = `presentation-${Date.now()}-${postgres}`;
-      const raw = {
-        channel: container,
+test(`bot and attachment presentation metadata roundtrip`, async () => {
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
+  const container = `presentation-${Date.now()}`;
+  const raw = {
+    channel: container,
+    ts: "1000",
+    bot_id: "BOTHER",
+    text: "Report",
+    files: [{ id: "FLARGE", title: "Large report", size: 1_000_000_001, mimetype: "application/pdf" }],
+  };
+  const event = toEvent(slackMessageToIngestEvent(raw, ids))!;
+  try {
+    await cache.ingest([event]);
+    await cache.ingest([{ container, ts: "1000", text: "Report", editedAt: 20 }]);
+    await cache.ingest([
+      {
+        container,
         ts: "1000",
-        bot_id: "BOTHER",
-        text: "Report",
-        files: [{ id: "FLARGE", title: "Large report", size: 1_000_000_001, mimetype: "application/pdf" }],
-      };
-      const event = toEvent(slackMessageToIngestEvent(raw, ids))!;
-      try {
-        await cache.ingest([event]);
-        await cache.ingest([{ container, ts: "1000", text: "Report", editedAt: 20 }]);
-        await cache.ingest([
-          {
-            container,
-            ts: "1000",
-            text: "stale",
-            editedAt: 10,
-            botId: "BWRONG",
-            files: [{ fileId: "FWRONG" }],
-            handled: true,
-          },
-        ]);
-        const stored = (await cache.readMessages(container))[0]!;
-        assert.equal(stored.botId, "BOTHER");
-        assert.equal(stored.files![0]!.title, "Large report");
-        assert.equal(stored.files![0]!.size, 1_000_000_001);
-        const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
-        const client = {
-          conversations: { replies: async () => ({ messages: [raw] }) },
-          bots: {
-            info: async ({ bot }: { bot: string }) => {
-              assert.equal(bot, "BOTHER");
-              return { bot: { name: "Report bot" } };
-            },
-          },
-        };
-        const views = [];
-        for (const source of ["live", "mirror"] as const) {
-          const serializer = createConversationSerializer({
-            ids,
-            directory,
-            externalParticipantsEnabled: async () => true,
-            readHistory: createSlackHistoryReader({ core, ids, source }),
-          });
-          const result = await serializer.serializeSlackConversation(
-            client,
-            {
-              kind: "channel",
-              channel: container,
-              threadTs: "1000",
-              ts: "1001",
-              rawText: "question",
-              userId: "U1",
-              files: [],
-            },
-            { audience: [] },
-          );
-          views.push(result.view);
-          const current = await serializer.serializeSlackConversation(
-            client,
-            {
-              kind: "channel",
-              channel: container,
-              threadTs: "1000",
-              ts: "1001",
-              rawText: "question",
-              userId: "U1",
-              files: raw.files,
-            },
-            { audience: [] },
-          );
-          assert.deepEqual(current.view.omittedFiles, [{ name: "Large report", reason: "too-big" }]);
-        }
-        assert.deepEqual(views[1]!.messages, views[0]!.messages);
-        assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
-        assert.equal(views[1]!.messages[0]!.name, "Report bot");
-        assert.deepEqual(views[1]!.files, views[0]!.files);
-        assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
-        assert.deepEqual(views[1]!.files, []);
-        assert.deepEqual(views[1]!.omittedFiles, []);
-        await cache.ingest([{ container, ts: "1000", deleted: true }]);
-        await cache.ingest([{ ...event, botId: "BWRONG", editedAt: 30 }]);
-        assert.equal((await cache.readMessages(container, { includeDeleted: true }))[0]!.botId, "BOTHER");
-      } finally {
-        await cache.close();
-      }
-    },
-  );
-}
+        text: "stale",
+        editedAt: 10,
+        botId: "BWRONG",
+        files: [{ fileId: "FWRONG" }],
+        handled: true,
+      },
+    ]);
+    const stored = (await cache.readMessages(container))[0]!;
+    assert.equal(stored.botId, "BOTHER");
+    assert.equal(stored.files![0]!.title, "Large report");
+    assert.equal(stored.files![0]!.size, 1_000_000_001);
+    const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
+    const client = {
+      conversations: { replies: async () => ({ messages: [raw] }) },
+      bots: {
+        info: async ({ bot }: { bot: string }) => {
+          assert.equal(bot, "BOTHER");
+          return { bot: { name: "Report bot" } };
+        },
+      },
+    };
+    const views = [];
+    for (const source of ["live", "mirror"] as const) {
+      const serializer = createConversationSerializer({
+        ids,
+        directory,
+        externalParticipantsEnabled: async () => true,
+        readHistory: createSlackHistoryReader({ core, ids, source }),
+      });
+      const result = await serializer.serializeSlackConversation(
+        client,
+        {
+          kind: "channel",
+          channel: container,
+          threadTs: "1000",
+          ts: "1001",
+          rawText: "question",
+          userId: "U1",
+          files: [],
+        },
+        { audience: [] },
+      );
+      views.push(result.view);
+      const current = await serializer.serializeSlackConversation(
+        client,
+        {
+          kind: "channel",
+          channel: container,
+          threadTs: "1000",
+          ts: "1001",
+          rawText: "question",
+          userId: "U1",
+          files: raw.files,
+        },
+        { audience: [] },
+      );
+      assert.deepEqual(current.view.omittedFiles, [{ name: "Large report", reason: "too-big" }]);
+    }
+    assert.deepEqual(views[1]!.messages, views[0]!.messages);
+    assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
+    assert.equal(views[1]!.messages[0]!.name, "Report bot");
+    assert.deepEqual(views[1]!.files, views[0]!.files);
+    assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
+    assert.deepEqual(views[1]!.files, []);
+    assert.deepEqual(views[1]!.omittedFiles, []);
+    await cache.ingest([{ container, ts: "1000", deleted: true }]);
+    await cache.ingest([{ ...event, botId: "BWRONG", editedAt: 30 }]);
+    assert.equal((await cache.readMessages(container, { includeDeleted: true }))[0]!.botId, "BOTHER");
+  } finally {
+    await cache.close();
+  }
+});
 
 test("HTTP ingestion rejects invalid file sizes", () => {
   for (const size of [-1, Infinity, NaN, 0.5, Number.MAX_SAFE_INTEGER + 1, "10"]) {

@@ -11,28 +11,26 @@ requiredCapabilities:
 Use this skill when the user asks about their Dropbox files or folders — listing,
 searching, reading/downloading, uploading, or sharing.
 
-This is an OAuth connector. The resolved user's Dropbox token already lives on your
-computer as an environment variable, one per Dropbox API host (the way a logged-in CLI's
-cached credential would):
+This is an OAuth connector used by proxy: the user's token never enters your computer.
+Select the connected-app credential for `api.dropboxapi.com` (RPC: list, search, share,
+move, delete) and `content.dropboxapi.com` (download, upload) in `execute.credentials`
+(for example `connector:api.dropboxapi.com:default`); that command gets
+`$AGENT_CREDENTIAL_TOKEN`. Call `$AGENT_API_URL/v1/credentials/http/<host>/<path>` with
+`-H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN"`; the credential broker adds the user's
+token and forwards the request to `https://<host>/<path>`. If you selected two accounts
+for the same host, put the credential handle where the host goes. Select both when a
+command touches both hosts. Never ask the user for a token or use another principal's
+credential or a service fallback.
 
-- `$VAULT_TOKEN_API_DROPBOXAPI_COM` — for `api.dropboxapi.com` (RPC: list, search, share, move, delete)
-- `$VAULT_TOKEN_CONTENT_DROPBOXAPI_COM` — for `content.dropboxapi.com` (download, upload)
+If no Dropbox credential is listed: per-user connected apps are offered only in a **direct
+DM** with the user (their personal scope) — in a channel or group they're absent by design,
+even for a fully-connected user. So don't tell a channel user to reconnect; ask them to DM
+you to run this. Only if none is listed inside a DM does it mean they haven't connected
+Dropbox — then point them to the Connectors page.
 
-Both carry the **same** Dropbox token (one OAuth grant spans every host), so if a
-host-specific var is empty, `$VAULT_TOKEN_API_DROPBOXAPI_COM` works as the bearer for any
-Dropbox host. Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_..."` on every call;
-nothing on the network path adds it for you. Never ask the user
-for a token, log it, or use another principal's credential or a service fallback.
-
-If `$VAULT_TOKEN_API_DROPBOXAPI_COM` is **empty**: per-user connector tokens are injected
-only in a **direct DM** with the user (their personal scope) — in a channel or group
-they're absent by design, even for a fully-connected user. So don't tell a channel user to
-reconnect; ask them to DM you to run this. Only if it's empty inside a DM does it mean they
-haven't connected Dropbox — then point them to the Connectors page.
-
-On **400 `Invalid authorization value`**: the header was missing or empty, so Dropbox
-never checked the token. Fix your command (`echo ${#VAULT_TOKEN_API_DROPBOXAPI_COM}` shows
-the variable is set) and retry; this says nothing about the user's connection. Before
+On **401 from the broker** (`unauthorized`): the `x-agent-capability` header was missing or
+empty because the credential wasn't selected for that command. Fix your command and retry;
+this says nothing about the user's connection. Before
 telling a user Dropbox is broken, confirm with `users/get_current_account` below.
 
 On **401** (`invalid_access_token`, `expired_access_token`): the token was sent and
@@ -55,8 +53,8 @@ and no `Content-Type`** (adding `Content-Type: application/json` with an empty b
 a 400):
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/users/get_current_account' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM"
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/users/get_current_account" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN"
 ```
 
 Read `root_info` from the response. If `root_info[".tag"]` is `team`, use its
@@ -78,8 +76,8 @@ strings — ids are stable across namespaces and avoid path-escaping issues.
 `path` is `""` for the root of the active namespace, or a folder path/id:
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/files/list_folder' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/files/list_folder" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Content-Type: application/json' \
   --data '{"path":"","recursive":false}'
@@ -91,8 +89,8 @@ whole subtree in one paginated pass instead of walking folder by folder.
 If the response has `"has_more":true`, page with the returned `cursor`:
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/files/list_folder/continue' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/files/list_folder/continue" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{"cursor":"CURSOR"}'
 ```
@@ -100,8 +98,8 @@ curl -sS -X POST 'https://api.dropboxapi.com/2/files/list_folder/continue' \
 ## Search
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/files/search_v2' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/files/search_v2" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Content-Type: application/json' \
   --data '{"query":"budget","options":{"max_results":100}}'
@@ -117,8 +115,8 @@ Downloads use the content host and carry their argument in the `Dropbox-API-Arg`
 (no JSON body). Reference the file by id or path:
 
 ```bash
-curl -sS -X POST 'https://content.dropboxapi.com/2/files/download' \
-  -H "Authorization: Bearer $VAULT_TOKEN_CONTENT_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/content.dropboxapi.com/2/files/download" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Dropbox-API-Arg: {"path":"id:FILE_ID"}' \
   -o inbox/dropbox-file.bin
@@ -134,8 +132,8 @@ target file/folder (id + path), and get approval before running it.
 Upload bytes you produced (content host; the arg is a header, the file is the body):
 
 ```bash
-curl -sS -X POST 'https://content.dropboxapi.com/2/files/upload' \
-  -H "Authorization: Bearer $VAULT_TOKEN_CONTENT_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/content.dropboxapi.com/2/files/upload" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Dropbox-API-Arg: {"path":"/Reports/q3.pdf","mode":"add","autorename":true}' \
   -H 'Content-Type: application/octet-stream' \
@@ -146,8 +144,8 @@ Create a shared link (returns a `url`; a 409 `shared_link_already_exists` carrie
 existing link in its metadata — reuse it):
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/sharing/create_shared_link_with_settings" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Content-Type: application/json' \
   --data '{"path":"id:FILE_ID"}'
@@ -157,14 +155,14 @@ Move/rename or delete (delete_v2 is recoverable — the file goes to the user's 
 files, not a permanent purge):
 
 ```bash
-curl -sS -X POST 'https://api.dropboxapi.com/2/files/move_v2' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/files/move_v2" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Content-Type: application/json' \
   --data '{"from_path":"id:FILE_ID","to_path":"/Archive/q3.pdf"}'
 
-curl -sS -X POST 'https://api.dropboxapi.com/2/files/delete_v2' \
-  -H "Authorization: Bearer $VAULT_TOKEN_API_DROPBOXAPI_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/api.dropboxapi.com/2/files/delete_v2" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Content-Type: application/json' \
   --data '{"path":"id:FILE_ID"}'

@@ -1,5 +1,6 @@
 import { swallow } from "../util/errors.ts";
-import { sleep, createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
+import { sleep } from "../util/async.ts";
+import { type GoalNoticeView } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
@@ -29,7 +30,6 @@ interface TurnHooks {
 export interface TurnFlow {
   callCore(body: CoreTurnBody, hooks?: TurnHooks): Promise<TurnResult>;
   inFlightRuns: { add(runId: string): void; delete(runId: string): void; has(runId: string): boolean };
-  inFlightRunByThread: ReturnType<typeof createInFlightThreadMap>;
   ackRunDelivery(runId: string): void;
 }
 
@@ -46,8 +46,6 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     },
     has: (runId: string): boolean => inFlightRunPins.has(runId),
   };
-
-  const inFlightRunByThread = createInFlightThreadMap();
 
   function ackRunDelivery(runId: string): void {
     void (async () => {
@@ -71,13 +69,12 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
 
   function coreFailure(err: unknown): Error {
     swallow("slack: core call", err);
-    if ((err as { code?: string })?.code === "run_stalled") {
-      return new SlackTurnFailure(
-        "this request is taking unusually long — I'm still on it and will post the result here as soon as it finishes",
-        err,
-      );
-    }
-    return new SlackTurnFailure(GENERIC_FAILURE_TEXT, err);
+    return new SlackTurnFailure(
+      (err as { code?: string })?.code === "run_stalled"
+        ? "this request is taking unusually long — I'm still on it and will post the result here as soon as it finishes"
+        : GENERIC_FAILURE_TEXT,
+      err,
+    );
   }
 
   async function callCore(body: CoreTurnBody, hooks: TurnHooks = {}): Promise<TurnResult> {
@@ -87,45 +84,33 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     } catch (err) {
       throw coreFailure(err);
     }
-    if (queued.status !== "queued" || !queued.runId) return queued;
+    const runId = queued.runId;
+    if (queued.status !== "queued" || !runId) return queued;
     if (queued.steered) {
-      await hooks.onSteered?.(queued.runId);
+      await hooks.onSteered?.(runId);
       return { status: "silent", steered: true };
     }
-    inFlightRuns.add(queued.runId);
-    try {
-      await hooks.onQueued?.(queued.runId);
-      return await pollRun(queued.runId, hooks);
-    } finally {
-      inFlightRuns.delete(queued.runId);
-    }
-  }
-
-  async function pollRun(runId: string, hooks: TurnHooks): Promise<TurnResult> {
     inFlightRuns.add(runId);
-    let result: TurnResult | null;
     try {
-      result = await core.waitRun(runId, {
-        ...(hooks.onReplying ? { onReplying: hooks.onReplying } : {}),
-        ...(hooks.onFirstBlock ? { onFirstBlock: hooks.onFirstBlock } : {}),
-        ...(hooks.onSurfacePosted ? { onSurfacePosted: hooks.onSurfacePosted } : {}),
-        ...(hooks.onGoal ? { onGoal: hooks.onGoal } : {}),
-      });
-    } catch (err) {
+      await hooks.onQueued?.(runId);
+      inFlightRuns.add(runId);
+      let result: TurnResult | null;
+      try {
+        result = await core.waitRun(runId, hooks);
+      } catch (err) {
+        inFlightRuns.delete(runId);
+        throw coreFailure(err);
+      }
+      if (result?.status === "refused" && result.refusalKind === "security_quarantine") return result;
+      if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
+        if (!hooks.deferDeliveryAck) ackRunDelivery(runId);
+      } else inFlightRuns.delete(runId);
+      if (result) return result;
+      throw new SlackTurnFailure("the agent finished without producing a reply", undefined);
+    } finally {
       inFlightRuns.delete(runId);
-      throw coreFailure(err);
     }
-    if (result?.status === "refused" && result.refusalKind === "security_quarantine") {
-      return result;
-    }
-    if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
-      if (!hooks.deferDeliveryAck) ackRunDelivery(runId);
-    } else {
-      inFlightRuns.delete(runId);
-    }
-    if (result) return result;
-    throw new SlackTurnFailure("the agent finished without producing a reply", undefined);
   }
 
-  return { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery };
+  return { callCore, inFlightRuns, ackRunDelivery };
 }

@@ -1,7 +1,3 @@
-export function envKey(host: string): string {
-  return `VAULT_TOKEN_${host.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
-}
-
 export function connectorTokenNote(host: string): string {
-  return `token in \`$${envKey(host)}\`; send it yourself as \`Authorization: Bearer\`; nothing adds it for you`;
+  return `proxy ${host}; any method and path; call \`$AGENT_API_URL/v1/credentials/http/${host}/<path>\` with header \`x-agent-capability: $AGENT_CREDENTIAL_TOKEN\` and the broker adds the OAuth token`;
 }

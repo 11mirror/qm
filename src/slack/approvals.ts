@@ -1,53 +1,39 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { slackFailureText } from "./turn-flow.ts";
-import { slackSectionBlocks } from "./mrkdwn.ts";
+import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import {
   APPROVAL_ACTION_IDS,
-  type ApprovalActionId,
+  type PendingApproval,
   type StoredApproval,
   approvalDecisionMessage,
+  approvalDetails,
   approvalMessage,
-  clip,
   type ApprovalDecisionRecord,
   createApprovalRegistry,
-  createThreadTracker,
   recoveredApprovalContext,
-  resolveReactionTargets,
-  slackReplyArgs,
-  stripAckPrefix,
-  toSlackMrkdwn,
-  uploadAttachments,
-  uploadFailureNote,
-} from "./lib.ts";
+} from "./approval-cards.ts";
+import { safeClip } from "./safe-cut.ts";
+import { createThreadTracker } from "./message-gating.ts";
+import { resolveReactionTargets } from "./reactions.ts";
+import { slackReplyArgs } from "./delivery.ts";
+import { stripAckPrefix } from "./presenters.ts";
+import { uploadAttachments, uploadFailureNote } from "./attachments.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
 import type { Directory } from "./directory.ts";
-import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
+import { type ActionApp, applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 
-interface ActionArgs {
-  ack: () => Promise<void>;
-  body: unknown;
-  action: unknown;
-  client: any;
-}
-
-interface SlackApprovalContext {
+interface SlackApprovalContext extends Omit<PendingApproval, "requestId" | "originUrl"> {
   requesterId: string | undefined;
   channel: string;
   replyThreadTs?: string;
   triggerTs?: string;
   threadOnly: boolean;
   approvalChannel: string;
-  command: string;
-  reason: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -55,22 +41,14 @@ interface SlackApprovalContext {
   recovered?: boolean;
 }
 
-type ApprovalScope = "once" | "session" | "always";
+const SCOPES = {
+  hilo_allow_once: "once",
+  hilo_allow_session: "session",
+  hilo_allow_always: "always",
+  hilo_deny: "deny",
+} as const;
 
-function approvalScope(actionId: ApprovalActionId): ApprovalScope | "deny" {
-  if (actionId === "hilo_allow_once") return "once";
-  if (actionId === "hilo_allow_session") return "session";
-  if (actionId === "hilo_allow_always") return "always";
-  return "deny";
-}
-
-export interface Approvals {
-  rememberSlackApprovals(
-    approvals: NonNullable<TurnResult["pendingApprovals"]>,
-    ctx: Omit<SlackApprovalContext, "command" | "reason">,
-  ): void;
-  registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void;
-}
+const EXPIRED = "That approval request expired — let me know when you want to try again.";
 
 export function createApprovals(deps: {
   externalAccess?: boolean;
@@ -78,71 +56,50 @@ export function createApprovals(deps: {
   flow: TurnFlow;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
-}): Approvals {
+}) {
   const { core, flow, directory, threads } = deps;
+  const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
 
-  interface TurnOutcome {
-    result: TurnResult;
-    runId?: string;
-  }
-
-  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+  async function runTurn(body: CoreTurnBody, onQueued?: (runId: string) => void) {
     if (deps.externalAccess && body.conversation.kind !== "dm")
       throw new Error("Continue this request privately instead of resuming a shared approval.");
     let runId: string | undefined;
     const result = await flow.callCore(body, {
-      ...hooks,
       onQueued: (id) => {
         runId = id;
-        hooks.onQueued?.(id);
+        onQueued?.(id);
       },
     });
-    return { result, ...(runId ? { runId } : {}) };
+    const ackQuarantine = (): void => {
+      if (runId && result.status === "refused" && result.refusalKind === "security_quarantine")
+        flow.ackRunDelivery(runId);
+    };
+    return { result, ackQuarantine };
   }
-
-  function ackConveyedQuarantine({ result, runId }: TurnOutcome): void {
-    if (runId && result.status === "refused" && result.refusalKind === "security_quarantine") {
-      flow.ackRunDelivery(runId);
-    }
-  }
-
-  const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
 
   function rememberSlackApprovals(
     approvals: NonNullable<TurnResult["pendingApprovals"]>,
     ctx: Omit<SlackApprovalContext, "command" | "reason">,
   ): void {
-    for (const approval of approvals) {
+    for (const approval of approvals)
       pendingSlackApprovals.remember(approval.requestId, {
         ...ctx,
         command: approval.command,
         reason: approval.reason,
-        ...(approval.purpose ? { purpose: approval.purpose } : {}),
-        ...(approval.summary ? { summary: approval.summary } : {}),
-        ...(approval.kind ? { kind: approval.kind } : {}),
-        ...(approval.grantModes ? { grantModes: approval.grantModes } : {}),
+        ...approvalDetails(approval),
       });
-    }
   }
 
-  type StoredApprovalFetch = { state: "found"; stored: StoredApproval } | { state: "gone" } | { state: "unavailable" };
-
-  async function fetchStoredApproval(requestId: string): Promise<StoredApprovalFetch> {
+  async function fetchStoredApproval(requestId: string): Promise<StoredApproval | null | "unavailable"> {
     try {
-      const stored = await core.getApproval(requestId);
-      if (!stored) return { state: "gone" };
-      return { state: "found", stored: stored as StoredApproval };
+      return ((await core.getApproval(requestId)) as StoredApproval | null) ?? null;
     } catch (err) {
       console.error("[slack-plugin] approval recovery fetch failed:", (err as Error).message);
-      return { state: "unavailable" };
+      return "unavailable";
     }
   }
 
-  async function postApprovalFollowup(client: any, ctx: SlackApprovalContext, text: string): Promise<void> {
-    await client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
-  }
-
-  async function handleApprovalAction({ ack, body, action, client }: ActionArgs): Promise<void> {
+  async function handleApprovalAction({ ack, body, action, client }: any): Promise<void> {
     await ack();
     const parsed = parseBlockAction(action, APPROVAL_ACTION_IDS);
     if (!parsed) return;
@@ -152,59 +109,36 @@ export function createApprovals(deps: {
     const click = parseInteractionBody(body);
     const { clickerId, messageTs, messageThreadTs } = click;
     const channel = click.channel ?? ctx?.channel ?? "";
+    const tell = (text: string): Promise<unknown> =>
+      client.chat
+        .postEphemeral({ channel, user: clickerId, text })
+        .catch(swallowAs("slack: chat.postEphemeral", undefined));
+    const expire = async (): Promise<void> => {
+      if (channel && messageTs)
+        await updateSlackMessage(client, channel, messageTs, `_${EXPIRED}_`).catch(
+          swallowAs("slack: update approval message", undefined),
+        );
+      else if (channel && clickerId) await tell(EXPIRED);
+    };
 
     if (pendingSlackApprovals.busy(requestId)) {
-      if (channel && clickerId) {
-        await client.chat
-          .postEphemeral({
-            channel,
-            user: clickerId,
-            text: "This approval is being resolved right now — give it a moment.",
-          })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      }
+      if (channel && clickerId) await tell("This approval is being resolved right now — give it a moment.");
       return;
     }
 
-    const fetched = channel ? await fetchStoredApproval(requestId) : ({ state: "unavailable" } as const);
-    if (fetched.state === "unavailable" && !ctx) {
-      if (channel && clickerId) {
-        await client.chat
-          .postEphemeral({
-            channel,
-            user: clickerId,
-            text: "I couldn't check on that approval just now — try the button again in a moment.",
-          })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      }
+    const fetched = channel ? await fetchStoredApproval(requestId) : "unavailable";
+    if (fetched === "unavailable" && !ctx) {
+      if (channel && clickerId)
+        await tell("I couldn't check on that approval just now — try the button again in a moment.");
       return;
     }
-    if (fetched.state === "gone") {
+    if (fetched === null) {
       pendingSlackApprovals.settle(requestId);
-      if (channel && messageTs) {
-        await updateSlackMessage(
-          client,
-          channel,
-          messageTs,
-          "_That approval request expired — let me know when you want to try again._",
-        ).catch(swallowAs("slack: update approval message", undefined));
-      } else if (channel && clickerId) {
-        await client.chat
-          .postEphemeral({
-            channel,
-            user: clickerId,
-            text: "That approval request expired — let me know when you want to try again.",
-          })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      }
-      return;
+      return expire();
     }
     const rebuilt =
-      fetched.state === "found"
-        ? recoveredApprovalContext(fetched.stored, {
-            channel,
-            ...(messageThreadTs ? { threadTs: messageThreadTs } : {}),
-          })
+      fetched !== "unavailable"
+        ? recoveredApprovalContext(fetched, { channel, ...(messageThreadTs ? { threadTs: messageThreadTs } : {}) })
         : null;
     if (rebuilt && !ctx) {
       pendingSlackApprovals.remember(requestId, { ...rebuilt, recovered: true } as SlackApprovalContext);
@@ -220,77 +154,48 @@ export function createApprovals(deps: {
         recovered: true,
       };
     }
-
-    if (!ctx) {
-      if (channel && messageTs) {
-        await updateSlackMessage(
-          client,
-          channel,
-          messageTs,
-          "_That approval request expired — let me know when you want to try again._",
-        ).catch(swallowAs("slack: update approval message", undefined));
-      } else if (channel && clickerId) {
-        await client.chat
-          .postEphemeral({
-            channel,
-            user: clickerId,
-            text: "That approval request expired — let me know when you want to try again.",
-          })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      }
-      return;
-    }
+    if (!ctx) return expire();
 
     const requesterMatches =
       clickerId === ctx.requesterId ||
       (ctx.recovered === true && (await directory.classifyActor(client, clickerId)).externalId === ctx.requesterId);
     if (!requesterMatches) {
-      await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: "Only the person who requested this command can approve or deny it.",
-        })
-        .catch(swallowAs("slack: chat.postEphemeral", undefined));
+      await tell("Only the person who requested this command can approve or deny it.");
       return;
     }
 
     const begun = pendingSlackApprovals.begin(requestId);
     if (begun.state === "busy") {
-      await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: "Still working on your previous click — give it a moment.",
-        })
-        .catch(swallowAs("slack: chat.postEphemeral", undefined));
+      await tell("Still working on your previous click — give it a moment.");
       return;
     }
     if (begun.state !== "ready") return;
 
-    const selected = approvalScope(actionId);
-    const approval = {
-      requestId,
-      approved: selected !== "deny",
-      ...(selected !== "deny" ? { scope: selected } : {}),
-    };
-
+    const selected = SCOPES[actionId];
+    const approval = { requestId, approved: selected !== "deny", ...(selected !== "deny" ? { scope: selected } : {}) };
     let settled = false;
-    const settle = (): void => {
-      pendingSlackApprovals.settle(requestId);
-      settled = true;
-    };
-
     const delegated = isSubagentThreadRef(ctx.turn.conversation.threadRef);
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
     const decided: ApprovalDecisionRecord = { decision: selected, by: clickerId, at: Date.now(), state: "done" };
-    const decisionCard = (extra: string[] = []) => approvalDecisionMessage(ctx, decided, extra);
-    const updateCard = (card: { text: string; blocks: Array<Record<string, unknown>> }) =>
-      updateSlackMessage(client, cardChannel, messageTs, card.text, card.blocks);
-    await updateCard(approvalDecisionMessage(ctx, { ...decided, state: "pending" })).catch(
-      swallowAs("slack: update approval message", undefined),
-    );
+    const updateCard = (text: string, blocks?: Array<Record<string, unknown>>) =>
+      updateSlackMessage(client, cardChannel, messageTs, text, blocks);
+    const decide = (extra: string[] = []) => {
+      const card = approvalDecisionMessage(ctx, decided, extra);
+      return updateCard(card.text, card.blocks);
+    };
+    const pendingCard = (lead: string, text: string, retained = {}) =>
+      updateCard(text, [
+        { type: "section", text: { type: "mrkdwn", text: lead } },
+        ...approvalMessage([
+          { requestId, command: ctx.command, reason: ctx.reason, ...approvalDetails(ctx), ...retained },
+        ]).blocks,
+      ]).catch(swallowAs("slack: update approval message", undefined));
+    const followup = (text: string) =>
+      client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
+
+    const pending = approvalDecisionMessage(ctx, { ...decided, state: "pending" });
+    await updateCard(pending.text, pending.blocks).catch(swallowAs("slack: update approval message", undefined));
     try {
       const approver = await directory.classifyActor(client, clickerId);
       const onQueued =
@@ -301,76 +206,50 @@ export function createApprovals(deps: {
                 .catch(swallowAs("slack: delivery-state checkpoint", undefined));
             }
           : undefined;
-      const sealedOut = async (result: TurnResult): Promise<boolean> => {
-        const retained = result.pendingApprovals?.find((item) => item.requestId === requestId);
-        if (result.status !== "pending_approval" || (result.pendingApprovals?.length && !retained)) return false;
+      const { result, ackQuarantine } = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued);
+      pendingSlackApprovals.settle(requestId);
+      settled = true;
+
+      const retained = result.pendingApprovals?.find((item) => item.requestId === requestId);
+      if (result.status === "pending_approval" && (!result.pendingApprovals?.length || retained)) {
         pendingSlackApprovals.remember(requestId, ctx);
         const note = result.reason ?? "This conversation is waiting on a pending approval.";
-        const retry = approvalMessage([
-          {
-            requestId,
-            command: ctx.command,
-            reason: ctx.reason,
-            ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
-            ...(ctx.summary ? { summary: ctx.summary } : {}),
-            ...(ctx.kind ? { kind: ctx.kind } : {}),
-            ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
-            ...retained,
-          },
-        ]);
-        await updateSlackMessage(
-          client,
-          cardChannel,
-          messageTs,
+        await pendingCard(
+          note,
           `${note} This approval stays pending; try again once the conversation is unblocked.`,
-          [{ type: "section", text: { type: "mrkdwn", text: note } }, ...retry.blocks],
-        ).catch(swallowAs("slack: update approval message", undefined));
-        return true;
-      };
-
-      if (selected === "deny") {
-        const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
-        settle();
-        if (await sealedOut(outcome.result)) return;
-        await updateCard(decisionCard());
-        ackConveyedQuarantine(outcome);
+          retained,
+        );
         return;
       }
 
-      const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
-      const result = outcome.result;
-      settle();
-
-      if (await sealedOut(result)) return;
+      if (selected === "deny") {
+        await decide();
+        ackQuarantine();
+        return;
+      }
 
       if (delegated) {
-        await updateCard(
-          decisionCard([
-            result.status === "failed" || result.status === "refused"
-              ? `The delegated task could not continue: ${result.reason ?? "execution failed"}`
-              : "Results will return to the original conversation.",
-          ]),
-        );
+        await decide([
+          result.status === "failed" || result.status === "refused"
+            ? `The delegated task could not continue: ${result.reason ?? "execution failed"}`
+            : "Results will return to the original conversation.",
+        ]);
         return;
       }
 
       if (result.status === "ok") {
         if (ctx.threadOnly && ctx.replyThreadTs) threads.mark(ctx.channel, ctx.replyThreadTs, true);
-        const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
-        const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
-        const { reactions } = cleanedContinuation;
+        const cleaned = cleanAgentReplyForSlack(result.reply ?? "");
+        const replyBody = stripAckPrefix(cleaned.text, ctx.ackedFirstBlock);
         let reply = result.stopped ? "Stopped." : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
-        else if (result.attachments?.length || reactions.length) reply = "Done.";
+        else if (result.attachments?.length || cleaned.reactions.length) reply = "Done.";
         if (cardIsRemote) {
-          await updateCard(decisionCard());
-          await postApprovalFollowup(client, ctx, reply);
+          await decide();
+          await followup(reply);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
-          await updateSlackMessage(
-            client,
-            cardChannel,
-            messageTs,
+          await updateCard(
             reply,
             replyBlocks.length < 48 ? [...replyBlocks, ...approvalDecisionMessage(ctx, decided).blocks] : undefined,
           );
@@ -380,76 +259,54 @@ export function createApprovals(deps: {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
             console.error("[slack-plugin] file upload failed:", (err as Error).message);
-            await postApprovalFollowup(client, ctx, uploadFailureNote(err));
+            await followup(uploadFailureNote(err));
           }
         }
-        const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());
+        const { directives } = resolveReactionTargets(cleaned.reactions, ctx.allowedTs ?? new Set());
         await applyAndLogReactions(client, ctx.channel, ctx.triggerTs, directives);
         return;
       }
 
       if (result.status === "pending_approval") {
-        const approvals = result.pendingApprovals ?? [];
-        rememberSlackApprovals(approvals, {
-          requesterId: ctx.requesterId,
-          channel: ctx.channel,
-          approvalChannel: cardChannel,
-          ...(ctx.replyThreadTs ? { replyThreadTs: ctx.replyThreadTs } : {}),
-          ...(ctx.triggerTs ? { triggerTs: ctx.triggerTs } : {}),
-          threadOnly: ctx.threadOnly,
-          turn: ctx.turn,
-          ...(ctx.allowedTs ? { allowedTs: ctx.allowedTs } : {}),
-          ...(ctx.slackIdsByPrincipal ? { slackIdsByPrincipal: ctx.slackIdsByPrincipal } : {}),
-          ...(ctx.recovered ? { recovered: true } : {}),
-        });
-        await updateCard(decisionCard(["A new command needs approval; its card will arrive separately."]));
+        const {
+          command: _command,
+          reason: _reason,
+          purpose: _purpose,
+          summary: _summary,
+          kind: _kind,
+          grantModes: _grantModes,
+          ackedFirstBlock: _ackedFirstBlock,
+          ...base
+        } = ctx;
+        rememberSlackApprovals(result.pendingApprovals ?? [], base);
+        await decide(["A new command needs approval; its card will arrive separately."]);
         return;
       }
 
       const failLink = result.refusalKind === "internal_only" ? null : (result.adminUrl ?? null);
-      const failDetail = failLink ? ` Full error: ${failLink}` : "";
-      await updateCard(decisionCard([`I can't continue — ${userFacingFailureClause(result)}.${failDetail}`]));
-      ackConveyedQuarantine(outcome);
+      await decide([
+        `I can't continue — ${userFacingFailureClause(result)}.${failLink ? ` Full error: ${failLink}` : ""}`,
+      ]);
+      ackQuarantine();
     } catch (err) {
       console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));
       const msg = slackFailureText(err);
       if (settled) {
-        await updateSlackMessage(client, cardChannel, messageTs, `⚠️ ${msg}`).catch(
-          swallowAs("slack: update approval message", undefined),
-        );
+        await updateCard(`⚠️ ${msg}`).catch(swallowAs("slack: update approval message", undefined));
         return;
       }
       pendingSlackApprovals.release(requestId);
-      const retry = approvalMessage([
-        {
-          requestId,
-          command: ctx.command,
-          reason: ctx.reason,
-          ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
-          ...(ctx.summary ? { summary: ctx.summary } : {}),
-          ...(ctx.kind ? { kind: ctx.kind } : {}),
-          ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
-        },
-      ]);
-      await updateSlackMessage(
-        client,
-        cardChannel,
-        messageTs,
-        `⚠️ ${clip(msg, 300)} — the approval is still pending; use the buttons to try again.`,
-        [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: `⚠️ ${clip(msg, 300)} — the approval is still pending; try again:` },
-          },
-          ...retry.blocks,
-        ],
-      ).catch(swallowAs("slack: update approval message", undefined));
+      await pendingCard(
+        `⚠️ ${safeClip(msg, 300)} — the approval is still pending; try again:`,
+        `⚠️ ${safeClip(msg, 300)} — the approval is still pending; use the buttons to try again.`,
+      );
     }
   }
 
-  function registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void {
-    app.action(/^hilo_/, handleApprovalAction);
-  }
-
-  return { rememberSlackApprovals, registerActions };
+  return {
+    rememberSlackApprovals,
+    registerActions(app: ActionApp): void {
+      app.action(/^hilo_/, handleApprovalAction);
+    },
+  };
 }

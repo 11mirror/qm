@@ -367,7 +367,6 @@ export function createMockHarness(): Harness {
           sandboxId: params.sandboxId,
         });
         await turn.emit({ kind: "ToolResult", body: { ...result } });
-        turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
         reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
       } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ") || command0.startsWith("!owner ")) {
@@ -387,7 +386,6 @@ export function createMockHarness(): Harness {
           else if (tag === "!owner ") opts = { ownerAuth: true };
           const result = await turn.tools.execute(command, opts);
           await turn.emit({ kind: "ToolResult", body: { ...result } });
-          turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
         }
@@ -420,7 +418,6 @@ export function createMockHarness(): Harness {
           await turn.emit({ kind: "ToolResult", body: { ...result } });
           reply = output;
         }
-        turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
       } else if (command0.startsWith("!reach ")) {
         const rest = command0.slice("!reach ".length);
@@ -435,7 +432,6 @@ export function createMockHarness(): Harness {
         } catch (e) {
           reply = `[reach error] ${e instanceof Error ? e.message : String(e)}`;
         }
-        turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
       } else if (command0.startsWith("!paused-approval ")) {
         const command = command0.slice("!paused-approval ".length);

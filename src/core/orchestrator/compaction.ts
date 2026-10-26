@@ -154,7 +154,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       ...contextSummaryItem(throughSeq, text),
       ...(mode ? { body: { mode } } : {}),
     });
-    await deps.harness.turns.resetSession?.(input.session.id);
     return summary;
   }
 

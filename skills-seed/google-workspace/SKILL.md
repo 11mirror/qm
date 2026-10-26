@@ -11,17 +11,19 @@ requiredCapabilities:
 Use this skill when the user asks about Gmail, Google Calendar, or Google Tasks:
 schedule, meetings, emails, labels, drafts, replies, or to-do lists and tasks.
 
-This is an OAuth connector. The resolved user's Google OAuth token already lives on
-your computer as an environment variable, one per Google API host (the way a logged-in
-CLI's cached credential would):
+This is an OAuth connector used by proxy: the user's token never enters your computer.
+Select the connected-app credential for `gmail.googleapis.com` (Gmail) or
+`www.googleapis.com` (Calendar and Tasks) in `execute.credentials` (for example
+`connector:gmail.googleapis.com:default`); that command gets `$AGENT_CREDENTIAL_TOKEN`.
+Call `$AGENT_API_URL/v1/credentials/http/<host>/<path>` with `-H "x-agent-capability:
+$AGENT_CREDENTIAL_TOKEN"`; the credential broker adds the user's token and forwards the
+request to `https://<host>/<path>`. If you selected two accounts for the same host, put
+the credential handle where the host goes.
 
-- `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM` — for `gmail.googleapis.com`
-- `$VAULT_TOKEN_WWW_GOOGLEAPIS_COM` — for `www.googleapis.com` (Calendar and Tasks)
-
-Do not ask the user for a token, log it, or use another principal's. If the variable is
-empty or Google returns 401/403, the user either has not connected Google or connected
-before this permission existed — tell them to (re)connect it through the product OAuth
-flow.
+Do not ask the user for a token or use another principal's. If no Google credential is
+listed, or the broker returns 410 or Google returns 401/403, the user either has not
+connected Google or connected before this permission existed — tell them to (re)connect it
+through the product OAuth flow.
 
 ## Gmail
 
@@ -85,8 +87,8 @@ For "what is on my schedule today?", first get the user's timezone
 assume it), compute the local day bounds, and call:
 
 ```bash
-curl -sS --get 'https://www.googleapis.com/calendar/v3/calendars/primary/events' \
-  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
+curl -sS --get "$AGENT_API_URL/v1/credentials/http/www.googleapis.com/calendar/v3/calendars/primary/events" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   --data-urlencode "timeMin=$TIME_MIN" \
   --data-urlencode "timeMax=$TIME_MAX" \
   --data-urlencode "singleEvents=true" \
@@ -107,14 +109,14 @@ floor allows them; offer to continue in DM.
 ## Google Tasks
 
 Tasks is served under `www.googleapis.com/tasks/v1`, so it uses the same
-`$VAULT_TOKEN_WWW_GOOGLEAPIS_COM` token. List the task lists, then the tasks in one:
+`www.googleapis.com` credential as Calendar. List the task lists, then the tasks in one:
 
 ```bash
-curl -sS 'https://www.googleapis.com/tasks/v1/users/@me/lists' \
-  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM"
+curl -sS "$AGENT_API_URL/v1/credentials/http/www.googleapis.com/tasks/v1/users/@me/lists" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN"
 
-curl -sS --get 'https://www.googleapis.com/tasks/v1/lists/LIST_ID/tasks' \
-  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
+curl -sS --get "$AGENT_API_URL/v1/credentials/http/www.googleapis.com/tasks/v1/lists/LIST_ID/tasks" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   --data-urlencode "showCompleted=false" \
   --data-urlencode "maxResults=100"
 ```
@@ -126,8 +128,8 @@ Creating, completing, editing, or deleting a task is a write — treat it like a
 write below. Example creation after approval:
 
 ```bash
-curl -sS -X POST 'https://www.googleapis.com/tasks/v1/lists/LIST_ID/tasks' \
-  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/www.googleapis.com/tasks/v1/lists/LIST_ID/tasks" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data '{"title":"...","notes":"...","due":"2026-07-20T00:00:00.000Z"}'
 ```
@@ -142,8 +144,8 @@ draft.
 Calendar event creation after approval:
 
 ```bash
-curl -sS -X POST 'https://www.googleapis.com/calendar/v3/calendars/primary/events' \
-  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
+curl -sS -X POST "$AGENT_API_URL/v1/credentials/http/www.googleapis.com/calendar/v3/calendars/primary/events" \
+  -H "x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   -H 'content-type: application/json' \
   --data @event.json
 ```

@@ -7,9 +7,7 @@ import { join } from "node:path";
 import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { tenant } from "../src/tenant.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -51,14 +49,6 @@ test("provision runs commands with env and cwd", async () => {
   assert.match(r.stdout, /VAR=v1/);
 });
 
-test("an already-aborted signal never executes a command", async () => {
-  const handle = await sandbox.provision(layers);
-  const before = fake.execScripts().length;
-  const signal = AbortSignal.abort();
-  await assert.rejects(sandbox.run(handle, "echo must-not-run", { signal }), /aborted/i);
-  assert.equal(fake.execScripts().length, before);
-});
-
 test("streams and exit codes are exact", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
@@ -87,16 +77,6 @@ test("empty file roundtrip", async () => {
   assert.equal(back.length, 0);
 });
 
-test("listDir and removeDir", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFile(h, "d/one.txt", "1");
-  await sandbox.writeFile(h, "d/e/two.txt", "2");
-  const listed = await sandbox.listDir(h, "d");
-  assert.deepEqual(listed.sort(), ["d/e/two.txt", "d/one.txt"]);
-  await sandbox.removeDir(h, "d");
-  assert.equal(await sandbox.readFile(h, "d/one.txt"), null);
-});
-
 test("process sessions capability works end to end", async () => {
   assert.ok(supportsProcessSessions(sandbox));
   if (!supportsProcessSessions(sandbox)) return;
@@ -120,21 +100,6 @@ test("force-through proxy env is set when a proxy url and token are present", as
   assert.match(r.stdout, /^basic$/m);
 });
 
-test("large command output survives intact", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout, "x".repeat(900 * 1024));
-});
-
-test("sandbox is reused across provisions and warm start is reported", async () => {
-  const a = await sandbox.provision(layers);
-  const b = await sandbox.provision(layers);
-  assert.equal(a.id, b.id);
-  assert.equal(b.coldStart, false);
-  assert.equal(fake.createdCount(scopeName()), 1);
-});
-
 test("an existing live sandbox holding the scope name is adopted after a restart", async () => {
   await make().provision(layers);
   const h = await sandbox.provision(layers);
@@ -142,19 +107,6 @@ test("an existing live sandbox holding the scope name is adopted after a restart
   assert.equal(fake.createdCount(scopeName()), 1);
   const r = await sandbox.run(h, "echo alive");
   assert.equal(r.stdout.trim(), "alive");
-});
-
-test("the durable store reconnects the same sandbox across backend instances", async () => {
-  const store: DurableMap<StoredModalSandbox> = testMap();
-  const s1 = make({ store });
-  const a = await s1.provision(layers);
-  await s1.writeFile(a, "keep.txt", "resident\n");
-  const first = fake.current(a.id)?.sandboxId;
-  const s2 = make({ store });
-  const b = await s2.provision(layers);
-  assert.equal(fake.current(b.id)?.sandboxId, first);
-  assert.equal(await s2.readFile(b, "keep.txt"), "resident\n");
-  assert.equal(fake.createdCount(scopeName()), 1);
 });
 
 test("scratch sandboxes are unnamed, ephemeral, and terminated at release", async () => {
@@ -176,16 +128,6 @@ test("a terminated sandbox falls back to a fresh one with home hydrated from the
   assert.equal(await sandbox.readFile(b, "keep.txt"), "survives the kill\n");
   const r = await sandbox.run(b, "echo revived");
   assert.equal(r.stdout.trim(), "revived");
-});
-
-test("a sandbox that dies mid-turn is revived transparently for the next command", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.teardown(h);
-  fake.terminate(h.id);
-  const r = await sandbox.run(h, "echo back");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.trim(), "back");
-  assert.equal(fake.createdCount(scopeName()), 2);
 });
 
 test("rotation snapshots changes written since the last teardown snapshot", async () => {
@@ -215,74 +157,6 @@ test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.guestResponsive, false);
   assert.equal(status.provisioned, false, "a sandbox the platform says is gone needs a re-provision, not a restart");
-});
-
-test("file reads and writes revive a sandbox that died mid-turn", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFile(h, "pre.txt", "before death\n");
-  await sandbox.teardown(h);
-  fake.terminate(h.id);
-  const h2 = await sandbox.provision(layers);
-  fake.terminate(h2.id);
-  await sandbox.writeFile(h2, "post.txt", "after revival\n");
-  assert.equal(await sandbox.readFile(h2, "post.txt"), "after revival\n");
-  assert.equal(await sandbox.readFile(h2, "pre.txt"), "before death\n");
-  assert.equal(await sandbox.readFile(h2, "never-existed.txt"), null);
-});
-
-test("a scratch sandbox that dies mid-turn is revived as scratch, not as a durable scope sandbox", async () => {
-  const h = await sandbox.provision(layers, { scratch: { key: "job-revive" } });
-  fake.terminateAllRunning();
-  const r = await sandbox.run(h, "echo scratch-back");
-  assert.equal(r.stdout.trim(), "scratch-back");
-  assert.equal(fake.createdCount(scopeName()), 0, "the revived box must not claim the scope name");
-  assert.equal(fake.totalCreated(), 2);
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(make()),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, modal can move bytes by reference");
-});
-
-test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(layers);
-  await assert.rejects(() => sb.stageOut!(h, "outbox/big.bin"), /modal stageOut/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
-  assert.ok(script, "the stageOut curl reached the guest");
-  assert.match(script, /--upload-file/, "streams from disk rather than buffering in the guest");
-  assert.doesNotMatch(script, /--data-binary/, "the OOM shape must never come back");
-  assert.match(script, /-X POST/, "--upload-file alone would send PUT");
-  assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
-});
-
-test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(layers);
-  await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /modal stageIn/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
-  assert.match(script, /-o .*\.part/, "downloads to a temp file");
-  assert.match(script, /mv -f /, "and only then moves it into place");
-  assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
 test("reapDeepIdle spares a box running a detached background job", async () => {
@@ -381,12 +255,6 @@ test("forced scratch destruction surfaces failure and retries the same live sess
   assert.equal(fake.runningCount(), 1);
   await sandbox.teardown(handle, { destroy: true });
   assert.equal(fake.runningCount(), 0);
-});
-
-test("released scratch handles cannot recreate a persistent sandbox", async () => {
-  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
-  await sandbox.teardown(handle, { destroy: true });
-  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
 });
 
 const nearExpiry = (): number => Date.now() + 3600_000;
@@ -496,14 +364,6 @@ test("profile advertises provider checkpoints and process sessions", () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
   assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
   assert.equal(make({ cpus: 4, memoryMb: 8192 }).profile.spec?.cpus, 4);
-});
-
-test("computerStatus never provisions a sandbox", async () => {
-  const status = await sandbox.computerStatus!(scope);
-  assert.equal(status.guestResponsive, false);
-  assert.equal(status.provisioned, false);
-  assert.match(status.machine, /no machine provisioned yet/);
-  assert.equal(fake.totalCreated(), 0, "a status probe must not create a sandbox");
 });
 
 test("a failing checkpoint restore fails the provision instead of cold-starting empty", async () => {

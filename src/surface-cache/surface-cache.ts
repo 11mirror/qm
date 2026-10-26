@@ -3,7 +3,6 @@ import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceC
 import { tenant } from "../tenant.ts";
 
 export type {
-  ActiveThread,
   CachedMessage,
   ContainerSummary,
   IngestEvent,

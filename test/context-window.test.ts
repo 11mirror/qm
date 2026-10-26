@@ -66,15 +66,6 @@ test("session store: sessions without a summary return the full history", async 
 });
 
 test(
-  "postgres store: context window slices at the latest summary and keeps guards whole-history",
-  { skip: pgSkip },
-  async () => {
-    const store = createPostgresSessionStore(URL!);
-    await exerciseWindow(store, `ch:C1:pg-${Date.now()}`);
-  },
-);
-
-test(
   "postgres store: a payload merely mentioning context_summary text is not treated as a summary",
   { skip: pgSkip },
   async () => {

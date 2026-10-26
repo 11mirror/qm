@@ -1,11 +1,11 @@
 import { canonicalPerson } from "../../directory/person.ts";
-import { scopeId, type Cron } from "../../types.ts";
+import type { Cron } from "../../types.ts";
 import { ensureInboxCron, inboxName, INBOX_SOURCES } from "../../inbox/sync-task.ts";
 import { isResolved, ledgerItemView } from "../../inbox/view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
 import { canAdministerCron } from "../control-service.ts";
-import { actingPrincipal, appCrons, cronSummary, inboxDeps } from "./cron-items.ts";
+import { actingPrincipal, appCrons, cronSummary, inboxLoopsEnabled } from "./cron-items.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -24,21 +24,20 @@ function inboxTitle(cron: Cron): string {
 }
 
 async function inbox(ctx: ApiCtx): Promise<void> {
-  const deps = inboxDeps(ctx);
+  const deps = ctx.deps.inbox;
   const preferences = ctx.deps.uiState;
   if (!deps || !preferences) return sendJson(ctx.res, 503, { error: "inbox_unavailable" });
-  const acting = actingPrincipal(ctx);
-  if (!acting) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  const actorId = actingPrincipal(ctx);
+  if (!actorId) return;
+  if (!(await inboxLoopsEnabled(ctx, actorId))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
   if (ctx.capability && ctx.capability.privateScope !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
   const defaults = [];
-  for (const { source } of INBOX_SOURCES) defaults.push(await ensureInboxCron(appCrons(ctx), acting.actorId, source));
-  const id = uiStateId(acting.actorId, "inbox-crons");
+  for (const { source } of INBOX_SOURCES) defaults.push(await ensureInboxCron(appCrons(ctx), actorId, source));
+  const id = uiStateId(actorId, "inbox-crons");
   const pref = await preferences.putIfAbsent(id, { value: defaults.map((cron) => cron.id), updatedAt: Date.now() });
   const available: Cron[] = [];
   for (const cron of await ctx.app.listCrons()) {
-    if (cron.inbox && !cron.archived && (await canAdministerCron(ctx.app, cron, acting.actorId))) available.push(cron);
+    if (cron.inbox && !cron.archived && (await canAdministerCron(ctx.app, cron, actorId))) available.push(cron);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "PUT") {
@@ -59,11 +58,11 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const selectedIds = selected.map((cron) => cron.id);
   const cronsById = new Map(selected.map((cron) => [cron.id, cron]));
   if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
-    const mailCrons = selected.filter((cron) => cron.owner === acting.actorId && cron.inbox?.source === "gmail");
+    const mailCrons = selected.filter((cron) => cron.owner === actorId && cron.inbox?.source === "gmail");
     const mail = (await Promise.all(mailCrons.map((cron) => deps.items.byCron(cron.id))))
       .flat()
       .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
-    await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
+    await ctx.deps.inboxSourceRefresh(actorId, mail);
   }
   const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(
     (item) => selectedIds.includes(item.cronId) && item.inboxPreview?.sentChat !== true,
@@ -77,7 +76,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const requestedFilter = ctx.url.searchParams.get("filter");
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
     return sendJson(ctx.res, 400, { error: "invalid_filter" });
-  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(actorId, "inbox-filter")))?.value;
   const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
@@ -129,7 +128,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
           .filter(
             (item) =>
               item.source === "slack" &&
-              cronsById.get(item.cronId)?.owner === acting.actorId &&
+              cronsById.get(item.cronId)?.owner === actorId &&
               !(
                 typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
                 Date.now() < item.inboxPreview.slackAvatarsRefreshAt
@@ -138,7 +137,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
           .map((item) => deps.items.get(item.id)),
       )
     ).filter((item) => item !== null);
-    await ctx.deps.inboxSourceRefresh(acting.actorId, slack, "avatars");
+    await ctx.deps.inboxSourceRefresh(actorId, slack, "avatars");
     for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
       const summary = page.find((entry) => entry.id === refreshed?.id);
       if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
@@ -183,11 +182,8 @@ async function inbox(ctx: ApiCtx): Promise<void> {
 }
 
 async function access(ctx: ApiCtx): Promise<void> {
-  const acting = actingPrincipal(ctx);
-  if (!acting) return;
-  sendJson(ctx.res, 200, {
-    enabled: (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))) === true,
-  });
+  const actorId = actingPrincipal(ctx);
+  if (actorId) sendJson(ctx.res, 200, { enabled: await inboxLoopsEnabled(ctx, actorId) });
 }
 
 async function viewers(ctx: ApiCtx): Promise<void> {

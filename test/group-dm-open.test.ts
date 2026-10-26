@@ -241,6 +241,7 @@ describe("the Slack surface opening a group DM", () => {
       core: core as never,
       directory: directory as never,
       serializer: {} as never,
+      readHistory: {} as never,
       botToken: "xoxb-test",
       clientOptions: {},
     });

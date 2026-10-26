@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackSender } from "../src/slack/sender.ts";
-import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
+import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },

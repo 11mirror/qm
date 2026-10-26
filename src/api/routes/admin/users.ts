@@ -13,9 +13,9 @@ import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj } from "../shared.ts";
+import { isObj } from "../shared.ts";
+import { badRequest, notFound, orgAdmin } from "./common.ts";
 import { type ApiCtx } from "../route.ts";
-import { tenant } from "../../../tenant.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
@@ -28,10 +28,10 @@ const FORGET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export async function listUsers(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { scope } = authz;
+  authz.audit("users.read", "users");
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
@@ -96,23 +96,19 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
   return participants.some((participant) => samePerson(participant.principalId, email));
 }
 
-export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
-  return inviteUser(ctx, false);
-}
+export const inviteExternalUser = (ctx: ApiCtx): Promise<void> => inviteUser(ctx, false);
 
-export async function inviteTeammate(ctx: ApiCtx): Promise<void> {
-  return inviteUser(ctx, true);
-}
+export const inviteTeammate = (ctx: ApiCtx): Promise<void> => inviteUser(ctx, true);
 
 async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const { res, deps, body } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor, scope } = authz;
+  if (!deps.identity) return notFound(res);
   if (teammate && ctx.capability)
     return sendJson(res, 403, { error: "forbidden", message: "Teammate invitations must be made in Admin." });
-  const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
+  const bad = (message: string) => badRequest(res, message);
   const b = isObj(body) ? body : {};
   const email = String(b.email ?? "")
     .trim()
@@ -142,9 +138,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
-  if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant)) {
+  if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant))
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
-  }
   if (!teammate && role === "member" && holdsGrant && !ownsGrant)
     return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   let grantChange: "grant.create" | "grant.revoke" | null = null;
@@ -157,8 +152,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   } catch (e) {
     return grantError(res, "grant_failed", e);
   }
-  if (grantChange)
-    audit(deps, { principalId: actor.id, action: grantChange, resource: `${email}/org_admin`, scopeLabel: scope });
+  if (grantChange) authz.audit(grantChange, `${email}/org_admin`);
   const created = existing === undefined;
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
   const member: ExternalMember = {
@@ -172,12 +166,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   };
   await deps.identity.putExternalMember(member);
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
-  audit(deps, {
-    principalId: actor.id,
-    action: teammate ? "user.invite" : action,
-    resource: email,
-    scopeLabel: scope,
-  });
+  authz.audit(teammate ? "user.invite" : action, email);
   const signInUrl = teammate
     ? `${deps.portalUrl!.replace(/\/+$/, "")}/auth/invite#token=${encodeURIComponent(
         await mintSignedPayload(
@@ -233,18 +222,17 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
 
 export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor, scope } = authz;
+  if (!deps.identity) return notFound(res);
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
-  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
+  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant))
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
-  }
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   if (holdsGrant) {
     try {
@@ -252,12 +240,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
     } catch (e) {
       return grantError(res, "revoke_failed", e);
     }
-    audit(deps, {
-      principalId: actor.id,
-      action: "grant.revoke",
-      resource: `${existing.email}/org_admin`,
-      scopeLabel: scope,
-    });
+    authz.audit("grant.revoke", `${existing.email}/org_admin`);
   }
   const now = Date.now();
   const tombstone: ExternalMember = {
@@ -268,19 +251,19 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   };
   if (externalMemberActive(existing, now) || existing.role !== "member") {
     await deps.identity.putExternalMember(tombstone);
-    audit(deps, { principalId: actor.id, action: "external_user.revoke", resource: existing.email, scopeLabel: scope });
+    authz.audit("external_user.revoke", existing.email);
   }
   if (existing.kind === "teammate" || now - tombstone.expiresAt! < FORGET_AFTER_MS)
     return sendJson(res, 200, { ok: true, removed: false });
   await deps.identity.removeExternalMember(existing.email);
-  audit(deps, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
+  authz.audit("external_user.forget", existing.email);
   return sendJson(res, 200, { ok: true, removed: true });
 }
 
 export async function searchDirectory(ctx: ApiCtx): Promise<void> {
   const { res, deps, app, url } = ctx;
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || !deps.directory) return sendJson(res, 200, { members: [] });
   const r = await app.resolveRecipient(q);
@@ -294,10 +277,10 @@ export async function searchDirectory(ctx: ApiCtx): Promise<void> {
 
 export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "keychain.read", resource: "keychain", scopeLabel: scope });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { scope } = authz;
+  authz.audit("keychain.read", "keychain");
 
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
@@ -370,12 +353,11 @@ async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const org = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
-  audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
+  authz.audit("user.read", principalId);
 
   const [grants, stats, onboarding] = await Promise.all([
     deps.admin?.listGrants() ?? [],
@@ -406,85 +388,68 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
 }
 
 export async function startImpersonation(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
-  const org = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
+  const { res, app, body } = ctx;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
-  if (!target) return sendJson(res, 400, { error: "bad_request", message: "target principal required" });
-  if (target === actor.id) return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+  if (!target) return badRequest(res, "target principal required");
+  if (target === authz.actor.id) return badRequest(res, "cannot impersonate yourself");
   const member = await app.directoryMember(target);
-  audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
+  authz.audit("impersonate.start", target);
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });
 }
 
 export async function stopImpersonation(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const org = tenant().orgScope;
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
+  const { res, body } = ctx;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
-  audit(deps, { principalId: actor.id, action: "impersonate.stop", resource: target || "-", scopeLabel: org });
+  authz.audit("impersonate.stop", target || "-");
   return sendJson(res, 200, { ok: true });
 }
+
+const isoToday = () => new Date().toISOString().slice(0, 10);
 
 const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending", "completed", "dismissed"]);
 
 export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params } = ctx;
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor } = authz;
+  if (!deps.memory) return notFound(res);
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const status = (body as { status?: unknown }).status;
-  if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "onboarding requires { status: not_started|pending|completed|dismissed }",
-    });
-  }
+  if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus))
+    return badRequest(res, "onboarding requires { status: not_started|pending|completed|dismissed }");
   const personal = makeScopeId("personal", principalId);
-  const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, today, actor.id);
-  audit(deps, {
-    principalId: actor.id,
-    action: "user.onboarding.set",
-    resource: `${principalId}/${status}`,
-    scopeLabel: personal,
-  });
+  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, isoToday(), actor.id);
+  authz.audit("user.onboarding.set", `${principalId}/${status}`, personal);
   return sendJson(res, 200, { ok: true, scopeId: personal, status });
 }
 
 export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor } = authz;
+  if (!deps.memory) return notFound(res);
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
-  const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, "not_started", today, actor.id);
-  let deletedSessions = 0;
-  if (deps.sessions) {
-    const own = (await deps.sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal);
-    for (const s of own) {
-      await deps.sessions.deleteSession(s.id);
-      deletedSessions++;
-    }
-  }
-  audit(deps, {
-    principalId: actor.id,
-    action: "user.reset",
-    resource: `${principalId}/sessions=${deletedSessions}`,
-    scopeLabel: personal,
-  });
+  await setOnboardingStatus(deps.memory, personal, "not_started", isoToday(), actor.id);
+  const sessions = deps.sessions;
+  const own = sessions ? (await sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal) : [];
+  for (const s of own) await sessions!.deleteSession(s.id);
+  const deletedSessions = own.length;
+  authz.audit("user.reset", `${principalId}/sessions=${deletedSessions}`, personal);
   return sendJson(res, 200, { ok: true, scopeId: personal, deletedSessions });
 }
 
 export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor } = authz;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
     const grant = await deps.admin!.createGrant(actor, {
@@ -492,43 +457,28 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
       role: b.role as AdminRole,
       scopeId: String(b.scopeId ?? ""),
     });
-    audit(deps, {
-      principalId: actor.id,
-      action: "grant.create",
-      resource: `${grant.principalId}/${grant.role}`,
-      scopeLabel: grant.scopeId,
-    });
+    authz.audit("grant.create", `${grant.principalId}/${grant.role}`, grant.scopeId);
     return sendJson(res, 200, { ok: true, grant });
   } catch (e) {
-    if (e instanceof AdminError) return sendJson(res, e.status, { error: "grant_failed", message: e.message });
-    throw e;
+    return grantError(res, "grant_failed", e);
   }
 }
 
 export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
   const { res, deps, url, params } = ctx;
-  const actor = await authorizeAdmin(ctx, tenant().orgScope);
-  if (!actor) return;
+  const authz = await orgAdmin(ctx);
+  if (!authz) return;
+  const { actor } = authz;
   const principalId = params.principalId!;
   const scope = url.searchParams.get("scope") ?? "";
   const role = url.searchParams.get("role") ?? "";
-  if (!principalId || !scope || role !== "org_admin") {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "principalId (path), and scope + role=org_admin (query) required",
-    });
-  }
+  if (!principalId || !scope || role !== "org_admin")
+    return badRequest(res, "principalId (path), and scope + role=org_admin (query) required");
   try {
     await deps.admin!.revokeGrant(actor, principalId, scope, role);
-    audit(deps, {
-      principalId: actor.id,
-      action: "grant.revoke",
-      resource: `${principalId}/${role}`,
-      scopeLabel: scope,
-    });
+    authz.audit("grant.revoke", `${principalId}/${role}`, scope);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
-    if (e instanceof AdminError) return sendJson(res, e.status, { error: "revoke_failed", message: e.message });
-    throw e;
+    return grantError(res, "revoke_failed", e);
   }
 }

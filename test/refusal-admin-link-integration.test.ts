@@ -20,7 +20,7 @@ import { processRun } from "../src/runs/worker.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
-import { refusalNote } from "../src/slack/lib.ts";
+import { refusalNote } from "../src/slack/refusals.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";

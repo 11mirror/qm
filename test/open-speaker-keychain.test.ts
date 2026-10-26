@@ -1,13 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { coreToolOptions } from "../src/harness/agent-tools.ts";
-import { loadConfig } from "../src/config.ts";
-
-test("Open owner execution is discoverable without an isolation flag", () => {
-  const config = loadConfig({});
-  assert.equal(coreToolOptions(config).ownerAuthExec, true);
-});
 
 test("Open owner computer rechecks revocation before reuse and is destroyed, never shared", async () => {
   let member = true;
@@ -59,7 +52,12 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
   await assert.rejects(boxes.provisionOwnerAuth!(), /no longer authorized/);
   posture = "open";
   const command = boxes.ownerAuthCommand!("true");
-  assert.match(command, /unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN/);
+  assert.match(command, /^unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN; unset AGENT_CREDENTIAL_TOKEN /);
+  assert.doesNotMatch(
+    boxes.ownerAuthCommand!("true", { AGENT_CREDENTIAL_TOKEN: "selected" }),
+    /unset [^;]*AGENT_CREDENTIAL_TOKEN/,
+    "a selected broker credential survives into the owner command",
+  );
   assert.ok(!JSON.stringify(audits).includes("synthetic-secret"));
   await boxes.reclaimBox();
   assert.deepEqual(releases, [[handle, { destroy: true }]]);

@@ -1,5 +1,4 @@
-import { errMessage } from "../../util/errors.ts";
-import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { readRawBody, sendJson } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
 async function surfaceEvents(ctx: BaseCtx): Promise<void> {
@@ -8,18 +7,10 @@ async function surfaceEvents(ctx: BaseCtx): Promise<void> {
     req.resume();
     return sendJson(res, 404, { error: "not_found" });
   }
-  let rawBody: string;
-  try {
-    rawBody = await readRawBody(req);
-  } catch (e) {
-    if (e instanceof PayloadTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
-    throw e;
-  }
   const out = await deps.chatSurfaces.receive(params.surface!, {
     headers: req.headers,
     pathWithQuery: url.pathname + url.search,
-    rawBody,
+    rawBody: await readRawBody(req),
   });
   return sendJson(res, out.status, out.body);
 }

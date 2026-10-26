@@ -1,28 +1,16 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
-import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
-import {
-  type RecentMessage,
-  type SlackFile,
-  buildContextWindow,
-  downloadSlackFile,
-  isExternallyShared,
-  isOversize,
-  openConversationFor,
-  oversizeMsg,
-  parseDeliveryTarget,
-} from "./lib.ts";
+import { type RecentMessage, buildContextWindow } from "./conversation.ts";
+import { downloadSlackFile, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
+import { isExternallyShared } from "./identity.ts";
+import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
-import {
-  type ConversationSerializer,
-  RECENT_HISTORY_LIMIT,
-  RECENT_THREAD_LIMIT,
-  slackFileName,
-} from "./conversation-view.ts";
+import { type ConversationSerializer, RECENT_THREAD_LIMIT } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
   rateLimitNotice?: SlackRateLimitNotice;
@@ -33,7 +21,7 @@ export function createSurfaceContextFulfiller(deps: {
   trustedFileHost?: string;
   userToken?: string;
   clientOptions: Record<string, unknown>;
-  readHistory?: SlackHistoryReader;
+  readHistory: SlackHistoryReader;
   historyClient?: any;
   historyLimit?: number;
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
@@ -75,37 +63,6 @@ export function createSurfaceContextFulfiller(deps: {
     }
   }
 
-  async function fetchContextHistory(
-    client: any,
-    channel: string,
-    threadTs: string | undefined,
-    before: string | undefined,
-    live: boolean,
-  ): Promise<{ raw: SlackHistoryMessage[]; hasMore: boolean; note?: string }> {
-    if (deps.readHistory) return deps.readHistory(client, channel, threadTs, before, false, live);
-    if (live) throw new Error("Live Slack history is unavailable.");
-    const page = before ? { latest: before, inclusive: false } : {};
-    if (threadTs) {
-      const { messages, hasMore } = parseMessageList(
-        await client.conversations.replies({
-          channel,
-          ts: threadTs,
-          limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_THREAD_LIMIT),
-          ...page,
-        }),
-      );
-      return { raw: messages, hasMore };
-    }
-    const { messages, hasMore } = parseMessageList(
-      await client.conversations.history({
-        channel,
-        limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_HISTORY_LIMIT),
-        ...page,
-      }),
-    );
-    return { raw: messages.slice().reverse(), hasMore };
-  }
-
   async function findMessageAt(
     client: any,
     channel: string,
@@ -137,36 +94,27 @@ export function createSurfaceContextFulfiller(deps: {
     }
     const files = (msg.files ?? []).filter((f) => f?.id);
     if (!files.length) return { error: "that message has no files attached" };
-    let file: SlackFile | undefined;
-    if (ref.name) {
-      const want = ref.name.toLowerCase();
-      file =
-        files.find((f) => slackFileName(f).toLowerCase() === want) ??
-        files.find((f) => slackFileName(f).toLowerCase().includes(want));
-      if (!file)
-        return {
-          error: `that message has no file matching "${ref.name}" — it carries: ${files.map(slackFileName).join(", ")}`,
-        };
-    } else if (files.length === 1) {
-      file = files[0]!;
-    } else {
+    const names = files.map(slackFileName);
+    const want = ref.name?.toLowerCase();
+    const exact = want ? names.findIndex((n) => n.toLowerCase() === want) : -1;
+    let at = files.length === 1 ? 0 : -1;
+    if (want) at = exact >= 0 ? exact : names.findIndex((n) => n.toLowerCase().includes(want));
+    if (at < 0)
       return {
-        error: `that message carries ${files.length} files — pass a name: ${files.map(slackFileName).join(", ")}`,
+        error: want
+          ? `that message has no file matching "${ref.name}" — it carries: ${names.join(", ")}`
+          : `that message carries ${files.length} files — pass a name: ${names.join(", ")}`,
       };
-    }
-    if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };
-    let bytes: Uint8Array;
-    let blobId: string;
-    try {
-      bytes = await downloadSlackFile(file, {
-        token: botToken,
-        ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-      });
-      ({ blobId } = await core.stageBlob(bytes));
-    } catch (err) {
-      swallow("slack: surface-file fetch", err);
-      return { error: `I couldn't read "${slackFileName(file)}" — it may be restricted, deleted, or too large for me` };
-    }
+    const file = files[at]!;
+    const name = names[at]!;
+    if (isOversize(file)) return { error: oversizeMsg(name) };
+    const staged = await downloadSlackFile(file, {
+      token: botToken,
+      ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
+    })
+      .then(async (bytes) => ({ bytes, ...(await core.stageBlob(bytes)) }))
+      .catch(swallowAs("slack: surface-file fetch", undefined));
+    if (!staged) return { error: `I couldn't read "${name}" — it may be restricted, deleted, or too large for me` };
     const author = file.user
       ? await directory.classifyUserCached(client, file.user).then(
           (c) => c.actor.displayName,
@@ -175,9 +123,9 @@ export function createSurfaceContextFulfiller(deps: {
       : undefined;
     return {
       file: {
-        blobId,
-        name: slackFileName(file),
-        sizeBytes: bytes.length,
+        blobId: staged.blobId,
+        name,
+        sizeBytes: staged.bytes.length,
         ...(file.mimetype ? { mimetype: file.mimetype } : {}),
         ...(author ? { author } : {}),
       },
@@ -196,11 +144,9 @@ export function createSurfaceContextFulfiller(deps: {
         return { error: "I'm not allowed to open group DMs in this workspace (the app needs the mpim:write scope)" };
       return { error: `I couldn't open that group DM: ${(err as Error).message}` };
     }
-    try {
-      void directory.forceDirectorySync(client).catch(swallowAs("slack: sync after opening a group DM", undefined));
-    } catch (err) {
-      swallow("slack: sync after opening a group DM", err);
-    }
+    void (async () => directory.forceDirectorySync(client))().catch(
+      swallowAs("slack: sync after opening a group DM", undefined),
+    );
     return { group: { groupId } };
   }
 
@@ -253,10 +199,10 @@ export function createSurfaceContextFulfiller(deps: {
       );
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
       const outcomes = await Promise.allSettled([
-        fetchContextHistory(client, channel, undefined, before, q.live === true),
+        deps.readHistory(client, channel, undefined, before, false, q.live === true),
         threadTs
-          ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
-          : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
+          ? deps.readHistory(client, channel, threadTs, before, false, q.live === true)
+          : Promise.resolve({ raw: [] as SlackHistoryMessage[], hasMore: false, note: undefined }),
       ]);
       const byTs = new Map<string, SlackHistoryMessage>();
       const notes = new Set<string>();
@@ -272,7 +218,7 @@ export function createSurfaceContextFulfiller(deps: {
         }
         for (const message of outcome.value.raw) if (message.ts) byTs.set(message.ts, message);
         hasMore ||= outcome.value.hasMore;
-        if ("note" in outcome.value && outcome.value.note) notes.add(outcome.value.note);
+        if (outcome.value.note) notes.add(outcome.value.note);
       }
       const raw = [...byTs.values()];
       const failure = outcomes.find((outcome) => outcome.status === "rejected");

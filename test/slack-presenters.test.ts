@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAckPresenter, stripAckPrefix, renderGoalNotice, createGoalNoticePresenter } from "../src/slack/lib.ts";
+import {
+  createAckPresenter,
+  stripAckPrefix,
+  renderGoalNotice,
+  createGoalNoticePresenter,
+} from "../src/slack/presenters.ts";
 
 function presenterHarness(opts: { reactionDelayMs?: number } = {}) {
   const calls: string[] = [];

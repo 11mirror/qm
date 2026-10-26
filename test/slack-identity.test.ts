@@ -15,7 +15,7 @@ import {
   groupDmDisplayName,
   resolveChannelMembership,
   type ActorAssertion,
-} from "../src/slack/lib.ts";
+} from "../src/slack/identity.ts";
 
 const TEAM = "T-OWN";
 

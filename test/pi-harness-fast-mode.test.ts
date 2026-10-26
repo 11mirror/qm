@@ -533,7 +533,7 @@ test("compaction retries a refused summary on the configured fallback model", as
   const harness = createPiHarness({
     apiKey: "sk-anthropic-test",
     openaiApiKey: "sk-openai-test",
-    modelId: "claude-sonnet-5",
+    defaultModelId: "claude-sonnet-5",
     resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
   });
   const models: unknown[] = [];

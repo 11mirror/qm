@@ -20,7 +20,7 @@ function recordFetch(t: TestContext, headers: Headers[] = []): string[] {
 
 const companyHarness = (keys: Record<string, string>) =>
   createPiHarness({
-    modelId: "gpt-5.6-sol",
+    defaultModelId: "gpt-5.6-sol",
     captureRequests: false,
     resolveProviderKeys: async () => keys,
     companyModelId: codexSubscriptionModelId,
@@ -49,7 +49,7 @@ test("an unavailable company ChatGPT token fails closed instead of falling back 
 test("without a company subscription a plain OpenAI id stays metered", async (t) => {
   const urls = recordFetch(t);
   const harness = createPiHarness({
-    modelId: "gpt-5.6-sol",
+    defaultModelId: "gpt-5.6-sol",
     captureRequests: false,
     resolveProviderKeys: async () => ({ openai: "sk-metered" }),
   });
@@ -80,7 +80,7 @@ test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer 
   const headers: Headers[] = [];
   const urls = recordFetch(t, headers);
   const harness = createPiHarness({
-    modelId: "claude-sonnet-5",
+    defaultModelId: "claude-sonnet-5",
     captureRequests: false,
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-company" }),
   });

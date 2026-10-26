@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
+import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import type { BaseCtx } from "./routes/route.ts";
 
 export { sendJson };
 
@@ -32,6 +34,18 @@ export function extendBodyDeadline(req: IncomingMessage, ms: number): void {
   (req as DeadlineCarrier)[BODY_DEADLINE]?.rearm(ms);
 }
 
+const TEXTUAL_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/x-javascript",
+  "application/graphql",
+  "application/sql",
+  "application/toml",
+]);
+
 export function contentTypeWithUtf8Charset(contentType: string): string {
   let parameterStart = -1;
   let inQuotes = false;
@@ -51,21 +65,7 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   }
   if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart))) return contentType;
   const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
-  const textual =
-    mime.startsWith("text/") ||
-    mime === "application/json" ||
-    mime === "application/xml" ||
-    mime === "application/yaml" ||
-    mime === "application/x-yaml" ||
-    mime === "application/javascript" ||
-    mime === "application/x-javascript" ||
-    mime === "application/graphql" ||
-    mime === "application/sql" ||
-    mime === "application/toml" ||
-    mime === "image/svg+xml" ||
-    mime.endsWith("+json") ||
-    mime.endsWith("+xml") ||
-    mime.endsWith("+yaml");
+  const textual = mime.startsWith("text/") || TEXTUAL_MIME_TYPES.has(mime) || /\+(json|xml|yaml)$/.test(mime);
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
@@ -142,4 +142,17 @@ export async function verifyOrReject(
 export function contentDispositionAttachment(name: string, kind: "attachment" | "inline" = "attachment"): string {
   const fallback = name.replace(/[\r\n"\\]/g, "_").replace(/[^\x20-\x7e]/g, "_") || "download";
   return `${kind}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+export function verifySignedRoute(ctx: BaseCtx, tail: string): Promise<boolean> {
+  const { req, res, secret, auth, url, pathname, method } = ctx;
+  return verifyOrReject(
+    req,
+    res,
+    secret,
+    auth,
+    canonicalPayload(method, pathname + url.search, tail),
+    false,
+    ctx.allowUnsignedSourceAuth,
+  );
 }

@@ -58,7 +58,7 @@ import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbo
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { connectorTokenNote, envKey } from "../credentials/connector-token.ts";
+import { connectorTokenNote } from "../credentials/connector-token.ts";
 import {
   credentialHandle,
   renderKeychainManifest,
@@ -89,6 +89,7 @@ import {
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
   isValidCapabilityTimezone,
+  type BrokeredConnector,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
 import type {
@@ -716,7 +717,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const visible = new Set(view.map((entry) => entry.seq));
           for (const seq of participantHistorySeqs) if (!visible.has(seq)) participantHistorySeqs.delete(seq);
         }
-        await deps.harness.turns.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
       const enforceScreen = securityPolicy.screening === "enforce";
@@ -1391,7 +1391,50 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           throw new Error("Open speaker keychain access is no longer authorized");
         }
       };
-      const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
+      // Brokered credentials (shared org credentials and connected-app OAuth tokens) never enter the
+      // sandbox: each selected one resolves to the same AGENT_CREDENTIAL_TOKEN, minted once per command
+      // over every brokered handle that command requested; the broker injects auth server-side.
+      type CredentialBroker = ReturnType<typeof credentialBroker>;
+      const credentialBroker = (requested: readonly string[]) => {
+        const credentials: string[] = [];
+        const connectors: BrokeredConnector[] = [];
+        let token: Promise<string> | undefined;
+        return {
+          service: (slug: string) => {
+            if (requested.includes(slug) && !credentials.includes(slug)) credentials.push(slug);
+          },
+          connector: (connector: BrokeredConnector) => {
+            if (requested.includes(connector.handle) && !connectors.some((c) => c.handle === connector.handle))
+              connectors.push(connector);
+          },
+          env: async () => [
+            { key: "AGENT_API_URL", value: deps.apiBaseUrl!, secret: false },
+            {
+              key: "AGENT_CREDENTIAL_TOKEN",
+              value: await (token ??= mintBrokerToken(credentials.toSorted(), connectors)),
+            },
+          ],
+        };
+      };
+      const brokerAvailable = Boolean(deps.signingSecret && deps.apiBaseUrl);
+      const connectorOf = (
+        credential: import("../credentials/keychain.ts").KeychainCredentialMeta,
+        grantId?: string,
+      ): BrokeredConnector | undefined =>
+        credential.managed === "connector" && credential.host
+          ? {
+              handle: credentialHandle(credential),
+              host: credential.host,
+              ownerId: credential.ownerId,
+              ...(credential.refresh?.accountType ? { accountType: credential.refresh.accountType } : {}),
+              ...(grantId ? { grantId } : {}),
+            }
+          : undefined;
+      const resolvedCredential = async (
+        materialized: import("../credentials/keychain.ts").MaterializedCred,
+        broker: CredentialBroker,
+      ) => {
+        if (materialized.kind === "connector") return { env: await broker.env() };
         if (materialized.kind === "env") return { env: materialized.env };
         return {
           env: [],
@@ -1430,24 +1473,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scope: credential.scope ?? "scoped",
         });
       };
-      const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
+      const registerKeychainCredentials = async (
+        addCredential: typeof addCredentialToCatalog,
+        broker: CredentialBroker,
+      ): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
         for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+          const connector = connectorOf(credential, grant.id);
+          if (connector && !brokerAvailable) continue;
+          if (connector) broker.connector(connector);
           addCredential(
             {
               handle: credentialHandle(credential),
               resolve: async () => {
                 const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
                 return {
-                  ...resolvedCredential(prepared.materialized),
+                  ...(await resolvedCredential(prepared.materialized, broker)),
                   commit: prepared.commit,
                   singleUse: prepared.singleUse,
                 };
               },
             },
-            `${credential.service}, owner ${credential.ownerId}, grant ${grant.id}`,
+            `${credential.service}, owner ${credential.ownerId}, grant ${grant.id}${connector ? `; ${connectorTokenNote(connector.host)}` : ""}`,
             credential.id,
             credential.ownerId,
             credential.id,
@@ -1457,6 +1506,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ownAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+            const connector = connectorOf(credential);
+            if (connector && !brokerAvailable) continue;
+            if (connector) broker.connector(connector);
             addCredential(
               {
                 handle: credentialHandle(credential),
@@ -1465,10 +1517,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   await authorizeOwnerCredentials();
                   return resolvedCredential(
                     await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
+                    broker,
                   );
                 },
               },
-              `${credential.service}, owner ${credential.ownerId}`,
+              `${credential.service}, owner ${credential.ownerId}${connector ? `; ${connectorTokenNote(connector.host)}` : ""}`,
               credential.id,
               credential.ownerId,
               credential.id,
@@ -1476,11 +1529,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerKeychainCredentials(addCredentialToCatalog);
-      const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
+      const catalogBroker = credentialBroker([]);
+      await registerKeychainCredentials(addCredentialToCatalog, catalogBroker);
+      const registerConnectorCredentials = async (
+        addCredential: typeof addCredentialToCatalog,
+        broker: CredentialBroker,
+      ): Promise<void> => {
         if (
           !external &&
           !strictReadOnly &&
+          brokerAvailable &&
           deps.connectorTokens &&
           (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
         ) {
@@ -1497,15 +1555,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   )
                 : await tokens.connectorTokenStatus(host, actor.id, accountType);
               if (!status?.connected || status.needsReconnect) continue;
+              const handle = `connector:${host}:${accountType ?? "default"}`;
+              broker.connector({ handle, host, ownerId: actor.id, ...(accountType ? { accountType } : {}) });
               addCredential(
                 {
-                  handle: `connector:${host}:${accountType ?? "default"}`,
+                  handle,
                   scope: isolateOwnerKeychain ? "owner" : "scoped",
                   resolve: async () => {
                     await authorizeOwnerCredentials();
-                    const token = await tokens.connectorAccessToken(host, actor.id, accountType);
-                    if (!token) throw new Error(`Connector is no longer available: ${host}`);
-                    return { env: [{ key: envKey(host), value: token }] };
+                    if (!(await tokens.connectorAccessToken(host, actor.id, accountType)))
+                      throw new Error(`Connector is no longer available: ${host}`);
+                    return { env: await broker.env() };
                   },
                 },
                 `${host} connector, account ${accountType ?? "default"}; ${connectorTokenNote(host)}`,
@@ -1517,7 +1577,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerConnectorCredentials(addCredentialToCatalog);
+      await registerConnectorCredentials(addCredentialToCatalog, catalogBroker);
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
@@ -1681,9 +1741,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
+      const mintBrokerToken = (credentials: string[], connectors: BrokeredConnector[]): Promise<string> =>
+        mintCapabilityToken(
+          {
+            ...scopeAttestation,
+            aud: CREDENTIAL_BROKER_AUD,
+            ...(external
+              ? {
+                  runId: input.runId,
+                  runAttempt: input.attempt,
+                  runLeaseToken: input.runLeaseToken,
+                  threadRef: conversation.threadRef,
+                }
+              : {}),
+            credentials,
+            ...(connectors.length ? { connectors } : {}),
+            exp: sandboxTokenExpiry,
+          },
+          (deps.capabilitySecret ?? deps.signingSecret)!,
+          deps.capabilityTokenCompression,
+        );
       const registerServiceCredentials = async (
         addCredential: typeof addCredentialToCatalog,
-        requestedHandles: readonly string[],
+        broker: CredentialBroker,
       ): Promise<void> => {
         if (strictReadOnly || !deps.serviceCreds) return;
         const records = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
@@ -1693,40 +1773,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const available = records.filter(
           (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
         );
-        const brokerSlugs = available
-          .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
-          .map((record) => record.slug)
-          .sort();
-        let brokerToken: Promise<string> | undefined;
-        const resolveBrokerToken = (): Promise<string> =>
-          (brokerToken ??= (async () => {
-            const current = await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId);
-            for (const slug of brokerSlugs) {
-              await authorizeServiceCredential(slug);
-              const record = current.find((candidate) => candidate.slug === slug);
-              if (!record?.enabled || !record.hasSecret || record.delivery === "env") {
-                throw new Error(`Service credential is no longer available: ${slug}`);
-              }
-            }
-            return mintCapabilityToken(
-              {
-                ...scopeAttestation,
-                aud: CREDENTIAL_BROKER_AUD,
-                ...(external
-                  ? {
-                      runId: input.runId,
-                      runAttempt: input.attempt,
-                      runLeaseToken: input.runLeaseToken,
-                      threadRef: conversation.threadRef,
-                    }
-                  : {}),
-                credentials: brokerSlugs,
-                exp: sandboxTokenExpiry,
-              },
-              (deps.capabilitySecret ?? deps.signingSecret)!,
-              deps.capabilityTokenCompression,
-            );
-          })());
         for (const credential of available) {
           if (credential.delivery === "env") {
             if ((!allInternal && !external) || !credential.envKey) continue;
@@ -1755,11 +1801,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               undefined,
               "Organization",
             );
-          } else if (deps.signingSecret && deps.apiBaseUrl) {
+          } else if (brokerAvailable) {
+            broker.service(credential.slug);
             addCredential(
               {
                 handle: credential.slug,
-                resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
+                resolve: async () => {
+                  await authorizeServiceCredential(credential.slug);
+                  const record = (await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId)).find(
+                    (candidate) => candidate.slug === credential.slug,
+                  );
+                  if (!record?.enabled || !record.hasSecret || record.delivery === "env") {
+                    throw new Error(`Service credential is no longer available: ${credential.slug}`);
+                  }
+                  return { env: await broker.env() };
+                },
               },
               `${credential.name}; proxy ${credential.host}; ${(credential.allowedMethods?.length ? credential.allowedMethods : ["GET"]).toSorted().join("/")}; ${credential.allowedPathPrefixes?.length ? `paths ${credential.allowedPathPrefixes.toSorted().join(", ")}` : "any path"}; use the use-shared-credential skill`,
               undefined,
@@ -1768,7 +1824,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
       };
-      await registerServiceCredentials(addCredentialToCatalog, []);
+      await registerServiceCredentials(addCredentialToCatalog, catalogBroker);
       if (!strictReadOnly && actor.type === "internal") {
         for (const tool of brokeredTools) {
           const broker = deps.layerBrokerFor?.(tool);
@@ -2092,7 +2148,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     body: { securityReleaseRequestId: input.approval!.requestId },
                   }),
                 );
-              await deps.harness.turns.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(lease, {
@@ -2620,9 +2675,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               identities.set(credential.handle, identity);
               refreshed.set(credential.handle, credential);
             };
-            await registerKeychainCredentials(add);
-            await registerConnectorCredentials(add);
-            await registerServiceCredentials(add, handles);
+            const broker = credentialBroker(handles);
+            await registerKeychainCredentials(add, broker);
+            await registerConnectorCredentials(add, broker);
+            await registerServiceCredentials(add, broker);
             for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
               add(credential, "");
             return [...refreshed.values()];
@@ -3509,7 +3565,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
-            ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
             goal: sessionGoal,
@@ -3581,7 +3636,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.harness.turns.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
             if (recovery)

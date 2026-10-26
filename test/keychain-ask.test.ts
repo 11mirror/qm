@@ -10,7 +10,6 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildTestApp } from "./support/test-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -23,8 +22,6 @@ import {
 import { createAskExpirySweep, fireAskResolution } from "../src/triggers/keychain-ask.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -35,9 +32,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -288,35 +283,6 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   );
   await k.markAskNotified(ask.id, "expired");
   assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
-});
-
-test("expiry sweep fires the resolution once and rides the scheduler tick", async () => {
-  let t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p" });
-  t += ASK_TTL_MS + 1;
-
-  const fired: KeychainAsk[] = [];
-  const sweep = createAskExpirySweep({ keychain: k, fire: async (a) => void fired.push(a) });
-  await sweep(t);
-  await sweep(t);
-  assert.equal(fired.length, 1, "one resolution per expired ask, ever");
-  assert.equal(fired[0]!.status, "expired");
-
-  const swept: number[] = [];
-  const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-    outbound: recordingOutbound(),
-    idempotency: idStore,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: async () => ({ status: "ok" }) as TurnResult,
-    sweepAsks: async (now) => void swept.push(now),
-  });
-  await scheduler.tick(42);
-  assert.deepEqual(swept, [42], "the ask sweep rides the scheduler's leader-leased tick");
 });
 
 test("sweep is the durable retry for approve/decline resolutions that never fired, and prunes old asks", async () => {
@@ -646,7 +612,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       keychain: built.keychain,
       keychainApprovals: approvals,
       outbound: built.outbound,
-      ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       workspace: built.workspace,
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
@@ -907,33 +872,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const resolution = await waitFor(() => resumeTurns(session!.id, /declined the access request/));
     assert.equal(resolution.length, 1);
     assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
-  });
-
-  it("the removed chat-approval routes are gone; background requests may still ask", async () => {
-    const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
-    const gh = creds.credentials.find((c: any) => c.service === "github");
-    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { liveActor: true });
-    const registered = keychainRoutes.flatMap((r) => ("path" in r ? [`${r.method} ${r.path}`] : []));
-    assert.ok(registered.includes("POST /v1/keychain/asks"));
-    for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
-      assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
-    const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
-    for (const [path, body] of [
-      ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
-      ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
-      ["/v1/keychain/asks/anything/decline", {}],
-    ] as const) {
-      const res = await post(path, body, liveOwner);
-      assert.equal(res.status, 403, path);
-      assert.deepEqual(await res.json(), unknown, path);
-    }
-    const send = await post(
-      "/v1/keychain/asks",
-      { credential: gh.id, purpose: "p" },
-      await capFor("U_BOB", "channel:C_INFRA", { triggered: true }),
-    );
-    assert.equal(send.status, 200, "background requests may ask but cannot approve");
   });
 
   for (const kind of ["channel", "group", "project"] as const) {

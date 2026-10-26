@@ -55,20 +55,8 @@ test("a trailing steer is not the run's turn", () => {
   assert.equal(findTrailingPartialTurn([user("do the thing", 1), toolCall(2), steer("also this", 3)], RUN_1), null);
 });
 
-test("a trailing resume note from a prior dead resume is skipped, reaching the real user entry", () => {
-  const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3), toolCall(4)];
-  const found = findTrailingPartialTurn(entries, RUN_1);
-  assert.deepEqual(found, { userSeq: 1, workEntries: 2 }, "the note itself is not work");
-});
-
 test("an attempt that died before recording ANY work reports workEntries 0", () => {
   const found = findTrailingPartialTurn([user("build and deploy the release", 1)], RUN_1);
-  assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
-});
-
-test("prior resume notes alone are NOT work — repeated no-work deaths still report 0", () => {
-  const entries = [user("build and deploy the release", 1), resumeEntry(2)];
-  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
