@@ -4,10 +4,10 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
-import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane } from "./list-page";
+import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane, textBtn } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
-import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 
 export interface WebhookView {
   id: string;
@@ -128,25 +128,18 @@ function webhookPageRow(w: WebhookView): TemplateResult {
   let lastRun = "never fired";
   if (w.lastError) lastRun = "error";
   else if (w.lastFiredAt) lastRun = relTime(w.lastFiredAt);
-  return html`
-    <a
-      class="list-row"
-      href=${deepLinkPath(UI_BASE, "webhooks", null, null, w.id)}
-      @click=${(event: MouseEvent) => {
-        if (!isPlainLeftClick(event)) return;
-        event.preventDefault();
-        openWebhook(w, { push: true });
-      }}
-    >
-      <span class="list-row-title" dir="auto">${actionSnippet(w.action)}</span>
+  return page.link(
+    w.id,
+    "list-row",
+    () => openWebhook(w, { push: true }),
+    html`<span class="list-row-title" dir="auto">${actionSnippet(w.action)}</span>
       <span class="list-row-meta">
         ${scopeChip(w.ownerScopeId)}
         <span class="badge">${w.verification.scheme}</span>
         <span class="badge">${w.enabled ? "enabled" : "disabled"}</span>
         <span class="list-row-date">${lastRun}</span>
-      </span>
-    </a>
-  `;
+      </span>`,
+  );
 }
 
 function copyRow(text: string) {
@@ -171,7 +164,7 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
       back: "Webhooks",
       onBack: drawWebhooksPage,
       title: "Webhook",
-      heading: html`<button class="btn" @click=${showNewWebhook}>${icon(Plus, 15)}<span>New webhook</span></button>`,
+      heading: textBtn("New webhook", Plus, showNewWebhook),
       notice,
       body: html`
         ${fieldTpl("Context", scopeChip(w.ownerScopeId))} ${fieldTpl("Action", w.action, "pre")}
@@ -384,39 +377,31 @@ function parseWebhookFilters(text: string): Array<{ path: string; in: string[] }
 async function onCreateWebhook(e: Event): Promise<void> {
   e.preventDefault();
   const form = e.currentTarget as HTMLFormElement;
-  const errSlot = form.querySelector(".form-error") as HTMLElement | null;
-  const field = (n: string) =>
-    (form.querySelector(`[name="${n}"]`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ??
-    "";
+  const errSlot = form.querySelector(".form-error") as HTMLElement;
+  const field = (n: string) => (form.elements.namedItem(n) as HTMLInputElement | HTMLTextAreaElement).value;
   const action = field("action").trim();
-  const scheme = field("scheme") || "hmac-sha256";
   const secret = field("secret").trim();
-  let filters: Array<{ path: string; in: string[] }>;
-  if (errSlot) errSlot.textContent = "";
+  errSlot.textContent = "";
   if (!action) {
-    if (errSlot) errSlot.textContent = "An action is required.";
+    errSlot.textContent = "An action is required.";
     return;
   }
+  let stage = "Invalid filters.";
   try {
-    filters = parseWebhookFilters(field("filters"));
-  } catch (err) {
-    if (errSlot) errSlot.textContent = errMessage(err, "Invalid filters.");
-    return;
-  }
-  const payload: Record<string, unknown> = {
-    action,
-    verification: { scheme, ...(secret ? { secret } : {}) },
-  };
-  if (filters.length) payload.filters = filters;
-  try {
+    const filters = parseWebhookFilters(field("filters"));
+    stage = "create failed";
     const r = await api<{ webhook: WebhookView; url: string }>("/api/webhooks", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        action,
+        verification: { scheme: field("scheme") || "hmac-sha256", ...(secret ? { secret } : {}) },
+        ...(filters.length ? { filters } : {}),
+      }),
     });
     await refreshWebhooks();
     showWebhookCreated(r.webhook, r.url);
   } catch (err) {
-    if (errSlot) errSlot.textContent = errMessage(err, "create failed");
+    errSlot.textContent = errMessage(err, stage);
   }
 }
 

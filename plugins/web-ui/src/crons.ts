@@ -17,7 +17,7 @@ import {
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
-import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 import {
   cronNextFire,
   cronRunSummary,
@@ -274,21 +274,16 @@ function cronPageRow(c: CronView, mine: boolean): TemplateResult {
   const status = cronStatusLabel(c);
   return html`
     <div class="list-row cron-row cron-${status}">
-      <a
-        class="cron-row-main"
-        href=${deepLinkPath(UI_BASE, "crons", null, null, c.id)}
-        @click=${(event: MouseEvent) => {
-          if (!isPlainLeftClick(event)) return;
-          event.preventDefault();
-          openCron(c, { push: true });
-        }}
-      >
-        <span class="list-row-title cron-title-line"><span dir="auto">${cronTitle(c)}</span></span>
-        <span class="list-row-meta">
-          ${isPersonalScope(c) ? nothing : scopeChip(c.ownerScopeId, c.scopeName ?? null)}
-          <span class="cron-meta-line" ${tip(cronRunSummaryTitle(c))}>${cronRunSummary(c)}</span>
-        </span>
-      </a>
+      ${page.link(
+        c.id,
+        "cron-row-main",
+        () => openCron(c, { push: true }),
+        html`<span class="list-row-title cron-title-line"><span dir="auto">${cronTitle(c)}</span></span>
+          <span class="list-row-meta">
+            ${isPersonalScope(c) ? nothing : scopeChip(c.ownerScopeId, c.scopeName ?? null)}
+            <span class="cron-meta-line" ${tip(cronRunSummaryTitle(c))}>${cronRunSummary(c)}</span>
+          </span>`,
+      )}
       ${canManageCron(c, mine) ? cronRowActions(c) : nothing}
     </div>
   `;

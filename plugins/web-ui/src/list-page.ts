@@ -6,7 +6,7 @@ import { contextsState, scopeFilterControl } from "./contexts";
 import { fieldSelect } from "./ui";
 import { appState, type View } from "./shell-state";
 import { scopedSession, scopedViewTopbar, type SessionTool } from "./session-scope";
-import { deepLinkPath, UI_BASE } from "./deep-link";
+import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { trapDialogFocus } from "./dialog-focus";
 import { errMessage } from "../../chassis/src/errors";
 import { tip } from "./tooltip";
@@ -266,6 +266,20 @@ export function artifactPage(view: View, className: string, tool?: SessionTool) 
       if (`${location.pathname}${location.search}` === next) return;
       if (push) history.pushState(null, "", next);
       else history.replaceState(null, "", next);
+    },
+
+    link(id: string | null, cls: string, open: () => void, content: TemplateResult, label?: string): TemplateResult {
+      return html`<a
+        class=${cls}
+        href=${deepLinkPath(UI_BASE, view, null, null, id)}
+        aria-label=${label ?? nothing}
+        @click=${(event: MouseEvent) => {
+          if (!isPlainLeftClick(event)) return;
+          event.preventDefault();
+          open();
+        }}
+        >${content}</a
+      >`;
     },
 
     takeFlash(): string {
