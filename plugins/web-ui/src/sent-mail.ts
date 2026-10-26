@@ -23,7 +23,6 @@ export interface SentEmail {
   subject: string;
   snippet: string;
   sentAt: number;
-  conversation?: SentThreadMessage[];
 }
 
 interface SentMailPage {
@@ -67,24 +66,12 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
   const current = ++detailGeneration;
   draw();
   try {
-    const local = await fetchLocalSentMail();
-    const seeded = local?.messages.find((item) => item.id === message.id);
-    const result = seeded
-      ? {
-          ...seeded,
-          from: local!.accountEmail,
-          cc: "",
-          body: `${plainSnippet(seeded.snippet)}\n\nFull message text is not included in this local preview.`,
-          html: false,
-          attachments: [],
-        }
-      : await api<NonNullable<typeof detail>>(
-          `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
-        );
+    const result = await api<NonNullable<typeof detail>>(
+      `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
+    );
     if (current === detailGeneration) {
       detail = result;
       selected = { ...message, ...result };
-      if (seeded) accountEmail = local!.accountEmail;
       draw();
       await loadSentChat(draw, current);
     }
@@ -101,9 +88,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
   chatError = "";
   draw();
   try {
-    let text = detail.html ? plainSnippet(detail.body) : detail.body;
-    if (detail.conversation?.length)
-      text = detail.conversation.map((entry) => `${entry.from} to ${entry.to}:\n${entry.body}`).join("\n\n");
+    const text = detail.html ? plainSnippet(detail.body) : detail.body;
     const result = await api<{ item: LedgerItem }>("/api/inbox/sent-chat", {
       method: "POST",
       body: JSON.stringify({
@@ -190,8 +175,7 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
   }
   draw();
   try {
-    const local = more ? null : await fetchLocalSentMail();
-    const page = local ?? (await api<SentMailPage>(`/api/inbox/sent?${params}`));
+    const page = await api<SentMailPage>(`/api/inbox/sent?${params}`);
     if (current !== generation) return;
     accountType = page.accountType ?? (more ? accountType : "default");
     messages = [
@@ -217,46 +201,6 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
       draw();
     }
   }
-}
-
-async function fetchLocalSentMail(): Promise<SentMailPage | null> {
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return null;
-  try {
-    const response = await fetch("/sent-seed.local.json", { cache: "no-store" });
-    if (!response.ok) return null;
-    const payload = (await response.json()) as Partial<SentMailPage>;
-    if (typeof payload.accountEmail !== "string" || !Array.isArray(payload.messages)) return null;
-    const messages = payload.messages.filter(
-      (message): message is SentEmail =>
-        typeof message === "object" &&
-        message !== null &&
-        typeof message.id === "string" &&
-        typeof message.threadId === "string" &&
-        typeof message.to === "string" &&
-        typeof message.subject === "string" &&
-        typeof message.snippet === "string" &&
-        typeof message.sentAt === "number" &&
-        (message.conversation === undefined ||
-          (Array.isArray(message.conversation) && message.conversation.every(isSentThreadMessage))),
-    );
-    return messages.length ? { accountEmail: payload.accountEmail, messages } : null;
-  } catch {
-    return null;
-  }
-}
-
-function isSentThreadMessage(message: unknown): message is SentThreadMessage {
-  if (typeof message !== "object" || message === null) return false;
-  const item = message as Partial<SentThreadMessage>;
-  return (
-    typeof item.from === "string" &&
-    typeof item.to === "string" &&
-    (item.cc === undefined || typeof item.cc === "string") &&
-    typeof item.sentAt === "number" &&
-    typeof item.body === "string" &&
-    (item.attachments === undefined ||
-      (Array.isArray(item.attachments) && item.attachments.every((attachment) => typeof attachment === "string")))
-  );
 }
 
 export function isSentMailLoading(): boolean {
@@ -363,19 +307,18 @@ export function sentEmailPageTpl(
   const body = detail?.html
     ? plainSnippet(detail.body.replace(/<br\s*\/?>(|\s)|<\/(p|div|tr|li|h[1-6])>/gi, "\n"))
     : detail?.body;
-  let entries: SentThreadMessage[] = [];
-  if (detail?.conversation?.length) entries = detail.conversation;
-  else if (detail)
-    entries = [
-      {
-        from: detail.from,
-        to: message.to,
-        cc: detail.cc,
-        sentAt: message.sentAt,
-        body: body || "This email has no text body.",
-        attachments: detail.attachments,
-      },
-    ];
+  const entries: SentThreadMessage[] = detail
+    ? [
+        {
+          from: detail.from,
+          to: message.to,
+          cc: detail.cc,
+          sentAt: message.sentAt,
+          body: body || "This email has no text body.",
+          attachments: detail.attachments,
+        },
+      ]
+    : [];
   return html`
     <div class="pane-head inbox-item-head src-gmail">
       <div class="inbox-item-head-copy">

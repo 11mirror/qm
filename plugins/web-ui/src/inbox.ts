@@ -542,8 +542,6 @@ export async function refreshInbox(
       const entry = inboxState.items.find((item) => item.id === openId);
       if (entry) void loadDetail(entry.id, entry.cronId);
     }
-    const localItems = await fetchLocalInboxItems();
-    if (localItems.length) inboxState.items = localItems;
     inboxState.loaded = true;
     inboxState.error = null;
     inboxState.fetchedAt = Date.now();
@@ -636,26 +634,6 @@ function reviewTpl(item: InboxItem, withChat = true): TemplateResult {
     ${item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
     ${withChat ? chatTpl(item) : nothing}
   </div>`;
-}
-
-async function fetchLocalInboxItems(): Promise<InboxItem[]> {
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return [];
-  try {
-    const response = await fetch("/inbox-seed.local.json", { cache: "no-store" });
-    if (!response.ok) return [];
-    const payload = (await response.json()) as { items?: unknown };
-    if (!Array.isArray(payload.items)) return [];
-    return payload.items.filter(
-      (item): item is InboxItem =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof (item as InboxItem).id === "string" &&
-        typeof (item as InboxItem).sourceKey === "string" &&
-        ((item as InboxItem).source === "gmail" || (item as InboxItem).source === "slack"),
-    );
-  } catch {
-    return [];
-  }
 }
 
 let realtimeWired = false;
