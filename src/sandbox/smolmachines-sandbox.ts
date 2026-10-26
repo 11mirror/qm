@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createBearerApi, sleep } from "../util/async.ts";
+import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
@@ -69,12 +69,30 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
   const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
-  const { request: api, json: apiJson } = createBearerApi({
-    baseUrl,
-    token: opts.token ?? "",
-    fetchImpl: opts.fetchImpl ?? fetch,
-    failure: async (action, res) => new Error(`smolmachines ${action}: ${await httpFailure(res)}`),
-  });
+  const fetchImpl = opts.fetchImpl ?? fetch;
+
+  function api(method: string, path: string, req: { body?: unknown; timeoutMs?: number } = {}): Promise<Response> {
+    const raw = req.body instanceof Uint8Array;
+    const send = (signal?: AbortSignal): Promise<Response> =>
+      fetchImpl(`${baseUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${opts.token ?? ""}`,
+          ...(req.body !== undefined ? { "content-type": raw ? "application/octet-stream" : "application/json" } : {}),
+        },
+        ...(req.body !== undefined
+          ? { body: raw ? (req.body as Uint8Array<ArrayBuffer>) : JSON.stringify(req.body) }
+          : {}),
+        signal: signal ?? AbortSignal.timeout(req.timeoutMs ?? 60_000),
+      });
+    return method === "POST" ? send() : fetchWithRetry(send, "idempotent", { timeoutMs: req.timeoutMs ?? 60_000 });
+  }
+
+  async function apiJson<T>(method: string, path: string): Promise<T> {
+    const res = await api(method, path);
+    if (!res.ok) throw new Error(`smolmachines ${method} ${path}: ${await httpFailure(res)}`);
+    return (await res.json()) as T;
+  }
 
   async function findMachine(name: string): Promise<MachineInfo | null> {
     const machines = await apiJson<MachineInfo[]>("GET", "/v1/machines");
@@ -228,7 +246,6 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     const res = await api("PUT", filesUrl(id, absPath), {
       body: data,
       timeoutMs: FILE_TRANSFER_TIMEOUT_MS,
-      retry: "idempotent",
     });
     if (!res.ok) {
       throw new Error(`smolmachines write ${absPath}: ${await httpFailure(res)}`);

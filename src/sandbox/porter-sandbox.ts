@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import {
   createPorterClient,
   createPorterExec,
@@ -81,23 +81,33 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   async function launch(name: string, volume?: { id: string }): Promise<void> {
     const slug = await slugFor(name);
     const bodyName = `${slug}-${randomUUID().slice(0, 5)}`;
-    const sb = await client.sandboxes.create({
-      image: IMAGE,
-      name: bodyName,
-      command: ["sleep", "infinity"],
-      tags: {
-        [SCOPE_TAG]: slug,
-        [EGRESS_TAG]: egressProxyHost ? "proxy" : "open",
-        [KIND_TAG]: volume ? "scope" : "scratch",
-      },
-      ...(volume ? { volume_mounts: { [HOME_DIR]: volume.id } } : {}),
-      ...(egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
-      ttl_seconds: ttlSec,
-    });
+    const sb = await client.sandboxes
+      .create({
+        image: IMAGE,
+        name: bodyName,
+        command: ["sleep", "infinity"],
+        tags: {
+          [SCOPE_TAG]: slug,
+          [EGRESS_TAG]: egressProxyHost ? "proxy" : "open",
+          [KIND_TAG]: volume ? "scope" : "scratch",
+        },
+        ...(volume ? { volume_mounts: { [HOME_DIR]: volume.id } } : {}),
+        ...(egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
+        ttl_seconds: ttlSec,
+      })
+      .catch((e) => {
+        if (errMessage(e).includes("egress restriction is not available")) {
+          throw new Error(
+            `porter sandbox ${bodyName}: SANDBOX_EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or unset the proxy URL (docs/porter.md) (${errMessage(e)})`,
+            { cause: e },
+          );
+        }
+        throw e;
+      });
     try {
       await waitPorterRunning(bodyName, sb);
     } catch (e) {
-      await retirePorterBody(sb, false).catch(swallowAs(`porter: retire ${bodyName} after a failed launch`, undefined));
+      await retirePorterBody(sb, false).catch(() => {});
       throw e;
     }
     bodies.set(name, sb);
