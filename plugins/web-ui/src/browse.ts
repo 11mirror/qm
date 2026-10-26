@@ -6,6 +6,8 @@ import { setScopedSession } from "./session-scope";
 import { ADMIN_HOME_URL, appState, can, switchView } from "./shell";
 import { icon } from "./icons";
 import type { View } from "./shell-state";
+import { VIEW_TITLES } from "./document-title";
+import { brandName } from "./ui";
 
 interface Destination {
   view: View | null;
@@ -22,22 +24,22 @@ const browseState = { open: false, sel: 0 };
 let host: HTMLDivElement | null = null;
 
 export function destinations(): Destination[] {
-  const to = (view: View, glyph: IconNode, label: string, blurb: string): Destination => ({
+  const to = (view: View, glyph: IconNode, blurb: string): Destination => ({
     view,
     href: deepLinkPath(UI_BASE, view, null),
     glyph,
-    label,
+    label: VIEW_TITLES[view],
     blurb,
   });
   const list: Destination[] = [
-    to("contexts", Folder, "Projects", "Group chats, files, and automations"),
-    to("files", Files, "Files", "Everything you and QM have shared"),
-    to("crons", Clock, "Crons", "Work that runs on a schedule"),
-    to("webhooks", Webhook, "Webhooks", "Inbound events that wake QM"),
-    to("keychain", KeyRound, "Keychain", "Connected accounts and credentials"),
-    to("deploys", Rocket, "Apps", "What QM has shipped for you"),
-    to("memory", Brain, "Memory", "What QM remembers about your work"),
-    to("skills", Box, "Skills", "Reusable procedures QM can follow"),
+    to("contexts", Folder, "Group chats, files, and automations"),
+    to("files", Files, `Everything you and ${brandName()} have shared`),
+    to("crons", Clock, "Work that runs on a schedule"),
+    to("webhooks", Webhook, `Inbound events that wake ${brandName()}`),
+    to("keychain", KeyRound, "Connected accounts and credentials"),
+    to("deploys", Rocket, `What ${brandName()} has shipped for you`),
+    to("memory", Brain, `What ${brandName()} remembers about your work`),
+    to("skills", Box, `Reusable procedures ${brandName()} can follow`),
   ];
   if (can("admin")) {
     list.push({

@@ -1,5 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { deepLinkPath } from "./deep-link.ts";
+import { VIEW_TITLES } from "./document-title.ts";
+import type { View } from "./shell-state.ts";
 
 export interface ResourceHit {
   title: string;
@@ -17,13 +19,6 @@ export interface ResourceSearchResponse {
   failed: string[];
   limited?: string[];
 }
-const labels: Record<string, string> = {
-  skills: "Skills",
-  crons: "Crons",
-  deploys: "Apps",
-  webhooks: "Webhooks",
-  contexts: "Projects",
-};
 
 export function resourceResults(
   result: ResourceSearchResponse,
@@ -33,10 +28,10 @@ export function resourceResults(
     hits: result.hits.map((hit) => ({
       title: hit.title,
       description: hit.snippet,
-      group: labels[hit.kind]!,
+      group: VIEW_TITLES[hit.kind],
       href: deepLinkPath(base, hit.kind, null, ...(hit.kind === "contexts" ? [hit.id, null] : [null, hit.id])),
     })),
-    failed: result.failed.map((kind) => labels[kind] ?? kind),
+    failed: result.failed.map((kind) => VIEW_TITLES[kind as View] ?? kind),
   };
 }
 
