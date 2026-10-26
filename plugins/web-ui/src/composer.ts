@@ -292,6 +292,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     ctx.chat.drawActiveChat();
   });
   let skillsLoading = false;
+  let skillsLoadFailed = false;
   let slashActiveIndex = 0;
   function effectiveFastMode(): boolean {
     return composerState.fastMode === true;
@@ -1039,8 +1040,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     try {
       const r = await api<{ skills: SkillItem[] }>("/api/skills");
       skillsCache = r.skills ?? [];
-    } catch {
-      skillsCache = null;
+    } catch (error) {
+      reportHandledError("web:skills_load", error);
+      skillsLoadFailed = true;
     } finally {
       skillsLoading = false;
       if (agent === ctx.chat.state.agent) ctx.chat.drawActiveChat(agent);
@@ -1150,7 +1152,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.slashDismissed = false;
     slashActiveIndex = 0;
     const armed = slashQuery(composerState.draft) !== null;
-    if (armed && skillsCache === null && !skillsLoading) void loadSkills(agent);
+    if (!armed) skillsLoadFailed = false;
+    else if (skillsCache === null && !skillsLoading && !skillsLoadFailed) void loadSkills(agent);
     const popoverShown = Boolean(ctx.chat.state.host?.querySelector(".slash-popover"));
     if (
       armed ||

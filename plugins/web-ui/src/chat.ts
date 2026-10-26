@@ -151,7 +151,6 @@ const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
 
 const toMessages = (items: Item[]): AgentMessage[] => itemsToMessages(items, transcriptModel());
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function markConnectorConnected(provider: string): void {
   if (!provider) return;
@@ -405,13 +404,7 @@ export function createChatSurface(
     void ctx.composer.refreshRuntimeSelection(scopeId, agent);
 
     let listedWorking = false;
-    let titlePollStarted = false;
     agent.subscribe((e) => {
-      if (!titlePollStarted && agent.state.isStreaming) {
-        titlePollStarted = true;
-        const row = sessionsState.list.find((r) => r.threadRef === threadRef);
-        if (!row?.title?.trim()) void settleNewSessionTitle(agent, threadRef);
-      }
       scheduleStreamDraw(agent);
       if (agent === chatState.agent && (agent.state.isStreaming || e.type === "agent_end"))
         chatState.pendingSend = null;
@@ -425,8 +418,9 @@ export function createChatSurface(
       if (e.type !== "agent_end") return;
       void agent.waitForIdle().then(async () => {
         if (agent === chatState.agent) clearLiveWork();
-        const wasUnsaved = agent === chatState.agent && chatState.sessionId === null;
-        await refreshSessions({ silent: true }).catch(() => {});
+        await refreshSessions({ silent: true }).catch((error: unknown) =>
+          reportHandledError("web:refresh_sessions", error),
+        );
         if (!detachedAgents.has(agent)) {
           sessionsState.list = clearWorking(sessionsState.list, threadRef);
           renderList();
@@ -436,7 +430,6 @@ export function createChatSurface(
         await refreshTranscriptFromItems(agent);
         void ctx.composer.refreshRuntimeSelection(scopeId, agent, true);
         void followNextQueuedRun(agent, threadRef, normalStreamFn, onWork);
-        if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, threadRef);
       });
     });
 
@@ -526,7 +519,10 @@ export function createChatSurface(
             expanded: chatState.inheritedExpanded,
             icon: icon(GitFork, 14),
             navigate: () => void forkOriginController.navigate(),
-            toggle: () => void forkOriginController.toggle().catch(() => {}),
+            toggle: () =>
+              void forkOriginController
+                .toggle()
+                .catch((error: unknown) => reportHandledError("web:fork_origin", error)),
           }
         : null,
     );
@@ -539,7 +535,7 @@ export function createChatSurface(
         .then((page) => {
           if (readOnlyView?.id === ro.id) mountReadOnlyPage(readOnlyView.session, page);
         })
-        .catch(() => {});
+        .catch((error: unknown) => reportHandledError("web:transcript_refresh", error));
       return;
     }
     const agent = chatState.agent;
@@ -618,7 +614,9 @@ export function createChatSurface(
       releaseSubmission();
       if (agent === chatState.agent) {
         clearLiveWork();
-        await refreshSessions({ silent: true }).catch(() => {});
+        await refreshSessions({ silent: true }).catch((error: unknown) =>
+          reportHandledError("web:refresh_sessions", error),
+        );
         await refreshTranscriptFromItems(agent);
       }
       const active = chatState.agent;
@@ -877,20 +875,6 @@ export function createChatSurface(
     });
   }
 
-  async function settleNewSessionTitle(agent: Agent, threadRef: string): Promise<void> {
-    const titled = (): boolean => {
-      const s = sessionsState.list.find((row) => row.threadRef === threadRef);
-      return Boolean(s?.title && s.title.trim());
-    };
-    if (titled()) return;
-    for (const delay of [1200, 1800, 2400, 3600, 4800, 6400, 8000, 8000]) {
-      await sleep(delay);
-      if (agent !== chatState.agent || chatState.threadRef !== threadRef) return;
-      await refreshSessions({ silent: true }).catch(() => {});
-      if (titled()) return;
-    }
-  }
-
   function mountPane(className: string, content: TemplateResult): () => boolean {
     const container = ctx.container();
     if (!container) return () => false;
@@ -1124,7 +1108,8 @@ export function createChatSurface(
         () => ctx.container()?.querySelector<HTMLElement>(".chat-scroll"),
         () => mountReadOnlyPage(s, page, messages, chatState.inheritedMessages),
       );
-    } catch {
+    } catch (error) {
+      reportHandledError("web:load_earlier", error);
       chatState.loadingEarlier = false;
       readonlyRedraw?.();
     }
