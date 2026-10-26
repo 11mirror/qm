@@ -4,6 +4,7 @@ import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
+import { brandName } from "../ui.ts";
 export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
@@ -170,7 +171,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <label for="ambient-enabled">Ambient behavior</label>
         <p class="hint" style="margin: 2px 0 6px">
           When off, the agent never wakes on overheard messages in this channel; it only responds to direct @mentions.
-          Default: on for channels with 8 or fewer members, off for larger ones.
+          Default: on only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
         </p>
         <select
           id="ambient-enabled"
@@ -178,7 +179,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.draft.ambientEnabled == null ? "default" : String(s.draft.ambientEnabled ? "on" : "off")}
           @change=${(event: Event) => changeField(s, "ambient-enabled", event)}
         >
-          <option value="default">Default (by channel size)</option>
+          <option value="default">Default (on when standing orders are set)</option>
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
@@ -248,7 +249,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
             [
               "open",
               "Open",
-              "QM can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
+              brandName() +
+                " can use your saved memories, files, and skills across conversations when you ask it for help. In a group conversation, this could risk revealing private information to others.",
             ],
           ],
         )}

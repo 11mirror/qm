@@ -1548,22 +1548,6 @@
   border-radius: 6px;
   background: var(--warn-surface);
 }
-#app-view .xml-tag {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-#app-view .xml-tag.closing {
-  opacity: 0.6;
-}
-#app-view .xml-text {
-  margin: 2px 0 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
 #app-view .entry.system-entry pre {
   border-left: 3px solid #cbd5e1;
 }

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-import { prepare } from "../../src/admin/transcript.ts";
 const bundle = buildSync({
   entryPoints: [new URL("../../src/admin/transcript.ts", import.meta.url).pathname],
   bundle: true,
@@ -45,18 +44,19 @@ test("transcript grouping pairs tool items by callId and anchors model requests 
       item(6, "AgentMessage", { text: "done" }),
     ],
   };
-  const result = prepare(data, [
+  const dom = setup();
+  const result = (dom.window as any).ui.prepare(data, [
     { turnSeq: 1, step: 2 },
     { turnSeq: 1, step: 1 },
   ]);
   assert.deepEqual(
-    result.units.map((u: any) => u.kind),
+    [...result.units].map((u: any) => u.kind),
     ["item", "tool", "tool", "item"],
   );
   assert.equal(result.units[1].result.seq, 5);
   assert.equal(result.units[2].result.seq, 4);
   assert.deepEqual(
-    result.units[3].llmReqs.map((r: any) => r.step),
+    [...result.units[3].llmReqs].map((r: any) => r.step),
     [1, 2],
   );
 });
@@ -70,9 +70,9 @@ test("items-shaped transcript renders a row per message with its text", async ()
     const doc = dom.window.document;
     assert.equal(doc.querySelector(".empty"), null);
     assert.equal(doc.querySelector(".user-entry .entry-label")!.textContent, "Ada");
-    assert.equal(doc.querySelector(".user-entry .message-body")!.textContent, "hello there");
+    assert.equal(doc.querySelector(".user-entry .message-body")!.textContent!.trim(), "hello there");
     assert.equal(doc.querySelector(".assistant-entry .entry-label")!.textContent, "QM");
-    assert.equal(doc.querySelector(".assistant-entry .message-body")!.textContent, "all done");
+    assert.equal(doc.querySelector(".assistant-entry .message-body")!.textContent!.trim(), "all done");
     assert.equal(doc.querySelectorAll(".tool-line-entry").length, 1);
     assert.match(doc.querySelector(".tool-line-entry .when")!.textContent!, /#2→#3/);
   } finally {

@@ -8,6 +8,7 @@ import { states, connectors, installation, emoji, context, type SlackSetting } f
 export * from "./integrations-state.ts";
 import { loadScope as loadSettings } from "./integrations-state.ts";
 import { fmtTime } from "./format.ts";
+import { brandName } from "../ui.ts";
 export function loadScope(data: any, scope: string) {
   loadSettings(data, scope);
   if (states.get("ack-emoji")!.available) void emoji.load();
@@ -63,9 +64,9 @@ cards["card-channel-header-pin-default"] = () => {
     <div class="head">
       <h2>Pinned channel message</h2>
       <p>
-        When QM joins an internal Slack channel, it can post and pin a message showing the active model and a link to
-        that channel’s settings. Turn this off to remove QM’s pinned message from channels using this default.
-        Individual channels can override it on their settings page.
+        When ${brandName()} joins an internal Slack channel, it can post and pin a message showing the active model and
+        a link to that channel’s settings. Turn this off to remove ${brandName()}’s pinned message from channels using
+        this default. Individual channels can override it on their settings page.
       </p>
     </div>
     <div class="body">
@@ -88,9 +89,9 @@ cards["card-channel-header-pin-default"] = () => {
       <figure class="slack-message-example">
         <figcaption>Example · pinned in #product</figcaption>
         <div class="slack-example-message">
-          <span class="slack-example-avatar" aria-hidden="true">Q</span>
+          <span class="slack-example-avatar" aria-hidden="true">${brandName().slice(0, 1)}</span>
           <div>
-            <strong>QM</strong> <span class="muted">APP</span>
+            <strong>${brandName()}</strong> <span class="muted">APP</span>
             <p>Using Sonnet here. <span class="slack-example-link">More settings</span></p>
           </div>
         </div>

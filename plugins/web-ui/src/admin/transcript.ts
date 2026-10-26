@@ -6,7 +6,8 @@ import { node, renderer, scroller } from "./shared.ts";
 import { isUserMessage, itemFields, type Item } from "../items.ts";
 import { firstLine, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
 import { copyButton, errorStripBox, metaChip } from "./dom.ts";
-import { isXmlishText, renderMarkdown, renderXmlish } from "./rich-text.ts";
+import { isXmlishText } from "./rich-text.ts";
+import { markdown } from "../message-markdown.ts";
 import {
   renderToolEntry,
   stepDurEl,
@@ -356,12 +357,8 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     memo(bodyNodes, item, () => {
       const text = itemText(item),
         user = isUserMessage(item);
-      let value: Node;
-      if (user && isXmlishText(text)) value = renderXmlish(text);
-      else if (user || item.kind === "AgentMessage") value = renderMarkdown(text);
-      else value = node(html`<pre>${text}</pre>`);
-      if ((value as Element).tagName === "PRE") value.textContent = text;
-      return value;
+      const markup = (user && !isXmlishText(text)) || item.kind === "AgentMessage";
+      return node(markup ? html`<div class="message-body">${markdown(text)}</div>` : html`<pre>${text}</pre>`);
     });
   function unitTemplate(unit: Row) {
     if (unit.kind === "llm")
