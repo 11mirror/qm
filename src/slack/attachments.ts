@@ -1,5 +1,6 @@
 import { sleep } from "../util/async.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import type { ByteSource } from "../util/bytes.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 
@@ -75,10 +76,19 @@ const CAP_MB = Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000);
 const capLabel = CAP_MB >= 1000 ? `${Math.round(CAP_MB / 1000)} GB` : `${CAP_MB} MB`;
 export const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
 
+class SlackFileAccessError extends Error {}
+
+export function fileReadIssue(label: string, err: unknown): string {
+  if (err instanceof BlobTooLargeError) return oversizeMsg(label);
+  if (err instanceof SlackFileAccessError)
+    return `I couldn't read "${label}" — check my file-access permission (files:read) (${err.message})`;
+  return `I couldn't read "${label}" (${errMessage(err)})`;
+}
+
 export async function downloadSlackFile(
   file: SlackFile,
   opts: { token?: string; fetchImpl?: typeof fetch; timeoutMs?: number; trustedHost?: string } = {},
-): Promise<Uint8Array> {
+): Promise<ByteSource> {
   const url = file.url_private_download || file.url_private;
   if (!url) throw new Error("no url_private");
   if (file.mode === "external" || file.mode === "remote") throw new Error("external/remote files aren't supported");
@@ -89,18 +99,22 @@ export async function downloadSlackFile(
     redirect: "manual",
     signal: AbortSignal.timeout(opts.timeoutMs ?? 300_000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const denied = res.status < 400 || res.status === 401 || res.status === 403;
+    throw new (denied ? SlackFileAccessError : Error)(`HTTP ${res.status}`);
+  }
   const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("text/html")) throw new Error("got an HTML page (check files:read scope)");
+  if (ct.includes("text/html")) throw new SlackFileAccessError("got an HTML page (check files:read scope)");
   const len = Number(res.headers.get("content-length") ?? "0");
-  if (len > MAX_ATTACHMENT_BYTES) throw new Error("file too large");
-  return new Uint8Array(await res.arrayBuffer());
+  if (len > MAX_ATTACHMENT_BYTES) throw new BlobTooLargeError();
+  if (!res.body) throw new Error("empty response body");
+  return res.body;
 }
 
 export async function processInboundFiles(
   files: readonly SlackFile[],
-  download: (file: SlackFile) => Promise<Uint8Array>,
-  stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
+  download: (file: SlackFile) => Promise<ByteSource>,
+  stage: (source: ByteSource) => Promise<{ blobId: string; sizeBytes: number }>,
   resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined,
 ): Promise<{ attachments: IncomingAttachment[]; issues: string[] }> {
   const attachments: IncomingAttachment[] = [];
@@ -115,29 +129,25 @@ export async function processInboundFiles(
       issues.push(oversizeMsg(label));
       continue;
     }
+    let staged: { blobId: string; sizeBytes: number };
     try {
-      const bytes = await download(f);
-      if (bytes.length > MAX_ATTACHMENT_BYTES) {
-        issues.push(oversizeMsg(label));
-        continue;
-      }
-      const { blobId } = await stage(bytes);
-      const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
-      attachments.push({
-        name: slackFileName(f),
-        mimetype: f.mimetype || "application/octet-stream",
-        sizeBytes: bytes.length,
-        blobId,
-        ...(f.id ? { sourceId: f.id } : {}),
-        ...(author ? { author } : {}),
-      });
+      staged = await stage(await download(f));
     } catch (err) {
-      const detail =
-        err instanceof BlobTooLargeError
-          ? "that request was too large — try fewer or smaller files"
-          : (err as Error).message;
-      issues.push(`I couldn't read "${label}" — check my file-access permission (files:read) (${detail})`);
+      swallow(`slack: inbound file ${f.id ?? label}`, err);
+      issues.push(fileReadIssue(label, err));
+      continue;
     }
+    const author = await Promise.resolve()
+      .then(() => resolveAuthor?.(f.user))
+      .catch(swallowAs("slack: inbound file author lookup", undefined));
+    attachments.push({
+      name: slackFileName(f),
+      mimetype: f.mimetype || "application/octet-stream",
+      sizeBytes: staged.sizeBytes,
+      blobId: staged.blobId,
+      ...(f.id ? { sourceId: f.id } : {}),
+      ...(author ? { author } : {}),
+    });
   }
   return { attachments, issues };
 }
