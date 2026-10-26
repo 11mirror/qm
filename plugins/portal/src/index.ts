@@ -1068,6 +1068,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
+  if (method === "POST" && /^\/v1\/surfaces\/[^/]+\/events$/.test(pathname)) {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      "content-type",
+      "x-timestamp",
+      "x-signature",
+    ]);
+  }
+
   const consentBounce = (): void => {
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();

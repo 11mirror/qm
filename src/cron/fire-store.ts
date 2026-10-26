@@ -46,7 +46,8 @@ const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" &&
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
 const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${prefix}.${c.name}`).join(", ")})`;
 
-const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
+// Built per call: tenantCols depends on whether tenancy is on, which is decided after this module loads.
+const upsertFire = (): string => `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (${tenantCols("cron_id, fire_key")}) DO UPDATE
      SET ${UPSERT_SET}`;
@@ -148,7 +149,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
 
   return {
     async record(cronId, entry) {
-      await query(UPSERT_FIRE, fireParams(cronId, entry));
+      await query(upsertFire(), fireParams(cronId, entry));
     },
     async beginExclusive(cronId, entry, staleRunningMs) {
       return withPgTransaction(await pool(), async (client) => {
@@ -162,7 +163,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         );
         const row = running.rows[0] as Record<string, unknown> | undefined;
         if (row) return { begun: false, running: rowToEntry(row) };
-        await client.query(UPSERT_FIRE, fireParams(cronId, entry));
+        await client.query(upsertFire(), fireParams(cronId, entry));
         return { begun: true };
       });
     },

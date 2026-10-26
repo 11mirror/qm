@@ -15,7 +15,6 @@ export const ADMIN_MARKUP = `
     </div>
     <template data-onboarding-ui="steps"></template>
     <template data-onboarding-ui="provider"></template>
-    <template data-onboarding-ui="registry"></template>
     <section class="card">
       <div class="head">
         <h2>Custom providers</h2>

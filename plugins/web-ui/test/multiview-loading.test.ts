@@ -15,7 +15,6 @@ test("a restored tab finishes loading after becoming hidden while session metada
   ];
   const h = await harness({
     path: "/",
-    welcome: true,
     listSessions: sessions,
     items: [item("AgentMessage", { seq: 1, createdAt: 1, text: "Restored target transcript" })],
     remoteCanvas: {

@@ -2,7 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tenantFor, withTenant } from "../src/tenant.ts";
-import { modelOverlayVersion, resolveModel, setModelOverlays, validateModelOverlay } from "../src/model/pi-models.ts";
 import { isCustomModelId, setCustomProviders } from "../src/model/custom-providers.ts";
 import { setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
 import { oauthProvider, setPublicOAuthClients } from "../src/connectors/oauth.ts";
@@ -21,28 +20,6 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const alpha = tenantFor("tenant-alpha");
 const beta = tenantFor("tenant-beta");
-
-test("an admin-registered model overlay is visible only to the tenant that registered it", () => {
-  const overlay = validateModelOverlay({
-    id: "alpha-only-model",
-    name: "Alpha only",
-    provider: "openai",
-    template: "gpt-5.5",
-    contextWindow: 400_000,
-    maxTokens: 20_000,
-    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-  });
-  withTenant(alpha, () => setModelOverlays([overlay]));
-  assert.ok(withTenant(alpha, () => resolveModel("alpha-only-model")));
-  assert.equal(
-    withTenant(beta, () => resolveModel("alpha-only-model")),
-    undefined,
-  );
-  assert.notEqual(
-    withTenant(alpha, () => modelOverlayVersion()),
-    withTenant(beta, () => modelOverlayVersion()),
-  );
-});
 
 test("custom providers, Slack mention names and MCP sign-in clients do not cross tenants", () => {
   withTenant(alpha, () => {

@@ -763,6 +763,21 @@ test("Loop ingress forwards signed events and Google identity without a portal s
   assert.equal((await fetch(`${base}/v1/loop-ingress/gmail/extra`, { method: "POST" })).status, 404);
 });
 
+test("chat surface events reach core with their query and signature headers, without a portal session", async () => {
+  const response = await fetch(`${base}/v1/surfaces/bookface/events?v=1`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-timestamp": "123", "x-signature": "v0=signature" },
+    body: JSON.stringify({ type: "message" }),
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { cookie: string | null; headers: Record<string, string>; url?: string };
+  assert.equal(body.cookie, null);
+  assert.equal(body.headers["x-timestamp"], "123");
+  assert.equal(body.headers["x-signature"], "v0=signature");
+  assert.equal((await fetch(`${base}/v1/surfaces/bookface/events`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/surfaces/bookface/events/x`, { method: "POST" })).status, 404);
+});
+
 test("linked administrator impersonation follows the target", async () => {
   const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
     method: "POST",

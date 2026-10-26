@@ -44,10 +44,10 @@ interface HarnessOptions {
   contexts?: CoreContext[];
   items?: unknown[];
   savedCanvas?: boolean;
-  welcome?: boolean;
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  returnPath?: string;
   returnReplaces?: string;
   openNewChat?: boolean;
 }
@@ -107,11 +107,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       JSON.stringify({
         state: "return-nonce",
         user: "test:tester",
-        path: "/s/sess-deep",
+        path: opts.returnPath ?? "/s/sess-deep",
         service: { id: "gmail", name: "Gmail" },
         accountId: "ca_test",
         ...(opts.returnReplaces ? { replaces: opts.returnReplaces } : {}),
-        widget: opts.returnWidget ?? "welcome",
+        widget: opts.returnWidget ?? "settings",
         expiresAt: Date.now() + 60000,
         picker: { query: "mail", expanded: true },
         scrollTop: 0,
@@ -141,7 +141,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         user: "tester",
         org: "test",
         permissions: [],
-        ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });

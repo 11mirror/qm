@@ -186,7 +186,7 @@ test("writes relay their method and body only where the allow-list permits them"
     ["POST", "skill-packs/s1/import", { selected: "all" }],
     ["PATCH", "skill-packs/s1", { ref: "dev" }],
     ["DELETE", "skill-packs/s1", undefined],
-    ["PUT", "model-registry/known", { verify: true }],
+    ["PUT", "model-providers/openai", { apiKey: "sk-test" }],
   ] as const) {
     const { response, hops } = await call(method, `/api/admin/${path}`, body);
     assert.equal(response.status, 200, `${method} ${path}`);

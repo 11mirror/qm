@@ -40,7 +40,6 @@ const WRITES = new Map<string, string[]>([
   ["users", ["PUT", "POST"]],
   ["slack-installation", ["POST", "PUT", "DELETE"]],
   ["model-providers", ["PUT", "DELETE"]],
-  ["model-registry", ["POST", "PUT", "DELETE"]],
   ["custom-providers", ["PUT", "DELETE"]],
   ["mcp-servers", ["PUT", "DELETE"]],
 ]);
@@ -71,7 +70,6 @@ const READS = new Set([
   "slack-installation",
   "slack-emoji",
   "model-providers",
-  "model-registry",
   "custom-providers",
   "mcp-servers",
   "principal-links",

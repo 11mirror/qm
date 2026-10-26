@@ -5,10 +5,8 @@ import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
-import "./onboarding-welcome";
-import { welcomeIdeasPrompt } from "./welcome-ideas";
+import "./connect-apps";
 import { setupContent } from "./setup-widget";
-import { isWelcomeConversation } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -658,7 +656,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof itemsToMessages>,
   ): boolean {
-    if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.inbox || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -1342,54 +1340,6 @@ export function createChatSurface(
     consumeBackgroundPanelRequest();
   }
 
-  let startingIdeas = false;
-
-  function ideasUnavailable(): boolean {
-    return (
-      startingIdeas ||
-      !chatState.agent ||
-      chatState.agent.state.isStreaming ||
-      Boolean(chatState.pendingSend) ||
-      Boolean(ctx.composer.state.draft) ||
-      Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles ||
-      hasUnresolvedApproval()
-    );
-  }
-
-  async function showWelcomeIdeas(): Promise<void> {
-    if (ideasUnavailable()) return;
-    startingIdeas = true;
-    const threadRef = `web:${appState.me!.user}:ideas:${crypto.randomUUID()}`;
-    mountContinuable(threadRef, null, null, []);
-    const agent = chatState.agent;
-    try {
-      if (agent) {
-        await ctx.composer.refreshRuntimeSelection(null, agent);
-        await ctx.composer.sendSuggestedPrompt(welcomeIdeasPrompt, agent);
-      }
-    } finally {
-      startingIdeas = false;
-      if (agent && agent === chatState.agent) drawActiveChat(agent);
-    }
-  }
-
-  function welcomeGreeting(animate = true): TemplateResult {
-    return html`
-      <article class="message-row assistant-row welcome-greeting">
-        <div class="assistant-body">
-          <qm-onboarding-welcome
-            .me=${appState.me}
-            .animateWelcome=${animate}
-            .onMoreIdeas=${showWelcomeIdeas}
-            .ideasDisabled=${ideasUnavailable()}
-            .base=${withBase("")}
-          ></qm-onboarding-welcome>
-        </div>
-      </article>
-    `;
-  }
-
   function setTurnRuntime(runtime: TurnRuntime | null): void {
     chatState.turnRuntime = runtime;
     if (chatState.agent) drawActiveChat(chatState.agent);
@@ -1600,12 +1550,6 @@ export function createChatSurface(
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
-    const showWelcome =
-      !ctx.inbox &&
-      !editingApp &&
-      (appState.me?.welcomeCohort
-        ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
-        : isNewUser && !messages.length);
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1615,12 +1559,11 @@ export function createChatSurface(
     }
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
-    const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
+    const emptyChat = !messages.length && !chatState.forkSession;
     const showSuggestions =
       !ctx.inbox &&
       emptyChat &&
       !editingApp &&
-      !(isNewUser && appState.me?.welcomeCohort) &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
@@ -1689,10 +1632,9 @@ export function createChatSurface(
           <section class="chat-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
-              ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
-              ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
-              ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent}
+              ${waitingSteerRows(agent)} ${glanceTier ? nothing : liveWorkStatus(agent)}
+              ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
@@ -2226,16 +2168,14 @@ export function createChatSurface(
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;
             parts.push(
-              html`<qm-onboarding-welcome
+              html`<qm-connect-apps
                 .me=${appState.me}
                 .base=${withBase("")}
                 .widget=${part.type === "setup" ? "apps" : part.type}
                 .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
                 .onConnected=${continueAfterConnection}
                 .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
-                .setupOnly=${true}
-                .animateWelcome=${false}
-              ></qm-onboarding-welcome>`,
+              ></qm-connect-apps>`,
             );
             continue;
           }
@@ -3535,7 +3475,7 @@ export function createChatSurface(
   }
 
   function scrollTranscript(force = false): void {
-    if (preserveConnectionScroll || ctx.container()?.querySelector(".empty-chat qm-onboarding-welcome")) {
+    if (preserveConnectionScroll) {
       transcriptViewport.sync(null);
       return;
     }
