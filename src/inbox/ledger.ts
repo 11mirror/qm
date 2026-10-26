@@ -3,6 +3,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThreadMessage } from "../types.ts";
 import { isResolved } from "./view.ts";
+import { adapterForItem, inboxMetadataKeys } from "./sources/index.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
@@ -71,6 +72,7 @@ export interface InboxLedger {
   prune(cronId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<InboxItem | null>;
   byCron(cronId: string): Promise<InboxItem[]>;
+  byCrons(cronIds: readonly string[]): Promise<InboxItem[]>;
   summaries(
     cronIds: string[],
     options?: { includeInboxMetadata?: boolean },
@@ -81,6 +83,19 @@ export interface InboxLedger {
 }
 
 export type InboxEventSink = (item: InboxItem, event: LatestEvent) => Promise<void>;
+
+export const INBOX_ITEM_SOURCE_MIGRATION = {
+  id: "durable-map/crons/0004-inbox-item-source",
+  statements: [
+    `DO $$ BEGIN IF to_regclass('cron_items') IS NOT NULL THEN
+       UPDATE cron_items SET json = jsonb_set(json, '{source}', json -> 'sourcePayload' -> 'source')
+         WHERE NOT json ? 'source' AND jsonb_typeof(json -> 'sourcePayload' -> 'source') = 'string';
+       UPDATE cron_items SET json = json #- '{sourcePayload,source}'
+         WHERE json -> 'sourcePayload' ? 'source' AND json ->> 'source' = json -> 'sourcePayload' ->> 'source';
+       UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'cron_items';
+     END IF; END $$`,
+  ],
+};
 
 export function inboxItemId(cronId: string, sourceKey: string): string {
   return hashId([contentPart(cronId), contentPart(sourceKey)]);
@@ -211,8 +226,13 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     if (item && onEvent) onEvent({ cronId: item.cronId, itemId: item.id, op, at: Date.now() });
   };
 
-  const forCron = async (cronId: string): Promise<InboxItem[]> =>
-    (await backing.all()).filter((item) => item.cronId === cronId);
+  const forCrons = async (cronIds: readonly string[]): Promise<InboxItem[]> => {
+    const wanted = new Set(cronIds);
+    if (!wanted.size) return [];
+    const items = await backing.select({ where: { field: "cronId", anyOfFold: [...wanted] } });
+    return items.filter((item) => wanted.has(item.cronId));
+  };
+  const forCron = (cronId: string): Promise<InboxItem[]> => forCrons([cronId]);
 
   const ledger: InboxLedger = {
     async summaries(cronIds, options) {
@@ -224,26 +244,13 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       const items = await backing.select({
         where: { field: "cronId", anyOfFold: cronIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
+        pickNested: { sourcePayload: inboxMetadataKeys() },
       });
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
-        return {
-          ...item,
-          ...(source !== undefined ? { source } : {}),
-          ...(source === "slack"
-            ? {
-                inboxPreview: {
-                  ...item.inboxPreview,
-                  participants: sourcePayload?.participants,
-                  slackAvatarsRefreshAt: sourcePayload?.slackAvatarsRefreshAt,
-                },
-              }
-            : {}),
-          ...(source === "gmail"
-            ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
-            : {}),
-        };
+        const adapter = adapterForItem(item);
+        return adapter
+          ? { ...item, inboxPreview: { ...item.inboxPreview, ...adapter.inboxMetadata(sourcePayload ?? {}) } }
+          : item;
       });
     },
     async ingest(entries) {
@@ -391,7 +398,7 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     async reopen(id, opts) {
       let applied = false;
       const after = await update(id, (item) => {
-        const sentReply = opts?.sentReply === true && item.source === "gmail" && item.sourcePayload?.sentChat === true;
+        const sentReply = opts?.sentReply === true && item.sourcePayload?.sentChat === true;
         if (item.status !== "skipped" && item.status !== "failed" && !(sentReply && item.status === "shipped"))
           return item;
         applied = true;
@@ -433,6 +440,7 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
     },
     get: (id) => backing.get(id),
     byCron: forCron,
+    byCrons: forCrons,
     async acquireDecision(id, decisionAt = Date.now()) {
       let token: string | null = null;
       await update(id, (item) => {

@@ -3,14 +3,20 @@ import { gmailAdapter } from "./gmail.ts";
 import { slackAdapter } from "./slack.ts";
 import type { SourceAdapter } from "./adapter.ts";
 
-const SOURCE_ADAPTERS: readonly SourceAdapter[] = [gmailAdapter, slackAdapter];
-
-export function sourceAdapter(id: unknown): SourceAdapter | undefined {
-  return typeof id === "string" ? SOURCE_ADAPTERS.find((adapter) => adapter.id === id) : undefined;
+function sourceAdapters(): readonly SourceAdapter[] {
+  return [gmailAdapter, slackAdapter];
 }
 
-export function adapterForItem(item: InboxItem): SourceAdapter | undefined {
-  return sourceAdapter(item.source ?? item.sourcePayload?.source);
+export function sourceAdapter(id: unknown): SourceAdapter | undefined {
+  return typeof id === "string" ? sourceAdapters().find((adapter) => adapter.id === id) : undefined;
+}
+
+export function inboxMetadataKeys(): string[] {
+  return [...new Set(sourceAdapters().flatMap((adapter) => adapter.inboxMetadataKeys))];
+}
+
+export function adapterForItem(item: Pick<InboxItem, "source">): SourceAdapter | undefined {
+  return sourceAdapter(item.source);
 }
 
 export type { SourceAdapter } from "./adapter.ts";

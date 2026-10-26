@@ -407,7 +407,7 @@ test("email classification projection is opt-in, scoped, and never changes store
     assert.ok(query.omit?.includes("thread"));
     if (!query.omit?.includes("sourcePayload"))
       assert.deepEqual(query.pickNested, {
-        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
+        sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"],
       });
     const rows = await originalSelect(query);
     for (const row of rows) assert.equal((row as InboxItem).sourcePayload?.privateDetail, undefined);
@@ -423,17 +423,6 @@ test("email classification projection is opt-in, scoped, and never changes store
   for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
   assert.deepEqual(await ledger.summaries([CRON]), before);
   assert.deepEqual(await ledger.get(inboxItemId(CRON, "gmail:thread-1")), stored);
-});
-
-test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
-  const ledger = createInboxLedger(testMap());
-  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
-  const before = await ledger.summaries([CRON]);
-  const [classified] = await ledger.summaries([CRON], { includeInboxMetadata: true });
-  assert.equal(classified!.source, "gmail");
-  assert.equal(classified!.inboxPreview!.automated, true);
-  assert.deepEqual(await ledger.summaries([CRON]), before);
-  assert.equal((await ledger.byCron(CRON))[0]!.source, undefined);
 });
 
 test("ingest batches writes while resolving legacy IDs and duplicate events", async () => {
@@ -549,4 +538,27 @@ test("ordinary ledger annotations leave previews unchanged and do not project av
   assert.deepEqual(projected.inboxPreview?.participants, updated!.sourcePayload!.participants);
   assert.equal(projected.inboxPreview?.slackAvatarsRefreshAt, 12345);
   assert.equal("sourcePayload" in projected, false);
+});
+
+test("per-cron reads, prune and delete query only that cron's items instead of scanning the table", async () => {
+  const backing = testMap<InboxItem>(["cronId"]);
+  const seed = createInboxLedger(backing);
+  await seed.ingest([entry(), entry({ dedupeKey: "gmail:thread-2" }), entry({ cronId: "cron-2" })]);
+  const ledger = createInboxLedger({
+    ...backing,
+    all: async () => assert.fail("full table scan"),
+    entries: async () => assert.fail("full table scan"),
+  });
+  assert.equal((await ledger.byCron(CRON)).length, 2);
+  assert.deepEqual((await ledger.byCrons([CRON, "cron-2", "cron-missing"])).map((item) => item.cronId).sort(), [
+    CRON,
+    CRON,
+    "cron-2",
+  ]);
+  assert.equal(await ledger.prune(CRON, { maxItems: 10, retentionMs: 0 }), 0);
+  await ledger.deleteByCron(CRON);
+  assert.deepEqual(
+    (await backing.all()).map((item) => item.cronId),
+    ["cron-2"],
+  );
 });

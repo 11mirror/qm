@@ -362,7 +362,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   assert.equal(feed.items[0].sourcePayload.privateDetail, undefined);
   assert.deepEqual((await w.items.summaries([cron!.id]))[0], before);
   const disabled = world(false);
-  t.mock.method(disabled.items, "byCron", async () => {
+  t.mock.method(disabled.items, "byCrons", async () => {
     assert.fail("flag-disabled inbox read payloads");
   });
   t.mock.method(disabled.items, "summaries", async () => {

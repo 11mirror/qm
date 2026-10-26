@@ -204,3 +204,34 @@ test("ledger mutations emit change events", async () => {
 test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
   assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
 });
+
+test("one conversation event reads every inbox cron's items in a single query", async () => {
+  const other = { id: "cron-other", owner: "other@example.com", inbox: { source: "slack" } } as unknown as Cron;
+  const items = createInboxLedger(testMap());
+  await items.ingest([slackEntry(), slackEntry({ cronId: other.id })]);
+  const reads: string[][] = [];
+  const calls: Array<[string, LatestEvent["author"]]> = [];
+  const rt = createInboxRealtime({
+    crons: { list: async () => [CRON, other] },
+    items: {
+      byCrons: async (cronIds) => {
+        reads.push([...cronIds]);
+        return items.byCrons(cronIds);
+      },
+    },
+    record: async (item, event) => {
+      calls.push([item.cronId, event.author]);
+    },
+  });
+  await rt.onConversationEvent({
+    source: "slack",
+    conversationRef: "D123",
+    at: 2_000_000,
+    senderEmail: "other@example.com",
+  });
+  assert.deepEqual(reads, [[CRON.id, other.id]]);
+  assert.deepEqual(calls, [
+    [CRON.id, "other"],
+    [other.id, "owner"],
+  ]);
+});

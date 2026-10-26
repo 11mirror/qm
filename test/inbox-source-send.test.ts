@@ -282,7 +282,7 @@ test("adapters parse their own source shape into an opaque payload", () => {
   if ("error" in parsed) return;
   assert.equal(parsed.dedupeKey, "thread-9");
   assert.equal(parsed.sourceAt, 1700);
-  assert.equal(parsed.sourcePayload.source, "gmail");
+  assert.equal(parsed.sourcePayload.source, undefined);
   assert.deepEqual(parsed.proposal?.data, { body: "sure", to: ["ada@example.com"] });
 });
 

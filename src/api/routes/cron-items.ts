@@ -172,9 +172,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
   if (cron.inbox?.source === "gmail" && cron.owner === loaded.actorId) {
-    const openMail = (await deps.items.byCron(cron.id)).filter(
-      (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
-    );
+    const openMail = (await deps.items.byCron(cron.id)).filter((item) => !isResolved(item) && item.source === "gmail");
     await ctx.deps.inboxSourceRefresh?.(cron.owner, openMail);
   }
   const all = sortLedgerItems(await deps.items.byCron(cron.id));
@@ -223,8 +221,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     if (parsed.source === "slack") {
       const adapter = sourceAdapter("slack")!;
       const existing = existingItems.find(
-        (item) =>
-          (item.source ?? item.sourcePayload?.source) === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
+        (item) => item.source === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
       );
       if (existing) parsed.dedupeKey = existing.sourceKey;
     }
@@ -389,7 +386,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (kind === "reply") {
-    if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
+    if (!ctx.actor?.p || item.source !== "gmail" || item.sourcePayload?.sentChat !== true)
+      return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     return sendItemOrConflict(ctx, next, "a reply is already being drafted");
   }

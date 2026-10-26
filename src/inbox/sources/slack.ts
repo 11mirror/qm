@@ -189,7 +189,7 @@ export const slackAdapter: SourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "slack", ...common, slack } as InboxPayload,
+      sourcePayload: { ...common, slack } as InboxPayload,
       ...(draft ? { proposal: { data: draft as unknown as InboxPayload } } : {}),
     };
     return entry;
@@ -200,6 +200,10 @@ export const slackAdapter: SourceAdapter = {
     return (slack.isDirectMessage ? [true, false] : [false]).some(
       (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
     );
+  },
+  inboxMetadataKeys: ["participants", "slackAvatarsRefreshAt"],
+  inboxMetadata(sourcePayload) {
+    return { participants: sourcePayload.participants, slackAvatarsRefreshAt: sourcePayload.slackAvatarsRefreshAt };
   },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
