@@ -1,5 +1,37 @@
-import { toolCallApprovalKey } from "../core/approval-id.ts";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import {
+  withRetrySafety,
+  withToolApprovalGate,
+  withToolBodyTiming,
+  withRuntimeBarrier,
+  type RetryMark,
+} from "./agent-tools/wrappers.ts";
+import {
+  describePublishAudience,
+  optionalString,
+  optionalBoolean,
+  optionalInteger,
+  text,
+  isPolicyNotice,
+  PRESSURE_WARN_FULL60,
+  capResultText,
+  capPayloadStrings,
+  capText,
+  fmtStatus,
+  SURFACE_ACTIONS,
+  CRON_ID_ACTIONS,
+  SENDER_WEBHOOK_SCHEMES,
+  WEBHOOK_ACTION_PREVIEW_CHARS,
+  previewText,
+  previewTrims,
+  listOrder,
+  pageOf,
+  fmtCronLine,
+  fmtCronCreated,
+  fmtCronRunLine,
+  CLIENT_TOOL_DEFAULT_TIMEOUT_MS,
+  CLIENT_TOOL_TIMEOUT_TEXT,
+  outsideWorkspace,
+} from "./agent-tools/shared.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest } from "./tool-manifest.ts";
 import { SWARM_ACTIONS, type SwarmInput } from "../swarms/swarm.ts";
@@ -15,23 +47,21 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, CronFireLogEntry, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, ScopeId } from "../types.ts";
 import type { NewItem } from "../sessions/items.ts";
-import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
+import type { ToolContext, PublishInput } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
-import { errMessage, reportFailure, reportFailureAs, swallow } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
-import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
-import { headTailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
   cancelGoal,
@@ -60,22 +90,6 @@ import {
 import { SANDBOX_CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../api/control-service.ts";
 import { utcMinute } from "../util/time.ts";
-
-function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
-  if (!a) return "Owned by you.";
-  const note = a.note ? ` (note: ${a.note})` : "";
-  if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
-  if (a.kind === "members") {
-    if (a.memberCount === undefined)
-      return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
-    const n = a.memberCount;
-    const who = a.channelRef
-      ? `the ${n} ${n === 1 ? "person" : "people"} currently in #${a.channelRef}`
-      : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;
-    return `Owned by you; reachable by ${who} (from any surface they sign in to).${note}`;
-  }
-  return `Owned by you; owner-only (only you can reach it — use apps action share to widen).${note}`;
-}
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
@@ -137,198 +151,6 @@ export interface ToolContextRef {
   approvedToolCalls?: Map<string, string>;
 }
 
-const optionalString = (description: string) => Type.Optional(Type.String({ description }));
-const optionalBoolean = (description: string) => Type.Optional(Type.Boolean({ description }));
-const optionalInteger = (description: string) => Type.Optional(Type.Integer({ description }));
-
-function text(s: string) {
-  return { content: [{ type: "text" as const, text: s }], details: {} };
-}
-
-function isPolicyNotice(summary: Record<string, unknown>): boolean {
-  return summary.blocked !== undefined || summary.denied !== undefined;
-}
-
-const MAX_TOOL_RESULT_CHARS = 100_000;
-const PRESSURE_WARN_FULL60 = 50;
-const TRUNCATED_TAIL_CHARS = 10_000;
-
-function capResultText(t: string): string {
-  return headTailSlice(
-    t,
-    MAX_TOOL_RESULT_CHARS,
-    TRUNCATED_TAIL_CHARS,
-    `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
-      `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`,
-  );
-}
-
-function capPayloadStrings(v: unknown): unknown {
-  if (typeof v === "string") return capResultText(v);
-  if (Array.isArray(v)) {
-    let out: unknown[] | null = null;
-    for (let i = 0; i < v.length; i++) {
-      const c = capPayloadStrings(v[i]);
-      if (c !== v[i]) (out ??= v.slice())[i] = c;
-    }
-    return out ?? v;
-  }
-  if (v && typeof v === "object") {
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null) return v;
-    let out: Record<string, unknown> | null = null;
-    for (const [k, x] of Object.entries(v)) {
-      const c = capPayloadStrings(x);
-      if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
-    }
-    return out ?? v;
-  }
-  return v;
-}
-
-function capText(t: string): string {
-  return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
-}
-
-function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
-  return s.state === "exited" ? `exited ${s.code}` : "running";
-}
-
-function fmtCronSchedule(c: {
-  schedule: { cron?: string; timezone?: string; everyMs?: number; firstFireAt?: number };
-}): string {
-  const s = c.schedule;
-  if (s.cron) return `${s.cron}${s.timezone ? ` (${s.timezone})` : ""}`;
-  if (s.everyMs != null) return `every ${Math.max(1, Math.round(s.everyMs / 60_000))}m`;
-  if (s.firstFireAt != null) return `once at ${new Date(s.firstFireAt).toISOString()}`;
-  return "no schedule";
-}
-
-interface CronLike {
-  runtime?: import("./harness.ts").RuntimeChoice | null;
-  id: string;
-  title?: string;
-  enabled: boolean;
-  archived?: boolean;
-  schedule: { cron?: string; timezone?: string; everyMs?: number; firstFireAt?: number };
-  action?: string;
-  message?: string;
-  nextFireAt?: number;
-  destination?: { type: string; target: string };
-  lastFireNote?: { text: string; at: number; by?: string };
-  unattendedGrants?: string[];
-}
-
-const SURFACE_ACTIONS = [
-  "post",
-  "reach",
-  "react",
-  "edit",
-  "delete",
-  "read_thread",
-  "whats_new",
-  "search",
-  "read_members",
-  "read_file",
-] as const;
-const LIST_PAGE_SIZE = 25;
-const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note"]);
-const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
-const LIST_PAGE_MAX = 100;
-const LIST_TASK_PREVIEW_CHARS = 200;
-const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
-
-const flatText = (s: string): string => s.replace(/[\s\u0085]+/g, " ").trim();
-
-function previewText(s: string, max = LIST_TASK_PREVIEW_CHARS): string {
-  const f = flatText(s);
-  if (f.length <= max) return f;
-  let cut = f.slice(0, max);
-  const last = cut.charCodeAt(cut.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-  return `${cut.trimEnd()}…`;
-}
-
-const previewTrims = (s: string | undefined): boolean =>
-  s !== undefined && flatText(s).length > LIST_TASK_PREVIEW_CHARS;
-
-function listOrder(
-  a: { id: string; enabled: boolean; archived?: boolean; createdAt: number },
-  b: { id: string; enabled: boolean; archived?: boolean; createdAt: number },
-): number {
-  const rank = (c: { enabled: boolean; archived?: boolean }): number => {
-    if (c.archived) return 2;
-    if (c.enabled) return 0;
-    return 1;
-  };
-  return rank(a) - rank(b) || b.createdAt - a.createdAt || a.id.localeCompare(b.id);
-}
-
-function pageOf<T>(
-  items: T[],
-  opts: { offset?: number; limit?: number },
-): { page: T[]; offset: number; note: string | null } {
-  const offset = Math.max(0, opts.offset ?? 0);
-  const limit = Math.min(Math.max(1, opts.limit ?? LIST_PAGE_SIZE), LIST_PAGE_MAX);
-  const page = items.slice(offset, offset + limit);
-  const last = offset + page.length;
-  if (page.length === 0) return { page, offset, note: `nothing at offset ${offset} — ${items.length} total` };
-  if (items.length > last)
-    return { page, offset, note: `showing ${offset + 1}–${last} of ${items.length}; next page: offset: ${last}` };
-  if (offset > 0) return { page, offset, note: `showing ${offset + 1}–${last} of ${items.length}; end of list` };
-  return { page, offset, note: null };
-}
-
-function fmtCronLine(c: CronLike, preview = false): string {
-  const body = c.action || c.message;
-  let shown: string | undefined;
-  if (body) shown = preview ? previewText(body) : body;
-  const what = shown ? `${c.action ? "task" : "text"}: ${shown}` : "";
-  let state = " [paused]";
-  if (c.archived) state = " [archived]";
-  else if (c.enabled) state = "";
-  const dest = c.destination ? ` → ${c.destination.type}:${c.destination.target}` : "";
-  const next = c.nextFireAt ? ` (next ${new Date(c.nextFireAt).toISOString()})` : "";
-  const note =
-    !preview && c.lastFireNote && Number.isFinite(c.lastFireNote.at)
-      ? `\n    shift-change note (${utcMinute(c.lastFireNote.at)}${c.lastFireNote.by ? `, by ${c.lastFireNote.by}` : ""}): ${c.lastFireNote.text}`
-      : "";
-  const runtime = c.runtime
-    ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
-    : "";
-  const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${note}`;
-}
-
-function fmtCronCreated(r: {
-  cron: CronLike;
-  recipient?: { displayName: string };
-  channel?: { name: string };
-}): string {
-  let to = "";
-  if (r.recipient) to = `\nAddressed to ${r.recipient.displayName} (DM).`;
-  else if (r.channel) to = `\nAddressed to #${r.channel.name}.`;
-  return `Created cron ${fmtCronLine(r.cron)}${to}`;
-}
-
-function fmtCronRunLine(entry: CronFireLogEntry): string {
-  let lifecycle: string | null = null;
-  if (entry.status === "running") {
-    lifecycle = `in flight for ${Math.max(0, Math.round((Date.now() - entry.firedAt) / 60_000))}m`;
-  } else if (entry.endedAt !== undefined) {
-    lifecycle = `took ${Math.max(0, Math.round((entry.endedAt - entry.firedAt) / 1000))}s`;
-  }
-  const bits = [
-    new Date(entry.firedAt).toISOString(),
-    `status=${entry.status ?? "unknown"}`,
-    lifecycle,
-    `fireKey=${entry.fireKey}`,
-    entry.note ? `note=${entry.note}` : null,
-    entry.reply ? `reply=${entry.reply}` : null,
-  ].filter((bit): bit is string => bit !== null);
-  return `- ${bits.join("; ")}`;
-}
-
 export interface AgentToolsOptions {
   sessionTools?: boolean;
   scratchExec?: boolean;
@@ -363,9 +185,6 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const CLIENT_TOOL_DEFAULT_TIMEOUT_MS = 10_000;
-const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have been closed or navigated away.";
-
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
   prior?: (
@@ -379,9 +198,6 @@ export function pauseStampAfterToolCall(
     return upstream;
   };
 }
-
-const outsideWorkspace = (path: string): string =>
-  `[not in the computer's workspace: ${path}; only workspace files can be read, so copy it there or name it relative to the workspace]`;
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const scratchExec = !!opts?.scratchExec;
@@ -3954,231 +3770,3 @@ const SANDBOX_TOOL_ARGS: Record<
     unwatch: { required: ["monitor_id"], fields: [] },
   },
 };
-
-const RETRY_SAFE_FIELD = "retrySafe";
-
-const RETRY_SAFE_SCHEMA = optionalBoolean(
-  "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
-);
-const RERUN_INPUT_MAX_CHARS = 4_000;
-
-interface RetryMark {
-  safe: boolean;
-  rerun?: { tool: string; input: Record<string, unknown> };
-}
-
-function withRetrySafeField(parameters: unknown): unknown | null {
-  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
-  if (RETRY_SAFE_FIELD in parameters.properties) return null;
-  return { ...parameters, properties: { ...parameters.properties, [RETRY_SAFE_FIELD]: RETRY_SAFE_SCHEMA } };
-}
-
-function stripRetrySafeField(params: unknown): { params: unknown; retrySafe?: boolean } {
-  if (!isObj(params) || !(RETRY_SAFE_FIELD in params)) return { params };
-  const { [RETRY_SAFE_FIELD]: retrySafe, ...rest } = params;
-  return { params: rest, ...(typeof retrySafe === "boolean" ? { retrySafe } : {}) };
-}
-
-function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): ToolDefinition {
-  const parameters = withRetrySafeField(tool.parameters);
-  if (!parameters) return tool;
-  const inner = tool.execute.bind(tool);
-  return {
-    ...tool,
-    parameters: parameters as ToolDefinition["parameters"],
-    async execute(callId: string, params: unknown, ...rest: unknown[]) {
-      const stripped = stripRetrySafeField(params);
-      if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
-        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
-        marks.set(callId, {
-          safe: stripped.retrySafe,
-          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
-        });
-      }
-      try {
-        return await (inner as (...args: unknown[]) => unknown)(callId, stripped.params, ...rest);
-      } finally {
-        marks.delete(callId);
-      }
-    },
-  } as ToolDefinition;
-}
-
-const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
-const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
-const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
-const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
-const APPROVAL_ARGS_MAX_CHARS = 16_000;
-
-interface ToolApprovalDeclaration {
-  needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
-  approvalReason?: string;
-}
-
-async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
-  const needed =
-    typeof tool.needsApproval === "function" ? await tool.needsApproval(params) : tool.needsApproval === true;
-  return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
-}
-
-function approvalCallText(label: string, params: unknown): string {
-  return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
-}
-
-function withToolApprovalGate(
-  tool: ToolDefinition & ToolApprovalDeclaration,
-  ref: ToolContextRef,
-  rec: {
-    recordCall: (callId: string, payload: Record<string, unknown>) => Promise<void>;
-    recordResult: <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
-      callId: string,
-      summary: Record<string, unknown>,
-      ret: T,
-      isError?: boolean,
-    ) => Promise<T>;
-  },
-): ToolDefinition {
-  if (TOOL_APPROVAL_EXEMPT.has(tool.name)) return tool;
-  const inner = tool.execute.bind(tool);
-  return {
-    ...tool,
-    async execute(callId: string, params: unknown) {
-      const gate = ref.toolApprovalGate;
-      const resourceTool = RESOURCE_TOOL_NAMES.has(tool.name);
-      const resourceAction =
-        resourceTool && isObj(params) && typeof params.action === "string" ? params.action : undefined;
-      const approvalIdentity = resourceTool ? `${tool.name}:${resourceAction ?? "invalid"}` : tool.name;
-      const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
-      let declaredReason: string | undefined;
-      try {
-        declaredReason = await declaredApprovalReason(tool, params);
-      } catch (error) {
-        reportFailure("tool approval: needsApproval check", error, tool.name);
-        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_check_failed", error: errMessage(error) });
-        return rec.recordResult(
-          callId,
-          { tool: tool.name, blocked: "approval_check_failed" },
-          text(`[error] could not check whether this call needs approval: ${errMessage(error)}`),
-          true,
-        );
-      }
-      const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
-      if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
-        const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
-        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });
-        return rec.recordResult(
-          callId,
-          { tool: tool.name, blocked: "approval_args_too_long" },
-          text(`[blocked] ${reason}`),
-          true,
-        );
-      }
-      if (callKey ? !gate?.(approvalIdentity, callKey) : gate && !gate(approvalIdentity)) {
-        const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
-        ref.pendingApprovals?.push(
-          callKey
-            ? {
-                command: approvalCallText(commandLabel, params),
-                reason,
-                kind: "approval",
-                approvalKey: callKey,
-                summary: commandLabel,
-                grantModes: { session: false, always: false },
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-              }
-            : {
-                command: commandLabel,
-                reason,
-                kind: "approval",
-                approvalKey: `tool:${approvalIdentity}`,
-                ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-              },
-        );
-        ref.pausedOnApproval = true;
-        await rec.recordCall(callId, {
-          tool: tool.name,
-          ...(resourceAction ? { action: resourceAction } : {}),
-          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-          blocked: "needs_approval",
-          reason,
-        });
-        return rec.recordResult(
-          callId,
-          {
-            tool: tool.name,
-            ...(resourceAction ? { action: resourceAction } : {}),
-            blocked: "needs_approval",
-            reason,
-          },
-          { ...text(`[blocked: needs human approval] ${reason}`), terminate: true },
-          true,
-        );
-      }
-      if (!callKey) return (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      const approved = (ref.approvedToolCalls ??= new Map());
-      approved.set(callId, callKey);
-      try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      } finally {
-        approved.delete(callId);
-      }
-    },
-  } as ToolDefinition;
-}
-
-function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
-  const inner = tool.execute.bind(tool);
-  return {
-    ...tool,
-    async execute(callId: string, params: unknown) {
-      const start = Date.now();
-      try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      } finally {
-        try {
-          ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
-        } catch (error) {
-          swallow("tool body timing sink", error);
-        }
-      }
-    },
-  } as ToolDefinition;
-}
-
-function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
-  return {
-    ...tool,
-    async execute(...args) {
-      const [, params] = args;
-      if (ref.runtimeHandoff || ref.runtimeMutationPending)
-        return {
-          ...text(
-            "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
-          ),
-          terminate: !!ref.runtimeHandoff,
-        };
-      const mutation =
-        tool.name === "context" || (tool.name === "runtime" && (!isObj(params) || params.action !== "get"));
-      if (mutation) {
-        ref.runtimeMutationPending = true;
-        try {
-          await Promise.allSettled(ref.runtimeInFlight ?? []);
-          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
-            return { ...text("Runtime change cancelled before execution."), terminate: true };
-          return await tool.execute(...args);
-        } finally {
-          ref.runtimeMutationPending = false;
-        }
-      }
-      const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
-      inFlight.add(result);
-      try {
-        return await result;
-      } finally {
-        inFlight.delete(result);
-      }
-    },
-  };
-}
