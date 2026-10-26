@@ -14,19 +14,12 @@ import {
   serviceSecretValue,
   type ComputedSecret,
 } from "../secrets.ts";
-import { isInvalidSecret, isMissingOrPlaceholder, readEnvFile, writeEnvValue } from "../util.ts";
+import { isInvalidSecret, isMissingOrPlaceholder, parseAdminGrants, readEnvFile, writeEnvValue } from "../util.ts";
 import { runInit } from "./init.ts";
 
 export function adminGrantEmails(adminGrants: string | undefined): string {
-  return (adminGrants ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.lastIndexOf(":");
-      return (separator === -1 ? entry : entry.slice(0, separator)).trim();
-    })
-    .filter((principal) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal))
+  return parseAdminGrants(adminGrants)
+    .map((grant) => grant.email)
     .join(",");
 }
 
