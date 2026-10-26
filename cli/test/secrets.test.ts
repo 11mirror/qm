@@ -253,17 +253,6 @@ test("PORTAL_IDENTITY_SECRET reaches core, which both signs and verifies portal 
   assert.deepEqual(secret.services, ["core", "portal", "web-ui"]);
 });
 
-test("INBOX_USERS is an optional web-ui secret", () => {
-  const config = makeConfig({ services: ["core", "web-ui"] });
-  const allowlist = secretByName(config, "INBOX_USERS");
-  assert.equal(allowlist.required, false);
-  assert.deepEqual(allowlist.services, ["web-ui"]);
-  assert.deepEqual([...secretDestinations(allowlist).keys()], ["core"]);
-  assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
-  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(web-ui\)/);
-  assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
-});
-
 test("the invitation-email pair reaches core as optional secrets on every topology", () => {
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
     const alone = secretByName(makeConfig(), name);

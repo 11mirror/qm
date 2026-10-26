@@ -39,7 +39,6 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -63,7 +62,6 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const isInboxUser = (principalId: string) => principalInAllowlist(principalId, process.env.INBOX_USERS);
 
 async function hasInboxLoopPreview(user: string): Promise<boolean> {
   try {
@@ -339,8 +337,6 @@ async function resolveWebConversation(
   if (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
-  if (threadRef === `web:${user}:inbox` && !isInboxUser(user))
-    return { error: "forbidden", message: "inbox access is not enabled for this user" };
   const conversation = conversationForScope(threadRef, scope, channelName);
   if (!conversation || (threadRef === `web:${user}:inbox` && conversation.kind !== "dm")) {
     return {
@@ -1213,7 +1209,7 @@ export const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "inbox");
-      if (isInboxUser(user) && (await hasInboxLoopPreview(user))) permissions.push("inbox");
+      if (await hasInboxLoopPreview(user)) permissions.push("inbox");
       return json(res, 200, {
         user,
         org: ORG,
@@ -1963,7 +1959,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const itemsPath = /^\/api\/crons\/[^/]+\/items(\/|$)/.test(path);
     if ((inboxPath || itemsPath) && !(await hasInboxLoopPreview(user)))
       return json(res, 403, { error: "feature_disabled" });
-    if ((inboxPath || itemsPath) && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });

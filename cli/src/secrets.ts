@@ -275,12 +275,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "INBOX_USERS",
-    service: "web-ui",
-    required: false,
-    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
-  },
-  {
     name: "OIDC_CLIENT_ID",
     service: "portal",
     required: {
