@@ -15,10 +15,6 @@ function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
       events.push("ack");
       pending.delete(`run:${runId}`);
     },
-    async signalRunAbort() {},
-    async activeRunForThread() {
-      return undefined;
-    },
     async stageBlob() {
       return { blobId: "b", sizeBytes: 0 };
     },

@@ -16,7 +16,7 @@ function setup() {
   dom.window.scrollTo = () => {};
   dom.window.eval(
     bundle +
-      `;window.ui=transcriptUI;window.data={items:[]};window.visible={thinking:true,toolResults:true};window.textNode=text=>{const p=document.createElement('pre');p.textContent=text;return p;};window.services={api:async(method,path)=>({ok:true,data:path.includes('/llm?')?{requests:[]}:data}),scope:'org:test',pageSize:60,visibility:visible,current:()=>true,pageShell:()=>{},shortName:x=>x,relTime:x=>x,fmtTime:x=>x,adminErrors:async()=>[],setObserver:()=>{},entryHidden:kinds=>!visible.thinking&&kinds.includes('Reasoning'),isXmlishText:()=>false,renderMarkdown:textNode,titleCase:x=>x,brandSelfLabel:()=>"QM",stepDurEl:()=>null,copyButton:()=>document.createElement('button'),deliveryFileBadges:()=>null,wakeOriginLabel:()=>'Wake',firstLine:x=>x,toolName:(c,r)=>c.tool||r.tool,toolLabelText:x=>x,toolPrimaryText:()=>'',toolStatusMeta:()=>[],toolCopyText:()=>'',renderToolEntry:()=>({block:document.createElement('div')})};window.item=(seq,kind,extra={})=>({sessionId:'s',seq,kind,createdAt:seq,turnId:null,author:null,callId:null,text:null,tool:null,variant:null,body:{},...extra});`,
+      `;window.ui=transcriptUI;window.data={items:[]};window.visible={thinking:true,toolResults:true};window.services={api:async(method,path)=>({ok:true,data:path.includes('/llm?')?{requests:[]}:data}),scope:'org:test',pageSize:60,visibility:visible,current:()=>true,pageShell:()=>{},shortName:x=>x,adminErrors:async()=>[],setObserver:()=>{},entryHidden:kinds=>!visible.thinking&&kinds.includes('Reasoning'),brandSelfLabel:()=>"QM",deliveryFileBadges:()=>null};window.item=(seq,kind,extra={})=>({sessionId:'s',seq,kind,createdAt:seq,turnId:null,author:null,callId:null,text:null,tool:null,variant:null,body:{},...extra});`,
   );
   return dom;
 }
@@ -70,9 +70,9 @@ test("items-shaped transcript renders a row per message with its text", async ()
     const doc = dom.window.document;
     assert.equal(doc.querySelector(".empty"), null);
     assert.equal(doc.querySelector(".user-entry .entry-label")!.textContent, "Ada");
-    assert.equal(doc.querySelector(".user-entry pre")!.textContent, "hello there");
+    assert.equal(doc.querySelector(".user-entry .message-body")!.textContent, "hello there");
     assert.equal(doc.querySelector(".assistant-entry .entry-label")!.textContent, "QM");
-    assert.equal(doc.querySelector(".assistant-entry pre")!.textContent, "all done");
+    assert.equal(doc.querySelector(".assistant-entry .message-body")!.textContent, "all done");
     assert.equal(doc.querySelectorAll(".tool-line-entry").length, 1);
     assert.match(doc.querySelector(".tool-line-entry .when")!.textContent!, /#2→#3/);
   } finally {
@@ -119,13 +119,13 @@ test("model context selection and disclosure render from state and escape captur
   const dom = setup();
   try {
     dom.window.eval(
-      `Object.assign(services,{contextSections:()=>[{key:'system',label:'System',text:'<script>bad</script>',tokens:20,note:''},{key:'messages',label:'Messages',text:'hello',tokens:1,note:''}],requestBody:x=>x,fmtContextSize:()=> '21 tokens',sumCacheUsage:()=>null,metaChip:()=>document.createElement('span'),cacheMetaItems:()=>[],rawJsonLink:()=>document.createElement('a'),fmtTokens:x=>String(x)});document.getElementById('view-data').append(ui.requestsPanel([{}],services,{embedded:true,page:true,selectLargest:true}))`,
+      `document.getElementById('view-data').append(ui.requestsPanel([{promptEnvelope:{system:'<script>bad</script>',messages:[{role:'user',content:'hello'}]}}],services,{embedded:true,page:true,selectLargest:true}))`,
     );
     const doc = dom.window.document;
     assert.equal(doc.querySelector("pre")!.textContent, "<script>bad</script>");
     assert.equal(doc.querySelectorAll("script").length, 0);
     doc.querySelector<HTMLButtonElement>(".ctx-messages")!.click();
-    assert.equal(doc.querySelector("pre")!.textContent, "hello");
+    assert.equal(doc.querySelector("pre")!.textContent, "[user]\nhello");
     assert.equal(doc.querySelector(".ctx-messages")!.getAttribute("aria-pressed"), "true");
   } finally {
     dom.window.close();

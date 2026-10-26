@@ -2,7 +2,7 @@ import type { Item } from "../src/items.ts";
 import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { itemsToMessages, forkCutSeq } from "../src/core-bridge.ts";
+import { itemsToMessages, forkCutSeq } from "../src/transcript-messages.ts";
 
 const LOG: Item[] = [
   item("UserMessage", { seq: 0, createdAt: 0, text: "first" }),

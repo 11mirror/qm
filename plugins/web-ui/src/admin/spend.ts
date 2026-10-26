@@ -2,6 +2,8 @@ import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { BACKGROUND_SOURCES, spendChart } from "./spend-chart.ts";
 import { table, card, renderer, keepSearch, matches } from "./shared.ts";
+import { cronName, fmtPct, fmtTokens, plural } from "./format.ts";
+import { shortSchedule } from "./schedule.ts";
 
 type Services = Record<string, any>;
 
@@ -90,7 +92,7 @@ class SpendView {
           [fmtUsd(org.costUsd), "Total spend"],
           [fmtUsd(org.live?.costUsd), "Live"],
           [fmtUsd(org.background?.costUsd), "Background"],
-          [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
+          [org.cacheHitRatio == null ? "n/a" : fmtPct(org.cacheHitRatio), "Cache hit rate"],
         ],
         tabs: [
           ...[...PRESETS.keys()].map((range) => ({
@@ -156,8 +158,8 @@ class SpendView {
       { text: fmtUsd(row.costUsd), cls: "num" },
       { text: fmtUsd(row.live?.costUsd), cls: "num" },
       { node: this.backgroundCell(row.background), cls: "num" },
-      { text: s.fmtTokens(row.tokens || 0), cls: "num" },
-      { text: row.cacheHitRatio == null ? "n/a" : s.fmtPct(row.cacheHitRatio), cls: "num" },
+      { text: fmtTokens(row.tokens || 0), cls: "num" },
+      { text: row.cacheHitRatio == null ? "n/a" : fmtPct(row.cacheHitRatio), cls: "num" },
     ];
   }
   backgroundCell(background: any) {
@@ -167,21 +169,17 @@ class SpendView {
     return html`${fmtUsd(background?.costUsd)}${parts.length ? html`<div class="subline">${parts.join(" · ")}</div>` : null}`;
   }
   sourceCells(row: any) {
-    const s = this.services;
     return [
       { text: row.displayName },
       { text: fmtUsd(row.costUsd), cls: "num" },
-      { text: row.share == null ? "n/a" : s.fmtPct(row.share), cls: "num" },
+      { text: row.share == null ? "n/a" : fmtPct(row.share), cls: "num" },
       { text: Number(row.calls || 0).toLocaleString(), cls: "num" },
-      { text: s.fmtTokens(row.tokens || 0), cls: "num" },
+      { text: fmtTokens(row.tokens || 0), cls: "num" },
     ];
   }
   cronCells(row: any) {
     const s = this.services;
-    const where = [
-      row.scopeName || s.shortName(row.scopeId),
-      row.info ? s.shortSchedule(row.info.schedule) : "deleted",
-    ];
+    const where = [row.scopeName || s.shortName(row.scopeId), row.info ? shortSchedule(row.info.schedule) : "deleted"];
     return [
       {
         node: html`${row.displayName}
@@ -189,8 +187,8 @@ class SpendView {
         cls: "mono",
       },
       { text: fmtUsd(row.costUsd), cls: "num" },
-      { text: s.fmtTokens(row.tokens || 0), cls: "num" },
-      { text: row.cacheHitRatio == null ? "n/a" : s.fmtPct(row.cacheHitRatio), cls: "num" },
+      { text: fmtTokens(row.tokens || 0), cls: "num" },
+      { text: row.cacheHitRatio == null ? "n/a" : fmtPct(row.cacheHitRatio), cls: "num" },
     ];
   }
   draw() {
@@ -206,7 +204,7 @@ class SpendView {
     const scopes = sorted((this.data.scopes || []).filter(shared));
     const crons = sorted(
       (this.data.crons || [])
-        .map((row: any) => ({ ...row, displayName: s.cronName({ ...row.info, id: row.cronId }, true) }))
+        .map((row: any) => ({ ...row, displayName: cronName({ ...row.info, id: row.cronId }, true) }))
         .filter((row: any) => hit(row.cronId, row.scopeId, row.scopeName, row.info?.ownerScopeId, row.displayName)),
     );
     const backgroundTotal = Number(this.data.org?.background?.costUsd) || 0;
@@ -236,7 +234,7 @@ class SpendView {
       }${card(
         "Spend over time",
         series.length
-          ? `${this.data.window?.from ?? ""} to ${this.data.window?.to ?? ""} (UTC, ${this.data.window?.bucket ?? "day"} buckets) · ${s.plural(org.calls || 0, "model call")}`
+          ? `${this.data.window?.from ?? ""} to ${this.data.window?.to ?? ""} (UTC, ${this.data.window?.bucket ?? "day"} buckets) · ${plural(org.calls || 0, "model call")}`
           : "No model calls recorded in this window.",
         series.length
           ? keyed(this.chartBreakdown, spendChart(this.data, this.chartBreakdown))

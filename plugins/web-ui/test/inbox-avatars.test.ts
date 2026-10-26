@@ -6,7 +6,9 @@ test("Slack feed avatars use stable identities and fall back to initials when a 
   const f = await createInboxFixture();
   try {
     await f.vite.ssrLoadModule("/src/shell.ts");
-    const { participantsTpl, contextTpl, toInboxItem } = await f.vite.ssrLoadModule("/src/inbox.ts");
+    const { participantsTpl } = await f.vite.ssrLoadModule("/src/inbox-people.ts");
+    const { contextTpl } = await f.vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const { toInboxItem } = await f.vite.ssrLoadModule("/src/inbox-model.ts");
     const { render } = await f.vite.ssrLoadModule("lit");
     const item = toInboxItem({
       id: "slack-1",

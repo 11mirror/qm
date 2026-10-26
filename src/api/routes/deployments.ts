@@ -16,7 +16,7 @@ import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj } from "./shared.ts";
+import { isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -29,7 +29,6 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
-import { tenant } from "../../tenant.ts";
 
 const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -94,44 +93,6 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   }
   const reach = await app.reachDeployment(id, principal);
   return proxyReach(ctx, reach, subPath, principal, { sandbox: true });
-}
-
-function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
-  const prefix = "/v1/admin/deployments/";
-  if (!pathname.startsWith(prefix)) return null;
-  const rest = pathname.slice(prefix.length);
-  const marker = "/proxy";
-  const markerAt = rest.indexOf(marker);
-  if (markerAt < 0) return null;
-  const after = rest.slice(markerAt + marker.length);
-  if (after && !after.startsWith("/")) return null;
-  try {
-    return { id: decodeURIComponent(rest.slice(0, markerAt)), subPath: after || "/" };
-  } catch {
-    return null;
-  }
-}
-
-async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
-  const { req, res, app, deps } = ctx;
-  const parts = adminDeploymentProxyParts(ctx.pathname);
-  if (!parts) return sendJson(res, 404, { error: "not_found" });
-  if (!(await verifySignedRoute(ctx, (req.headers["x-admin-actor"] as string) ?? ""))) return;
-  const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
-  const actor = await authorizeAdmin(
-    { req, res, deps, capability: null },
-    deployment?.ownerScopeId ?? tenant().orgScope,
-  );
-  if (!actor) return;
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  audit(deps, {
-    principalId: actor.id,
-    action: "deployment.visit",
-    resource: deployment.id,
-    scopeLabel: deployment.ownerScopeId,
-  });
-  const reach = await app.reachDeployment(parts.id, "", { bypassAcl: true });
-  return proxyReach(ctx, reach, parts.subPath, undefined, { sandbox: true });
 }
 
 const GATEWAY_AUTH_HEADERS = [
@@ -1036,36 +997,22 @@ function gitServiceOf(tail: string, url: URL): "git-upload-pack" | "git-receive-
 
 function gitTokenFrom(ctx: BaseCtx): string | null {
   const authz = ctx.req.headers.authorization;
-  if (typeof authz === "string") {
-    const basic = /^basic\s+(.+)$/i.exec(authz);
-    if (basic) {
-      try {
-        const decoded = Buffer.from(basic[1]!, "base64").toString("utf8");
-        const colon = decoded.indexOf(":");
-        const user = colon < 0 ? decoded : decoded.slice(0, colon);
-        const pass = colon < 0 ? "" : decoded.slice(colon + 1);
-        return pass || user || null;
-      } catch {
-        return null;
-      }
-    }
-    const bearer = /^bearer\s+(.+)$/i.exec(authz);
-    if (bearer) return bearer[1]!;
+  if (typeof authz !== "string") return null;
+  const basic = /^basic\s+(.+)$/i.exec(authz);
+  if (basic) {
+    const decoded = Buffer.from(basic[1]!, "base64").toString("utf8");
+    const colon = decoded.indexOf(":");
+    const user = colon < 0 ? decoded : decoded.slice(0, colon);
+    const pass = colon < 0 ? "" : decoded.slice(colon + 1);
+    return pass || user || null;
   }
-  return ctx.url.searchParams.get("token") ?? ctx.url.searchParams.get("access_token");
+  return /^bearer\s+(.+)$/i.exec(authz)?.[1] ?? null;
 }
 
 async function readRequestBytes(req: BaseCtx["req"]): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.from(chunk as Buffer));
   return Buffer.concat(chunks);
-}
-
-function gitQueryString(url: URL): string {
-  const qs = new URLSearchParams(url.searchParams);
-  qs.delete("token");
-  qs.delete("access_token");
-  return qs.toString();
 }
 
 function headerEnd(buf: Buffer): { headEnd: number; bodyStart: number } | null {
@@ -1173,7 +1120,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
         repoPath,
         tail: parts.tail,
         method: ctx.method,
-        query: gitQueryString(ctx.url),
+        query: ctx.url.searchParams.toString(),
         contentType: typeof ctx.req.headers["content-type"] === "string" ? ctx.req.headers["content-type"] : undefined,
         body,
       });
@@ -1548,14 +1495,6 @@ function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
-  {
-    match: (m, p) =>
-      p.startsWith("/v1/admin/deployments/") &&
-      p.includes("/proxy") &&
-      ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(m),
-    auth: "source",
-    handle: proxyAdminDeployment,
-  },
   { match: (_m, p) => p.startsWith("/d/"), auth: "source", handle: proxyDeployment },
 ];
 

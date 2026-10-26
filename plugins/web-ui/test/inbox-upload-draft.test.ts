@@ -24,7 +24,12 @@ test("a submission freezes the edited draft before upload and never retries a co
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
-    const inbox = await vite.ssrLoadModule("/src/inbox.ts");
+    const inbox = {
+      ...(await vite.ssrLoadModule("/src/inbox.ts")),
+      ...(await vite.ssrLoadModule("/src/inbox-model.ts")),
+      ...(await vite.ssrLoadModule("/src/inbox-item-view.ts")),
+      ...(await vite.ssrLoadModule("/src/inbox-actions.ts")),
+    };
     const { render, html } = await vite.ssrLoadModule("lit");
     for (const conflict of [true, false]) {
       render(null, host);

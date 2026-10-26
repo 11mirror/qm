@@ -1,4 +1,5 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { createPostgresSwarmBoard } from "./swarms/swarm-board.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -603,7 +604,6 @@ export function buildApp(
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     advisoryLock,
-    ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
@@ -1763,6 +1763,7 @@ export function buildApp(
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
+    board: createPostgresSwarmBoard(databaseUrl),
     enabled: async (actorId) =>
       (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
       (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),

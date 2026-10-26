@@ -48,7 +48,6 @@ test(
         `CAPABILITY_SECRET=${sentinel}-capability`,
         `CONNECTOR_SECRET_KEY=${sentinel}-connector`,
         `PORTAL_IDENTITY_SECRET=${sentinel}-identity`,
-        `SKILL_SIGNING_SECRET=${sentinel}-skill`,
         "OIDC_CLIENT_ID=fixture-client",
         `OIDC_CLIENT_SECRET=${sentinel}`,
         "PORTAL_EXPECTED_TEAM_ID=T123",

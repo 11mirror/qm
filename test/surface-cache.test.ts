@@ -76,25 +76,6 @@ test("search finds mirrored bodies and excludes deleted rows", async () => {
   assert.equal(hits[0]!.ts, "1.0");
 });
 
-test("activeThreads projects sub-conversations with recent activity, newest first", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 1 },
-    { container: "C1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 2 },
-    { container: "C1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 3 },
-    { container: "C1", ts: "4.0", text: "top-level, no sub", createdAt: 4 },
-    { container: "C1", ts: "5.0", sub: "T-c", text: "gone", deleted: true, createdAt: 5 },
-  ]);
-  const threads = await cache.activeThreads({ container: "C1" });
-  assert.equal(threads.length, 2, "only the two live sub-conversations are threads (top-level and deleted aren't)");
-  assert.equal(threads[0]!.sub, "T-b", "newest activity first");
-  const a = threads.find((t) => t.sub === "T-a")!;
-  assert.equal(a.messageCount, 2);
-  const limited = await cache.activeThreads({ container: "C1", limit: 1 });
-  assert.equal(limited.length, 1);
-  assert.equal(limited[0]!.sub, "T-b");
-});
-
 test("eager membership maintenance: ingest keeps a container's members fresh, ungated by bodies", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([

@@ -36,16 +36,9 @@ function fixture() {
     index: false,
     own: false,
     apiBase: "",
-    scopeKind: (s: string) => s.split(":")[0],
     shortName: (s: string) => s,
     dirLabel: (s: string) => s,
-    plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`,
-    relTime: () => "just now",
-    fmtTime: () => "Today",
     fmtHistoryTime: () => "Today",
-    fmtBytes: (n: number) => `${n} B`,
-    fileKind: () => "file",
-    fileName: (s: string) => s,
     pageShell: (value: any) => {
       c.shell = value;
     },
@@ -54,25 +47,9 @@ function fixture() {
     reload: () => {},
     invalidate: () => {},
     stateToUrl: (s: any) => "/admin/" + s.view + "?scope=" + s.scope,
-    shortId: (s: string) => s,
-    titleCase: (s: string) => s,
     openScopeRow: () => {},
-    fileSha256: async () => "hash",
-    uploadErrorMessage: (s: string) => s,
-    firstLine: (s: string) => s,
-    cronName: (s: any) => s.title || s.id,
-    shortSchedule: () => "Daily",
-    fmtSchedule: () => "Every day",
-    destinationSummary: () => "None",
-    destinationDetails: () => "",
     setCronEditing: () => {},
     scopeRows: () => [],
-    packRepoLabel: (s: string) => s,
-    buildScopeMultiSelect: (_choices: any, selected: Set<string>, onChange: () => void) => {
-      c.selectedScopes = selected;
-      c.changeScopes = onChange;
-      return dom.window.document.createElement("div");
-    },
   };
   return { dom, root, c, ui: (dom.window as any).artifacts, skills: (dom.window as any).skillUI };
 }
@@ -245,10 +222,11 @@ test("pack selection follows target scopes and supports partial imports", async 
         }
       : { ok: true, data: { imported: [] } };
   };
+  c.scopeRows = () => [{ scopeId: "personal:alice" }];
   await skills.browsePack({ id: "pack", url: "example" }, root, c);
   assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, true);
-  c.selectedScopes.add("personal:alice");
-  c.changeScopes();
+  root.querySelector<HTMLButtonElement>(".scopepick .rowbtn")!.click();
+  root.querySelector<HTMLButtonElement>('.scope-option[title="personal:alice"]')!.click();
   assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, false);
   const b = root.querySelector<HTMLInputElement>('[data-name="b"]')!;
   b.checked = false;
@@ -368,6 +346,7 @@ test("pack registration preserves newer edits after its request completes", asyn
 test("file uploads post through the admin relay with the hash and name in the query", async () => {
   const { dom, c, ui } = fixture();
   c.apiBase = "/api/admin";
+  Object.defineProperty(dom.window, "crypto", { value: globalThis.crypto });
   const sent: Array<{ url: string; init: any }> = [];
   dom.window.fetch = (async (url: string, init: any) => {
     sent.push({ url, init });
@@ -382,6 +361,10 @@ test("file uploads post through the admin relay with the hash and name in the qu
   assert.equal(sent.length, 1);
   const url = new URL(sent[0]!.url, "http://localhost");
   assert.equal(url.pathname, "/api/admin/files/upload");
-  assert.deepEqual(Object.fromEntries(url.searchParams), { scope: "personal:alice", sha: "hash", name: "notes é.txt" });
+  assert.deepEqual(Object.fromEntries(url.searchParams), {
+    scope: "personal:alice",
+    sha: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    name: "notes é.txt",
+  });
   assert.deepEqual({ ...sent[0]!.init.headers }, { "content-type": "text/plain" });
 });

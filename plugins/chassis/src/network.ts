@@ -38,7 +38,13 @@ function normalizedIp(raw: string): string | null {
     .toLowerCase()
     .replace(/^\[(.*)\]$/, "$1")
     .replace(/%.*$/, "");
-  return isIP(value) ? value : null;
+  if (!isIP(value)) return null;
+  const mapped = /^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(value);
+  if (!mapped) return value;
+  if (mapped[1]) return mapped[1];
+  const hi = parseInt(mapped[2]!, 16);
+  const lo = parseInt(mapped[3]!, 16);
+  return [hi >> 8, hi & 255, lo >> 8, lo & 255].join(".");
 }
 
 export function isPrivateNetworkIp(raw: string): boolean {

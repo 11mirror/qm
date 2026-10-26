@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { card, table, renderer, stacked, matches } from "./shared.ts";
+import { fmtTime, scopeKind } from "./format.ts";
 
 export function keychain(root: HTMLElement, d: any, s: Record<string, any>) {
   const paint = renderer(root);
@@ -31,7 +32,7 @@ export function keychain(root: HTMLElement, d: any, s: Record<string, any>) {
       >${text}</span
     >`,
   });
-  const expiry = (ts: number) => (!ts ? "No expiry" : (ts <= Date.now() ? "Expired " : "Expires ") + s.fmtTime(ts));
+  const expiry = (ts: number) => (!ts ? "No expiry" : (ts <= Date.now() ? "Expired " : "Expires ") + fmtTime(ts));
   function draw() {
     paint(
       html`<div class="list-root">
@@ -104,7 +105,7 @@ export function keychain(root: HTMLElement, d: any, s: Record<string, any>) {
                 return [
                   mono(personName(g.ownerId), g.ownerId),
                   mono(credName(g.credentialId), g.credentialId),
-                  mono(g.audienceScopeId, s.scopeKind(g.audienceScopeId)),
+                  mono(g.audienceScopeId, scopeKind(g.audienceScopeId)),
                   muted(g.mode || "unknown"),
                   muted(
                     expired ? "expired" : g.status || "unknown",
@@ -142,7 +143,7 @@ export function keychain(root: HTMLElement, d: any, s: Record<string, any>) {
                 mono(personName(a.ownerId), a.ownerId),
                 mono(personName(a.requesterId), a.requesterId),
                 mono(credName(a.credentialId), a.credentialId),
-                mono(a.requesterScopeId, s.scopeKind(a.requesterScopeId)),
+                mono(a.requesterScopeId, scopeKind(a.requesterScopeId)),
                 muted(a.status || "unknown", a.status === "pending" ? "warn" : ""),
                 { node: stacked(a.purpose || "-", a.expiresAt ? expiry(a.expiresAt) : "") },
               ]),

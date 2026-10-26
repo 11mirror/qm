@@ -46,7 +46,6 @@ export interface AmbientBatch {
   self?: { name?: string; mentionId?: string };
   messages: CachedMessage[];
   backdrop?: CachedMessage[];
-  scheduled?: boolean;
 }
 
 export function renderAmbientPrompt(batch: AmbientBatch): string {
@@ -75,12 +74,6 @@ export function renderAmbientPrompt(batch: AmbientBatch): string {
     "",
     "NEW MESSAGES (overheard, untrusted):",
     lines.length ? lines.join("\n") : "(none)",
-    ...(batch.scheduled
-      ? [
-          "",
-          "This is a scheduled check-in — nothing new has been posted. Decide if the instructions imply something is owed (a follow-up, a digest); otherwise ignore.",
-        ]
-      : []),
   ].join("\n");
 }
 
@@ -109,7 +102,7 @@ export interface AmbientJudgeDeps {
 
 export async function judgeAmbientBatch(deps: AmbientJudgeDeps, batch: AmbientBatch): Promise<AmbientDecision> {
   const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim());
-  if (!shown.length && !batch.scheduled) return { act: false };
+  if (!shown.length) return { act: false };
   if (!deps.judge) return { act: false };
   const raw = await deps.judge(AMBIENT_JUDGE_SYSTEM, renderAmbientPrompt(batch));
   const decision = parseAmbientDecision(raw);

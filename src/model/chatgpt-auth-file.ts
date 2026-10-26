@@ -1,11 +1,10 @@
+import { decodeJwt } from "jose";
 export type JsonObject = Record<string, unknown>;
 
 function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> | undefined {
   if (!jwt) return undefined;
-  const part = jwt.split(".")[1];
-  if (!part) return undefined;
   try {
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return decodeJwt(jwt);
   } catch {
     return undefined;
   }

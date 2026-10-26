@@ -185,6 +185,8 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
     "http://192.168.1.9:8080",
     "http://[fdaa:0:1::3]:8080",
     "http://[::1]:8080",
+    "http://169.254.169.254",
+    "http://[::ffff:10.0.0.1]:8080",
   ]) {
     assert.equal(isPrivateNetworkUrl(url), true, url);
   }
@@ -193,6 +195,7 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
     "https://slack.com",
     "http://172.32.0.1",
     "http://11.0.0.1",
+    "http://[::ffff:8.8.8.8]",
     "http://internal.example.com",
     "http://evil.test/.internal",
     "not-a-url",

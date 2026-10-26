@@ -72,7 +72,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
 });
 
 test("visibleFor includes granted skills, shadowed by scope-owned skills of the same name", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap(), signingSecret: "grant-test" });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const granted = await publishedSkill(store, JOSH, "quickbooks");
   const own = await publishedSkill(store, ERIC, "quickbooks");
   const unique = await publishedSkill(store, JOSH, "reconcile");
@@ -109,7 +109,6 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
   const store = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
-    signingSecret: "self-shadow-test",
   });
   const own = await publishedSkill(store, ERIC, "quickbooks");
 
@@ -136,7 +135,6 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
   };
   const store = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    signingSecret: "snapshot-test",
     backing: counted,
   });
   const orgAlpha = await publishedSkill(store, ORG, "alpha-skill");
@@ -161,7 +159,7 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
 });
 
 test("a grant whose claimed owner scope does not match the skill's home is ignored", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap(), signingSecret: "forge-test" });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const victim = await publishedSkill(store, JOSH, "victim-skill");
 
   const forged = await store.visibleFor([ERIC, ORG], [{ id: victim.id, ownerScopeId: ERIC }]);

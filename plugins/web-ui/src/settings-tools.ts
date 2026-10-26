@@ -33,7 +33,7 @@ function toolRow(tool: ToolManifestEntry): TemplateResult {
           ${tool.reason}${tool.present && tool.actions?.length ? ` Actions: ${tool.actions.join(", ")}.` : ""}
         </div>
       </div>
-      <div class="settings-row-note">${tool.present ? "Available" : "Not available"}</div>
+      <div class="settings-row-note">${tool.present ? "On" : "Off"}</div>
     </div>
   `;
 }

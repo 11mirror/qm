@@ -12,7 +12,6 @@ const SECRETS = {
   CONNECTOR_SECRET_KEY: "connector-supersecret".repeat(2),
   CORE_SIGNING_SECRET: "core-signing-supersecret".repeat(2),
   PORTAL_IDENTITY_SECRET: "portal-identity-supersecret",
-  SKILL_SIGNING_SECRET: "skill-signing-supersecret".repeat(2),
   PLUG_TOKEN: "plugin-supersecret",
   SLACK_BOT_TOKEN: "xoxb-dual-role-supersecret",
   SLACK_APP_TOKEN: "xapp-supersecret",
@@ -238,7 +237,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\n`,
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
@@ -302,7 +301,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nCORE_SIGNING_SECRET=${"a".repeat(32)}\nPORTAL_IDENTITY_SECRET=identity\nSLACK_APP_TOKEN=app\n`,
+        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nCORE_SIGNING_SECRET=${"a".repeat(32)}\nSLACK_APP_TOKEN=app\n`,
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
@@ -311,7 +310,7 @@ test(
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-      await assert.rejects(dockerUp(config, dir, {}), /required secrets have no value.*SKILL_SIGNING_SECRET/s);
+      await assert.rejects(dockerUp(config, dir, {}), /required secrets have no value.*PORTAL_IDENTITY_SECRET/s);
       for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
         const args = JSON.parse(line) as string[];
         assert.notEqual(args[0], "run", "no container may start when a required secret is missing");
@@ -351,7 +350,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\n`,
       );
       fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;

@@ -1,3 +1,4 @@
+import { errMessage } from "../util/errors.ts";
 import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
@@ -204,14 +205,16 @@ export function createGatewayCatalog(
       } catch (error) {
         retryAt = now() + RETRY_MS;
         if (discovered && transientFailure(error) && now() - lastSuccessAt < STALE_MS) {
-          console.warn("[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds");
+          console.warn(
+            `[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds: ${errMessage(error)}`,
+          );
           return;
         }
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
           expiresAt = 0;
           setGatewayModels([]);
-          console.warn("[model] Gateway model discovery unavailable; retrying in 30 seconds");
+          console.warn(`[model] Gateway model discovery unavailable; retrying in 30 seconds: ${errMessage(error)}`);
         }
       }
     })().finally(() => {

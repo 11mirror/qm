@@ -4,8 +4,8 @@ import DOMPurify, { type Config } from "dompurify";
 
 export const MARKDOWN_SANITIZE_CONFIG: Config = {
   USE_PROFILES: { html: true, mathMl: true, svg: true },
-  ADD_TAGS: ["annotation", "semantics"],
-  ADD_ATTR: ["target", "encoding"],
+  ADD_TAGS: ["annotation", "semantics", "code-block"],
+  ADD_ATTR: ["target", "encoding", "language", "code"],
 };
 
 export const SHARED_MARKDOWN_SANITIZE_CONFIG: Config = {
@@ -14,25 +14,14 @@ export const SHARED_MARKDOWN_SANITIZE_CONFIG: Config = {
   FORBID_ATTR: ["href", "xlink:href", "src", "srcset", "poster", "style", "action"],
 };
 
-const SANDBOX_WORKSPACE_LINK = /\shref=(["'])sandbox:\/home\/sprite\/workspace\/([^"']+)\1/gi;
-
-function decodedBasename(path: string): string | null {
-  const encoded = path.split("/").at(-1);
-  if (!encoded) return null;
+export function sandboxFileHref(href: string): string {
+  const encoded = /^sandbox:\/.*\/workspace\/.*?([^/]+)$/i.exec(href)?.[1];
+  if (!encoded) return href;
   try {
-    return decodeURIComponent(encoded);
+    return `/api/files/by-name/content?name=${encodeURIComponent(decodeURIComponent(encoded))}`;
   } catch {
-    return null;
+    return href;
   }
-}
-
-export function rewriteSandboxFileLinks(html: string): string {
-  return html.replace(SANDBOX_WORKSPACE_LINK, (match, quote: string, path: string) => {
-    const name = decodedBasename(path);
-    if (!name) return match;
-    const href = `/api/files/by-name/content?name=${encodeURIComponent(name)}`;
-    return ` href=${quote}${href}${quote}`;
-  });
 }
 
 let installed = false;
@@ -43,15 +32,11 @@ export function installMarkdownSanitizer(options: { shared?: boolean } = {}): vo
   marked.use({
     walkTokens(token) {
       if (token.type === "html") token.text = escapeHtml(token.text);
+      if (token.type === "link") token.href = sandboxFileHref(token.href);
     },
     hooks: {
       postprocess: (html: string) =>
-        String(
-          DOMPurify.sanitize(
-            rewriteSandboxFileLinks(html),
-            options.shared ? SHARED_MARKDOWN_SANITIZE_CONFIG : MARKDOWN_SANITIZE_CONFIG,
-          ),
-        ),
+        String(DOMPurify.sanitize(html, options.shared ? SHARED_MARKDOWN_SANITIZE_CONFIG : MARKDOWN_SANITIZE_CONFIG)),
     },
   });
 }

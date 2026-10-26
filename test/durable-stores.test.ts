@@ -28,21 +28,19 @@ test("crons persist to the backing map (a second store instance reads them back)
   assert.equal(got?.lastFiredAt, 123);
 });
 
-test("skills persist AND verify with a stable signing secret across store instances", async () => {
+test("skills persist across store instances", async () => {
   const map = testMap<Skill>();
-  const secret = "stable-test-secret";
-  const s1 = createSkillStore({ advisoryLock: testAdvisoryLock(), signingSecret: secret, backing: map });
+  const s1 = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: map });
   const sk = await s1.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "digest", description: "make a digest", requiredCapabilities: [], body: "..." },
     createdBy: "U1",
   });
 
-  const s2 = createSkillStore({ advisoryLock: testAdvisoryLock(), signingSecret: secret, backing: map });
+  const s2 = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: map });
   const got = await s2.get(sk.id);
   assert.ok(got, "skill is readable through a second store instance");
   assert.equal(got!.manifest.name, "digest");
-  assert.equal(s2.verify(got!), true);
 });
 
 test("skill mutations reject names that could escape or collide when materialized", async () => {

@@ -3,7 +3,7 @@ import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
-import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
+import type { PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
@@ -36,17 +36,6 @@ const SYSTEM_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "Retraction",
   "Wake",
 ]);
-
-function isGrant(b: unknown): b is Grant {
-  return (
-    isObj(b) &&
-    typeof b.ownerScopeId === "string" &&
-    typeof b.ref === "string" &&
-    typeof b.granteeScopeId === "string" &&
-    (b.permission === "read" || b.permission === "write") &&
-    typeof b.grantedBy === "string"
-  );
-}
 
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
@@ -765,34 +754,6 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 201, { skill: skillView(created) });
 }
 
-async function createGrant(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  if (!isGrant(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a Grant" });
-  try {
-    await app.grant(body);
-    return sendJson(res, 200, { ok: true });
-  } catch (e) {
-    return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
-  }
-}
-
-async function revokeGrant(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const b = body as { ownerScopeId?: string; ref?: string; granteeScopeId?: string; revokedBy?: string };
-  if (!b.ownerScopeId || !b.ref || !b.granteeScopeId || typeof b.revokedBy !== "string" || !b.revokedBy) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ownerScopeId, ref, granteeScopeId, revokedBy required",
-    });
-  }
-  try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
-    return sendJson(res, 200, { ok: true });
-  } catch (e) {
-    return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
-  }
-}
-
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
@@ -986,8 +947,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
   { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
-  { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
-  { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/runtime-config", auth: "source", handle: getRuntimeConfig },
   { method: "PUT", path: "/v1/runtime-config", auth: "source", handle: putRuntimeConfig },

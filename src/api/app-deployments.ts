@@ -23,7 +23,6 @@ export function createDeploymentMethods(
   | "deploymentGrantees"
   | "listDeploymentsForViewer"
   | "effectiveDeploymentPermission"
-  | "deploymentGitPermissionFor"
   | "rollbackDeployment"
   | "canManageDeployment"
   | "archiveDeployment"
@@ -123,10 +122,6 @@ export function createDeploymentMethods(
       return enriched.filter((d): d is ViewerDeployment => d != null);
     },
     effectiveDeploymentPermission,
-    async deploymentGitPermissionFor(idOrName, principalId) {
-      const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
-      return deployment ? principalGitPermission(deployment, principalId) : null;
-    },
     rollbackDeployment: (id, version) => deps.deploy.rollbackDeployment(id, version),
     canManageDeployment: (idOrName, callerId, actingScopeId) =>
       deps.deploy.canManageDeployment(idOrName, callerId, actingScopeId),

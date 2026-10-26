@@ -36,24 +36,17 @@ function redactStructuredDiagnostics(value: string): string {
   }
 }
 
+const SENSITIVE_ASSIGNMENT = String.raw`["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*`;
+
 export function redactSecrets(value: string): string {
   return redactStructuredDiagnostics(value)
+    .replace(new RegExp(`(${SENSITIVE_ASSIGNMENT})\\[[\\s\\S]*?(?:\\]|$)`, "gi"), "$1[redacted]")
+    .replace(new RegExp(`(${SENSITIVE_ASSIGNMENT})\\{[\\s\\S]*$`, "gi"), "$1{redacted}")
     .replace(
-      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\[[\s\S]*?(?:\]|$)/gi,
-      "$1[redacted]",
-    )
-    .replace(
-      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\{[\s\S]*$/gi,
-      "$1{redacted}",
-    )
-    .replace(
-      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)(["'])(?:(?:\\[\s\S])|(?!\2)[\s\S])*(?:\2|$)/gi,
+      new RegExp(`(${SENSITIVE_ASSIGNMENT})(["'])(?:(?:\\\\[\\s\\S])|(?!\\2)[\\s\\S])*(?:\\2|$)`, "gi"),
       "$1$2[redacted]$2",
     )
-    .replace(
-      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?!(?:["']|\[))[^,\r\n}\]]+/gi,
-      "$1[redacted]",
-    )
+    .replace(new RegExp(`(${SENSITIVE_ASSIGNMENT})(?!(?:["']|\\[))[^,\\r\\n}\\]]+`, "gi"), "$1[redacted]")
     .replace(/\b(?:Basic|Digest)\s+\S+/gi, "[redacted]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/\bsk-[A-Za-z0-9._-]{8,}/g, "[redacted]")

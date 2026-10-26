@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { oneShot } from "../src/harness/pi-harness.ts";
+import { complete } from "../src/harness/pi-harness.ts";
 import { resolveModel, modelSupported, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
@@ -152,13 +152,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(modelServiceable("custom/qa/qa-chat", { anthropic: false, openai: false, openrouter: false }), true);
 
     // 6. REAL model call through QM's pi path → fake upstream answers
-    const reply = await oneShot(
-      "qa",
-      model as unknown as Model<Api>,
-      { qa: "sk-qa-good" },
-      "you are terse",
-      "say anything",
-    );
+    const reply = await complete(model as unknown as Model<Api>, { qa: "sk-qa-good" }, "you are terse", "say anything");
     assert.equal(reply, "QA UPSTREAM REPLY");
     const call = seen.find((s) => s.path.endsWith("/chat/completions"));
     assert.ok(call, "completion request reached the upstream");
@@ -229,8 +223,7 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     const model = resolveModel("custom/responses-provider/responses-custom-model");
     assert.ok(model);
     assert.equal(model.api, "openai-responses");
-    const reply = await oneShot(
-      "qa-responses",
+    const reply = await complete(
       model as Model<Api>,
       { "responses-provider": "sk-responses-test" },
       "be terse",
@@ -337,7 +330,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     const model = resolveModel("custom/antcompat/claude-compat");
     assert.ok(model);
     assert.equal((model as { api?: string }).api, "anthropic-messages");
-    const reply = await oneShot("qa-ant", model as unknown as Model<Api>, { antcompat: "sk-ant-qa" }, "terse", "go");
+    const reply = await complete(model as unknown as Model<Api>, { antcompat: "sk-ant-qa" }, "terse", "go");
     assert.equal(reply, "ANTHROPIC QA REPLY");
     const call = seen.find((s) => s.path.endsWith("/v1/messages"));
     assert.ok(call, "messages request reached the anthropic-compatible upstream");
@@ -453,7 +446,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
     assert.equal(model?.provider, "own");
     assert.equal(model?.name, "Claude Opus Mine");
     assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
-    const reply = await oneShot("qa", model as unknown as Model<Api>, { own: "sk-own" }, "you are terse", "hi");
+    const reply = await complete(model as unknown as Model<Api>, { own: "sk-own" }, "you are terse", "hi");
     assert.equal(reply, "OWN KEY REPLY");
     assert.deepEqual(seen, [{ model: "claude-opus-5", auth: "Bearer sk-own" }]);
   } finally {

@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -37,21 +37,10 @@ export function safeSkillFilePath(path: string): string {
   return parts.join("/");
 }
 
-function canonicalFiles(files: SkillFile[] | undefined): Array<[string, string, boolean]> {
-  return [...(files ?? [])]
-    .map((f): [string, string, boolean] => [f.path, f.content, f.executable === true])
-    .sort((a, b) => {
-      if (a[0] < b[0]) return -1;
-      if (a[0] > b[0]) return 1;
-      return 0;
-    });
-}
-
 export interface Skill {
   id: string;
   scopeId: ScopeId;
   manifest: SkillManifest;
-  signature: string;
   status: SkillStatus;
   createdBy: string;
   version: number;
@@ -74,7 +63,6 @@ export interface SkillResolution {
 }
 
 export interface SkillStoreOptions {
-  signingSecret?: string;
   backing: DurableMap<Skill>;
   advisoryLock: AdvisoryLock;
 }
@@ -85,7 +73,6 @@ export interface SkillStore {
   withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
-  verify(skill: Skill): boolean;
   review(id: string, reviewer: string, grantCapabilities: string[]): Promise<Skill>;
   publish(id: string): Promise<Skill>;
   archive(id: string): Promise<Skill>;
@@ -167,22 +154,9 @@ export function visibleSkillRows<T extends SkillSummary>(
 
 export function createSkillStore(opts: SkillStoreOptions): SkillStore {
   const skills = opts.backing;
-  const secret = opts.signingSecret ?? randomUUID();
   const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
-
-  function sign(manifest: SkillManifest): string {
-    const files = canonicalFiles(manifest.files);
-    const canonical = JSON.stringify({
-      name: manifest.name,
-      description: manifest.description,
-      requiredCapabilities: [...manifest.requiredCapabilities].sort(),
-      body: manifest.body,
-      ...(files.length ? { files } : {}),
-    });
-    return createHmac("sha256", secret).update(canonical).digest("hex");
-  }
 
   return {
     withNameLock,
@@ -193,7 +167,6 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         id: randomUUID(),
         scopeId: input.scopeId,
         manifest: input.manifest,
-        signature: sign(input.manifest),
         status: "draft",
         createdBy: input.createdBy,
         version: 1,
@@ -212,7 +185,6 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (!s) throw new Error(`unknown skill: ${id}`);
       if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
       s.manifest = manifest;
-      s.signature = sign(manifest);
       if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
       s.version += 1;
       s.updatedAt = Date.now();
@@ -223,15 +195,10 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     get: (id) => skills.get(id),
     list: () => skills.all(),
 
-    verify(skill) {
-      return sign(skill.manifest) === skill.signature;
-    },
-
     async review(id, reviewer, grantCapabilities) {
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
-      if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
       s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
       if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
       s.status = "reviewed";
@@ -294,7 +261,6 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
-      if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
       const existing = (await skills.all()).find(
         (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
       );
@@ -303,7 +269,6 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         id: existing?.id ?? randomUUID(),
         scopeId: targetScopeId,
         manifest: s.manifest,
-        signature: sign(s.manifest),
         status: "published",
         createdBy: s.createdBy,
         version: (existing?.version ?? 0) + 1,

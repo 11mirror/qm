@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { card, table, badge, renderer, stacked, subline as muted } from "./shared.ts";
+import { fmtTime, labelRole, plural, scopeKind } from "./format.ts";
 
 export async function detail(root: HTMLElement, principal: string, s: Record<string, any>) {
   const paint = renderer(root);
@@ -18,7 +19,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
   s.pageShell({
     back,
     title: d.displayName || d.principalId || principal,
-    context: [d.admin?.isAdmin ? s.labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
+    context: [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
   });
   const personalScope = d.scopeId || "personal:" + principal;
   let [onboarding, busy, hint, resetHint, sort] = [d.onboarding || "not_started", false, "", "", "default"];
@@ -106,7 +107,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
               { node: muted(c.kind || "unknown") },
               { node: muted(c.origin || "-") },
               c.accountLabel || c.envKey || c.host || "-",
-              { text: c.createdAt ? s.fmtTime(c.createdAt) : "-", cls: "num" },
+              { text: c.createdAt ? fmtTime(c.createdAt) : "-", cls: "num" },
             ]),
           "No credentials registered.",
         ),
@@ -138,7 +139,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                       : table(
                           ["When", "Used by", "Scope"],
                           usage.map((e: any) => [
-                            { text: s.fmtTime(e.ts), cls: "num" },
+                            { text: fmtTime(e.ts), cls: "num" },
                             { node: stacked(e.principalId, "") },
                             { node: muted(e.scopeLabel || "-") },
                           ]),
@@ -169,7 +170,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                           >${g.status || "unknown"}</span
                         >`,
                       },
-                      { node: stacked(g.audienceScopeId, s.scopeKind(g.audienceScopeId)), cls: "mono" },
+                      { node: stacked(g.audienceScopeId, scopeKind(g.audienceScopeId)), cls: "mono" },
                       { node: stacked(g.purpose || "-", g.usedBy ? "used by " + g.usedBy : "") },
                       {
                         action: {
@@ -198,7 +199,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
         <div style="margin:0 0 14px">${s.webUiAsButton(d.principalId || principal)}</div>
         <div class="user-resource-links" aria-label="Personal workspace">
           ${[
-            ["history", s.plural(d.stats?.sessions ?? 0, "conversation")],
+            ["history", plural(d.stats?.sessions ?? 0, "conversation")],
             ["files", "Files"],
             ["deployments", "Apps"],
             ["crons", "Crons"],

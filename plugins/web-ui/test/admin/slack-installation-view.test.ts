@@ -19,7 +19,7 @@ async function render(data: Record<string, unknown>) {
     bundle +
       ";window.ui=ui;ui.mountCards();ui.configure({api:async()=>({ok:true,data:" +
       JSON.stringify(data) +
-      '}),orgScope:()=>"org:test",connectorName:x=>x,fmtTime:x=>x});',
+      '}),orgScope:()=>"org:test",connectorName:x=>x});',
   );
   await dom.window.eval("ui.loadSlackInstallation()");
   const result = (id: string) => dom.window.document.getElementById(id) as any;

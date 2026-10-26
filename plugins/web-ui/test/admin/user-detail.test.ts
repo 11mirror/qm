@@ -11,10 +11,6 @@ test("user controls render before credentials and artifacts are scoped links", a
   const pending = f.ui.userDetail.detail(f.root, "alex@example.com", {
     pageShell() {},
     current: () => true,
-    labelRole: () => "member",
-    scopeKind: () => "personal",
-    fmtTime: String,
-    plural: (n: number, noun: string) => `${n} ${noun}s`,
     stateToUrl: ({ view, scope }: any) => `/admin/${view}?scope=${encodeURIComponent(scope)}`,
     webUiAsButton: () => f.document.createElement("button"),
     api: (_method: string, path: string) =>

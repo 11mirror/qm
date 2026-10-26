@@ -7,6 +7,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { states, connectors, installation, emoji, context, type SlackSetting } from "./integrations-state.ts";
 export * from "./integrations-state.ts";
 import { loadScope as loadSettings } from "./integrations-state.ts";
+import { fmtTime } from "./format.ts";
 export function loadScope(data: any, scope: string) {
   loadSettings(data, scope);
   if (states.get("ack-emoji")!.available) void emoji.load();
@@ -355,7 +356,7 @@ function connectorRows() {
             <strong>${context.connectorName(c.provider)}</strong><span class="credential-slug">${c.provider}</span>
           </div>
           <div class="hint">
-            ${c.inherited ? "Configured by deployment secrets" : "client " + (c.clientId || "None") + (c.updatedBy ? " · by " + c.updatedBy : "") + (c.updatedAt ? " · " + context.fmtTime(c.updatedAt) : "")}
+            ${c.inherited ? "Configured by deployment secrets" : "client " + (c.clientId || "None") + (c.updatedBy ? " · by " + c.updatedBy : "") + (c.updatedAt ? " · " + fmtTime(c.updatedAt) : "")}
           </div>
           <div class="credential-badges">
             ${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.inherited || c.hasSecret ? "Secret set" : "Secret missing", c.inherited || c.hasSecret ? "ok" : "err")}

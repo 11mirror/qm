@@ -99,7 +99,7 @@ test("discovered source plugins (absent from config.plugins) get CORE_SIGNING_SE
   assert.deepEqual(runtimeSecretNames("srcplug", signing), [], "not routed without discovery");
   assert.deepEqual(runtimeSecretNames("srcplug", signing, ["srcplug"]), ["CORE_SIGNING_SECRET"]);
   assert.ok(secretsForService(config, "srcplug", ["srcplug"]).some((s) => s.name === "CORE_SIGNING_SECRET"));
-  const other = secretByName(config, "SKILL_SIGNING_SECRET");
+  const other = secretByName(config, "CONNECTOR_SECRET_KEY");
   assert.deepEqual(
     runtimeSecretNames("srcplug", other, ["srcplug"]),
     [],
