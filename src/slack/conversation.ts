@@ -1,4 +1,5 @@
 import { resolveMentions } from "./mrkdwn.ts";
+import type { ConversationTurn, OverheardMessage } from "../types.ts";
 export { resolveMentions } from "./mrkdwn.ts";
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
 import { utcMinute } from "../util/time.ts";
@@ -112,20 +113,6 @@ export interface ConversationView {
   files: ReadonlyArray<{ name: string }>;
   omittedFiles: ReadonlyArray<{ name: string; reason: "too-big" | string }>;
   nameById?: ReadonlyMap<string, string>;
-}
-
-export interface ConversationTurn {
-  role: "user" | "assistant";
-  name?: string;
-  text: string;
-}
-
-export interface OverheardMessage {
-  ts: string;
-  role: "user" | "self";
-  name?: string;
-  text: string;
-  files?: string[];
 }
 
 const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => {

@@ -14,7 +14,7 @@ export function slackLink(url: string | undefined, label: string): string {
 }
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
-export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
+type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
 
 export interface PendingApproval {
   requestId: string;

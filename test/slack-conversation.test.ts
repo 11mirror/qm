@@ -9,10 +9,10 @@ import {
   resolveMentions,
   renderConversationView,
   type ConversationView,
-  type ConversationTurn,
   type RecentMessage,
 } from "../src/slack/conversation.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
+import type { ConversationTurn } from "../src/types.ts";
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
