@@ -28,11 +28,11 @@ function freshApp() {
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {
   const c = testConfigStore("default-org");
-  assert.equal(c.getExternalSlackParticipants(org), false);
-  await c.setExternalSlackParticipants(org, true);
-  assert.equal(c.getExternalSlackParticipants(org), true);
-  await c.setExternalSlackParticipants(org, false);
-  assert.equal(c.getExternalSlackParticipants(org), false);
+  assert.equal(c.setting("externalSlackParticipants", org), false);
+  await c.setSetting("externalSlackParticipants", true, org);
+  assert.equal(c.setting("externalSlackParticipants", org), true);
+  await c.setSetting("externalSlackParticipants", false, org);
+  assert.equal(c.setting("externalSlackParticipants", org), false);
 });
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
@@ -40,11 +40,19 @@ test("external-slack-participants: the durable read sees a flip from another ins
   const a = testConfigStore("default-org", { externalSlackParticipants: store });
   const b = testConfigStore("default-org", { externalSlackParticipants: store });
 
-  await a.setExternalSlackParticipants(org, true);
+  await a.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
 
-  assert.equal(b.getExternalSlackParticipants(org), false, "the sibling's stale read-cache hasn't seen the flip");
-  assert.equal(await b.getExternalSlackParticipantsDurable(org), true, "but the durable read picks it up at once");
+  assert.equal(
+    b.setting("externalSlackParticipants", org),
+    false,
+    "the sibling's stale read-cache hasn't seen the flip",
+  );
+  assert.equal(
+    await b.settingDurable("externalSlackParticipants", org),
+    true,
+    "but the durable read picks it up at once",
+  );
 });
 
 test("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
@@ -56,7 +64,7 @@ test("a Slack channel turn with an external in the audience is refused while the
 
 test("with the toggle on, an internal actor may drive a Slack turn in a room with an external", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await built.config.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
   const res = await built.app.turn(externalChannelTurn("slack"));
   assert.equal(res.status, "ok");
@@ -65,7 +73,7 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
 
 test("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await built.config.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
   const res = await built.app.turn(externalChannelTurn("test"));
   assert.equal(res.status, "refused");
@@ -74,7 +82,7 @@ test("the toggle relaxes only Slack: a non-Slack surface with an external audien
 
 test("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await built.config.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
   const res = await built.app.turn({
     surface: "slack",

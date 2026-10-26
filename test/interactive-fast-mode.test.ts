@@ -9,16 +9,16 @@ test("interactive fast mode defaults off and persists across instances", async (
   const interactiveFastMode = testMap<PersistedScopedFlag>();
   const first = testConfigStore("org", { interactiveFastMode });
   await first.hydrate!();
-  assert.equal(first.getInteractiveFastMode(), false);
-  assert.equal(await first.getInteractiveFastModeDurable(), false);
+  assert.equal(first.setting("interactiveFastMode"), false);
+  assert.equal(await first.settingDurable("interactiveFastMode"), false);
 
-  await first.setInteractiveFastMode(true);
-  assert.equal(first.getInteractiveFastMode(), true);
+  await first.setSetting("interactiveFastMode", true);
+  assert.equal(first.setting("interactiveFastMode"), true);
 
   const second = testConfigStore("org", { interactiveFastMode });
   await second.hydrate!();
-  assert.equal(second.getInteractiveFastMode(), true);
-  assert.equal(await second.getInteractiveFastModeDurable(), true);
+  assert.equal(second.setting("interactiveFastMode"), true);
+  assert.equal(await second.settingDurable("interactiveFastMode"), true);
 });
 
 test("the org default reaches only human turns that expressed no preference", () => {
@@ -36,5 +36,5 @@ test("refreshScope picks up an interactive fast mode change written elsewhere", 
   const org = scopeId("org", "org");
   await interactiveFastMode.put(org, { scopeId: org, on: true });
   await store.refreshScope(org);
-  assert.equal(store.getInteractiveFastMode(), true);
+  assert.equal(store.setting("interactiveFastMode"), true);
 });

@@ -194,10 +194,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         }
       : {}),
     async externalSlackParticipants() {
-      return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
+      return (await deps.config.settingDurable("externalSlackParticipants", orgScope)) === true;
     },
 
-    ackEmojiOverride: () => deps.config.getAckEmojiDurable(orgScope),
+    ackEmojiOverride: () => deps.config.settingDurable("ackEmoji", orgScope),
     publishEmojiCatalog: (emoji) => deps.config.setSlackEmojiCatalog(orgScope, emoji),
 
     async surfaceHeaderFacts(scope) {
@@ -211,7 +211,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       };
     },
 
-    channelHeaderPinEnabled: (scope) => deps.config.getChannelHeaderPinDurable(scope),
+    channelHeaderPinEnabled: (scope) => deps.config.settingDurable("channelHeaderPin", scope),
     onScopeModelChanged(listener) {
       deps.config.onRuntimeSelectionChanged((scope) => listener(scope));
     },

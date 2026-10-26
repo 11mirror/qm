@@ -169,7 +169,7 @@ test("explicit runtime validation rejects a revoked scoped model and unsupported
   const config = testConfigStore("default-org");
   await config.setRuntimeSelection(ORG, { modelId: "claude-sonnet-5" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-6-astra" });
-  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
+  await config.setSetting("webuiModels", ["claude-sonnet-5"], ORG);
   const ctx = { deps: { config } };
   assert.match((await availableRuntimeError(ctx, PERSONAL, { modelId: "gpt-6-astra" }))!, /no longer available/);
   assert.equal(

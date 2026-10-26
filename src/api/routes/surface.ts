@@ -757,9 +757,9 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
-    deps.config.getWebuiModelsDurable(tenant().orgScope),
+    deps.config.settingDurable("webuiModels", tenant().orgScope),
     deps.config.getBaseModelDurable(tenant().orgScope),
-    deps.config.getExternalSlackParticipantsDurable(tenant().orgScope),
+    deps.config.settingDurable("externalSlackParticipants", tenant().orgScope),
     resolveBranding(deps.config, tenant().orgScope, deps.brandingDefault),
   ]);
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
@@ -870,9 +870,9 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   const [on, configured, def] = await Promise.all([
-    ctx.deps.config.getChannelHeaderPinDurable(target.scope),
-    ctx.deps.config.getChannelHeaderPinOverrideDurable(target.scope),
-    ctx.deps.config.getChannelHeaderPinDefaultDurable(),
+    ctx.deps.config.settingDurable("channelHeaderPin", target.scope),
+    ctx.deps.config.settingOwnDurable("channelHeaderPin", target.scope),
+    ctx.deps.config.settingDurable("channelHeaderPin"),
   ]);
   return sendJson(ctx.res, 200, { scopeId: target.scope, on, configured, default: def });
 }
@@ -888,7 +888,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "expected { on: boolean | null } (null reverts to the org default)",
     });
-  await ctx.deps.config.setChannelHeaderPin(target.scope, ctx.body.on);
+  await ctx.deps.config.setSetting("channelHeaderPin", ctx.body.on, target.scope);
   audit(ctx.deps, {
     principalId: target.actorId,
     action: "channel-header-pin.update",
@@ -897,7 +897,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   });
   return sendJson(ctx.res, 200, {
     scopeId: target.scope,
-    on: ctx.body.on ?? (await ctx.deps.config.getChannelHeaderPinDefaultDurable()),
+    on: ctx.body.on ?? (await ctx.deps.config.settingDurable("channelHeaderPin")),
     configured: ctx.body.on,
   });
 }

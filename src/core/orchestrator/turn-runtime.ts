@@ -37,7 +37,7 @@ export async function selectTurnRuntime(
     typeof input.fastMode !== "boolean" &&
     !purposeDefault &&
     humanInput &&
-    (await deps.config?.getInteractiveFastModeDurable());
+    (await deps.config?.settingDurable("interactiveFastMode"));
   const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
   const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
     let userProviderKeys: ProviderKeys | undefined;

@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveBranding, sanitizeBranding } from "../src/resolution/branding.ts";
 import { scopeId } from "../src/types.ts";
+import type { OrgBranding, ScopedConfigStore } from "../src/resolution/config-store.ts";
+
+const brandingStore = (read: () => Promise<OrgBranding | null>) =>
+  ({ settingDurable: read }) as unknown as Pick<ScopedConfigStore, "settingDurable">;
 
 const ORG = scopeId("org", "acme");
 
@@ -38,26 +42,30 @@ test("sanitizeBranding accepts only https mark image urls that cannot break out 
 });
 
 test("resolveBranding prefers the store per field and fills the rest from the default", async () => {
-  const config = { getBrandingDurable: async () => ({ selfLabel: "storebot" }) };
+  const config = brandingStore(async () => ({ selfLabel: "storebot" }));
   assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot", orgName: "Env Org" }), {
     selfLabel: "storebot",
     orgName: "Env Org",
   });
   assert.deepEqual(await resolveBranding(undefined, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
-  assert.deepEqual(await resolveBranding({ getBrandingDurable: async () => null }, ORG), {});
+  assert.deepEqual(
+    await resolveBranding(
+      brandingStore(async () => null),
+      ORG,
+    ),
+    {},
+  );
 });
 
 test("resolveBranding degrades to the default identity when the durable read fails", async () => {
-  const config = {
-    getBrandingDurable: async (): Promise<never> => {
-      throw new Error("postgres hiccup");
-    },
-  };
+  const config = brandingStore(async (): Promise<never> => {
+    throw new Error("postgres hiccup");
+  });
   assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
   assert.deepEqual(await resolveBranding(config, ORG), {});
 });
 
 test("resolveBranding sanitizes stored values that predate write-side sanitization", async () => {
-  const config = { getBrandingDurable: async () => ({ selfLabel: "{{legacy}}", orgName: "Acme <{Corp}>" }) };
+  const config = brandingStore(async () => ({ selfLabel: "{{legacy}}", orgName: "Acme <{Corp}>" }));
   assert.deepEqual(await resolveBranding(config, ORG), { selfLabel: "legacy", orgName: "Acme Corp" });
 });

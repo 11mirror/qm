@@ -880,8 +880,8 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
-  await built.config.setBrowseMaxSteps("org:default-org", 120);
-  await built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
+  await built.config.setSetting("browseMaxSteps", 120, "org:default-org");
+  await built.config.setSetting("browseModel", "claude-sonnet-4-6", "org:default-org");
   const res2 = await app.turn(dm("!run echo steps again"));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
@@ -903,7 +903,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     return realProvision(layers, opts);
   };
 
-  await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
+  await built.config.setSetting("browseModel", "claude-retired-by-pi-ai", "org:acme");
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:stale1" } }));
   assert.equal(res.status, "ok");
   assert.equal(

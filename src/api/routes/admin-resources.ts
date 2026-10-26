@@ -4,7 +4,7 @@ import { parseAckEmoji } from "../../slack/config.ts";
 import type { ConfiguredDeps } from "../deps.ts";
 import type { ConfiguredCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -47,6 +47,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { tenant } from "../../tenant.ts";
+import { SCOPE_SETTINGS, type ScopeSettingName, type ScopeSettingValue } from "../../resolution/config-store.ts";
 import { auditAs, modelKeys } from "./admin/common.ts";
 
 export interface AutoFlaggerDraft {
@@ -122,22 +123,43 @@ const unserviceable = async (deps: ConfiguredDeps, modelId: string): Promise<{ e
     ? null
     : { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
 
-const orgSwitch = (
-  id: string,
-  readKey: string,
-  label: string,
-  scopeLabel: string,
-  get: AdminResource["get"],
-  set: (deps: ConfiguredDeps, scope: string, on: boolean) => Promise<void>,
-): AdminResource => ({
-  id,
-  kind: "boolean",
-  target: "org",
-  label,
-  readKey,
-  get,
-  apply: orgWide(scopeLabel, generic(boolBody, set)),
-});
+type Parsed<V> = { value: V } | { error: string };
+
+/** An admin resource over one per-scope setting: reads and writes go through the store, the target comes from SCOPE_SETTINGS. */
+function settingResource<K extends ScopeSettingName>(
+  name: K,
+  resource: Omit<AdminResource, "get" | "apply" | "target"> & {
+    /** The error for a non-org scope; required when the setting's target is "org". */
+    orgWide?: string;
+    /** Read only at the org scope. */
+    orgRead?: true;
+    parse: (
+      body: unknown,
+      deps: ConfiguredDeps,
+    ) => Parsed<ScopeSettingValue<K> | null> | Promise<Parsed<ScopeSettingValue<K> | null>>;
+  },
+): AdminResource {
+  const { orgWide: scopeLabel, orgRead, parse } = resource;
+  const { target, orgOnly } = SCOPE_SETTINGS[name];
+  const get = (deps: ConfiguredDeps, scope: string) => deps.config.setting(name, orgOnly ? undefined : scope);
+  const apply: AdminResource["apply"] = async (ctx, _actor, scope) => {
+    const parsed = await parse(ctx.body, ctx.deps);
+    if ("error" in parsed) return parsed;
+    await ctx.deps.config.setSetting(name, parsed.value, orgOnly ? undefined : scope);
+    return { ok: true };
+  };
+  // Copy descriptors rather than spreading so a live `get enumValues()` stays live.
+  const { orgWide: _o, orgRead: _r, parse: _p, ...props } = Object.getOwnPropertyDescriptors(resource);
+  return Object.defineProperties(
+    {
+      readKey: name,
+      ...(target === "org" ? { target } : {}),
+      get: orgRead ? orgScopeOnly(get) : get,
+      apply: scopeLabel ? orgWide(scopeLabel, apply) : apply,
+    } as AdminResource,
+    props,
+  );
+}
 
 const orgScopeOnly =
   <T>(get: (deps: ConfiguredDeps, scope: string) => T) =>
@@ -196,27 +218,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         posture === null ? deps.config.clearSharingPosture(scope) : deps.config.setSharingPosture(scope, posture),
     ),
   },
-  {
+  settingResource("autoFlagger", {
     id: "auto-flagger",
     refreshesModels: true,
     kind: "custom",
-    target: "org",
     clearable: true,
     label:
       "The model and classification rubric used to screen external content when the deployment enables model screening.",
-    readKey: "autoFlagger",
-    get: (deps) => deps.config.getAutoFlaggerConfig(),
-    apply: orgWide("the Auto flagger is org-wide", async (ctx) => {
-      let value: AutoFlaggerDraft | null = null;
-      if ((ctx.body as { reset?: unknown }).reset !== true) {
-        const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
-        if ("error" in parsed) return parsed;
-        value = parsed.value;
-      }
-      await ctx.deps.config.setAutoFlaggerConfig(value);
-      return { ok: true };
-    }),
-  },
+    orgWide: "the Auto flagger is org-wide",
+    parse: (body, deps) =>
+      (body as { reset?: unknown }).reset === true
+        ? { value: null }
+        : parseAutoFlaggerDraft(deps, body as Record<string, unknown>),
+  }),
   {
     id: "decisions",
     kind: "custom",
@@ -291,19 +305,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, modes) => deps.config.setApprovalGrantModes(scope, modes),
     ),
   },
-  {
+  settingResource("commandPolicy", {
     id: "command-policy",
     kind: "custom",
-    readKey: "commandPolicy",
-    get: (deps, scope) => deps.config.getCommandPolicy(scope),
-    apply: generic<CommandPolicy>(
-      (body) => {
-        const p = parseCommandPolicy(body);
-        return "error" in p ? { error: p.error } : { value: p.policy };
-      },
-      (deps, scope, policy) => deps.config.setCommandPolicy(scope, policy),
-    ),
-  },
+    parse: (body) => {
+      const p = parseCommandPolicy(body);
+      return "error" in p ? { error: p.error } : { value: p.policy };
+    },
+  }),
   {
     id: "soul",
     kind: "text",
@@ -372,19 +381,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  {
+  settingResource("egress", {
     id: "egress",
     kind: "custom",
-    readKey: "egress",
-    get: (deps, scope) => deps.config.getEgress(scope),
-    apply: generic(
-      (body) => {
-        const parsed = parseEgressPolicy(body);
-        return "error" in parsed ? parsed : { value: parsed.policy };
-      },
-      (deps, scope, v) => deps.config.setEgress(scope, v),
-    ),
-  },
+    parse: (body) => {
+      const parsed = parseEgressPolicy(body);
+      return "error" in parsed ? parsed : { value: parsed.policy };
+    },
+  }),
   {
     id: "feature-flags",
     kind: "custom",
@@ -439,53 +443,52 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  {
-    id: "unfulfilled-insights",
+  settingResource("unfulfilledInsights", { id: "unfulfilled-insights", kind: "boolean", parse: boolBody }),
+  settingResource("externalSlackParticipants", {
+    id: "external-slack-participants",
     kind: "boolean",
-    readKey: "unfulfilledInsights",
-    get: (deps, scope) => deps.config.getUnfulfilledInsights(scope),
-    apply: generic(boolBody, (deps, scope, on) => deps.config.setUnfulfilledInsights(scope, on)),
-  },
-  orgSwitch(
-    "external-slack-participants",
-    "externalSlackParticipants",
-    "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
-    "the external-Slack-participants toggle is org-wide",
-    (deps, scope) => deps.config.getExternalSlackParticipants(scope),
-    (deps, scope, on) => deps.config.setExternalSlackParticipants(scope, on),
-  ),
-  orgSwitch(
-    "channel-header-pin-default",
-    "channelHeaderPinDefault",
-    "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
-    "the channel pinned-header default is org-wide",
-    orgScopeOnly((deps, scope) => deps.config.getChannelHeaderPin(scope)),
-    (deps, scope, on) => deps.config.setChannelHeaderPin(scope, on),
-  ),
-  orgSwitch(
-    "org-ambient",
-    "orgAmbient",
-    "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
-    "the ambient switch here is org-wide",
-    orgScopeOnly((deps) => deps.config.getOrgAmbient()),
-    (deps, _scope, on) => deps.config.setOrgAmbient(on),
-  ),
-  orgSwitch(
-    "interactive-fast-mode",
-    "interactiveFastMode",
-    "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
-    "the interactive fast-mode switch is org-wide",
-    orgScopeOnly((deps) => deps.config.getInteractiveFastMode()),
-    (deps, _scope, on) => deps.config.setInteractiveFastMode(on),
-  ),
-  orgSwitch(
-    "individual-model-auth",
-    "individualModelAuth",
-    "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
-    "the individual-authorization switch is org-wide",
-    orgScopeOnly((deps) => deps.config.getIndividualModelAuth()),
-    (deps, _scope, on) => deps.config.setIndividualModelAuth(on),
-  ),
+    label:
+      "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
+    orgWide: "the external-Slack-participants toggle is org-wide",
+    parse: boolBody,
+  }),
+  settingResource("channelHeaderPin", {
+    id: "channel-header-pin-default",
+    kind: "boolean",
+    readKey: "channelHeaderPinDefault",
+    label:
+      "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
+    orgWide: "the channel pinned-header default is org-wide",
+    orgRead: true,
+    parse: boolBody,
+  }),
+  settingResource("orgAmbient", {
+    id: "org-ambient",
+    kind: "boolean",
+    label:
+      "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
+    orgWide: "the ambient switch here is org-wide",
+    orgRead: true,
+    parse: boolBody,
+  }),
+  settingResource("interactiveFastMode", {
+    id: "interactive-fast-mode",
+    kind: "boolean",
+    label:
+      "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
+    orgWide: "the interactive fast-mode switch is org-wide",
+    orgRead: true,
+    parse: boolBody,
+  }),
+  settingResource("individualModelAuth", {
+    id: "individual-model-auth",
+    kind: "boolean",
+    label:
+      "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
+    orgWide: "the individual-authorization switch is org-wide",
+    orgRead: true,
+    parse: boolBody,
+  }),
   {
     id: "memory-embedding-model",
     refreshesModels: true,
@@ -588,72 +591,54 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   })),
-  {
+  settingResource("webuiModels", {
     id: "webui-models",
     refreshesModels: true,
     kind: "string-list",
-    target: "org",
     clearable: true,
     label:
       "Web UI model picker (ordered list of model ids; the org base model is the default selection, else the first). Empty restores the built-in set.",
-    readKey: "webuiModels",
     get enumValues() {
       return selectableBaseModels();
     },
-    get: (deps, scope) => deps.config.getWebuiModels(scope),
-    apply: orgWide(
-      "the web UI model picker is org-wide",
-      generic<string[] | null>(
-        (body) => {
-          const raw = (body as { ids?: unknown }).ids;
-          if (raw !== undefined && raw !== null && !Array.isArray(raw))
-            return { error: "webui-models requires { ids: string[] } (empty list restores the default picker)" };
-          const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
-          for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
-          const seen = new Set<string>();
-          const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
-          return { value: unique.length ? unique : null };
-        },
-        (deps, scope, ids) => deps.config.setWebuiModels(scope, ids),
-      ),
-    ),
-  },
-  {
+    orgWide: "the web UI model picker is org-wide",
+    parse: (body) => {
+      const raw = (body as { ids?: unknown }).ids;
+      if (raw !== undefined && raw !== null && !Array.isArray(raw))
+        return { error: "webui-models requires { ids: string[] } (empty list restores the default picker)" };
+      const ids = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean) : [];
+      for (const id of ids) if (!resolveModel(id)) return { error: `unknown model id: ${id}` };
+      const seen = new Set<string>();
+      const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+      return { value: unique.length ? unique : null };
+    },
+  }),
+  settingResource("ackEmoji", {
     id: "ack-emoji",
     kind: "string-list",
-    target: "org",
     clearable: true,
     label:
       "Slack ack emoji (names the bot may react with to acknowledge a message). Empty restores the built-in rotation.",
-    readKey: "ackEmoji",
-    get: (deps, scope) => deps.config.getAckEmoji(scope),
-    apply: orgWide(
-      "the ack emoji set is org-wide",
-      generic<string[] | null>(
-        (body) => {
-          const raw = (body as { names?: unknown }).names;
-          if (raw !== undefined && raw !== null && !Array.isArray(raw))
-            return { error: "ack-emoji requires { names: string[] } (empty list restores the default rotation)" };
-          const input = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v : "")).join(",") : "";
-          const names = parseAckEmoji(input);
-          const supplied = Array.isArray(raw) ? raw.filter((v) => typeof v === "string" && v.trim()).length : 0;
-          if (supplied && names.length !== supplied)
-            return { error: "ack-emoji names must be Slack emoji names (lowercase letters, digits, _ + -)" };
-          return { value: names.length ? names : null };
-        },
-        (deps, scope, names) => deps.config.setAckEmoji(scope, names),
-      ),
-    ),
-  },
-  {
+    orgWide: "the ack emoji set is org-wide",
+    parse: (body) => {
+      const raw = (body as { names?: unknown }).names;
+      if (raw !== undefined && raw !== null && !Array.isArray(raw))
+        return { error: "ack-emoji requires { names: string[] } (empty list restores the default rotation)" };
+      const input = Array.isArray(raw) ? raw.map((v) => (typeof v === "string" ? v : "")).join(",") : "";
+      const names = parseAckEmoji(input);
+      const supplied = Array.isArray(raw) ? raw.filter((v) => typeof v === "string" && v.trim()).length : 0;
+      if (supplied && names.length !== supplied)
+        return { error: "ack-emoji names must be Slack emoji names (lowercase letters, digits, _ + -)" };
+      return { value: names.length ? names : null };
+    },
+  }),
+  settingResource("branding", {
     id: "branding",
     kind: "custom",
-    target: "org",
     clearable: true,
-    readKey: "branding",
-    get: (deps, scope) => deps.config.getBranding(scope),
-    apply: orgWide("branding is org-wide", async (ctx, _actor, scope) => {
-      const body = (ctx.body ?? {}) as {
+    orgWide: "branding is org-wide",
+    parse: (input) => {
+      const body = (input ?? {}) as {
         accent?: unknown;
         mark?: unknown;
         markUrl?: unknown;
@@ -665,60 +650,46 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const value = sanitizeBranding(body);
       if (accentInput && !value?.accent) return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
       if (markUrlInput && !value?.markUrl) return { error: "branding mark image must be an https URL" };
-      await ctx.deps.config.setBranding(scope, value ?? null);
-      return { ok: true };
-    }),
-  },
-  {
+      return { value: value ?? null };
+    },
+  }),
+  settingResource("browseModel", {
     id: "browse-model",
     refreshesModels: true,
     kind: "enum",
-    target: "org",
     clearable: true,
     label:
       "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
-    readKey: "browseModel",
     get enumValues() {
       return selectableBaseModels();
     },
-    get: (deps, scope) => deps.config.getBrowseModel(scope),
-    apply: orgWide("the browse model is org-wide", async (ctx, _actor, scope) => {
-      const raw = (ctx.body as { modelId?: unknown }).modelId;
+    orgWide: "the browse model is org-wide",
+    parse: async (body, deps) => {
+      const raw = (body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const unavailable = modelId ? await unserviceable(ctx.deps, modelId) : null;
-      if (unavailable) return unavailable;
-      await ctx.deps.config.setBrowseModel(scope, modelId || null);
-      return { ok: true };
-    }),
-  },
-  {
+      return (modelId ? await unserviceable(deps, modelId) : null) ?? { value: modelId || null };
+    },
+  }),
+  settingResource("browseMaxSteps", {
     id: "browse-max-steps",
     kind: "string",
-    target: "org",
     clearable: true,
     label: "Max browser steps per browse task (empty restores the default of 50).",
-    readKey: "browseMaxSteps",
-    get: (deps, scope) => deps.config.getBrowseMaxSteps(scope),
-    apply: orgWide(
-      "the browse step limit is org-wide",
-      generic<number | null>(
-        (body) => {
-          const raw = (body as { steps?: unknown }).steps;
-          if (raw === undefined || raw === null || raw === "") return { value: null };
-          let steps = NaN;
-          if (typeof raw === "number") steps = raw;
-          else if (typeof raw === "string") steps = Number(raw.trim());
-          if (!Number.isInteger(steps) || steps < 1 || steps > 500)
-            return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
-          return { value: steps };
-        },
-        (deps, scope, steps) => deps.config.setBrowseMaxSteps(scope, steps),
-      ),
-    ),
-  },
+    orgWide: "the browse step limit is org-wide",
+    parse: (body) => {
+      const raw = (body as { steps?: unknown }).steps;
+      if (raw === undefined || raw === null || raw === "") return { value: null };
+      let steps = NaN;
+      if (typeof raw === "number") steps = raw;
+      else if (typeof raw === "string") steps = Number(raw.trim());
+      if (!Number.isInteger(steps) || steps < 1 || steps > 500)
+        return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
+      return { value: steps };
+    },
+  }),
   {
     id: "connectors",
     kind: "custom",

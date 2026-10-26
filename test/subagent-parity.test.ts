@@ -142,7 +142,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const config = testConfigStore("org");
-  await config.setInteractiveFastMode(true);
+  await config.setSetting("interactiveFastMode", true);
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
