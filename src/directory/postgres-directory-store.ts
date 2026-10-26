@@ -14,115 +14,6 @@ import {
 } from "./directory-store.ts";
 import { tenant } from "../tenant.ts";
 
-const INITIAL_SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS directory_members(
-    org_id          TEXT NOT NULL,
-    principal_id    TEXT NOT NULL,
-    display_name    TEXT NOT NULL,
-    display_name_lc TEXT NOT NULL,
-    type            TEXT NOT NULL,
-    slack_id        TEXT,
-    PRIMARY KEY (org_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_members_name
-    ON directory_members (org_id, display_name_lc)`,
-  `CREATE INDEX IF NOT EXISTS directory_members_lower_pid
-    ON directory_members (org_id, lower(principal_id))`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_members' AND column_name = 'slack_id'
-    ) THEN
-      ALTER TABLE directory_members ADD COLUMN slack_id TEXT;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_channels(
-    org_id     TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    name_lc    TEXT NOT NULL,
-    is_private BOOLEAN NOT NULL DEFAULT FALSE,
-    PRIMARY KEY (org_id, channel_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_channels_name
-    ON directory_channels (org_id, name_lc)`,
-  `CREATE INDEX IF NOT EXISTS directory_channels_lower_cid
-    ON directory_channels (org_id, lower(channel_id))`,
-  `CREATE TABLE IF NOT EXISTS directory_channel_members(
-    org_id       TEXT NOT NULL,
-    channel_id   TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    PRIMARY KEY (org_id, channel_id, principal_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS directory_group_members(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    PRIMARY KEY (org_id, group_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_group_members_principal
-    ON directory_group_members (org_id, principal_id, group_id)`,
-  `CREATE TABLE IF NOT EXISTS directory_sync(
-    org_id        TEXT PRIMARY KEY,
-    members_hash  TEXT,
-    channels_hash TEXT,
-    groups_hash   TEXT,
-    channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at    BIGINT NOT NULL
-  )`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_sync' AND column_name = 'groups_hash'
-    ) THEN
-      ALTER TABLE directory_sync ADD COLUMN groups_hash TEXT;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_sync' AND column_name = 'channel_members_synced'
-    ) THEN
-      ALTER TABLE directory_sync ADD COLUMN channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_meta(
-    org_id        TEXT PRIMARY KEY,
-    workspace_url TEXT,
-    updated_at    BIGINT NOT NULL
-  )`,
-];
-
-const EXTERNAL_ROSTER_SCHEMA = [
-  `ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_channels' AND column_name = 'roster_known'
-    ) THEN
-      ALTER TABLE directory_channels ADD COLUMN roster_known BOOLEAN NOT NULL DEFAULT FALSE;
-      UPDATE directory_channels c SET roster_known = TRUE
-      FROM directory_sync s WHERE c.org_id = s.org_id AND s.channel_members_synced = TRUE;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_groups(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
-    PRIMARY KEY (org_id, group_id)
-  )`,
-  `INSERT INTO directory_groups (org_id, group_id, roster_known)
-    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
-    ON CONFLICT (org_id, group_id) DO NOTHING`,
-];
-
-const SYNC_STAMP_SCHEMA = [
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
-];
-
 function memberRow(r: Record<string, unknown>): DirectoryMember {
   return {
     principalId: r.principal_id as string,
@@ -170,26 +61,8 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
   );
 }
 
-export const DIRECTORY_MIGRATIONS = [
-  {
-    id: "directory/store/0001",
-    expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
-    statements: INITIAL_SCHEMA,
-  },
-  { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
-  { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
-  {
-    id: "directory/store/0004",
-    statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
-  },
-  {
-    id: "directory/store/0005",
-    statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
-  },
-];
-
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+  const { q, pool } = createPgPool(connectionString, []);
 
   async function pick<T>(
     query: string,

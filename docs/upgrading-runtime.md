@@ -30,38 +30,17 @@ available until the new revision has passed operational checks.
 
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
-checksums to bypass this check. A previously completed legacy webhook sweep is
-adopted into the checksum ledger without disabling webhooks that an operator has
-subsequently re-enabled.
+checksums to bypass this check.
 
-The cron journal imports existing `cron_fire_log` history into `cron_fires` and
-continues importing writes from older workers during a rolling upgrade. History
-retention also removes expired entries from the legacy table, preventing a later
-restart from importing them again. The legacy table remains available for older
-binaries.
-
-Upgrading from a release that predates the `items` table copies session history
-into `items` during startup migrations, then drops `session_entries`, `session_tape`
-and the old search table. Stop every older core and worker first: they cannot run
-against the new schema. `src/sessions/legacy-history-migrations.ts` keeps those released
-migrations verbatim; delete it once every supported deployment has applied
-`sessions/store/0036-items-cutover`. Upgrading from a release that still writes `session_tape`
-first copies its step metadata into `legacy_tape_steps`, then drops the tape. Stop every
-older core and worker before starting the new release: a tape write after the copy
-starts makes the drop refuse, and that startup fails with the reset to run. The copy
-runs on the direct migration connection without a statement timeout and resumes
-after an interrupted startup. It walks every session at roughly 30 sessions per
-second, so a few thousand sessions take a couple of minutes; above that, run
-`node src/migrate-main.ts` with the release's configuration before starting the
-servers so readiness checks do not time out. Instances that start meanwhile wait for the copy on
-the migration lock.
-
-Sessions created before QM recorded each session's origin get `origin` and `origin_id`
-from their thread reference during startup migrations. The backfill commits 5,000
-sessions at a time, resumes after an interrupted startup, and fills roughly 10,000
-sessions per second; with more than a few hundred thousand such sessions, run
-`node src/migrate-main.ts` with the release's configuration before starting the servers
-so readiness checks do not time out.
+The schema starts from `src/persistence/schema-baseline.sql`, which folds every
+migration released up to qm main 9be16d35 (the list is in
+`src/persistence/schema-baseline.ts`). A new database gets the baseline, then the later
+migrations. An existing database must already have applied every folded migration, as
+any deployment that has booted qm main 9be16d35 or later has: it records
+`baseline/0001` without changing anything and runs only the later migrations. Startup
+refuses an older database and names the migrations it lacks; boot it once on a release
+from 9be16d35 up to the one before the baseline, then upgrade. Startup also refuses a
+database that has QM tables but no `qm_schema_migrations` ledger.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

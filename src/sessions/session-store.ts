@@ -300,16 +300,11 @@ export interface AttributedTurn {
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
-export const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
-export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
-export const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
+const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
 const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
 const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
-export const threadRefCronIdExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
-
-const STABLE_ORIGIN_RE = new RegExp(stableOriginPattern(ORIGIN_ALTERNATION));
-const LEGACY_ORIGIN_RE = new RegExp(legacyOriginPattern(ORIGIN_ALTERNATION));
+const STABLE_ORIGIN_RE = new RegExp(`^agent:main:${ORIGIN_ALTERNATION}:[^:]+$`);
+const LEGACY_ORIGIN_RE = new RegExp(`^${ORIGIN_ALTERNATION}:[^:]+(:.+)?$`);
 const STABLE_CRON_ID_RE = new RegExp(STABLE_CRON_ID_PATTERN);
 const LEGACY_CRON_ID_RE = new RegExp(LEGACY_CRON_ID_PATTERN);
 

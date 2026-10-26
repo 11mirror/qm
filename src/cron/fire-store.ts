@@ -72,80 +72,11 @@ function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
   };
 }
 
-const LEGACY_FIRE_FIELDS = [
-  "source.cron_id",
-  "source.fire_key",
-  "COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id)",
-  "source.json->>'sessionId'",
-  "source.fired_at",
-  "(source.json->>'scheduledAt')::bigint",
-  "COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END)",
-  "source.json->>'status'",
-  "source.json->>'note'",
-  "source.json->>'reply'",
-].join(", ");
-
-const LEGACY_FIRE_UPSERT = `ON CONFLICT (cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
-  WHERE EXCLUDED.fired_at >= cron_fires.fired_at
-    AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
-    AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`;
-
-const LEGACY_FIRE_MAINTENANCE = {
-  id: "cron/fires/import-legacy-history",
-  statements: [
-    `DO $body$ BEGIN
-      IF to_regclass('cron_fire_log') IS NOT NULL THEN
-        LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
-        ${LEGACY_FIRE_UPSERT};
-      END IF;
-    END $body$`,
-    `CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$
-      BEGIN
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
-        ${LEGACY_FIRE_UPSERT};
-        RETURN NEW;
-      END
-    $body$`,
-    `DO $body$ BEGIN
-      IF to_regclass('cron_fire_log') IS NOT NULL THEN
-        DROP TRIGGER IF EXISTS qm_sync_legacy_cron_fire ON cron_fire_log;
-        CREATE TRIGGER qm_sync_legacy_cron_fire AFTER INSERT OR UPDATE ON cron_fire_log
-          FOR EACH ROW EXECUTE FUNCTION qm_sync_legacy_cron_fire();
-      END IF;
-    END $body$`,
-  ],
-};
-
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(
-    connectionString,
-    [
-      {
-        id: "cron/fires/0001",
-        statements: [
-          `CREATE TABLE IF NOT EXISTS cron_fires(
-        cron_id TEXT NOT NULL,
-        fire_key TEXT NOT NULL,
-        thread_ref TEXT NOT NULL,
-        session_id TEXT,
-        fired_at BIGINT NOT NULL,
-        scheduled_at BIGINT,
-        ended_at BIGINT,
-        status TEXT,
-        note TEXT,
-        reply TEXT,
-        PRIMARY KEY (cron_id, fire_key)
-      )`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
-          `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
-        ],
-      },
-    ],
-    [LEGACY_FIRE_MAINTENANCE],
-  );
+  // Drops the trigger function that mirrored the retired cron_fire_log table into cron_fires; nothing writes it now.
+  const { q, query, pool } = createPgPool(connectionString, "cron/fires/0002-drop-legacy-fire-sync", [
+    "DROP FUNCTION IF EXISTS qm_sync_legacy_cron_fire() CASCADE",
+  ]);
 
   return {
     async record(cronId, entry) {

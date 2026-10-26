@@ -7,6 +7,7 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { truncateTables } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
@@ -24,11 +25,7 @@ async function raw(sql: string, params: unknown[] = []): Promise<Record<string, 
 
 before(async () => {
   if (!URL) return;
-  await raw("DROP TABLE IF EXISTS deployment_access CASCADE");
-  await raw("DROP TABLE IF EXISTS deployments CASCADE");
-  await raw(
-    "DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/access/%' OR id LIKE 'durable-map/deployments/%'",
-  ).catch(() => {});
+  await truncateTables(URL, ["deployment_access", "deployments"]);
   await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
 });
 

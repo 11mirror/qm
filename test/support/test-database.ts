@@ -44,8 +44,10 @@ function databaseUrl(name: string): string {
   return url.toString();
 }
 
+// Both clone the runner's migrated template when there is one: building the baseline schema per database costs more
+// than copying it.
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return testMigratedDatabaseUrl();
 }
 
 export function testMigratedDatabaseUrl(): string {
@@ -99,4 +101,19 @@ export function testDeployBackings(
     pg: maps.pool,
     ...backings,
   };
+}
+
+/** Empties the given tables where they exist, so each test starts from the migrated schema with no rows. */
+export async function truncateTables(url: string, tables: readonly string[]): Promise<void> {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: url });
+  try {
+    const { rows } = await pool.query<{ name: string }>(
+      "SELECT name FROM unnest($1::text[]) AS name WHERE to_regclass(name) IS NOT NULL",
+      [tables],
+    );
+    if (rows.length) await pool.query(`TRUNCATE ${rows.map((row) => row.name).join(", ")} CASCADE`);
+  } finally {
+    await pool.end();
+  }
 }

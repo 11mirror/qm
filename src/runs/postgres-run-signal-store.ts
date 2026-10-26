@@ -20,31 +20,7 @@ function toSignals(rows: Rows): RunSignal[] {
 }
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
-  const pg = createPgPool(connectionString, [
-    {
-      id: "runs/signals/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS run_signals(
-        id BIGSERIAL PRIMARY KEY,
-        run_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        text TEXT,
-        payload JSONB,
-        created_at BIGINT NOT NULL,
-        consumed_at BIGINT
-      )`,
-        `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS payload JSONB`,
-        `CREATE INDEX IF NOT EXISTS idx_run_signals_pending ON run_signals(run_id) WHERE consumed_at IS NULL`,
-      ],
-    },
-    {
-      id: "runs/signals/0002",
-      statements: [
-        `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS dedupe_key TEXT`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
-      ],
-    },
-  ]);
+  const pg = createPgPool(connectionString, []);
   const q = pg.query;
 
   const listeners = new Map<string, Set<() => void>>();

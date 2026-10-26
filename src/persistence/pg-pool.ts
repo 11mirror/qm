@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { SCHEMA_BASELINE } from "./schema-baseline.ts";
 import { applyTenancy, TENANT_BYPASS_OPTION } from "./tenancy.ts";
 
 export type { Pool, PoolClient };
@@ -110,8 +111,24 @@ const migrationQueue = createKeyedQueue();
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
-async function applyTenancyIfEnabled(pool: Pool): Promise<void> {
-  if (tenancyEnabled) await applyTenancy(pool);
+const tenantized = new Set<string>();
+
+// Migration ids this process has seen applied, per database, so a store's first use skips the ledger when nothing new
+// was registered since.
+const settledMigrations = new Map<string, Set<string>>();
+
+function markSettled(connectionString: string, migrations: readonly PgMigration[]): void {
+  let settled = settledMigrations.get(connectionString);
+  if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
+  for (const migration of migrations) settled.add(migration.id);
+}
+
+// qm_tenantize() is idempotent, so a store reruns it only when migrations changed the schema or this process has
+// not run it on the database yet.
+async function applyTenancyIfEnabled(pool: Pool, connectionString: string, changed: boolean): Promise<void> {
+  if (!tenancyEnabled || (!changed && tenantized.has(connectionString))) return;
+  await applyTenancy(pool);
+  tenantized.add(connectionString);
 }
 
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
@@ -196,16 +213,10 @@ export interface PgMigrationDefinition {
   id: string;
   statements: readonly string[];
   expectedChecksum?: string;
-  legacyId?: string;
-  prepare?: readonly string[];
 }
 
 export interface PgMigration extends PgMigrationDefinition {
   checksum: string;
-}
-
-export interface PgMaintenanceDefinition extends PgMigrationDefinition {
-  beforeMigrations?: boolean;
 }
 
 export interface PgQueryOptions {
@@ -280,13 +291,7 @@ export function pgMigrationChecksum(statements: readonly string[]): string {
     .digest("hex");
 }
 
-export function definePgMigration(
-  id: string,
-  statements: readonly string[],
-  expectedChecksum?: string,
-  legacyId?: string,
-  prepare: readonly string[] = [],
-): PgMigration {
+export function definePgMigration(id: string, statements: readonly string[], expectedChecksum?: string): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
@@ -298,15 +303,7 @@ export function definePgMigration(
       `pg-pool: migration ${id} source checksum mismatch (expected=${expectedChecksum}, actual=${checksum})`,
     );
   }
-  const preparation = prepare.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
-  for (const statement of preparation) assertOneStatement(statement);
-  return {
-    id,
-    statements: normalized,
-    checksum,
-    ...(legacyId ? { legacyId } : {}),
-    ...(preparation.length ? { prepare: preparation } : {}),
-  };
+  return { id, statements: normalized, checksum };
 }
 
 const SCHEMA_LOCK_POLL_MS = 50;
@@ -321,8 +318,55 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
-export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
-  if (!migrations.length) return;
+// A database with no migration history gets the baseline schema. A database that applied every folded migration adopts
+// the baseline without running it. A database with only some of them, or with QM tables but no history, is refused: its
+// schema is older than this build can upgrade.
+async function applySchemaBaseline(client: PoolClient): Promise<boolean> {
+  const { id, checksum, sql, folded } = SCHEMA_BASELINE;
+  const applied = new Map(
+    (await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)).rows.map(
+      (row) => [row.id, row.checksum],
+    ),
+  );
+  const recorded = applied.get(id);
+  if (recorded !== undefined) {
+    if (recorded !== checksum) {
+      throw new Error(`pg-pool: schema baseline ${id} checksum mismatch (database=${recorded}, source=${checksum})`);
+    }
+    return false;
+  }
+  if (applied.size === 0) {
+    const existing = await client.query<{ present: boolean }>("SELECT to_regclass('sessions') IS NOT NULL AS present");
+    if (existing.rows[0]?.present) {
+      throw new Error(
+        `pg-pool: the database has QM tables but no ${PG_MIGRATIONS_TABLE} history, so its schema version is unknown; QM applies its baseline only to a database without them`,
+      );
+    }
+  } else {
+    const missing = folded.filter((migration) => !applied.has(migration));
+    if (missing.length) {
+      throw new Error(
+        `pg-pool: the database schema predates baseline ${id}: ${missing.length} of the ${folded.length} migrations folded into it never ran (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}). Boot it once on a QM build from before the baseline that has all of them (qm main at ${SCHEMA_BASELINE.release} or later), then this build.`,
+      );
+    }
+  }
+  await client.query("BEGIN");
+  try {
+    if (applied.size === 0) {
+      await client.query("SET LOCAL check_function_bodies = false");
+      await client.query(sql);
+    }
+    await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [id, checksum]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback schema baseline ${id}`, undefined));
+    throw error;
+  }
+  return true;
+}
+
+/** Applies the baseline and any pending migrations; returns how many it applied. */
+export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<number> {
   const client = await pool.connect();
   try {
     await lockSchema(client, "qm:schema-migrations");
@@ -333,33 +377,24 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    let applied = (await applySchemaBaseline(client)) ? 1 : 0;
+    const ledger = new Map(
+      (
+        await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
+      ).rows.map((row) => [row.id, row.checksum]),
+    );
     for (const migration of migrations) {
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
+      const recorded = ledger.get(migration.id);
+      if (recorded !== undefined) {
+        if (recorded !== migration.checksum) {
           throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
+            `pg-pool: migration ${migration.id} checksum mismatch (database=${recorded}, source=${migration.checksum})`,
           );
         }
         continue;
       }
-      if (migration.prepare) {
-        await client.query("SET statement_timeout = 0");
-        try {
-          for (const statement of migration.prepare) await client.query(statement);
-        } catch (error) {
-          await client
-            .query("RESET statement_timeout")
-            .catch(swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined));
-          throw error;
-        }
-        await client.query("RESET statement_timeout");
-      }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
-        if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
+        if (!migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
         }
         for (const statement of migration.statements) {
@@ -392,21 +427,12 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
+        applied++;
         continue;
       }
       await client.query("BEGIN");
       try {
-        let adopted = false;
-        if (migration.legacyId) {
-          const legacyTable = await client.query<{ present: boolean }>(
-            "SELECT to_regclass('schema_migrations') IS NOT NULL AS present",
-          );
-          if (legacyTable.rows[0]?.present) {
-            const legacy = await client.query("SELECT id FROM schema_migrations WHERE id = $1", [migration.legacyId]);
-            adopted = legacy.rows.length > 0;
-          }
-        }
-        if (!adopted) for (const statement of migration.statements) await client.query(statement);
+        for (const statement of migration.statements) await client.query(statement);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
           migration.id,
           migration.checksum,
@@ -416,7 +442,9 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback migration ${migration.id}`, undefined));
         throw error;
       }
+      applied++;
     }
+    return applied;
   } finally {
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
@@ -461,13 +489,12 @@ export function pgCaOptions(): { ssl?: { ca: string } } {
 }
 
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
-const registeredPreMigrationMaintenance = new Map<string, Map<string, PgMigration>>();
 
-function registerPgMigration(connectionString: string, migration: PgMigration, registry = registeredMigrations): void {
-  let database = registry.get(connectionString);
+function registerPgMigration(connectionString: string, migration: PgMigration): void {
+  let database = registeredMigrations.get(connectionString);
   if (!database) {
     database = new Map();
-    registry.set(connectionString, database);
+    registeredMigrations.set(connectionString, database);
   }
   const existing = database.get(migration.id);
   if (existing && existing.checksum !== migration.checksum) {
@@ -478,29 +505,6 @@ function registerPgMigration(connectionString: string, migration: PgMigration, r
 
 export function registeredPgMigrations(connectionString: string): readonly PgMigration[] {
   return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
-}
-
-async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[]): Promise<void> {
-  if (!maintenance.length) return;
-  const client = await pool.connect();
-  try {
-    await lockSchema(client, "qm:schema-maintenance");
-    for (const operation of maintenance) {
-      await client.query("BEGIN");
-      try {
-        for (const statement of operation.statements) await client.query(statement);
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback maintenance ${operation.id}`, undefined));
-        throw error;
-      }
-    }
-  } finally {
-    await client
-      .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
-      .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
-    client.release();
-  }
 }
 
 export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
@@ -515,12 +519,10 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
         new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions(), options: TENANT_BYPASS_OPTION }),
       );
       try {
-        await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
-        await applyPgMigrations(
-          pool,
-          [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
-        );
-        await applyTenancyIfEnabled(pool);
+        const migrations = registeredPgMigrations(databaseUrl);
+        await applyPgMigrations(pool, migrations);
+        markSettled(databaseUrl, migrations);
+        await applyTenancyIfEnabled(pool, databaseUrl, true);
       } finally {
         await pool.end();
       }
@@ -528,51 +530,26 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
+/**
+ * A store passes its migrations (an empty list when the baseline holds its whole schema): before first use the pool
+ * applies the baseline and every migration registered for the database, in one global order. A pool created without
+ * them only queries (under row-level tenancy it migrates too).
+ */
 export function createPgPool(connectionString: string): PgPool;
+export function createPgPool(connectionString: string, migrationId: string, statements: readonly string[]): PgPool;
+export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[]): PgPool;
 export function createPgPool(
   connectionString: string,
-  migrationId: string,
-  statements: readonly string[],
-  maintenance?: readonly PgMaintenanceDefinition[],
-): PgPool;
-export function createPgPool(
-  connectionString: string,
-  definitions: readonly PgMigrationDefinition[],
-  maintenance?: readonly PgMaintenanceDefinition[],
-): PgPool;
-export function createPgPool(
-  connectionString: string,
-  idOrDefinitions: string | readonly PgMigrationDefinition[] = [],
-  statementsOrMaintenance: readonly string[] | readonly PgMaintenanceDefinition[] = [],
-  maintenanceDefinitions: readonly PgMaintenanceDefinition[] = [],
+  idOrDefinitions?: string | readonly PgMigrationDefinition[],
+  statements: readonly string[] = [],
 ): PgPool {
+  const migrates = idOrDefinitions !== undefined;
   const definitions =
-    typeof idOrDefinitions === "string"
-      ? [{ id: idOrDefinitions, statements: statementsOrMaintenance as readonly string[] }]
-      : idOrDefinitions;
+    typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
   const migrations = definitions.map((definition) =>
-    definePgMigration(
-      definition.id,
-      definition.statements,
-      definition.expectedChecksum,
-      definition.legacyId,
-      definition.prepare,
-    ),
+    definePgMigration(definition.id, definition.statements, definition.expectedChecksum),
   );
   for (const migration of migrations) registerPgMigration(connectionString, migration);
-  const maintenanceSource =
-    typeof idOrDefinitions === "string"
-      ? maintenanceDefinitions
-      : (statementsOrMaintenance as readonly PgMaintenanceDefinition[]);
-  const preMigrationMaintenance = maintenanceSource
-    .filter((definition) => definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
-  for (const maintenance of preMigrationMaintenance) {
-    registerPgMigration(connectionString, maintenance, registeredPreMigrationMaintenance);
-  }
-  const postMigrationMaintenance = maintenanceSource
-    .filter((definition) => !definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
@@ -588,14 +565,23 @@ export function createPgPool(
       }
     });
   }
+  // With row-level tenancy every pool migrates first: qm_tenantize() must run on the finished schema.
+  async function settle(): Promise<void> {
+    if (!migrates && !tenancyEnabled) return;
+    await withMigrationPool(async (instance) => {
+      // Read the registry here, after construction finished registering, not when the first query was issued.
+      const migrations = registeredPgMigrations(connectionString);
+      const settled = settledMigrations.get(connectionString);
+      const current = settled && migrations.every((migration) => settled.has(migration.id));
+      if (current && (!tenancyEnabled || tenantized.has(connectionString))) return;
+      const applied = await applyPgMigrations(instance, migrations);
+      markSettled(connectionString, migrations);
+      await applyTenancyIfEnabled(instance, connectionString, applied > 0);
+    });
+  }
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMaintenance(instance, preMigrationMaintenance);
-      await applyPgMigrations(instance, migrations);
-      await applyPgMaintenance(instance, postMigrationMaintenance);
-      await applyTenancyIfEnabled(instance);
-    }).catch((error) => {
+    await (readyP ??= settle().catch((error) => {
       readyP = null;
       throw error;
     }));
@@ -692,31 +678,20 @@ export function createPgPool(
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(
-      definition.id,
-      definition.statements,
-      definition.expectedChecksum,
-      definition.legacyId,
-      definition.prepare,
-    );
+    const migration = definePgMigration(definition.id, definition.statements, definition.expectedChecksum);
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
     await withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, [migration]);
-      await applyTenancyIfEnabled(instance);
+      const applied = await applyPgMigrations(instance, [migration]);
+      markSettled(connectionString, [migration]);
+      await applyTenancyIfEnabled(instance, connectionString, applied > 0);
     });
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(
       connectionString,
-      definePgMigration(
-        definition.id,
-        definition.statements,
-        definition.expectedChecksum,
-        definition.legacyId,
-        definition.prepare,
-      ),
+      definePgMigration(definition.id, definition.statements, definition.expectedChecksum),
     );
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };

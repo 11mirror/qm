@@ -1,17 +1,14 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { truncateTables } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL to run the Postgres rate-limiter test";
 
 beforeEach(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
-  await pool.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await pool.query("DROP TABLE IF EXISTS rate_limit_windows CASCADE");
-  await pool.end();
+  await truncateTables(URL, ["rate_limit_windows"]);
 });
 
 test("Postgres rate limits are shared across instances", { skip }, async () => {

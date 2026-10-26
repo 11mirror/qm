@@ -49,11 +49,3 @@ export async function setTriggerEnabled<T extends TriggerBase>(
 ): Promise<void> {
   await backing.merge(id, { enabled } as Partial<T>);
 }
-
-export const DROP_RECIPIENT_CONSENT_MIGRATION = {
-  id: "durable-map/triggers/0001-drop-recipient-consent",
-  statements: ["crons", "webhooks", "loops"].flatMap((table) => [
-    `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-    `UPDATE ${table} SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'`,
-  ]),
-};

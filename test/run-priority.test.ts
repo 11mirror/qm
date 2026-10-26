@@ -28,8 +28,7 @@ const backends: Array<{ name: string; skip: string | false; make: () => Promise<
     skip: URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres run-priority tests",
     make: async () => {
       const pool = new (await import("pg")).default.Pool({ connectionString: URL });
-      await pool.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
-      await pool.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/%'").catch(() => {});
+      await pool.query("DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN TRUNCATE runs, tool_calls; END IF; END $$");
       await pool.end();
       return createPostgresRunStore(URL!).runs;
     },

@@ -2,16 +2,16 @@ import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.t
 import type { EgressAuditRecord, EgressAuditSink } from "./egress-audit-sink.ts";
 
 const COLUMNS: readonly EventColumn<keyof EgressAuditRecord & string>[] = [
-  ["ts", "ts", "BIGINT", "number", true],
-  ["source", "source", "TEXT", "string", true],
-  ["host", "host", "TEXT", "string", true],
-  ["allowed", "allowed", "BOOLEAN", "boolean", true],
-  ["scope_label", "scopeLabel", "TEXT", "string", true],
-  ["port", "port", "INT", "number"],
-  ["verdict", "verdict", "TEXT", "string"],
-  ["via", "via", "TEXT", "string"],
-  ["peer_ip", "peerIp", "TEXT", "string"],
-  ["principal_id", "principalId", "TEXT", "string"],
+  ["ts", "ts", "number", true],
+  ["source", "source", "string", true],
+  ["host", "host", "string", true],
+  ["allowed", "allowed", "boolean", true],
+  ["scope_label", "scopeLabel", "string", true],
+  ["port", "port", "number"],
+  ["verdict", "verdict", "string"],
+  ["via", "via", "string"],
+  ["peer_ip", "peerIp", "string"],
+  ["principal_id", "principalId", "string"],
 ];
 
 export function createPostgresEgressAuditSink(connectionString: string): EgressAuditSink {
@@ -19,8 +19,6 @@ export function createPostgresEgressAuditSink(connectionString: string): EgressA
     connectionString,
     table: "egress_events",
     columns: COLUMNS,
-
-    schema: { expectedChecksum: "cfbf4ab51c2b0a4ac45eaeeb7a7011d7b2a4a4d9c21072473ed27400b03fe054" },
     defaultLimit: 5000,
     equalityFilters: { scopeId: "scope_label", source: "source" },
     persistErrorMessage: "[egress-audit] failed to persist egress decision:",

@@ -41,31 +41,6 @@ export interface TeamStore {
   apply(change: TeamChange, actorId: string): Promise<void>;
 }
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS teams(
-    team_id          TEXT    PRIMARY KEY,
-    name             TEXT    NOT NULL,
-    isolated_in_open BOOLEAN NOT NULL DEFAULT FALSE,
-    created_by       TEXT    NOT NULL,
-    created_at       BIGINT  NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS team_members(
-    team_id      TEXT   NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-    principal_id TEXT   NOT NULL,
-    role         TEXT   NOT NULL CHECK (role IN ('member', 'admin')),
-    added_by     TEXT   NOT NULL,
-    added_at     BIGINT NOT NULL,
-    PRIMARY KEY (team_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS team_members_principal ON team_members (principal_id)`,
-  `CREATE TABLE IF NOT EXISTS team_rooms(
-    team_id  TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-    scope_id TEXT NOT NULL,
-    PRIMARY KEY (team_id, scope_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS team_rooms_scope ON team_rooms (scope_id)`,
-];
-
 const keysOf = (id: string) => personIds(id).map(foldPrincipalId);
 const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
 
@@ -74,7 +49,7 @@ export function createPostgresTeamStore(
   flags: Pick<FeatureFlagStore, "enabled">,
   orgScope: ScopeId,
 ): TeamStore {
-  const { q, pool } = createPgPool(connectionString, "teams/0001", SCHEMA);
+  const { q, pool } = createPgPool(connectionString, []);
   const enabled = () => flags.enabled("team_scopes", orgScope);
   return {
     async list() {

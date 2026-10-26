@@ -40,21 +40,7 @@ export interface AmbientJudgmentStore {
 const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane: 0 });
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
-  const { q, close } = createPgPool(connectionString, "surface-cache/ambient-judgment/0001", [
-    `CREATE TABLE IF NOT EXISTS ambient_judgments(
-        id BIGSERIAL PRIMARY KEY,
-        org_id TEXT NOT NULL, surface TEXT NOT NULL, container TEXT NOT NULL,
-        decision TEXT NOT NULL, reason TEXT, asked_by TEXT, prompt TEXT, model TEXT,
-        latency_ms INT, ts_from TEXT, ts_to TEXT, created_at BIGINT NOT NULL
-      )`,
-    `ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created
-        ON ambient_judgments(org_id, container, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_created
-        ON ambient_judgments(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision
-        ON ambient_judgments(org_id, decision)`,
-  ]);
+  const { q, close } = createPgPool(connectionString, []);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),
     orgId: r.org_id as string,
