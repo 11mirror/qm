@@ -142,6 +142,7 @@ const sessionPatchTails = new Map<string, Promise<void>>();
 const sessionPatchVersions = new Map<string, number>();
 let sessionPatchGeneration = 0;
 let sessionPatchEpoch = 0;
+const SAVE_FAILED_NOTICE = "Couldn't save that change.";
 
 export function clearSessionSelection(): boolean {
   if (!selection.ids.size && !selection.anchor) return false;
@@ -1445,8 +1446,10 @@ async function bulkPatch(patch: SessionPatch): Promise<void> {
   redrawSelection();
   const patches = ids.map((id) => queueSessionPatch(id, patch));
   const results = await Promise.allSettled(patches);
-  if (sessionPatchGeneration === generation && results.some((r) => r.status === "rejected"))
+  if (sessionPatchGeneration === generation && results.some((r) => r.status === "rejected")) {
+    canvasToast(SAVE_FAILED_NOTICE);
     await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
+  }
   redrawSelection();
 }
 
@@ -1542,7 +1545,9 @@ async function persistSessionPatch(id: string, patch: SessionPatch): Promise<voi
     renderList();
   } catch (e) {
     swallow("web-ui: save session change", e);
-    if (sessionPatchGeneration === generation) await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
+    if (sessionPatchGeneration !== generation) return;
+    canvasToast(SAVE_FAILED_NOTICE);
+    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
   }
 }
 
