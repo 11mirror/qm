@@ -21,8 +21,8 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
-const RELEASE_APPROVED_NOTE = `\n\n${loadProtocolFile("turn-approval-release")}`;
-const OPERATION_APPROVED_NOTE = `\n\n${loadProtocolFile("turn-approval-operation")}`;
+const RELEASE_APPROVED_NOTE = loadProtocolFile("turn-approval-release");
+const OPERATION_APPROVED_NOTE = loadProtocolFile("turn-approval-operation");
 
 type ScreenedOutput = NonNullable<PendingApprovalRecord["screenedOutput"]>;
 
@@ -186,7 +186,7 @@ export function loadApprovalLedger(
 
 export type ApprovalDecisionOutcome =
   | { kind: "settled"; result: TurnResult }
-  | { kind: "approved"; releasedToolOutput?: ScreenedOutput; promptNote: string };
+  | { kind: "approved"; releasedToolOutput?: ScreenedOutput; approvalNote: string };
 
 export async function consumeApprovalDecision(args: {
   deps: Pick<OrchestratorDeps, "approvals" | "approvalGrants" | "auditLog" | "sessions" | "sessionSyscalls">;
@@ -343,7 +343,7 @@ export async function consumeApprovalDecision(args: {
   return {
     kind: "approved",
     ...(released ? { releasedToolOutput: released } : {}),
-    promptNote:
+    approvalNote:
       p.kind === "input" || p.approvalKey?.startsWith("security-screen-release:")
         ? RELEASE_APPROVED_NOTE
         : OPERATION_APPROVED_NOTE,
