@@ -37,6 +37,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
     return;
   }
   if ((req.url ?? "").startsWith("/api/upstream-reset")) return req.socket.destroy();
+  if ((req.url ?? "").startsWith("/api/slow")) {
+    setTimeout(() => res.headersSent || res.end("{}"), 500);
+    return;
+  }
   if ((req.url ?? "").startsWith("/api/upstream-unavailable")) {
     res.writeHead(503, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: "unavailable" }));
@@ -110,8 +114,9 @@ test("an upstream reset mid-response does not crash the portal", async (t) => {
   assert.equal(errors.mock.callCount(), 0);
 });
 
-test("a client abort mid-request-body does not crash the portal", async (t) => {
+test("a client abort mid-request-body does not crash the portal or log an upstream failure", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
+  const warnings = t.mock.method(console, "warn", () => {});
   await new Promise<void>((resolve) => {
     const s = connect(port, "localhost", () => {
       s.write(
@@ -133,6 +138,32 @@ test("a client abort mid-request-body does not crash the portal", async (t) => {
   const alive = await fetch(`${base}/healthz`);
   assert.equal(alive.status, 200);
   assert.equal(errors.mock.callCount(), 0);
+  assert.equal(warnings.mock.callCount(), 0);
+});
+
+test("a browser that leaves before the upstream answers logs no upstream failure", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const warnings = t.mock.method(console, "warn", () => {});
+  const controller = new AbortController();
+  const pending = fetch(`${base}/web-ui/api/slow`, {
+    headers: { cookie: sessionCookie("U1") },
+    signal: controller.signal,
+  }).catch(() => undefined);
+  await new Promise((r) => setTimeout(r, 100));
+  controller.abort();
+  await pending;
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(warnings.mock.callCount(), 0);
+});
+
+test("a real upstream failure logs its cause once", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const warnings = t.mock.method(console, "warn", () => {});
+  const r = await fetch(`${base}/web-ui/api/upstream-reset`, { headers: { cookie: sessionCookie("U1") } });
+  await r.text();
+  assert.equal(r.status, 502);
+  assert.equal(warnings.mock.callCount(), 1);
+  assert.match(format(...warnings.mock.calls[0]!.arguments), /^\[portal\] upstream .* failed: /);
 });
 
 test("completed portal failures log status, method and duration once without request data", async (t) => {
