@@ -788,7 +788,6 @@ export function createKeychain(deps: {
   const oauthSlot = (accountType?: string) => `oauth:${accountType && accountType !== "default" ? accountType : ""}`;
   const oauthId = (host: string, principalId: string, accountType?: string) =>
     credId(principalId, host.toLowerCase(), oauthSlot(accountType));
-  const inflightRefreshes = new Map<string, Promise<string | null>>();
 
   async function putConnectorToken(
     host: string,
@@ -865,6 +864,11 @@ export function createKeychain(deps: {
     });
   }
 
+  const rotatedSince = (current: KeychainCredential, rec: KeychainCredential): boolean =>
+    current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint;
+  const rotatedToken = (current: KeychainCredential): string | null =>
+    oauthExpired(current, now(), oauthSkew) ? null : (tryDecrypt(current, recToOAuthToken)?.accessToken ?? null);
+
   async function refreshAndStore(
     host: string,
     principalId: string,
@@ -872,56 +876,50 @@ export function createKeychain(deps: {
     rec: KeychainCredential,
   ): Promise<string | null> {
     if (!deps.refreshConnector) return null;
-    const stored = tryDecrypt(rec, recToOAuthToken);
-    if (!stored) return null;
-    try {
-      const fresh = await deps.refreshConnector(host, stored, {
-        ...(stored.accountType ? { accountType: stored.accountType } : {}),
-        ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
-      });
-      if (!fresh.accessToken) throw new Error("refresh returned an empty access token");
-      const merged: OAuthToken = {
-        ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
-        ...(stored.accountType ? { accountType: stored.accountType } : {}),
-        ...(stored.orgId ? { orgId: stored.orgId } : {}),
-        ...(stored.idToken ? { idToken: stored.idToken } : {}),
-        ...(stored.accountId ? { accountId: stored.accountId } : {}),
-        ...fresh,
-      };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
-    } catch (e) {
-      const message = storedRefreshError(e);
-      console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
+    const refreshConnector = deps.refreshConnector;
+    return lock.withLock(`keychain-refresh:${rec.id}`, async () => {
+      const latest = await deps.creds.get(rec.id);
+      if (latest && rotatedSince(latest, rec)) return rotatedToken(latest);
+      const stored = tryDecrypt(rec, recToOAuthToken);
+      if (!stored) return null;
       try {
-        await markConnectorRefreshFailure(rec, message);
-      } catch (writeErr) {
-        console.error(
-          `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
-        );
+        const fresh = await refreshConnector(host, stored, {
+          ...(stored.accountType ? { accountType: stored.accountType } : {}),
+          ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
+        });
+        if (!fresh.accessToken) throw new Error("refresh returned an empty access token");
+        const merged: OAuthToken = {
+          ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
+          ...(stored.accountType ? { accountType: stored.accountType } : {}),
+          ...(stored.orgId ? { orgId: stored.orgId } : {}),
+          ...(stored.idToken ? { idToken: stored.idToken } : {}),
+          ...(stored.accountId ? { accountId: stored.accountId } : {}),
+          ...fresh,
+        };
+        const current = await deps.creds.get(rec.id);
+        if (current && rotatedSince(current, rec)) return rotatedToken(current);
+        await putConnectorToken(host, principalId, merged, accountType);
+        return merged.accessToken;
+      } catch (e) {
+        const message = storedRefreshError(e);
+        console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
+        try {
+          await markConnectorRefreshFailure(rec, message);
+        } catch (writeErr) {
+          console.error(
+            `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
+          );
+        }
+        return null;
       }
-      return null;
-    }
+    });
   }
 
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
     if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
-      let pending = inflightRefreshes.get(rec.id);
-      if (!pending) {
-        pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
-        inflightRefreshes.set(rec.id, pending);
-        void pending.finally(() => inflightRefreshes.delete(rec.id));
-      }
-      return pending;
+      return refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
     }
     if (oauthExpired(rec, t, oauthSkew) && !refreshable) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
@@ -1501,7 +1499,6 @@ export function createKeychain(deps: {
       if (!rec) return null;
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
-      // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
       const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
@@ -1611,7 +1608,6 @@ export function renderAskNotice(
 ): string {
   const { ask, credential } = input;
   const who = input.requesterName ? `${input.requesterName} (${ask.requesterId})` : ask.requesterId;
-  // Never surface a raw Slack scope id to a person — describe the place instead.
   let where: string;
   if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
   else if (input.scopeName) where = `**${input.scopeName}**`;
