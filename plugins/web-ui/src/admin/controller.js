@@ -29,75 +29,21 @@ export function startAdmin(host, env) {
   const root = $("app-view");
   const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
   const VIEWS = [...ADMIN_VIEWS];
-  function prepareParityCards() {
-    const content = document.querySelector("#view-governance .governance-content");
-    const providers = document.createElement("section");
-    providers.className = "card sv-models";
-    providers.id = "card-custom-providers";
-    providers.innerHTML =
-      '<div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div>';
-
-    const keychains = document.createElement("section");
-    keychains.className = "card sv-credentials";
-    keychains.id = "card-personal-keychains";
-    keychains.innerHTML =
-      '<div class="head"><h2>Personal keychains</h2></div><div class="body"><div class="keychain-summary"><strong id="keychain-user-count">—</strong> users with keychain entries · <strong id="keychain-standing-count">—</strong> standing grants</div></div><div class="foot"><button type="button" class="viewlink" data-viewlink="users">View users ›</button></div>';
-    $("card-feature-flags").classList.remove("hidden");
-    $("card-slack-installation").classList.add("sv-slack-settings");
-    content.append(
-      $("card-ambient-policy"),
-      $("card-runtimes"),
-      providers,
-      $("card-webui-models"),
-      $("card-soul"),
-      $("card-branding"),
-      $("card-feature-flags"),
-      $("card-decisions"),
-      $("card-service-credentials"),
-      keychains,
-      $("card-security-posture"),
-      $("card-auto-flagger"),
-      $("card-sharing-posture"),
-      governanceUI.createCard("card-governance-org-ambient"),
-      $("card-command-policy"),
-      $("card-egress"),
-      $("card-slack-installation"),
-      $("card-external-slack"),
-      $("card-channel-header-pin-default"),
-      $("card-ack-emoji"),
-    );
-    const connectorView = $("view-connectors");
-    const connectorTip = document.createElement("aside");
-    connectorTip.className = "connector-dm-tip admin-notice hidden";
-    connectorTip.id = "connector-dm-tip";
-    connectorTip.setAttribute("role", "note");
-    connectorTip.appendChild(document.createElement("p"));
-    connectorTip.querySelector("p").textContent =
-      "Tip: the easiest way to change these settings is to ask " +
-      env.productName +
-      " in a DM. It can make the edit for you and confirm what changed.";
-    connectorView.before(connectorTip);
-    const builtIns = document.createElement("section");
-    builtIns.className = "card";
-    builtIns.id = "card-built-in-connectors";
-    builtIns.innerHTML =
-      '<div class="head"><h2>Built-in connectors</h2></div><div class="body" id="built-in-connectors">Loading connectors…</div>';
-    connectorView.appendChild(builtIns);
-    document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
-      link.closest("section.card").querySelector(":scope > .head").appendChild(link);
-    });
-  }
-  prepareParityCards();
+  $("card-feature-flags").classList.remove("hidden");
+  $("connector-dm-tip").firstChild.textContent =
+    "Tip: the easiest way to change these settings is to ask " +
+    env.productName +
+    " in a DM. It can make the edit for you and confirm what changed.";
+  document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
+    link.closest("section.card").querySelector(":scope > .head").appendChild(link);
+  });
   const scAddButton = $("sc-add");
   const scStatusHome = $("st-service-credentials").parentElement;
-  const dialog = document.createElement("dialog");
-  dialog.id = "sc-dialog";
-  dialog.className = "custom-provider-dialog credential-dialog";
-  dialog.setAttribute("aria-labelledby", "sc-dialog-title");
-  dialog.setAttribute("aria-describedby", "sc-dialog-description");
-  dialog.innerHTML =
-    '<div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div>';
-  $("card-service-credentials").appendChild(dialog);
+  $("card-service-credentials").insertAdjacentHTML(
+    "beforeend",
+    '<dialog id="sc-dialog" class="custom-provider-dialog credential-dialog" aria-labelledby="sc-dialog-title" aria-describedby="sc-dialog-description"><div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div></dialog>',
+  );
+  const dialog = $("sc-dialog");
   dialog.insertBefore($("sc-editor"), $("sc-dialog-actions"));
   $("sc-dialog-actions").append($("sc-reset"), $("sc-save"));
   const dismiss = () => {
@@ -109,31 +55,24 @@ export function startAdmin(host, env) {
     dismiss();
   });
   dialog.addEventListener("click", (event) => {
-    const rect = dialog.getBoundingClientRect();
-    if (
-      event.target === dialog &&
-      (event.clientX < rect.left ||
-        event.clientX > rect.right ||
-        event.clientY < rect.top ||
-        event.clientY > rect.bottom)
-    )
-      dismiss();
+    const { left, right, top, bottom } = dialog.getBoundingClientRect();
+    const { clientX: x, clientY: y } = event;
+    if (event.target === dialog && (x < left || x > right || y < top || y > bottom)) dismiss();
   });
   function openScDialog() {
-    const dialog = $("sc-dialog");
     $("sc-dialog-title").textContent = scEditing ? "Edit credential" : "Add credential";
     setStatus("st-service-credentials", "", "");
     $("sc-dialog-actions").prepend($("st-service-credentials"));
     if (!dialog.open) dialog.showModal();
   }
-
+  const fire = (target) =>
+    ["input", "change"].forEach((type) => target.dispatchEvent(new Event(type, { bubbles: true })));
   document.querySelectorAll("[data-choice-for]").forEach((input) => {
     if (input.closest(".sv-governance, .sv-slack-settings, .sv-models, .sv-customize")) return;
     input.onchange = () => {
       const select = $(input.dataset.choiceFor);
       select.value = input.value;
-      select.dispatchEvent(new Event("input", { bubbles: true }));
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(select);
     };
   });
   document.querySelectorAll("[data-checkbox-for]").forEach((input) => {
@@ -141,56 +80,26 @@ export function startAdmin(host, env) {
     input.onchange = () => {
       const checkbox = $(input.dataset.checkboxFor);
       checkbox.checked = input.value === "on";
-      checkbox.dispatchEvent(new Event("input", { bubbles: true }));
-      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(checkbox);
     };
   });
-  const SCOPED = new Set([
-    "governance",
-    "egress",
-    "history",
-    "files",
-    "memory",
-    "audit",
-    "errors",
-    "skills",
-    "crons",
-    "deployments",
-  ]);
-  const ORG_WIDE = new Set([
-    "users",
-    "spend",
-    "keychain",
-    "connectors",
-    "judgments",
-    "ackemoji",
-    "models",
-    "credentials",
-    "customize",
-    "slack-settings",
-  ]);
-  const ENDPOINT = { history: "sessions" };
-  const HISTORY_PAGE_SIZE = 50;
+  const SCOPED = new Set("governance egress history files memory audit errors skills crons deployments".split(" "));
+  const ORG_WIDE = new Set(
+    "users spend keychain connectors judgments ackemoji models credentials customize slack-settings".split(" "),
+  );
   const ERRORS_PAGE_SIZE = 50;
-
-  const TRANSCRIPT_PAGE_SIZE = 500;
   const brandSelfLabel = () => env.productName;
   const DEFAULT_VIEW = "history";
   const orgId = env.org;
   let scope = "org:" + orgId;
   let view = DEFAULT_VIEW;
-
   let page = 1;
   let historyCursor = null;
-
-  const FOCUS_STALE_MS = 60000;
   const viewLoadedAt = {};
   let cronDestinationEditId = null;
   const transcriptVisibility = { thinking: true, toolResults: true };
-
   const API_BASE = env.apiBase;
   const PAGE_BASE = env.pageBase;
-
   async function api(method, path, body) {
     try {
       const res = await fetch(API_BASE + path.replace(/^\/api(?=\/)/, ""), {
@@ -211,7 +120,8 @@ export function startAdmin(host, env) {
       return { ok: false, status: 0, data: { message: "Network request failed." } };
     }
   }
-
+  const scopeUrl = (id, rest = "") => "/api/scopes/" + encodeURIComponent(id) + rest;
+  const viewUrl = (id, name) => scopeUrl(id, "?view=" + encodeURIComponent(name));
   async function openWebUiAs(target) {
     if (!target) return;
     try {
@@ -220,26 +130,21 @@ export function startAdmin(host, env) {
         headers: { accept: "application/json" },
       });
       if (!res.ok) {
-        let msg = "Failed (" + res.status + ")";
         const j = await res.json().catch(() => null);
-        if (j && j.message) msg = j.message;
-        alert("Couldn't start impersonation: " + msg);
-        return;
+        return alert("Couldn't start impersonation: " + ((j && j.message) || "Failed (" + res.status + ")"));
       }
     } catch (e) {
-      alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
-      return;
+      return alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
     }
     window.open("/web-ui/", "_blank", "noopener");
   }
   function webUiAsButton(target) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "link";
-    b.textContent = "Open web UI as this person ↗";
-    b.title = "View the assistant web UI as " + target + " (audited)";
-    b.onclick = () => openWebUiAs(target);
-    return b;
+    const title = "View the assistant web UI as " + target + " (audited)";
+    return el(
+      "button.link",
+      { type: "button", title, onclick: () => openWebUiAs(target) },
+      "Open web UI as this person ↗",
+    );
   }
   const fmtTime = (ts) => new Date(ts).toLocaleString();
   const sameLocalDate = (a, b) =>
@@ -266,24 +171,15 @@ export function startAdmin(host, env) {
       fmtClock(d)
     );
   }
-  const fmtHistoryTime = relTime;
-  function fmtHistoryCreated(createdAt, lastActivity) {
-    if (!createdAt) return "Never";
-    const created = new Date(createdAt);
-    return lastActivity && sameLocalDate(created, new Date(lastActivity))
-      ? fmtClock(created)
-      : fmtHistoryTime(createdAt);
-  }
   const fmtMs = (n) => {
     if (n == null) return "n/a";
-    if (n >= 1000) return (n / 1000).toFixed(2) + " s";
-    return Math.round(n) + " ms";
+    return n >= 1000 ? (n / 1000).toFixed(2) + " s" : Math.round(n) + " ms";
   };
   const fmtPct = (n) => ((n || 0) * 100).toFixed(1) + "%";
   const statusTimers = new Map();
   function setStatus(id, msg, kind, sticky = false) {
     if (id === "st-service-credentials") {
-      governanceUI.settings.credentialStatus(msg, kind || "");
+      settings.credentialStatus(msg, kind || "");
       return;
     }
     const governanceKey = governanceUI.statusKey(id);
@@ -323,15 +219,7 @@ export function startAdmin(host, env) {
     const dialog = $("governance-review");
     $("governance-review-title").textContent = title;
     $("governance-review-subtitle").textContent = subtitle;
-    const list = $("governance-review-facts");
-    list.textContent = "";
-    facts.forEach(([key, value]) => {
-      const term = document.createElement("dt");
-      term.textContent = key;
-      const detail = document.createElement("dd");
-      detail.textContent = value;
-      list.append(term, detail);
-    });
+    $("governance-review-facts").replaceChildren(...facts.flatMap(([key, value]) => [el("dt", key), el("dd", value)]));
     $("governance-review-warning").textContent = warning;
     const confirm = $("governance-review-confirm");
     confirm.textContent = confirmLabel || "";
@@ -349,81 +237,57 @@ export function startAdmin(host, env) {
     event.preventDefault();
     finishGovernanceReview(false);
   });
-  function badge(text, kind) {
-    const s = document.createElement("span");
-    s.className = "badge" + (kind ? " " + kind : "");
-    s.textContent = text;
-    return s;
+  function el(spec, props, ...kids) {
+    const [tag, className] = spec.split(".");
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (props === null || typeof props !== "object") node.textContent = props ?? "";
+    else
+      for (const [key, value] of Object.entries(props)) {
+        if (key === "style") node.style.cssText = value;
+        else if (key in node) node[key] = value;
+        else node.setAttribute(key, value);
+      }
+    node.append(...kids);
+    return node;
   }
+  const pick = (map, key, fallback) => (Object.hasOwn(map, key) ? map[key] : fallback);
+  const settings = governanceUI.settings;
+  const credentialState = settings.credentialState;
+  const badge = (text, kind) => el("span", { className: "badge" + (kind ? " " + kind : ""), textContent: text });
   function deliveryFileBadges(filesPayload) {
     const filesWithNames = (filesPayload || []).filter((f) => f && f.name);
     if (!filesWithNames.length) return null;
-    const files = document.createElement("div");
-    files.className = "badges";
-    for (const f of filesWithNames) {
-      const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
-      if (f.artifactId) {
-        const link = document.createElement("button");
-        link.className = "badge info";
-        link.textContent = label;
-        link.onclick = () =>
-          downloadFile({ id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true });
-        files.appendChild(link);
-      } else {
-        files.appendChild(badge(label, "muted"));
-      }
-    }
-    return files;
-  }
-  function nodeCell(node, cls) {
-    return { node, cls };
+    return el(
+      "div.badges",
+      {},
+      ...filesWithNames.map((f) => {
+        const label = `${f.name}${f.sizeBytes ? " · " + fmtBytes(f.sizeBytes) : ""}`;
+        if (!f.artifactId) return badge(label, "muted");
+        const file = { id: f.artifactId, name: f.name, size: f.sizeBytes, mimetype: f.mimetype, openable: true };
+        return el("button.badge info", { textContent: label, onclick: () => downloadFile(file) });
+      }),
+    );
   }
   function stacked(primary, secondary, cls) {
-    const d = document.createElement("div");
+    const d = el("div", {}, el("div.primaryline", primary));
     if (cls) d.className = cls;
-    const p = document.createElement("div");
-    p.className = "primaryline";
-    p.textContent = primary;
-    d.appendChild(p);
-    if (secondary) {
-      const s = document.createElement("div");
-      s.className = "subline";
-      s.textContent = secondary;
-      d.appendChild(s);
-    }
+    if (secondary) d.appendChild(el("div.subline", secondary));
     return d;
-  }
-  function deploymentHref(dep) {
-    return dep.publicUrl || "";
   }
   const shortId = (id, len = 8) => String(id || "").slice(0, len) || "-";
   const titleCase = (s) =>
     String(s || "")
       .replace(/[_-]/g, " ")
       .replace(/\b\w/g, (m) => m.toUpperCase());
-  function labelRole(role) {
-    return role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " ");
-  }
-  function scopeKind(scopeId) {
-    return String(scopeId || "").split(":")[0] || "scope";
-  }
-  function statusKind(status) {
-    if (status === "done") return "ok";
-    if (status === "failed") return "err";
-    if (status === "running") return "info";
-    if (status === "pending") return "warn";
-    return "muted";
-  }
-  function statusBadge(status) {
-    return badge(titleCase(status || "unknown"), statusKind(status));
-  }
-  function entryIsNoise(e) {
-    return ["tool_call", "tool_result", "soul", "system"].includes(e.type);
-  }
+  const labelRole = (role) => (role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " "));
+  const scopeKind = (scopeId) => String(scopeId || "").split(":")[0] || "scope";
+  const STATUS_KIND = { done: "ok", failed: "err", running: "info", pending: "warn" };
+  const statusBadge = (status) => badge(titleCase(status || "unknown"), pick(STATUS_KIND, status, "muted"));
+  const entryIsNoise = (e) => ["tool_call", "tool_result", "soul", "system"].includes(e.type);
   function fileKind(path) {
     const name = String(path || "");
-    const ext = name.includes(".") ? name.split(".").pop() : "";
-    return ext ? "." + ext.toLowerCase() : "file";
+    return name.includes(".") ? "." + name.split(".").pop().toLowerCase() : "file";
   }
   function fileName(path) {
     return (
@@ -445,15 +309,16 @@ export function startAdmin(host, env) {
       return text.trim() || fallback;
     }
   }
-
   function stateToUrl(st) {
     const p = new URLSearchParams();
+    const withQuery = (path) => {
+      const q = p.toString();
+      return q ? path + "?" + q : path;
+    };
     if ((st.view || DEFAULT_VIEW) === "history") {
       if (st.session) {
         if (st.turn != null) p.set("turn", String(st.turn));
-        const q = p.toString();
-        const path = PAGE_BASE + "/history/s/" + encodeURIComponent(st.session);
-        return q ? path + "?" + q : path;
+        return withQuery(PAGE_BASE + "/history/s/" + encodeURIComponent(st.session));
       }
       const scopeSegment = st.scope && scopeKind(st.scope) !== "org" ? encodeURIComponent(st.scope) : null;
       const scopeInPath = scopeSegment && !/%2F|%5C/i.test(scopeSegment);
@@ -462,13 +327,11 @@ export function startAdmin(host, env) {
       if (st.cron) p.set("cron", st.cron);
       if (st.historyKind && st.historyKind !== "conversation") p.set("kind", st.historyKind);
       if (st.cursor) p.set("cursor", st.cursor);
-      const q = p.toString();
-      const path = scopeInPath ? PAGE_BASE + "/history/scopes/" + scopeSegment : PAGE_BASE + "/history";
-      return q ? path + "?" + q : path;
+      return withQuery(scopeInPath ? PAGE_BASE + "/history/scopes/" + scopeSegment : PAGE_BASE + "/history");
     }
-    if (["connectors", "slack-settings"].includes(st.view) && st.setup === "slack") p.set("setup", "slack");
-    if (["connectors", "slack-settings"].includes(st.view) && ["setup", "install", "connected"].includes(st.slack))
-      p.set("slack", st.slack);
+    const slackSetup = ["connectors", "slack-settings"].includes(st.view);
+    if (slackSetup && st.setup === "slack") p.set("setup", "slack");
+    if (slackSetup && ["setup", "install", "connected"].includes(st.slack)) p.set("slack", st.slack);
     if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
     if (st.view === "errors" && st.page > 1) p.set("page", st.page);
     if (st.principal) p.set("principal", st.principal);
@@ -480,18 +343,10 @@ export function startAdmin(host, env) {
       p.set("from", spendWindow.from);
       p.set("to", spendWindow.to);
     } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
-    if (st.view === "slack" && st.container) p.set("container", st.container);
-    if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
-    if (st.view === "judgments" && st.container) p.set("container", st.container);
-    if (st.view === "judgments" && st.decision) p.set("decision", st.decision);
-    if (st.view === "judgments" && st.jid) p.set("jid", st.jid);
-    if (st.view === "ackemoji" && st.container) p.set("container", st.container);
-    if (st.view === "ackemoji" && st.decision) p.set("decision", st.decision);
-    if (st.view === "ackemoji" && st.jid) p.set("jid", st.jid);
-    const q = p.toString();
-
-    const path = st.view === "general" ? PAGE_BASE : PAGE_BASE + "/" + encodeURIComponent(st.view || DEFAULT_VIEW);
-    return q ? path + "?" + q : path;
+    const logKeys = ["container", "decision", "jid"];
+    const extra = { slack: st.container ? ["container", "ts"] : [], judgments: logKeys, ackemoji: logKeys }[st.view];
+    for (const key of extra || []) if (st[key]) p.set(key, st[key]);
+    return withQuery(st.view === "general" ? PAGE_BASE : PAGE_BASE + "/" + encodeURIComponent(st.view || DEFAULT_VIEW));
   }
   function decodePathSegment(seg) {
     if (!seg) return null;
@@ -503,7 +358,6 @@ export function startAdmin(host, env) {
   }
   function urlToState() {
     const p = new URLSearchParams(location.search);
-
     const rel = location.pathname.startsWith(PAGE_BASE) ? location.pathname.slice(PAGE_BASE.length) : location.pathname;
     const segs = rel.replace(/^\/+/, "").split("/");
     const fromPath = decodePathSegment(segs[0] ?? "");
@@ -515,12 +369,10 @@ export function startAdmin(host, env) {
     }
     const slackStep = ["setup", "install", "connected"].includes(p.get("slack"));
     const raw = p.get("setup") === "slack" || slackStep ? "slack-settings" : p.get("view") || fromPath;
-
     const v = raw === "skill-packs" ? "skills" : raw;
     const session = pathSession || p.get("session") || null;
     const kindRaw = p.get("kind");
     const normalizedHistoryKind = ["conversation", "cron", "background"].includes(kindRaw) ? kindRaw : "conversation";
-
     const turnRaw = p.get("turn");
     let resolvedView = DEFAULT_VIEW;
     if (VIEWS.includes(v)) resolvedView = v;
@@ -536,30 +388,20 @@ export function startAdmin(host, env) {
         (resolvedView === "history" || resolvedView === "errors" ? "org:" + orgId : scope),
       session,
       turn: turnRaw == null || turnRaw === "" ? null : turnRaw,
-      principal: p.get("principal") || null,
-      cron: p.get("cron") || null,
-      own: p.get("own") || null,
-      mem: p.get("mem") || null,
-      range: p.get("range") || null,
-      from: p.get("from") || null,
-      to: p.get("to") || null,
       historyKind: normalizedHistoryKind,
       page: Math.max(1, parseInt(p.get("page"), 10) || 1),
-      cursor: p.get("cursor") || null,
-      container: p.get("container") || null,
-      ts: p.get("ts") || null,
-      decision: p.get("decision") || null,
-      jid: p.get("jid") || null,
+      ...Object.fromEntries(
+        ["principal", "cron", "own", "mem", "range", "from", "to", "cursor", "container", "ts", "decision", "jid"].map(
+          (key) => [key, p.get(key) || null],
+        ),
+      ),
     };
   }
-
   let transcriptObserver = null;
   function render(st) {
     governanceUI.transcript.cancel();
-    if (transcriptObserver) {
-      transcriptObserver.disconnect();
-      transcriptObserver = null;
-    }
+    transcriptObserver?.disconnect();
+    transcriptObserver = null;
     $("header-controls").textContent = "";
     view = st.view;
     scope = st.scope;
@@ -583,7 +425,7 @@ export function startAdmin(host, env) {
     $("view-connectors").classList.toggle("hidden", view !== "connectors");
     $("view-data").classList.toggle(
       "hidden",
-      view === "general" || view === "onboarding" || isGovLike(view) || view === "connectors",
+      ["general", "onboarding", "connectors"].includes(view) || isGovLike(view),
     );
     if (view === "general") return;
     if (view === "onboarding") return void governanceUI.onboarding.load();
@@ -593,24 +435,17 @@ export function startAdmin(host, env) {
     }
     if (view === "connectors") return void governanceUI.integrations.loadConnectors();
     if (view === "user") return void showUserDetail(st.principal);
-    if (view === "slack") return void renderSlackMirror(st);
+    if (view === "slack") return void governanceUI.slackActivity.renderSlackMirror(st);
     if (view === "judgments") return void governanceUI.slackActivity.renderAmbientJudgments(st);
     if (view === "ackemoji") return void governanceUI.slackActivity.renderAckEmojiPicks(st);
-    if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
-    if (view === "history" && st.session) return void showTranscript(st.session);
+    if (view === "history" && st.session && st.turn != null)
+      return void governanceUI.transcript.contextPage(st.session, st.turn, transcriptServices());
+    if (view === "history" && st.session)
+      return void governanceUI.transcript.show(st.session, undefined, undefined, transcriptServices());
     renderData();
   }
-
-  const GOV_LIKE = new Set(["governance", "models", "credentials", "customize", "slack-settings"]);
-  function isGovLike(v) {
-    return GOV_LIKE.has(v);
-  }
-  function hasGovernanceDraft() {
-    return isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
-  }
-  function governanceSaveInFlight() {
-    return isGovLike(view) && !!$("view-governance").querySelector(".status.saving");
-  }
+  const isGovLike = (v) => ["governance", "models", "credentials", "customize", "slack-settings"].includes(v);
+  const hasGovernanceDraft = () => isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
   function governanceScopeName(scopeId = scope) {
     return scopeKind(scopeId) === "org"
       ? "Organization · " + scopeId.split(":").slice(1).join(":")
@@ -625,7 +460,7 @@ export function startAdmin(host, env) {
       ["Current scope", governanceScopeName()],
       ["Destination", VIEW_TITLE[destination] || titleCase(destination)],
     ];
-    if (governanceSaveInFlight()) {
+    if (isGovLike(view) && $("view-governance").querySelector(".status.saving")) {
       void reviewGovernanceChange({
         title: "Governance save in progress",
         subtitle: "Wait for the current save to finish before leaving.",
@@ -645,13 +480,11 @@ export function startAdmin(host, env) {
     });
   }
   function go(st) {
-    const leavingDraft = hasGovernanceDraft() && (st.view !== view || st.scope !== scope);
-    if (!leavingDraft) return commitGo(st);
+    if (!hasGovernanceDraft() || (st.view === view && st.scope === scope)) return commitGo(st);
     void reviewLeave(st.view).then((confirmed) => {
-      if (confirmed) {
-        if (view === "governance") governanceReadyScope = null;
-        commitGo(st);
-      }
+      if (!confirmed) return;
+      if (view === "governance") governanceReadyScope = null;
+      commitGo(st);
     });
   }
   function setView(v) {
@@ -665,14 +498,13 @@ export function startAdmin(host, env) {
   document.querySelectorAll("[data-viewlink]").forEach((button) => {
     button.onclick = () => setView(button.dataset.viewlink);
   });
-  $("add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
-  $("onboarding-add-custom-provider").onclick = () => governanceUI.settings.openProvider(null);
+  $("add-custom-provider").onclick = () => settings.openProvider(null);
+  $("onboarding-add-custom-provider").onclick = () => settings.openProvider(null);
   function route() {
     const st = urlToState();
     if (st.view === "history" && st.session) {
       const list = { ...st, session: null, turn: null };
       history.replaceState(list, "", stateToUrl(list));
-
       if (st.turn != null)
         history.pushState({ ...st, turn: null, deepLink: true }, "", stateToUrl({ ...st, turn: null }));
       history.pushState({ ...st, deepLink: true }, "", stateToUrl(st));
@@ -708,7 +540,6 @@ export function startAdmin(host, env) {
     event.preventDefault();
     event.returnValue = "";
   });
-
   let scopeDir = null;
   let environmentDir = [];
   async function loadScopeDirectory() {
@@ -717,19 +548,13 @@ export function startAdmin(host, env) {
     viewLoadedAt.history = Date.now();
     scopeDir = r.data.scopes || [];
     environmentDir = r.data.environments || [];
-
     if (SCOPED.has(view) && !urlToState().session) {
       const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
-
       if (!(memoryEditor && orgWideView())) defaultShell();
       if (view !== "governance" && !memoryEditor) renderData();
     }
   }
-  function dirLabel(id) {
-    const s = (scopeDir || []).find((x) => x.scopeId === id);
-    return (s && s.label) || "";
-  }
-
+  const dirLabel = (id) => (scopeDir || []).find((x) => x.scopeId === id)?.label || "";
   function shortName(scopeId) {
     if (!scopeId) return "";
     const kind = scopeKind(scopeId);
@@ -746,12 +571,11 @@ export function startAdmin(host, env) {
   }
   function scopeCell(id, extraCls) {
     const lbl = dirLabel(id);
-    return nodeCell(stacked(lbl || id, lbl ? id : ""), "mono" + (extraCls ? " " + extraCls : ""));
+    return { node: stacked(lbl || id, lbl ? id : ""), cls: "mono" + (extraCls ? " " + extraCls : "") };
   }
   const orgWideView = () => scopeKind(scope) === "org";
   function scopeRows() {
     const rows = (scopeDir || []).filter((s) => scopeKind(s.scopeId) !== "org");
-
     if (scopeKind(scope) !== "org" && !rows.some((s) => s.scopeId === scope)) rows.unshift({ scopeId: scope });
     return rows;
   }
@@ -762,124 +586,90 @@ export function startAdmin(host, env) {
       go(next);
     }
   }
-
   function pageShell(opts = {}) {
     const bar = $("shellbar");
     bar.textContent = "";
     const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "memory"].includes(view);
     bar.classList.toggle("logs-shell", logView);
-    const counts = document.createElement("div");
-    counts.className = "log-counts";
+    const counts = el("div.log-counts");
     const countText = (label, value) => {
-      const count = document.createElement("span");
-      count.className = "log-count";
       const number = Number(value);
       const noun = number === 1 ? label.replace(/s$/, "") : label;
-      count.textContent =
-        (Number.isFinite(number) ? number.toLocaleString() : String(value)) + " " + noun.toLowerCase();
-      return count;
+      const amount = Number.isFinite(number) ? number.toLocaleString() : String(value);
+      return el("span.log-count", amount + " " + noun.toLowerCase());
     };
     if (opts.back) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "back";
-      const label = document.createElement("span");
-      label.textContent = opts.back.label.replace(/^←\s*/, "");
-      b.append(backArrow(), label);
-      b.onclick = opts.back.onClick;
-      const row = document.createElement("div");
-      row.className = "shell-back-row";
-      row.appendChild(b);
-      bar.appendChild(row);
+      const back = el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
+      back.append(el("span", opts.back.label.replace(/^←\s*/, "")));
+      bar.appendChild(el("div.shell-back-row", {}, back));
     }
-    if (opts.title) {
-      const h = document.createElement("h2");
-      h.className = "shell-title";
-      h.textContent = opts.title;
-      bar.appendChild(h);
-    }
+    if (opts.title) bar.appendChild(el("h2.shell-title", opts.title));
     if (logView) bar.appendChild(counts);
     if (opts.context) {
-      const c = opts.contextGo ? navLink(opts.context, opts.contextGo) : document.createElement("span");
+      const c = opts.contextGo ? navLink(opts.context, opts.contextGo) : el("span", opts.context);
       c.classList.add("shell-context");
-      if (!opts.contextGo) c.textContent = opts.context;
       bar.appendChild(c);
     }
     if (opts.tabs && opts.tabs.length) {
-      const wrap = document.createElement("div");
-      wrap.className = "shell-tabs" + (view === "judgments" ? " judgment-filters" : "");
-      opts.tabs.forEach((tab) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "shell-tab" + (tab.active ? " active" : "");
-        b.setAttribute("aria-pressed", String(!!tab.active));
-        if (logView) b.textContent = tab.label;
-        else b.textContent = tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString() : tab.label;
-        b.onclick = tab.onClick;
-        wrap.appendChild(b);
-      });
-      if (logView) {
-        const active = opts.tabs.find((tab) => tab.active);
-        if (active?.count != null) {
-          let noun = active.label;
-          if (view === "judgments") noun = "judgments";
-          else if (active.label === "Background") noun = "background runs";
-          counts.appendChild(countText(noun, active.count));
-        }
+      const wrap = el("div.shell-tabs" + (view === "judgments" ? " judgment-filters" : ""));
+      for (const tab of opts.tabs)
+        wrap.appendChild(
+          el("button.shell-tab" + (tab.active ? " active" : ""), {
+            type: "button",
+            "aria-pressed": String(!!tab.active),
+            textContent:
+              logView || tab.count == null ? tab.label : tab.label + " " + Number(tab.count).toLocaleString(),
+            onclick: tab.onClick,
+          }),
+        );
+      const active = opts.tabs.find((tab) => tab.active);
+      if (logView && active?.count != null) {
+        let noun = active.label;
+        if (view === "judgments") noun = "judgments";
+        else if (active.label === "Background") noun = "background runs";
+        counts.appendChild(countText(noun, active.count));
       }
       bar.appendChild(wrap);
     } else if (opts.count != null && opts.count !== "") {
-      const c = document.createElement("span");
-      c.className = "shell-count";
-      c.textContent = String(opts.count);
-      if (logView) {
-        const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
-        counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
-      } else bar.appendChild(c);
+      const c = el("span.shell-count", String(opts.count));
+      const match = String(opts.count).match(/^([\d,.]+\+?)\s*(.*)$/);
+      if (!logView) bar.appendChild(c);
+      else counts.appendChild(match ? countText(match[2] || "records", match[1].replaceAll(",", "")) : c);
     }
-    if (logView && opts.stats?.length) {
-      opts.stats.forEach(([value, label]) => counts.appendChild(countText(label, value)));
-    }
-    const spacer = document.createElement("span");
-    spacer.className = "shell-spacer";
-    bar.appendChild(spacer);
+    if (logView) (opts.stats || []).forEach(([value, label]) => counts.appendChild(countText(label, value)));
+    bar.appendChild(el("span.shell-spacer"));
     if (!logView && opts.stats && opts.stats.length) bar.appendChild(kpis(opts.stats, "shell-stats"));
-    if (opts.search) {
-      bar.appendChild(searchField(opts.search));
-    }
+    if (opts.search) bar.appendChild(searchField(opts.search));
     (opts.actions || []).forEach((n) => bar.appendChild(n));
   }
   function searchField({ placeholder = "Search…", onInput = () => {}, value = "", disabled = false }) {
-    const wrap = document.createElement("div");
-    wrap.className = "shell-search admin-search";
-    const input = document.createElement("input");
-    input.type = "search";
-    input.placeholder = placeholder;
-    input.setAttribute("aria-label", placeholder.replace(/[…]+$/, ""));
+    const input = el("input", {
+      type: "search",
+      placeholder,
+      "aria-label": placeholder.replace(/[…]+$/, ""),
+      autocapitalize: "none",
+      value,
+      disabled,
+      oninput: () => onInput(input.value),
+    });
     input.spellcheck = false;
-    input.setAttribute("autocapitalize", "none");
-    input.value = value;
-    input.disabled = disabled;
-    input.oninput = () => onInput(input.value);
-    wrap.appendChild(input);
-    const icon = document.createElement("span");
-    icon.className = "admin-search-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "icon-button admin-search-clear";
-    clear.setAttribute("aria-label", "Clear search");
-    clear.textContent = "×";
-    clear.disabled = disabled;
-    clear.onclick = () => {
-      input.value = "";
-      onInput("");
-      input.focus();
-    };
-    wrap.append(icon, clear);
-    return wrap;
+    const icon = el("span.admin-search-icon", {
+      "aria-hidden": "true",
+      innerHTML:
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
+    });
+    const clear = el("button.icon-button admin-search-clear", {
+      type: "button",
+      "aria-label": "Clear search",
+      textContent: "×",
+      disabled,
+      onclick: () => {
+        input.value = "";
+        onInput("");
+        input.focus();
+      },
+    });
+    return el("div.shell-search admin-search", {}, input, icon, clear);
   }
   function transcriptEntryHidden(entryTypes, hasDelivery, visibility = transcriptVisibility) {
     return (
@@ -889,86 +679,54 @@ export function startAdmin(host, env) {
         entryTypes.some((type) => type === "tool_call" || type === "tool_result"))
     );
   }
-
-  function navLink(label, target) {
-    const a = document.createElement("a");
-    a.className = "link";
-    a.textContent = label;
-    a.href = stateToUrl(target);
-    a.onclick = (e) => {
+  function linkClick(go) {
+    return (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      go(target);
+      go();
     };
-    return a;
   }
-
+  function navLink(label, target) {
+    return el("a.link", { textContent: label, href: stateToUrl(target), onclick: linkClick(() => go(target)) });
+  }
   function defaultShell(extras = {}) {
     extras = { actions: view === "credentials" ? [scAddButton] : [], ...extras };
     const title = VIEW_TITLE[view] || titleCase(view);
-    if (SCOPED.has(view) && !orgWideView()) {
-      pageShell({
-        back: {
-          label: "← " + title,
-          onClick: () =>
-            go({
-              view,
-              scope: "org:" + orgId,
-              session: null,
-              page: 1,
-              ...(view === "history" ? { historyKind } : {}),
-            }),
-        },
-        title: shortName(scope),
-        ...extras,
-      });
-    } else {
-      pageShell({ title, ...extras });
-    }
+    if (!SCOPED.has(view) || orgWideView()) return pageShell({ title, ...extras });
+    const back = () =>
+      go({ view, scope: "org:" + orgId, session: null, page: 1, ...(view === "history" && { historyKind }) });
+    pageShell({ back: { label: "← " + title, onClick: back }, title: shortName(scope), ...extras });
   }
-
   const orgOwnView = () => orgWideView() && urlToState().own === "1";
   function openScopeRow(scopeId, extra = {}) {
     if (scopeKind(scopeId) === "org") return go({ view, scope: scopeId, own: "1", session: null, page: 1, ...extra });
     selectScope(scopeId);
   }
-
-  const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "slack-settings", "user"]);
   window.addEventListener("focus", () => {
     if (!root.isConnected) return;
-    if (view === "slack-settings") {
-      void governanceUI.integrations.loadSlackInstallation();
-      return;
-    }
-    if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
-    if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
+    if (view === "slack-settings") return void governanceUI.integrations.loadSlackInstallation();
+    if (isGovLike(view) || view === "connectors" || view === "user") return;
+    if (Date.now() - (viewLoadedAt[view] || 0) < 60000) return;
     if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
     if (view === "history" && urlToState().session) return;
-    if (view === "onboarding") {
-      governanceUI.onboarding.load();
-      return;
-    }
-    if (view === "slack") {
-      if (!urlToState().container) renderSlackMirror(urlToState());
-      return;
-    }
-    if (view === "crons" && cronDestinationEditId) return;
+    if (view === "onboarding") return void governanceUI.onboarding.load();
+    if (view === "slack" && !urlToState().container) governanceUI.slackActivity.renderSlackMirror(urlToState());
+    if (view === "slack" || (view === "crons" && cronDestinationEditId)) return;
     renderData();
   });
-
   let loadedGovernanceScope = null;
   let governanceReadyScope = null;
   let loadedCommandPolicyPresent = false;
   let serviceCredDirectory = [];
   let serviceCredChannels = [];
-  governanceUI.settings.configureSoul({
+  settings.configureSoul({
     formatTime: fmtTime,
     restore: async (revision) => {
       const immutable = { ...revision };
       const targetScope = scope;
       const targetGeneration = governanceReq;
-      const draftBefore = JSON.stringify(governanceUI.settings.collect("soul"));
-      const expectedVersion = governanceUI.settings.collect("soul").expectedVersion;
+      const draftBefore = JSON.stringify(settings.collect("soul"));
+      const expectedVersion = settings.collect("soul").expectedVersion;
       const confirmed = await reviewGovernanceChange({
         title: "Restore SOUL version " + immutable.version + "?",
         subtitle: "The saved instructions from this revision will replace the current SOUL.",
@@ -984,7 +742,7 @@ export function startAdmin(host, env) {
       });
       if (!confirmed || scope !== targetScope || governanceReq !== targetGeneration) return;
       setStatus("st-soul", "Restoring…", "saving", true);
-      const r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/soul", {
+      const r = await api("PUT", scopeUrl(targetScope, "/soul"), {
         content: immutable.content,
         expectedVersion,
       });
@@ -1000,15 +758,14 @@ export function startAdmin(host, env) {
           true,
         );
       }
-      const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(targetScope) + "?view=customize");
+      const fresh = await api("GET", viewUrl(targetScope, "customize"));
       if (scope !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
         return setStatus("st-soul", "Restored, but the latest version could not be refreshed.", "warn", true);
-      if (JSON.stringify(governanceUI.settings.collect("soul")) === draftBefore)
-        governanceUI.settings.load(fresh.data, targetScope, "soul");
-      else governanceUI.settings.refreshSoul(fresh.data);
-      sectionSnapshots.set("soul", governanceUI.settings.states.get("soul").baseline);
-      if (!governanceUI.settings.states.get("soul").dirty)
+      if (JSON.stringify(settings.collect("soul")) === draftBefore) settings.load(fresh.data, targetScope, "soul");
+      else settings.refreshSoul(fresh.data);
+      sectionSnapshots.set("soul", settings.states.get("soul").baseline);
+      if (!settings.states.get("soul").dirty)
         setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
     },
   });
@@ -1040,33 +797,17 @@ export function startAdmin(host, env) {
     const scopeChanged = scope !== loadedGovernanceScope;
     if (requestedView === "credentials") {
       serviceCredList = [];
-      governanceUI.settings.credentialLoading();
+      settings.credentialLoading();
       void loadPersonalKeychainSummary(requestId, requestedScope);
     }
-    const r = await api(
-      "GET",
-      "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(requestedView),
-    );
+    const r = await api("GET", viewUrl(scope, requestedView));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
     if (!r.ok) {
-      if (requestedView === "credentials") {
-        governanceUI.settings.credentialLoading(
-          r.status === 403 ? "You don't administer this scope." : "Could not load credentials.",
-          true,
-        );
-      }
-      if (requestedView === "governance" && governanceReadyScope !== requestedScope) {
-        $("governance-loading").textContent =
-          r.status === 403
-            ? "You don't administer this scope."
-            : "Could not load settings. Select Governance to retry.";
-      }
-      setStatus(
-        "st-policy",
-        r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
-        "err",
-      );
-      return;
+      const denied = r.status === 403 ? "You don't administer this scope." : null;
+      if (requestedView === "credentials") settings.credentialLoading(denied || "Could not load credentials.", true);
+      if (requestedView === "governance" && governanceReadyScope !== requestedScope)
+        $("governance-loading").textContent = denied || "Could not load settings. Select Governance to retry.";
+      return setStatus("st-policy", denied || r.data?.message || "Failed to load.", "err");
     }
     if (requestedView === "governance") {
       renderEnvironmentNotice(r.data);
@@ -1076,24 +817,19 @@ export function startAdmin(host, env) {
     }
     if (requestedView === "customize") {
       savedBranding = r.data.branding || {};
-      governanceUI.settings.load(r.data, scope, "soul");
-      governanceUI.settings.load(r.data, scope, "branding");
-      void governanceUI.settings.loadFlags(r.data, scope);
-      governanceUI.settings.loadDecisions(r.data, scope);
+      settings.load(r.data, scope, "soul");
+      settings.load(r.data, scope, "branding");
+      void settings.loadFlags(r.data, scope);
+      settings.loadDecisions(r.data, scope);
     }
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
     const opts = r.data.baseModelOptions || [];
     if (requestedView === "models") {
-      for (const key of [
-        "runtime",
-        "cron-runtime",
-        "subagent-runtime",
-        "fallback-runtime",
-        "webui-models",
-        "memory-embedding-model",
-      ])
-        governanceUI.settings.load(r.data, scope, key);
-      void governanceUI.settings.loadProviders();
+      for (const key of "runtime cron-runtime subagent-runtime fallback-runtime webui-models memory-embedding-model".split(
+        " ",
+      ))
+        settings.load(r.data, scope, key);
+      void settings.loadProviders();
     }
     if (requestedView === "credentials") {
       loadServiceCredDirectory(r.data);
@@ -1110,55 +846,42 @@ export function startAdmin(host, env) {
     initCustomDropdowns($("view-governance"));
     captureGovernanceSnapshots();
     if (r.data.modelCatalogRefreshing) {
-      void api(
-        "GET",
-        "/api/scopes/" +
-          encodeURIComponent(requestedScope) +
-          "?view=" +
-          encodeURIComponent(requestedView) +
-          "&catalog=refresh",
-      )
+      void api("GET", viewUrl(requestedScope, requestedView) + "&catalog=refresh")
         .then((fresh) => {
           if (!fresh.ok || requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
-          const append = (target, incoming) => {
-            for (const model of incoming || []) {
-              const existing = target.findIndex((candidate) => candidate.id === model.id);
-              if (existing < 0) target.push(model);
-              else target[existing] = model;
-            }
-          };
-          append(opts, fresh.data.baseModelOptions);
+          for (const model of fresh.data.baseModelOptions || []) {
+            const existing = opts.findIndex((candidate) => candidate.id === model.id);
+            if (existing < 0) opts.push(model);
+            else opts[existing] = model;
+          }
           if (requestedView === "governance") governanceUI.updateCatalog(fresh.data);
-          governanceUI.settings.updateCatalog(r.data);
+          settings.updateCatalog(r.data);
           initCustomDropdowns($("view-governance"));
         })
         .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
     }
   }
   async function refreshSoulConflict() {
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view));
+    const fresh = await api("GET", viewUrl(scope, view));
     if (!fresh.ok) return false;
-    governanceUI.settings.refreshSoul(fresh.data);
-    sectionSnapshots.set("soul", governanceUI.settings.states.get("soul").baseline);
+    settings.refreshSoul(fresh.data);
+    sectionSnapshots.set("soul", settings.states.get("soul").baseline);
     return true;
   }
   async function refreshServiceCredentialConflict() {
     const requestedScope = scope;
     const requestedView = view;
     const requestId = ++governanceReq;
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view));
+    const fresh = await api("GET", viewUrl(scope, view));
     if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view || !fresh.ok) return false;
     loadServiceCredDirectory(fresh.data);
     const credentials = fresh.data.serviceCredentials || [];
     const refreshedEditing = credentials.find((credential) => credential.slug === scEditing);
-    if (refreshedEditing) {
-      scEditVersion = refreshedEditing.updatedAt;
-      governanceUI.settings.credentialState.version = scEditVersion;
-    }
+    if (refreshedEditing) credentialState.version = refreshedEditing.updatedAt;
     renderServiceCreds(credentials);
     void loadServiceCredentialUsage(requestedScope, requestId);
-    governanceUI.settings.credentialState.render();
-    governanceUI.settings.credentialState.changed();
+    credentialState.render();
+    credentialState.changed();
     return refreshedEditing ? "present" : "missing";
   }
   function loadServiceCredDirectory(data) {
@@ -1171,24 +894,22 @@ export function startAdmin(host, env) {
     );
   }
   let savedBranding = {};
-  governanceUI.settings.configureDecisions({
-    save: (targetScope, body) => api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/decisions", body),
+  settings.configureDecisions({
+    save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/decisions"), body),
   });
-  governanceUI.settings.configureFlags({
+  settings.configureFlags({
     buildSelector: buildScopeMultiSelect,
     loadChoices: async () => {
       if (!scopeDir) await loadScopeDirectory();
       return (scopeDir || []).map((row) => ({ scopeId: row.scopeId, label: row.label || row.scopeId }));
     },
-    save: (targetScope, body) => api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/feature-flags", body),
+    save: (targetScope, body) => api("PUT", scopeUrl(targetScope, "/feature-flags"), body),
   });
-
   let scEditing = null;
-  let scEditVersion = null;
   let serviceCredList = [];
   async function loadServiceCredentialUsage(requestedScope, requestId) {
     if (!serviceCredList.length) return;
-    const result = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "/credential-usage");
+    const result = await api("GET", scopeUrl(requestedScope, "/credential-usage"));
     if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
     const summaries = new Map((result.data?.summaries || []).map((summary) => [summary.slug, summary]));
     renderServiceCreds(
@@ -1199,7 +920,7 @@ export function startAdmin(host, env) {
       })),
     );
   }
-  governanceUI.settings.configureCredentials({
+  settings.configureCredentials({
     label: serviceCredentialPrincipalLabel,
     formatTime: fmtTime,
     edit: loadScForm,
@@ -1208,12 +929,11 @@ export function startAdmin(host, env) {
   });
   function renderServiceCreds(list) {
     serviceCredList = list;
-    governanceUI.settings.loadCredentials(list, serviceCredDirectory, serviceCredChannels, scopeDir || [], scope);
+    settings.loadCredentials(list, serviceCredDirectory, serviceCredChannels, scopeDir || [], scope);
   }
   function loadScForm(c) {
-    scEditing = c.slug;
-    scEditVersion = c.updatedAt;
-    governanceUI.settings.credentialState.begin(c);
+    if (c) scEditing = c.slug;
+    credentialState.begin(c);
     openScDialog();
     $("sc-name").focus();
   }
@@ -1223,8 +943,7 @@ export function startAdmin(host, env) {
     if (wasOpen) dialog.close();
     scStatusHome.appendChild($("st-service-credentials"));
     scEditing = null;
-    scEditVersion = null;
-    governanceUI.settings.credentialState.reset();
+    credentialState.reset();
     if (wasOpen) scAddButton.focus();
   }
   function serviceCredentialPrincipalLabel(grantee) {
@@ -1270,7 +989,7 @@ export function startAdmin(host, env) {
       danger: true,
     });
     if (!confirmed || targetScope !== scope) return;
-    const r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/service-credentials", {
+    const r = await api("PUT", scopeUrl(targetScope, "/service-credentials"), {
       slug: c.slug,
       delete: true,
       expectedUpdatedAt: c.updatedAt,
@@ -1279,136 +998,109 @@ export function startAdmin(host, env) {
     if (r.ok) {
       resetScForm();
       await loadScope();
-      setStatus("st-service-credentials", "Deleted", "ok");
-    } else {
-      const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-      let message = r.data?.message || "Delete failed.";
-      if (r.status === 409) {
-        message = conflictState
-          ? "Credential changed; the latest state is shown. Review it before deleting."
-          : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
-      }
-      setStatus("st-service-credentials", message, "err");
+      return setStatus("st-service-credentials", "Deleted", "ok");
     }
+    const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
+    let message = r.data?.message || "Delete failed.";
+    if (r.status === 409 && conflictState)
+      message = "Credential changed; the latest state is shown. Review it before deleting.";
+    else if (r.status === 409)
+      message = "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
+    setStatus("st-service-credentials", message, "err");
   }
   scAddButton.onclick = () => {
     resetScForm();
-    governanceUI.settings.credentialState.begin(null);
-    openScDialog();
-    $("sc-name").focus();
+    loadScForm(null);
   };
   $("sc-reset").onclick = () => {
     if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
   };
   $("sc-save").onclick = async () => {
-    const body = governanceUI.settings.credentialState.collect();
-    const targetScope = scope;
-    const invalid = governanceUI.settings.credentialState.validate(body);
-    if (invalid) {
-      setStatus("st-service-credentials", invalid, "err");
-      return;
-    }
-    $("sc-save").disabled = true;
-    setStatus("st-service-credentials", "Saving...", "saving", true);
-    let r;
-    try {
-      r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/service-credentials", body);
-    } catch {
-      if (targetScope !== scope) return;
-      governanceUI.settings.credentialState.changed();
-      setStatus(
-        "st-service-credentials",
+    const status = (message, kind, sticky) => setStatus("st-service-credentials", message, kind, sticky);
+    const unreachable = () => {
+      credentialState.changed();
+      status(
         "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
         "err",
         true,
       );
+    };
+    const body = credentialState.collect();
+    const targetScope = scope;
+    const invalid = credentialState.validate(body);
+    if (invalid) return status(invalid, "err");
+    $("sc-save").disabled = true;
+    status("Saving...", "saving", true);
+    let r;
+    try {
+      r = await api("PUT", scopeUrl(targetScope, "/service-credentials"), body);
+    } catch {
+      if (targetScope === scope) unreachable();
       return;
     }
     if (scope !== targetScope) return;
     if (r.ok) {
       await loadScope();
       if (scope !== targetScope) return;
-      governanceUI.settings.credentialState.commit(body);
-      if (!governanceUI.settings.credentialState.dirty) resetScForm();
-      setStatus("st-service-credentials", "Saved", "ok");
-    } else {
-      let conflictState;
-      try {
-        conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-      } catch {
-        governanceUI.settings.credentialState.changed();
-        setStatus(
-          "st-service-credentials",
-          "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
-          "err",
-          true,
-        );
-        return;
-      }
-      governanceUI.settings.credentialState.changed();
-      let message = r.data?.message || "Save failed.";
-      if (r.status === 403) {
-        message = "Not authorized for this scope.";
-      } else if (r.status === 409) {
-        if (conflictState === "missing") {
-          message =
-            "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
-        } else if (conflictState === "present") {
-          message = "Credential changed; latest revision loaded and your draft was preserved.";
-        } else {
-          message =
-            "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
-        }
-      }
-      setStatus("st-service-credentials", message, "err");
+      credentialState.commit(body);
+      if (!credentialState.dirty) resetScForm();
+      return status("Saved", "ok");
     }
+    let conflictState;
+    try {
+      conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
+    } catch {
+      return unreachable();
+    }
+    credentialState.changed();
+    let message = r.data?.message || "Save failed.";
+    if (r.status === 403) message = "Not authorized for this scope.";
+    else if (r.status === 409 && conflictState === "missing")
+      message =
+        "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
+    else if (r.status === 409 && conflictState === "present")
+      message = "Credential changed; latest revision loaded and your draft was preserved.";
+    else if (r.status === 409)
+      message =
+        "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
+    status(message, "err");
   };
-
   governanceUI.onboarding.configure({
     api,
     orgScope: () => orgScope(),
     connectorName: (id) => connectorName(id),
     view: () => view,
-    loadCustomProviders: () => governanceUI.settings.loadProviders(),
+    loadCustomProviders: () => settings.loadProviders(),
     loaded: () => {
       viewLoadedAt.onboarding = Date.now();
     },
     navigate: (target) => openOnboardingTarget(target),
   });
-
-  governanceUI.settings.configureProviders({
+  settings.configureProviders({
     api,
     refresh: async () => {
-      await governanceUI.settings.loadProviders();
+      await settings.loadProviders();
       if (view !== "models") return;
       const requestedScope = scope;
       const requestedGeneration = governanceReq;
-      const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=models");
+      const fresh = await api("GET", viewUrl(requestedScope, "models"));
       if (fresh.ok && scope === requestedScope && view === "models" && governanceReq === requestedGeneration)
-        governanceUI.settings.updateCatalog(fresh.data);
+        settings.updateCatalog(fresh.data);
     },
   });
   async function loadPersonalKeychainSummary(requestId, requestedScope) {
-    governanceUI.settings.keychainSummary(null);
+    settings.keychainSummary(null);
     const res = await api("GET", "/api/keychain?summary=1");
     if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
-    governanceUI.settings.keychainSummary(res.ok ? res.data : null);
+    settings.keychainSummary(res.ok ? res.data : null);
   }
   function openOnboardingTarget(target) {
     setView(target === "slack" ? "slack-settings" : "connectors");
-    setTimeout(
-      () =>
-        $(target === "slack" ? "card-slack-installation" : "card-connectors")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        }),
-      100,
-    );
+    const card = target === "slack" ? "card-slack-installation" : "card-connectors";
+    setTimeout(() => $(card)?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
   }
-
   const connectorName = (id) => (id === "x" ? "X" : id.charAt(0).toUpperCase() + id.slice(1));
   const orgScope = () => "org:" + orgId;
-
   governanceUI.integrations.configure({ api, orgScope, connectorName, fmtTime });
   governanceUI.integrations.mountBuiltIns();
   $("policy-test-open").onclick = () => {
@@ -1419,57 +1111,32 @@ export function startAdmin(host, env) {
   async function simulatePolicy() {
     const command = $("policy-sample").value;
     const result = $("policy-result");
-    if (!command.trim()) {
-      result.dataset.tone = "";
-      result.textContent = "Enter a sample command first.";
-      return;
-    }
+    const show = (tone, text) => {
+      result.dataset.tone = tone;
+      result.textContent = text;
+    };
+    if (!command.trim()) return show("", "Enter a sample command first.");
     let policy;
     try {
       policy = governanceUI.collect("command-policy");
     } catch (err) {
-      result.dataset.tone = "danger";
-      result.textContent = err instanceof Error ? err.message : "Policy is invalid.";
-      return;
+      return show("danger", err instanceof Error ? err.message : "Policy is invalid.");
     }
     $("policy-simulate").disabled = true;
-    result.dataset.tone = "";
-    result.textContent = "Evaluating with the server’s command scanner…";
+    show("", "Evaluating with the server’s command scanner…");
     const simulateBody = { command };
     if (loadedCommandPolicyPresent || $("card-command-policy").classList.contains("dirty"))
       simulateBody.policy = policy;
-    const response = await api(
-      "PUT",
-      "/api/scopes/" + encodeURIComponent(scope) + "/command-policy-simulate",
-      simulateBody,
-    );
+    const response = await api("PUT", scopeUrl(scope, "/command-policy-simulate"), simulateBody);
     $("policy-simulate").disabled = false;
-    if (!response.ok) {
-      result.dataset.tone = "danger";
-      result.textContent = response.data?.message || "Simulation failed.";
-      return;
-    }
-    const decision = response.data.decision;
-    let tone = "warn";
-    if (decision === "allow") tone = "ok";
-    else if (decision === "deny") tone = "danger";
-    result.dataset.tone = tone;
-    let ruleLabel = null;
-    if (response.data.ruleSource === "organization") {
-      ruleLabel = "Organization rule " + (response.data.ruleIndex + 1);
-    } else if (response.data.ruleSource === "scope") {
-      ruleLabel = "This scope’s rule " + (response.data.ruleIndex + 1);
-    }
-    result.textContent = ruleLabel
-      ? ruleLabel +
-        " matches" +
-        (response.data.matched ? " “" + response.data.matched + "”" : "") +
-        " → " +
-        (EFFECT_LABELS[decision] || decision) +
-        (response.data.reason ? " · " + response.data.reason : "")
-      : "No scope-policy rule matches → " +
-        (EFFECT_LABELS[decision] || decision) +
-        (response.data.reason ? " · " + response.data.reason : "");
+    if (!response.ok) return show("danger", response.data?.message || "Simulation failed.");
+    const { decision, ruleSource, ruleIndex, matched, reason } = response.data;
+    let rule = "No scope-policy rule matches";
+    if (ruleSource === "organization") rule = "Organization rule " + (ruleIndex + 1) + " matches";
+    else if (ruleSource === "scope") rule = "This scope’s rule " + (ruleIndex + 1) + " matches";
+    if (matched && (ruleSource === "organization" || ruleSource === "scope")) rule += " “" + matched + "”";
+    const outcome = " → " + (EFFECT_LABELS[decision] || decision) + (reason ? " · " + reason : "");
+    show(pick({ allow: "ok", deny: "danger" }, decision, "warn"), rule + outcome);
   }
   $("policy-simulate").onclick = simulatePolicy;
   $("policy-sample").addEventListener("keydown", (e) => {
@@ -1507,17 +1174,21 @@ export function startAdmin(host, env) {
     });
   }
   function governanceSaveReview(key, body) {
-    if (key === "security-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "auto";
-      const dangerous = body.posture === "dangerous";
-      return reviewGovernanceChange({
-        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
-        subtitle: "Review the immutable change below before it is applied.",
+    const before = () => JSON.parse(sectionSnapshots.get(key) || "{}");
+    const review = (current, proposed, options) =>
+      reviewGovernanceChange({
         facts: [
           ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
+          ["Current", current],
+          ["Proposed", proposed],
         ],
+        ...options,
+      });
+    if (key === "security-posture") {
+      const dangerous = body.posture === "dangerous";
+      return review(titleCase(before().posture || "auto"), titleCase(body.posture), {
+        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
+        subtitle: "Review the immutable change below before it is applied.",
         warning: dangerous
           ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
           : "This changes the effective tools and approval behavior for future turns in this scope.",
@@ -1526,16 +1197,10 @@ export function startAdmin(host, env) {
       });
     }
     if (key === "sharing-posture") {
-      const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "isolated";
       const open = body.posture === "open";
-      return reviewGovernanceChange({
+      return review(titleCase(before().posture || "isolated"), titleCase(body.posture), {
         title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
         subtitle: "This applies to future live human turns in the selected scope.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", titleCase(before)],
-          ["Proposed", titleCase(body.posture)],
-        ],
         warning: open
           ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
           : "Cross-context resources will again require explicit shares or grants.",
@@ -1544,15 +1209,10 @@ export function startAdmin(host, env) {
       });
     }
     if (key === "external-slack-participants") {
-      const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
-      return reviewGovernanceChange({
+      const label = (on) => (on ? "External audiences enabled" : "Internal only");
+      return review(label(!!before().on), label(body.on), {
         title: body.on ? "Allow external Slack audiences?" : "Return Slack to internal-only?",
         subtitle: "This organization-wide audience boundary applies to future Slack turns.",
-        facts: [
-          ["Scope", governanceScopeName()],
-          ["Current", before ? "External audiences enabled" : "Internal only"],
-          ["Proposed", body.on ? "External audiences enabled" : "Internal only"],
-        ],
         warning: body.on
           ? "Agent replies and anything read in a mixed Slack room can be visible to guests or Slack Connect participants. External users still cannot drive the agent."
           : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
@@ -1565,30 +1225,25 @@ export function startAdmin(host, env) {
   $("sharing-posture-inherit").onclick = async () => {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
+    const stale = () => requestedScope !== scope || requestedGeneration !== governanceReq;
     const draftBefore = JSON.stringify(governanceUI.collect("sharing-posture"));
-    if (
-      !(await reviewGovernanceChange({
-        title: "Follow organization sharing?",
-        subtitle: "Remove this scope's sharing override.",
-        facts: [["Scope", governanceScopeName()]],
-        warning:
-          "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
-        confirmLabel: "Follow organization",
-      })) ||
-      requestedScope !== scope ||
-      requestedGeneration !== governanceReq
-    )
-      return;
-    const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/sharing-posture", {
-      inherit: true,
+    const confirmed = await reviewGovernanceChange({
+      title: "Follow organization sharing?",
+      subtitle: "Remove this scope's sharing override.",
+      facts: [["Scope", governanceScopeName()]],
+      warning:
+        "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
+      confirmLabel: "Follow organization",
     });
-    if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+    if (!confirmed || stale()) return;
+    const result = await api("PUT", scopeUrl(requestedScope, "/sharing-posture"), { inherit: true });
+    if (stale()) return;
     if (result.ok)
       await refreshPolicySetting("sharing-posture", requestedScope, requestedGeneration, draftBefore, "Saved");
     else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
   };
   async function refreshPolicySetting(key, requestedScope, requestedGeneration, draftBefore, message) {
-    const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+    const fresh = await api("GET", viewUrl(requestedScope, "governance"));
     if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
     if (!fresh.ok) return governanceUI.status(key, "Saved, but the current setting could not be refreshed.", "warn");
     const state = governanceUI.states.get(key);
@@ -1606,24 +1261,20 @@ export function startAdmin(host, env) {
     const requestedScope = scope;
     const button = $("auto-flagger-test");
     $("auto-flagger-test-result").hidden = false;
-    const windowField = $("auto-flagger-window");
-    const requested = Number(windowField.value);
-    if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
+    const requested = Number($("auto-flagger-window").value);
+    if (!Number.isInteger(requested) || requested < 1 || requested > 500)
       return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
-    }
     setStatus("st-auto-flagger-test", "Replaying the last " + requested + " screenings through this rubric…", "", true);
     button.disabled = true;
     try {
-      const r = await api("POST", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger/test", {
+      const r = await api("POST", scopeUrl(requestedScope, "/auto-flagger/test"), {
         window: requested,
         compare: $("auto-flagger-compare").checked,
         modelId: $("auto-flagger-model").value,
         rubric: $("auto-flagger-rubric").value,
       });
       if (requestedScope !== scope) return;
-      if (!r.ok) {
-        return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
-      }
+      if (!r.ok) return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
       setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
     } finally {
       button.disabled = false;
@@ -1633,26 +1284,24 @@ export function startAdmin(host, env) {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
     const draftBefore = JSON.stringify(governanceUI.collect("auto-flagger"));
-    const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger", {
+    const r = await api("PUT", scopeUrl(requestedScope, "/auto-flagger"), {
       reset: true,
     });
     if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
     if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
     await refreshPolicySetting("auto-flagger", requestedScope, requestedGeneration, draftBefore, "Default restored");
   };
-
   async function saveSetting(key, btn) {
     const requestedScope = scope;
     const requestedGeneration = governanceReq;
+    const stale = () => requestedScope !== scope || requestedGeneration !== governanceReq;
     let body;
     try {
       body = governanceUI.collect(key);
     } catch (err) {
-      setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
-      return;
+      return setStatus(statusIdOf(key), err instanceof Error ? err.message : "Could not save.", "err");
     }
-    if (!(await governanceSaveReview(key, body)) || requestedScope !== scope || requestedGeneration !== governanceReq)
-      return;
+    if (!(await governanceSaveReview(key, body)) || stale()) return;
     const saveRequest = String(++governanceSaveSeq);
     if (btn) {
       btn.dataset.saveRequest = saveRequest;
@@ -1661,73 +1310,59 @@ export function startAdmin(host, env) {
     setStatus(statusIdOf(key), "Saving...", "saving", true);
     const isBranding = key === "branding";
     const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
-    const r = await api(
-      "PUT",
-      "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
-      brandingBody,
-    );
+    const r = await api("PUT", scopeUrl(requestedScope, "/" + (isBranding ? "branding" : key)), brandingBody);
     if (requestedGeneration !== governanceReq) return;
     if (requestedScope !== scope) {
-      if (!btn || btn.dataset.saveRequest === saveRequest) {
-        if (btn) {
-          delete btn.dataset.saveRequest;
-          btn.disabled = !btn.classList.contains("dirty");
-        }
-        setStatus(statusIdOf(key), "", "");
+      if (btn && btn.dataset.saveRequest !== saveRequest) return;
+      if (btn) {
+        delete btn.dataset.saveRequest;
+        btn.disabled = !btn.classList.contains("dirty");
       }
-      return;
+      return setStatus(statusIdOf(key), "", "");
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
-    if (r.ok) {
-      governanceUI.commit(key, body);
-      sectionSnapshots.set(key, JSON.stringify(body));
-      if (isBranding) {
-        savedBranding = brandingBody;
-        if (!hasGovernanceDraft()) location.reload();
-        return;
-      }
-      if (key === "soul") {
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
-        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-        if (fresh.ok) {
-          governanceUI.settings.refreshSoul(fresh.data);
-          sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-          if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-        } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-        return;
-      }
-      if (key === "command-policy") loadedCommandPolicyPresent = true;
-      if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
-        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-        if (fresh.ok && !governanceUI.states.get(key).dirty) {
-          governanceUI.load(fresh.data, requestedScope, key);
-          sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-          governanceUI.status(key, "Saved", "ok");
-        }
-      }
-    } else {
-      if (key === "soul" && r.status === 409) await refreshSoulConflict();
+    if (!r.ok) {
+      const soulConflict = key === "soul" && r.status === 409;
+      if (soulConflict) await refreshSoulConflict();
       let message = r.data?.message || "Save failed.";
-      if (key === "soul" && r.status === 409) {
-        message = "SOUL changed; latest revision loaded and your draft was preserved.";
-      } else if (r.status === 403) {
-        message = "Not authorized for this scope.";
-      }
-      setStatus(statusIdOf(key), message, "err");
+      if (soulConflict) message = "SOUL changed; latest revision loaded and your draft was preserved.";
+      else if (r.status === 403) message = "Not authorized for this scope.";
+      return setStatus(statusIdOf(key), message, "err");
     }
+    governanceUI.commit(key, body);
+    sectionSnapshots.set(key, JSON.stringify(body));
+    if (isBranding) {
+      savedBranding = brandingBody;
+      if (!hasGovernanceDraft()) location.reload();
+      return;
+    }
+    if (key === "soul") {
+      const fresh = await api("GET", viewUrl(requestedScope, "customize"));
+      if (stale()) return;
+      if (!fresh.ok) return governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+      settings.refreshSoul(fresh.data);
+      sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+      if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+      return;
+    }
+    if (key === "command-policy") loadedCommandPolicyPresent = true;
+    if (!["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) return;
+    const fresh = await api("GET", viewUrl(requestedScope, "governance"));
+    if (stale() || !fresh.ok || governanceUI.states.get(key).dirty) return;
+    governanceUI.load(fresh.data, requestedScope, key);
+    sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+    governanceUI.status(key, "Saved", "ok");
   }
   document.querySelectorAll("[data-save]").forEach((btn) => {
     btn.onclick = () => saveSetting(btn.dataset.save, btn);
   });
-  governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
+  settings.configureRuntimes({ save: (key) => saveSetting(key) });
   const credentialEdited = (e) => {
     if (e.target.matches("input, textarea, select") && e.target.closest("#card-service-credentials"))
-      governanceUI.settings.credentialState.changed();
+      credentialState.changed();
   };
   $("view-governance").addEventListener("input", credentialEdited);
   $("view-governance").addEventListener("change", credentialEdited);
-
   const DD_CHEVRON =
     '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const ddNativeValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
@@ -1751,21 +1386,13 @@ export function startAdmin(host, env) {
     )
       return;
     sel.dataset.ddHost = "1";
-    const dd = document.createElement("div");
-    dd.className = "dd";
+    const dd = el("div.dd");
     if (sel.getAttribute("style")) dd.setAttribute("style", sel.getAttribute("style"));
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("aria-haspopup", "listbox");
-    btn.setAttribute("aria-expanded", "false");
-    const lab = document.createElement("span");
-    btn.appendChild(lab);
-    btn.insertAdjacentHTML("beforeend", DD_CHEVRON);
-    const menu = document.createElement("div");
-    menu.className = "dd-menu";
-    menu.setAttribute("role", "listbox");
-    menu.id = "dd-menu-" + ++dropdownSequence;
+    const lab = el("span");
+    const menu = el("div.dd-menu", { role: "listbox", id: "dd-menu-" + ++dropdownSequence });
+    const btn = el("button", { type: "button", "aria-haspopup": "listbox", "aria-expanded": "false" }, lab);
     btn.setAttribute("aria-controls", menu.id);
+    btn.insertAdjacentHTML("beforeend", DD_CHEVRON);
     dd.append(btn, menu);
     sel.after(dd);
     let activeIndex = -1;
@@ -1781,50 +1408,47 @@ export function startAdmin(host, env) {
       if (ddNativeValue.get.call(sel) === value) return;
       ddNativeValue.set.call(sel, value);
       syncLabel();
-      sel.dispatchEvent(new Event("input", { bubbles: true }));
-      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      fire(sel);
     };
     const enabledOptions = () => Array.from(sel.options).filter((o) => !o.disabled);
+    const closeThis = () => {
+      closeDropdown(dd);
+      openDropdown = null;
+    };
     const setActive = (index) => {
       const items = Array.from(menu.querySelectorAll(".dd-item:not(.dis)"));
-      if (!items.length) {
-        activeIndex = -1;
-        return;
-      }
-      activeIndex = Math.max(0, Math.min(items.length - 1, index));
+      activeIndex = items.length ? Math.max(0, Math.min(items.length - 1, index)) : -1;
       items.forEach((it, i) => {
         it.classList.toggle("active", i === activeIndex);
-        if (i === activeIndex) {
-          btn.setAttribute("aria-activedescendant", it.id);
-          it.scrollIntoView({ block: "nearest" });
-        }
+        if (i !== activeIndex) return;
+        btn.setAttribute("aria-activedescendant", it.id);
+        it.scrollIntoView({ block: "nearest" });
       });
     };
     const buildMenu = () => {
-      menu.textContent = "";
       activeIndex = -1;
       let enabledIndex = 0;
-      Array.from(sel.options).forEach((o) => {
-        const it = document.createElement("div");
-        it.className = "dd-item" + (o.selected ? " sel" : "") + (o.disabled ? " dis" : "");
-        it.id = menu.id + "-option-" + menu.children.length;
-        it.setAttribute("role", "option");
-        if (o.selected) it.setAttribute("aria-selected", "true");
-        it.textContent = o.textContent;
-        if (!o.disabled) {
-          if (o.selected) activeIndex = enabledIndex;
-          enabledIndex += 1;
-        }
-        it.onclick = (e) => {
-          e.stopPropagation();
-          if (o.disabled) return;
-          closeDropdown(dd);
-          openDropdown = null;
-          commit(o.value);
-          btn.focus();
-        };
-        menu.appendChild(it);
-      });
+      menu.replaceChildren(
+        ...Array.from(sel.options).map((o, i) => {
+          const it = el("div", {
+            className: "dd-item" + (o.selected ? " sel" : "") + (o.disabled ? " dis" : ""),
+            id: menu.id + "-option-" + i,
+            role: "option",
+            textContent: o.textContent,
+            onclick: (e) => {
+              e.stopPropagation();
+              if (o.disabled) return;
+              closeThis();
+              commit(o.value);
+              btn.focus();
+            },
+          });
+          if (o.selected) it.setAttribute("aria-selected", "true");
+          if (!o.disabled && o.selected) activeIndex = enabledIndex;
+          if (!o.disabled) enabledIndex += 1;
+          return it;
+        }),
+      );
       setActive(activeIndex);
     };
     const open = () => {
@@ -1835,45 +1459,25 @@ export function startAdmin(host, env) {
       btn.setAttribute("aria-expanded", "true");
       openDropdown = dd;
     };
-    const toggle = () => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
       const wasOpen = dd.classList.contains("open");
       closeDropdown(openDropdown);
       openDropdown = null;
-      if (!wasOpen) {
-        open();
-      }
-    };
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      toggle();
+      if (!wasOpen) open();
     };
     btn.onkeydown = (e) => {
-      if (e.key === "Escape") {
-        closeDropdown(dd);
-        openDropdown = null;
-        e.preventDefault();
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (!dd.classList.contains("open")) {
-          open();
-          return;
-        }
+      if (!["Escape", "Enter", "ArrowDown", "ArrowUp"].includes(e.key)) return;
+      e.preventDefault();
+      const isOpen = dd.classList.contains("open");
+      if (e.key === "Escape") return closeThis();
+      if (e.key === "Enter" && isOpen) {
         const option = enabledOptions()[activeIndex];
         if (option) commit(option.value);
-        closeDropdown(dd);
-        openDropdown = null;
-        return;
+        return closeThis();
       }
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-      e.preventDefault();
-      const enabled = enabledOptions();
-      if (!enabled.length) return;
-      if (!dd.classList.contains("open")) {
-        open();
-        return;
-      }
+      if (e.key !== "Enter" && !enabledOptions().length) return;
+      if (!isOpen) return open();
       setActive(activeIndex + (e.key === "ArrowDown" ? 1 : -1));
     };
     Object.defineProperty(sel, "value", {
@@ -1904,19 +1508,12 @@ export function startAdmin(host, env) {
   function initCustomDropdowns(root) {
     if (!(root instanceof Element)) return;
     if (root instanceof HTMLSelectElement) upgradeCustomDropdown(root);
-    root.querySelectorAll("select").forEach((sel) => upgradeCustomDropdown(sel));
+    root.querySelectorAll("select").forEach(upgradeCustomDropdown);
   }
   initCustomDropdowns($("app-view"));
-  new MutationObserver((muts) => {
-    muts.forEach((m) => {
-      m.addedNodes.forEach((n) => {
-        if (!(n instanceof HTMLElement)) return;
-        if (n instanceof HTMLSelectElement) upgradeCustomDropdown(n);
-        else initCustomDropdowns(n);
-      });
-    });
-  }).observe($("app-view"), { childList: true, subtree: true });
-
+  new MutationObserver((muts) =>
+    muts.forEach((m) => m.addedNodes.forEach((n) => n instanceof HTMLElement && initCustomDropdowns(n))),
+  ).observe($("app-view"), { childList: true, subtree: true });
   const govFlatContent = document.querySelector("#view-governance .governance-content");
   function flattenGovernanceCards() {
     const cards = [...govFlatContent.children];
@@ -1935,61 +1532,48 @@ export function startAdmin(host, env) {
     subtree: true,
   });
   flattenGovernanceCards();
-
   resetScForm();
-
   let dataReq = 0;
   let historyKind = "conversation";
-
   const dataCache = new Map();
   function paintData(root, data) {
     root.textContent = "";
     if (["files", "memory", "skills", "crons", "deployments"].includes(view))
       return governanceUI.artifacts[view](root, data, artifactContext());
-    if (["errors", "audit", "egress"].includes(view)) return governanceUI.activity[view](root, data, activityContext());
+    if (["errors", "audit", "egress"].includes(view))
+      return governanceUI.activity[view](root, data, {
+        ...helpers(),
+        all: orgWideView(),
+        scope,
+        errorsPageSize: ERRORS_PAGE_SIZE,
+      });
     ({ spend: renderSpend, history: renderHistory, users: renderUsers, keychain: renderKeychain })[view](root, data);
   }
   async function renderData() {
     const root = $("view-data");
     const reqId = ++dataReq;
-    const q = "scope=" + encodeURIComponent(scope);
-    const ep = ENDPOINT[view] || view;
-    let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
-
+    const ep = view === "history" ? "sessions" : view;
+    let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?scope=${encodeURIComponent(scope)}`;
     if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
     if (view === "history") {
-      path += `&limit=${HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+      path += `&limit=50&category=${encodeURIComponent(historyCategory(historyKind))}`;
       if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
-      if (historyKind === "cron") {
-        path += `&origin=${encodeURIComponent(historyKind)}`;
-        const cronSel = urlToState().cron;
-        if (cronSel) path += `&cron=${encodeURIComponent(cronSel)}`;
-      }
+      const cronSel = urlToState().cron;
+      if (historyKind === "cron") path += `&origin=cron` + (cronSel ? `&cron=${encodeURIComponent(cronSel)}` : "");
       if (historyKind === "background") path += "&origin=other_background";
     }
     if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
     if (view === "spend") path += `?${spendQuery(urlToState())}`;
     const cacheable = view !== "memory";
     const cached = cacheable ? dataCache.get(path) : undefined;
-    if (cached !== undefined) {
-      paintData(root, cached);
-    } else {
-      root.textContent = "";
-      const loading = document.createElement("div");
-      loading.className = "loadingline";
-      loading.textContent = "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "...";
-      root.appendChild(loading);
-    }
+    if (cached !== undefined) paintData(root, cached);
+    else root.replaceChildren(el("div.loadingline", "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "..."));
     const r = await api("GET", path);
     if (reqId !== dataReq) return;
     if (!r.ok) {
-      if (cached !== undefined) return;
-      root.textContent = "";
-      const p = document.createElement("p");
-      p.className = "empty";
-      p.textContent =
+      const message =
         r.status === 403 ? "You don't administer this scope." : r.data?.message || `Failed to load (${r.status}).`;
-      root.appendChild(p);
+      if (cached === undefined) root.replaceChildren(el("p.empty", message));
       return;
     }
     if (cacheable) dataCache.set(path, r.data);
@@ -1997,70 +1581,36 @@ export function startAdmin(host, env) {
     paintData(root, r.data);
   }
   function kpis(items, className = "") {
-    const wrap = document.createElement("div");
-    wrap.className = "kpis";
+    const kpi = ([n, k]) => el("div.kpi", {}, el("div.n", { textContent: n }), el("div.k", { textContent: k }));
+    const wrap = el("div.kpis", {}, ...items.map(kpi));
     if (className) wrap.classList.add(className);
-    items.forEach(([n, k]) => {
-      const d = document.createElement("div");
-      d.className = "kpi";
-      const a = document.createElement("div");
-      a.className = "n";
-      a.textContent = n;
-      const b = document.createElement("div");
-      b.className = "k";
-      b.textContent = k;
-      d.append(a, b);
-      wrap.appendChild(d);
-    });
     return wrap;
   }
-
   function spendQuery(st) {
     const { from, to, bucket } = governanceUI.spend.spendWindow(st);
     return new URLSearchParams({ from, to, bucket }).toString();
   }
+  function clickLink(props) {
+    const a = el("a", { rel: "noreferrer", ...props });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
   const openUser = (principal) => go({ view: "user", scope, session: null, principal });
   function renderSpend(root, d) {
     governanceUI.spend.spend(root, d, {
-      defaultShell,
-      fmtPct,
-      fmtTokens,
-      shortName,
-      shortSchedule,
-      cronName,
-      plural,
+      ...helpers(),
       window: governanceUI.spend.spendWindow(urlToState()),
-      openUser,
       openCronRuns: (cron, cronScope) =>
         go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
       setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
       setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
-      downloadCsv: (breakdown = "entity") => {
-        const a = document.createElement("a");
-        a.href =
-          API_BASE + "/spend?format=csv&breakdown=" + encodeURIComponent(breakdown) + "&" + spendQuery(urlToState());
-        a.rel = "noreferrer";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      },
+      downloadCsv: (breakdown = "entity") =>
+        clickLink({
+          href:
+            API_BASE + "/spend?format=csv&breakdown=" + encodeURIComponent(breakdown) + "&" + spendQuery(urlToState()),
+        }),
     });
-  }
-  function activityContext() {
-    return {
-      all: orgWideView(),
-      scope,
-      defaultShell,
-      plural,
-      firstLine,
-      navLink,
-      shortName,
-      fmtTime,
-      relTime,
-      go,
-      egressDetail,
-      errorsPageSize: ERRORS_PAGE_SIZE,
-    };
   }
   async function adminErrors(query) {
     const r = await api("GET", "/api/errors?" + query);
@@ -2071,40 +1621,18 @@ export function startAdmin(host, env) {
     return r.ok ? Number(r.data?.total || 0) : 0;
   }
   function errorStripBox(errs, headText, max, rowLink) {
-    const box = document.createElement("div");
-    box.className = "error-strip";
-    const head = document.createElement("div");
-    head.className = "error-strip-head";
-    head.textContent = headText;
-    box.appendChild(head);
+    const box = el("div.error-strip", {}, el("div.error-strip-head", headText));
     errs.slice(0, max).forEach((e) => {
       const link = rowLink ? rowLink(e) : null;
-      const row = document.createElement(link ? "a" : "div");
-      row.className = "error-strip-row";
-      if (link) {
-        row.href = link.href;
-        row.onclick = (ev) => {
-          if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-          ev.preventDefault();
-          link.go();
-        };
-      }
-      const msg = document.createElement("span");
-      msg.className = "mono";
-      msg.textContent = firstLine(e.message || "(no message)", 160);
-      msg.title = e.message || "";
-      const meta = document.createElement("span");
-      meta.className = "subline";
-      meta.textContent = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
-      row.append(msg, meta);
+      const row = link
+        ? el("a.error-strip-row", { href: link.href, onclick: linkClick(link.go) })
+        : el("div.error-strip-row");
+      const msg = el("span.mono", { textContent: firstLine(e.message || "(no message)", 160), title: e.message || "" });
+      const meta = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
+      row.append(msg, el("span.subline", meta));
       box.appendChild(row);
     });
-    if (errs.length > max) {
-      const more = document.createElement("div");
-      more.className = "subline";
-      more.textContent = "…and " + (errs.length - max) + " more";
-      box.appendChild(more);
-    }
+    if (errs.length > max) box.appendChild(el("div.subline", "…and " + (errs.length - max) + " more"));
     return box;
   }
   function egressDetail(r) {
@@ -2126,28 +1654,15 @@ export function startAdmin(host, env) {
     return "Cron " + shortId(c.id);
   }
   function wakeOriginLabel(trigger) {
-    switch (String(trigger || "").toLowerCase()) {
-      case "cron":
-        return "Cron";
-      case "monitor":
-        return "Monitor wake";
-      case "webhook":
-        return "Webhook wake";
-      default:
-        return "Background wake";
-    }
+    const labels = { cron: "Cron", monitor: "Monitor wake", webhook: "Webhook wake" };
+    return pick(labels, String(trigger || "").toLowerCase(), "Background wake");
   }
   function plural(n, one, many = one + "s") {
     return `${Number(n || 0).toLocaleString()} ${Number(n || 0) === 1 ? one : many}`;
   }
-  function historyCategory(kind) {
-    return kind === "cron" || kind === "background" ? "background" : kind;
-  }
-
+  const historyCategory = (kind) => (kind === "cron" || kind === "background" ? "background" : kind);
   const KIND_LABEL = { conversation: "Conversations", cron: "Cron runs", background: "Background" };
-  function historyModeLabel(kind) {
-    return KIND_LABEL[kind] || KIND_LABEL.conversation;
-  }
+  const historyModeLabel = (kind) => KIND_LABEL[kind] || KIND_LABEL.conversation;
   function historyKindMatches(s, kind) {
     if (kind === "conversation") return s.category !== "background";
     if (kind === "cron") return s.origin?.kind === "cron";
@@ -2225,7 +1740,6 @@ export function startAdmin(host, env) {
     if (sch.everyMs != null) return shortSchedule(sch);
     return sch.firstFireAt ? "once at " + fmtTime(sch.firstFireAt) : "Never";
   }
-
   function shortSchedule(sch) {
     if (!sch) return "Never";
     if (sch.cron) {
@@ -2233,21 +1747,13 @@ export function startAdmin(host, env) {
       return label.startsWith("cron ") ? sch.cron : label;
     }
     if (sch.everyMs != null) {
-      const units = [
-        [86400000, "d"],
-        [3600000, "h"],
-        [60000, "m"],
-        [1000, "s"],
-      ];
-      for (const [n, u] of units) if (sch.everyMs >= n && sch.everyMs % n === 0) return "every " + sch.everyMs / n + u;
+      for (const [u, n] of Object.entries({ d: 86400000, h: 3600000, m: 60000, s: 1000 }))
+        if (sch.everyMs >= n && sch.everyMs % n === 0) return "every " + sch.everyMs / n + u;
       return "every " + sch.everyMs + " ms";
     }
     return sch.firstFireAt ? "once" : "Never";
   }
-  function destinationSummary(dest) {
-    if (!dest) return "None";
-    return (dest.type || "destination") + " -> " + (dest.target || "-");
-  }
+  const destinationSummary = (dest) => (dest ? (dest.type || "destination") + " -> " + (dest.target || "-") : "None");
   function destinationDetails(dest) {
     if (!dest) return "No delivery destination";
     const bits = [];
@@ -2267,49 +1773,18 @@ export function startAdmin(host, env) {
       dataReq === capturedRequest &&
       generation === artifactRenderGeneration;
     return {
+      ...helpers(),
       view,
       scope: capturedScope,
-      orgId,
       scopeDir,
       orgWide: orgWideView(),
       index: orgWideView() && !orgOwnView(),
       own: orgOwnView(),
       cron: urlToState().cron,
       apiBase: API_BASE,
-      api,
-      pageShell,
-      go,
-      stateToUrl,
-      openScopeRow,
-      scopeKind,
-      shortName,
-      dirLabel,
-      plural,
-      relTime,
-      fmtTime,
-      fmtHistoryTime,
-      fmtBytes,
-      shortId,
-      titleCase,
-      firstLine,
-      fileName,
-      fileKind,
-      fileSha256,
-      uploadErrorMessage,
-      downloadFile,
-      deploymentHref,
-      cronName,
-      shortSchedule,
-      fmtSchedule,
-      destinationSummary,
-      destinationDetails,
-      createdByCell,
-      packRepoLabel,
-      scopeCell,
-      statusBadge,
+      fmtHistoryTime: relTime,
+      deploymentHref: (dep) => dep.publicUrl || "",
       stacked,
-      scopeRows,
-      buildScopeMultiSelect,
       invalidate: () => dataCache.clear(),
       reload: () => (current() ? renderData() : Promise.resolve()),
       setCronEditing: (id) => {
@@ -2317,7 +1792,6 @@ export function startAdmin(host, env) {
       },
     };
   }
-
   function packRepoLabel(url) {
     try {
       return (
@@ -2339,21 +1813,9 @@ export function startAdmin(host, env) {
     if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: "built-in", cls: "subline" };
     return { text: s.createdBy || "None", cls: "mono" };
   }
-
-  let openOvMenu = null;
-  const closeOvMenus = () => {
-    if (!openOvMenu) return;
-    openOvMenu.menu.classList.add("hidden");
-    openOvMenu.btn.setAttribute("aria-expanded", "false");
-    openOvMenu = null;
-  };
-  document.addEventListener("click", closeOvMenus);
-  document.addEventListener("scroll", closeOvMenus, true);
-  window.addEventListener("resize", closeOvMenus);
   function buildScopeMultiSelect(choices, selected, onChange) {
-    const pick = document.createElement("div");
-    pick.className = "scopepick";
-    pick.style.cssText = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const row = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const pick = el("div.scopepick", { style: row });
     const labelOf = (id) => (choices.find((c) => c.scopeId === id) || {}).label || dirLabel(id) || id;
     const orgFirst = (ids) =>
       ids.sort((a, b) => {
@@ -2361,133 +1823,109 @@ export function startAdmin(host, env) {
         if (scopeKind(b) === "org") return 1;
         return a.localeCompare(b);
       });
-
-    const chips = document.createElement("div");
-    chips.style.cssText = "display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+    const changed = () => {
+      renderChips();
+      renderList();
+      onChange();
+    };
+    const chips = el("div", { style: row });
     const renderChips = () => {
-      chips.textContent = "";
-      if (!selected.size) {
-        const none = document.createElement("span");
-        none.style.cssText = "font-size:12px; color:var(--muted);";
-        none.textContent = "no scopes selected";
-        chips.appendChild(none);
-        return;
-      }
-      for (const id of orgFirst([...selected])) {
-        const chip = document.createElement("span");
-        chip.style.cssText =
-          "display:inline-flex; align-items:center; gap:5px; padding:2px 5px 2px 9px; border:1px solid var(--border); border-radius:12px; background:var(--subtle); font-size:12px; white-space:nowrap;";
-        chip.title = id;
-        const t = document.createElement("span");
-        t.textContent = labelOf(id);
-        chip.appendChild(t);
-        const x = document.createElement("button");
-        x.type = "button";
-        x.textContent = "✕";
-        x.setAttribute("aria-label", "Remove " + labelOf(id));
-        x.style.cssText =
-          "border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:11px; line-height:1; padding:0 1px;";
-        x.onclick = (e) => {
-          e.stopPropagation();
-          selected.delete(id);
-          renderChips();
-          renderList();
-          onChange();
-        };
-        chip.appendChild(x);
-        chips.appendChild(chip);
-      }
+      if (!selected.size)
+        return chips.replaceChildren(
+          el("span", { style: "font-size:12px; color:var(--muted);", textContent: "no scopes selected" }),
+        );
+      chips.replaceChildren(
+        ...orgFirst([...selected]).map((id) => {
+          const remove = el("button", {
+            type: "button",
+            textContent: "✕",
+            "aria-label": "Remove " + labelOf(id),
+            style:
+              "border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:11px; line-height:1; padding:0 1px;",
+            onclick: (e) => {
+              e.stopPropagation();
+              selected.delete(id);
+              changed();
+            },
+          });
+          const style =
+            "display:inline-flex; align-items:center; gap:5px; padding:2px 5px 2px 9px; border:1px solid var(--border); border-radius:12px; background:var(--subtle); font-size:12px; white-space:nowrap;";
+          return el("span", { style, title: id }, el("span", labelOf(id)), remove);
+        }),
+      );
     };
-
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.className = "rowbtn";
-    addBtn.textContent = "+ Add scope ▾";
-    addBtn.setAttribute("aria-haspopup", "listbox");
-    addBtn.setAttribute("aria-expanded", "false");
-
-    const menu = document.createElement("div");
-    menu.className = "scope-menu hidden";
-    menu.style.cssText = "left:0; right:auto; width:min(320px, 80vw);";
-    const filterWrap = document.createElement("div");
-    filterWrap.className = "scope-filter";
-    const filter = document.createElement("input");
-    filter.type = "text";
-    filter.placeholder = "Filter scopes…";
+    const addBtn = el("button.rowbtn", {
+      type: "button",
+      textContent: "+ Add scope ▾",
+      "aria-haspopup": "listbox",
+      "aria-expanded": "false",
+    });
+    const filter = el("input", {
+      type: "text",
+      placeholder: "Filter scopes…",
+      autocapitalize: "none",
+      style:
+        "width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); font:inherit;",
+    });
     filter.spellcheck = false;
-    filter.setAttribute("autocapitalize", "none");
-    filter.style.cssText =
-      "width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); font:inherit;";
-    filterWrap.appendChild(filter);
-    const list = document.createElement("div");
-    list.className = "scope-list";
-    list.setAttribute("role", "listbox");
-    const bulk = document.createElement("div");
-    bulk.style.cssText = "display:flex; gap:14px; padding:8px 10px; border-top:1px solid var(--border);";
-    const mkLink = (text, fn) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = text;
-      b.style.cssText =
-        "border:none; background:transparent; cursor:pointer; color:var(--text); font:inherit; font-size:12px; text-decoration:underline; text-underline-offset:2px; padding:0;";
-      b.onclick = fn;
-      return b;
-    };
-    bulk.append(
-      mkLink("Select all", () => {
+    const list = el("div.scope-list", { role: "listbox" });
+    const bulkLink = (text, onclick) =>
+      el("button", {
+        type: "button",
+        textContent: text,
+        style:
+          "border:none; background:transparent; cursor:pointer; color:var(--text); font:inherit; font-size:12px; text-decoration:underline; text-underline-offset:2px; padding:0;",
+        onclick,
+      });
+    const bulk = el(
+      "div",
+      { style: "display:flex; gap:14px; padding:8px 10px; border-top:1px solid var(--border);" },
+      bulkLink("Select all", () => {
         choices.forEach((c) => selected.add(c.scopeId));
-        renderChips();
-        renderList();
-        onChange();
+        changed();
       }),
-      mkLink("Clear", () => {
+      bulkLink("Clear", () => {
         selected.clear();
-        renderChips();
-        renderList();
-        onChange();
+        changed();
       }),
     );
-
     const renderList = () => {
       const q = filter.value.trim().toLowerCase();
-      list.textContent = "";
       const shown = choices.filter(
         (c) => !q || c.label.toLowerCase().includes(q) || c.scopeId.toLowerCase().includes(q),
       );
-      if (!shown.length) {
-        const p = document.createElement("div");
-        p.className = "scope-note";
-        p.textContent = "No scopes match.";
-        list.appendChild(p);
-        return;
-      }
-      for (const c of shown) {
-        const on = selected.has(c.scopeId);
-        const opt = document.createElement("button");
-        opt.type = "button";
-        opt.className = "scope-option" + (on ? " selected" : "");
-        opt.setAttribute("role", "option");
-        opt.setAttribute("aria-selected", String(on));
-        opt.title = c.scopeId;
-        const name = document.createElement("span");
-        name.className = "scope-name";
-        name.appendChild(stacked(c.label, c.label === c.scopeId ? "" : c.scopeId));
-        const mark = document.createElement("span");
-        mark.className = "count";
-        mark.textContent = on ? "✓" : "";
-        opt.append(name, mark);
-        opt.onclick = () => {
-          if (selected.has(c.scopeId)) selected.delete(c.scopeId);
-          else selected.add(c.scopeId);
-          renderChips();
-          renderList();
-          onChange();
-          filter.focus();
-        };
-        list.appendChild(opt);
-      }
+      if (!shown.length) return list.replaceChildren(el("div.scope-note", "No scopes match."));
+      list.replaceChildren(
+        ...shown.map((c) => {
+          const on = selected.has(c.scopeId);
+          const name = el("span.scope-name", {}, stacked(c.label, c.label === c.scopeId ? "" : c.scopeId));
+          return el(
+            "button.scope-option" + (on ? " selected" : ""),
+            {
+              type: "button",
+              role: "option",
+              "aria-selected": String(on),
+              title: c.scopeId,
+              onclick: () => {
+                if (selected.has(c.scopeId)) selected.delete(c.scopeId);
+                else selected.add(c.scopeId);
+                changed();
+                filter.focus();
+              },
+            },
+            name,
+            el("span.count", on ? "✓" : ""),
+          );
+        }),
+      );
     };
-
+    const menu = el(
+      "div.scope-menu hidden",
+      { style: "left:0; right:auto; width:min(320px, 80vw);" },
+      el("div.scope-filter", {}, filter),
+      list,
+      bulk,
+    );
     let onDocClick = null;
     const setOpen = (open) => {
       menu.classList.toggle("hidden", !open);
@@ -2516,36 +1954,19 @@ export function startAdmin(host, env) {
         addBtn.focus();
       }
     });
-
-    menu.append(filterWrap, list, bulk);
     pick.append(chips, addBtn, menu);
     renderChips();
     return pick;
   }
-  function renderKeychain(root, d) {
-    governanceUI.keychain.keychain(root, d, {
-      defaultShell,
-      fmtTime,
-      scopeKind,
-      openUser,
-    });
-  }
+  const renderKeychain = (root, d) => governanceUI.keychain.keychain(root, d, helpers());
   function renderUsers(root, d) {
     governanceUI.users.users(root, d, {
-      api,
-      copyText,
-      defaultShell,
-      fmtTime,
-      relTime,
-      labelRole,
+      ...helpers(),
       confirm: (message) => window.confirm(message),
-      openWebUiAs,
       orgScope: "org:" + orgId,
       clearCache: () => dataCache.clear(),
-      openUser,
     });
   }
-
   const fmtBytes = (n) => {
     if (n < 1024) return n + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
@@ -2555,179 +1976,112 @@ export function startAdmin(host, env) {
     if (p == null) return "";
     if (typeof p === "string") return p;
     if (typeof p === "object" && typeof p.text === "string") return p.text;
-
     if (typeof p === "object" && typeof p.thinking === "string")
       return p.thinking || (p.redacted ? "[redacted thinking]" : "");
-    try {
-      return JSON.stringify(p, null, 2);
-    } catch {
-      return String(p);
-    }
+    return stringify(p);
   }
-  const stringify = (x) => {
+  function stringify(x) {
     try {
       return JSON.stringify(x, null, 2);
     } catch {
       return String(x);
     }
-  };
-  const TOOL_PREVIEW_CHARS = 1800;
+  }
   function appendInlineMarkdown(parent, text) {
-    const pushText = (s) => {
-      if (s) parent.appendChild(document.createTextNode(s));
-    };
     const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*([^*]+)\*)/g;
     let last = 0;
     for (const m of String(text || "").matchAll(re)) {
-      pushText(text.slice(last, m.index));
-      if (m[2]) {
-        const strong = document.createElement("strong");
-        strong.textContent = m[2];
-        parent.appendChild(strong);
-      } else if (m[3]) {
-        const code = document.createElement("code");
-        code.textContent = m[3];
-        parent.appendChild(code);
-      } else if (m[4] && m[5]) {
-        const a = document.createElement("a");
-        a.href = m[5];
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = m[4];
-        parent.appendChild(a);
-      } else if (m[6]) {
-        const em = document.createElement("em");
-        em.textContent = m[6];
-        parent.appendChild(em);
-      }
+      if (m.index > last) parent.append(text.slice(last, m.index));
+      const [, , bold, code, label, href, em] = m;
+      if (bold) parent.appendChild(el("strong", bold));
+      else if (code) parent.appendChild(el("code", code));
+      else if (label && href)
+        parent.appendChild(el("a", { href, target: "_blank", rel: "noopener", textContent: label }));
+      else if (em) parent.appendChild(el("em", em));
       last = m.index + m[0].length;
     }
-    pushText(text.slice(last));
+    const rest = text.slice(last);
+    if (rest) parent.append(rest);
+  }
+  function inlineMarkdown(tag, text) {
+    const node = el(tag);
+    appendInlineMarkdown(node, text);
+    return node;
   }
   function renderMarkdown(text) {
-    const root = document.createElement("div");
-    root.className = "message-body";
-    const lines = String(text || "")
-      .replace(/\r\n/g, "\n")
-      .split("\n");
+    const root = el("div.message-body");
     let para = [];
     let list = null;
     let quote = [];
     let fence = null;
     const flushPara = () => {
-      if (!para.length) return;
-      const p = document.createElement("p");
-      appendInlineMarkdown(p, para.join(" "));
-      root.appendChild(p);
+      if (para.length) root.appendChild(inlineMarkdown("p", para.join(" ")));
       para = [];
     };
     const flushList = () => {
-      if (list) {
-        root.appendChild(list.node);
-        list = null;
-      }
+      if (list) root.appendChild(list.node);
+      list = null;
     };
     const flushQuote = () => {
-      if (!quote.length) return;
-      const bq = document.createElement("blockquote");
-      const p = document.createElement("p");
-      appendInlineMarkdown(p, quote.join(" "));
-      bq.appendChild(p);
-      root.appendChild(bq);
+      if (quote.length) root.appendChild(el("blockquote", {}, inlineMarkdown("p", quote.join(" "))));
       quote = [];
     };
-    for (const line of lines) {
+    const flushAll = () => {
+      flushPara();
+      flushList();
+      flushQuote();
+    };
+    const codeBlock = () => root.appendChild(el("pre", {}, el("code", fence.join("\n"))));
+    for (const line of String(text || "")
+      .replace(/\r\n/g, "\n")
+      .split("\n")) {
       const fenceMatch = line.match(/^```/);
-      if (fence) {
-        if (fenceMatch) {
-          const pre = document.createElement("pre");
-          const code = document.createElement("code");
-          code.textContent = fence.lines.join("\n");
-          pre.appendChild(code);
-          root.appendChild(pre);
-          fence = null;
-        } else {
-          fence.lines.push(line);
-        }
-        continue;
-      }
-      if (fenceMatch) {
-        flushPara();
-        flushList();
-        flushQuote();
-        fence = { lines: [] };
-        continue;
-      }
       const trimmed = line.trim();
-      if (!trimmed) {
-        flushPara();
-        flushList();
-        flushQuote();
-        continue;
-      }
       const quoteMatch = trimmed.match(/^>\s?(.*)$/);
-      if (quoteMatch) {
+      const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
+      if (fence && fenceMatch) {
+        codeBlock();
+        fence = null;
+      } else if (fence) fence.push(line);
+      else if (fenceMatch) {
+        flushAll();
+        fence = [];
+      } else if (!trimmed) flushAll();
+      else if (quoteMatch) {
         flushPara();
         flushList();
         quote.push(quoteMatch[1]);
-        continue;
-      }
-      const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
-      if (listMatch) {
+      } else if (listMatch) {
         flushPara();
         flushQuote();
         const ordered = /\d+\./.test(listMatch[1]);
-        if (!list || list.ordered !== ordered) {
+        if (list?.ordered !== ordered) {
           flushList();
-          list = { ordered, node: document.createElement(ordered ? "ol" : "ul") };
+          list = { ordered, node: el(ordered ? "ol" : "ul") };
         }
-        const li = document.createElement("li");
-        appendInlineMarkdown(li, listMatch[2]);
-        list.node.appendChild(li);
-        continue;
+        list.node.appendChild(inlineMarkdown("li", listMatch[2]));
+      } else {
+        flushList();
+        flushQuote();
+        para.push(trimmed);
       }
-      flushList();
-      flushQuote();
-      para.push(trimmed);
     }
-    if (fence) {
-      const pre = document.createElement("pre");
-      const code = document.createElement("code");
-      code.textContent = fence.lines.join("\n");
-      pre.appendChild(code);
-      root.appendChild(pre);
-    }
-    flushPara();
-    flushList();
-    flushQuote();
-    if (!root.childNodes.length) {
-      const p = document.createElement("p");
-      p.textContent = "";
-      root.appendChild(p);
-    }
+    if (fence) codeBlock();
+    flushAll();
+    if (!root.childNodes.length) root.appendChild(el("p"));
     return root;
   }
-
   const isXmlishText = (text) => /^\s*<[A-Za-z][\w-]*(\s|\/?>)/.test(String(text || ""));
   function renderXmlish(text) {
-    const root = document.createElement("div");
-    root.className = "message-body xml-body";
-    const unescape = (s) =>
-      s
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, "&");
+    const root = el("div.message-body xml-body");
     const row = (cls, depth) => {
-      const div = document.createElement("div");
-      div.className = cls;
+      const div = root.appendChild(el("div." + cls));
       div.style.paddingLeft = Math.min(depth, 8) * 18 + "px";
-      root.appendChild(div);
       return div;
     };
     const addText = (s, depth) => {
       const t = s.replace(/^[\s\n]+|[\s\n]+$/g, "");
-      if (t) appendInlineMarkdown(row("xml-text", depth), unescape(t));
+      if (t) appendInlineMarkdown(row("xml-text", depth), slackUnescape(t.replace(/&quot;/g, '"')));
     };
     const tagRe = /<\/?[A-Za-z][\w-]*(?:\s+[\w-]+(?:="[^"]*")?)*\s*\/?>/g;
     let depth = 0,
@@ -2812,12 +2166,6 @@ export function startAdmin(host, env) {
     const fallback = hasResult ? resultPayload : callPayload;
     return toolTextValue(fallback);
   }
-  function toolTextCard(text) {
-    const pre = document.createElement("pre");
-    pre.className = "tool-command";
-    pre.textContent = text;
-    return pre;
-  }
   function toolCopyText(callEntry, resultEntry) {
     const parts = [];
     if (callEntry)
@@ -2828,7 +2176,6 @@ export function startAdmin(host, env) {
       );
     return parts.join("\n\n");
   }
-
   async function copyText(text) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -2838,11 +2185,7 @@ export function startAdmin(host, env) {
     } catch {
       void 0;
     }
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
+    const ta = document.body.appendChild(el("textarea", { value: text, style: "position: fixed; opacity: 0;" }));
     ta.select();
     let ok;
     try {
@@ -2850,14 +2193,11 @@ export function startAdmin(host, env) {
     } catch {
       ok = false;
     }
-    document.body.removeChild(ta);
+    ta.remove();
     return ok;
   }
   function copyButton(label, getText) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "copy";
-    btn.textContent = label;
+    const btn = el("button.copy", { type: "button", textContent: label });
     btn.onclick = async (ev) => {
       ev.stopPropagation();
       const ok = await copyText(getText());
@@ -2874,74 +2214,51 @@ export function startAdmin(host, env) {
     const callPayload = callEntry?.payload ?? {};
     const resultPayload = resultEntry?.payload ?? {};
     const tool = toolName(callPayload, resultPayload);
-    const block = document.createElement("div");
-    block.className = "entry tool-entry";
-    const who = document.createElement("div");
-    who.className = "who";
-    const label = document.createElement("span");
-    label.className = "tool-label";
-    label.textContent = toolLabelText(tool, callPayload, resultPayload);
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = resultEntry
-      ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
-      : `#${callEntry?.seq ?? resultEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? resultEntry?.createdAt)}`;
-    const status = document.createElement("div");
-    status.className = "meta-row";
-    toolStatusMeta(tool, resultPayload, !!resultEntry).forEach((item) => status.appendChild(item));
+    const block = el("div.entry tool-entry");
+    const who = el("div.who");
     if (contextBtn) who.appendChild(contextBtn);
-    who.append(label);
-
+    who.append(el("span.tool-label", toolLabelText(tool, callPayload, resultPayload)));
     if (timingEl) who.appendChild(timingEl);
     who.append(
-      when,
-      status,
+      el(
+        "span.when",
+        resultEntry
+          ? `#${callEntry?.seq ?? "?"}→#${resultEntry.seq} · ${fmtTime(callEntry?.createdAt ?? resultEntry.createdAt)}`
+          : `#${callEntry?.seq ?? resultEntry?.seq ?? "?"} · ${fmtTime(callEntry?.createdAt ?? resultEntry?.createdAt)}`,
+      ),
+      el("div.meta-row", {}, ...toolStatusMeta(tool, resultPayload, !!resultEntry)),
       copyButton("Copy", () => toolCopyText(callEntry, resultEntry)),
     );
-    const body = document.createElement("div");
-    body.className = "tool-body";
+    const body = el("div.tool-body");
     const primaryText = toolPrimaryText(callPayload, resultPayload, !!callEntry, !!resultEntry);
     if (primaryText) {
-      const truncated = primaryText.length > TOOL_PREVIEW_CHARS;
-      const preview = truncated ? primaryText.slice(0, TOOL_PREVIEW_CHARS) + "…" : primaryText;
-      const card = toolTextCard(preview);
+      const truncated = primaryText.length > 1800;
+      const preview = truncated ? primaryText.slice(0, 1800) + "…" : primaryText;
+      const card = el("pre.tool-command", { textContent: preview, tabIndex: 0, role: "button" });
       const syncExpanded = () => {
         const expanded = block.classList.contains("expanded");
         card.setAttribute("aria-expanded", String(expanded));
         card.title = expanded ? "Click to collapse tool text" : "Click to expand tool text";
         if (truncated) card.textContent = expanded ? primaryText : preview;
       };
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.onclick = () => {
+      const toggle = () => {
         block.classList.toggle("expanded");
         syncExpanded();
       };
+      card.onclick = toggle;
       card.onkeydown = (ev) => {
         if (ev.key !== "Enter" && ev.key !== " ") return;
         ev.preventDefault();
-        block.classList.toggle("expanded");
-        syncExpanded();
+        toggle();
       };
       syncExpanded();
       body.appendChild(card);
     }
-
     if (delivery) {
-      const dv = document.createElement("div");
-      dv.className = "tool-delivery";
-      const drow = document.createElement("div");
-      drow.className = "who";
-      const dlabel = document.createElement("span");
-      dlabel.className = "entry-label important";
-      dlabel.textContent = deliveryLabel(delivery);
-      drow.appendChild(dlabel);
+      const drow = el("div.who", {}, el("span.entry-label important", deliveryLabel(delivery)));
       if (delivery.shadow) {
-        const sb = document.createElement("span");
-        sb.className = "entry-label";
-        sb.title = "Recorded for observability, never sent to the human (shadow-mode rollout)";
-        sb.textContent = "not sent";
-        drow.appendChild(sb);
+        const title = "Recorded for observability, never sent to the human (shadow-mode rollout)";
+        drow.appendChild(el("span.entry-label", { title, textContent: "not sent" }));
       }
       drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
       const mirror = slackMirrorRef(delivery);
@@ -2950,29 +2267,27 @@ export function startAdmin(host, env) {
         ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
         drow.appendChild(ml);
       }
-      const dwhen = document.createElement("span");
-      dwhen.className = "when";
-      dwhen.textContent = `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`;
-      drow.appendChild(dwhen);
-      const pre = document.createElement("pre");
+      drow.appendChild(el("span.when", `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`));
       const from = delivery.destination?.onBehalfOf ? `from ${delivery.destination.onBehalfOf}\n` : "";
       const to = delivery.destination?.target ? `to ${delivery.destination.target}\n` : "";
       const recipientLine = delivery.recipientThreadRef ? `recipient thread ${delivery.recipientThreadRef}\n` : "";
-      pre.textContent = `${from}${to}${recipientLine}${delivery.text || ""}`.trim();
-      dv.append(drow, pre);
+      const dv = el(
+        "div.tool-delivery",
+        {},
+        drow,
+        el("pre", `${from}${to}${recipientLine}${delivery.text || ""}`.trim()),
+      );
       const files = deliveryFileBadges(delivery.attachments);
       if (files) dv.appendChild(files);
       body.appendChild(dv);
     }
-    block.append(who);
-    block.appendChild(body);
+    block.append(who, body);
     return { block, sync: () => {} };
   }
-
   function renderHistory(root, d) {
     governanceUI.history.history(root, d, {
+      ...helpers(),
       historyKind,
-      historyKindMatches,
       cron: urlToState().cron,
       cursor: historyCursor,
       scope,
@@ -2980,51 +2295,20 @@ export function startAdmin(host, env) {
       environments: environmentDir,
       title: VIEW_TITLE.history,
       kindLabels: KIND_LABEL,
-      historyModeLabel,
-      go,
-      pageShell,
-      cronName,
-      scopeKind,
-      shortName,
-      plural,
-      selectScope,
-      fmtHistoryCreated,
-      relTime,
-      stateToUrl,
-      titleCase,
-      errorStripBox,
-      adminErrorCount,
-      adminErrors,
-      scopeRows,
     });
   }
-
   let userDetailRequest = 0;
   async function showUserDetail(principalId) {
     const request = ++userDetailRequest;
     const root = $("view-data");
     root.textContent = "";
     return governanceUI.userDetail.detail(root, principalId, {
-      api,
-      pageShell,
-      labelRole,
-      fmtTime,
-      scopeKind,
-      plural,
-      stateToUrl,
-      go,
+      ...helpers(),
       confirm: (message) => window.confirm(message),
-      orgId,
-      webUiAsButton,
       current: (principal) => request === userDetailRequest && view === "user" && urlToState().principal === principal,
       reload: showUserDetail,
     });
   }
-
-  async function showContextPage(sessionId, turnSeq) {
-    return governanceUI.transcript.contextPage(sessionId, turnSeq, transcriptServices());
-  }
-
   let slackContainers = null;
   let slackContainersTruncated = false;
   async function loadSlackContainers() {
@@ -3035,7 +2319,6 @@ export function startAdmin(host, env) {
     }
     return r;
   }
-
   function slackContainerLabel(id) {
     const c = (slackContainers || []).find((x) => x.container === id) || {};
     const nm = c.name || null;
@@ -3045,229 +2328,104 @@ export function startAdmin(host, env) {
     if (kind === "group") return nm || ((c.members || []).length ? c.members.length + " people" : id);
     return nm ? "#" + nm : id;
   }
-
   function slackContainerScope(id) {
     const kind = ((slackContainers || []).find((x) => x.container === id) || {}).kind;
     if (kind === "channel") return "channel:" + id;
     if (kind === "group") return "group:" + id;
     return null;
   }
-
   function slackUnescape(s) {
     return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   }
-  function slackMentionSpan(text) {
-    const s = document.createElement("span");
-    s.className = "sm-mention";
-    s.textContent = text;
-    return s;
-  }
-
   function slackEntityNode(inner, mentions) {
     const u = slackUnescape(inner);
-    if (u[0] === "@") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || (mentions && mentions[id]) || id));
-    }
-    if (u[0] === "#") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("#" + (label || id));
-    }
-    if (u[0] === "!") {
-      const [cmd, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || cmd.split("^")[0]));
-    }
+    const [id, label] = u.slice(1).split("|");
+    if (u[0] === "@") return el("span.sm-mention", "@" + (label || (mentions && mentions[id]) || id));
+    if (u[0] === "#") return el("span.sm-mention", "#" + (label || id));
+    if (u[0] === "!") return el("span.sm-mention", "@" + (label || id.split("^")[0]));
     const bar = u.indexOf("|");
     const url = bar === -1 ? u : u.slice(0, bar);
-    const label = bar === -1 ? url : u.slice(bar + 1);
-
-    if (!/^(https?:|mailto:|tel:)/i.test(url)) return document.createTextNode(label);
-    const a = document.createElement("a");
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-    return a;
+    const text = bar === -1 ? url : u.slice(bar + 1);
+    if (!/^(https?:|mailto:|tel:)/i.test(url)) return document.createTextNode(text);
+    return el("a", { href: url, target: "_blank", rel: "noopener", textContent: text });
   }
-
   function slackAppendMrkdwn(raw, parent) {
     const text = slackUnescape(raw);
     const re = /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~|(https?:\/\/[^\s<>]+)/g;
     let last = 0,
       m;
     while ((m = re.exec(text))) {
-      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
-      let el;
-      if (m[1] != null) {
-        el = document.createElement("strong");
-        el.textContent = m[1];
-      } else if (m[2] != null) {
-        el = document.createElement("em");
-        el.textContent = m[2];
-      } else if (m[3] != null) {
-        el = document.createElement("s");
-        el.textContent = m[3];
-      } else {
+      if (m.index > last) parent.append(text.slice(last, m.index));
+      const styled = [
+        ["strong", m[1]],
+        ["em", m[2]],
+        ["s", m[3]],
+      ].find(([, value]) => value != null);
+      if (styled) parent.appendChild(el(...styled));
+      else {
         let url = m[4].replace(/[.,;!?]+$/, "");
         while (url.endsWith(")") && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length)
           url = url.slice(0, -1);
-        el = slackEntityNode(url);
-        parent.appendChild(el);
-        parent.appendChild(document.createTextNode(m[4].slice(url.length)));
-        last = re.lastIndex;
-        continue;
+        parent.append(slackEntityNode(url), m[4].slice(url.length));
       }
-      parent.appendChild(el);
       last = re.lastIndex;
     }
-    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    if (last < text.length) parent.append(text.slice(last));
   }
-
   function slackParseInline(text, parent, mentions) {
     const re = /`([^`\n]+)`|<([^>\n]+)>|:([a-z0-9_+'-]+):/g;
     let last = 0,
       m;
     while ((m = re.exec(text))) {
       if (m.index > last) slackAppendMrkdwn(text.slice(last, m.index), parent);
-      if (m[1] != null) {
-        const c = document.createElement("code");
-        c.className = "sm-code";
-        c.textContent = slackUnescape(m[1]);
-        parent.appendChild(c);
-      } else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
-      else {
-        const emoji = governanceUI.charForName(m[3]);
-        if (emoji) parent.appendChild(document.createTextNode(emoji));
-        else slackAppendMrkdwn(m[0], parent);
-      }
+      const emoji = m[3] != null && governanceUI.charForName(m[3]);
+      if (m[1] != null) parent.appendChild(el("code.sm-code", slackUnescape(m[1])));
+      else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
+      else if (emoji) parent.append(emoji);
+      else slackAppendMrkdwn(m[0], parent);
       last = re.lastIndex;
     }
     if (last < text.length) slackAppendMrkdwn(text.slice(last), parent);
   }
-
   function slackParseText(raw, mentions) {
     const frag = document.createDocumentFragment();
     if (!raw) return frag;
     raw.split("```").forEach((part, i) => {
-      if (i % 2 === 1) {
-        const pre = document.createElement("pre"),
-          code = document.createElement("code");
-        code.textContent = slackUnescape(part.replace(/^\n/, "").replace(/\n$/, ""));
-        pre.appendChild(code);
-        frag.appendChild(pre);
-      } else {
-        let quote = null;
-        part.split("\n").forEach((line, lineIndex) => {
-          const quoted = /^(?:>|&gt;) ?/.test(line);
-          if (quoted) {
-            if (!quote) {
-              quote = document.createElement("blockquote");
-              frag.appendChild(quote);
-            } else quote.appendChild(document.createTextNode("\n"));
-            slackParseInline(line.replace(/^(?:>|&gt;) ?/, ""), quote, mentions);
-          } else {
-            if (lineIndex && !quote) frag.appendChild(document.createTextNode("\n"));
-            quote = null;
-            slackParseInline(line, frag, mentions);
-          }
-        });
-      }
+      if (i % 2 === 1)
+        return frag.appendChild(el("pre", {}, el("code", slackUnescape(part.replace(/^\n/, "").replace(/\n$/, "")))));
+      let quote = null;
+      part.split("\n").forEach((line, lineIndex) => {
+        if (/^(?:>|&gt;) ?/.test(line)) {
+          if (quote) quote.append("\n");
+          else quote = frag.appendChild(el("blockquote"));
+          slackParseInline(line.replace(/^(?:>|&gt;) ?/, ""), quote, mentions);
+        } else {
+          if (lineIndex && !quote) frag.append("\n");
+          quote = null;
+          slackParseInline(line, frag, mentions);
+        }
+      });
     });
     return frag;
   }
-  governanceUI.slackActivity.configure({
-    api,
-    go,
-    urlToState,
-    stateToUrl,
-    pageShell,
-    navLink,
-    relTime,
-    fmtTime,
-    brandSelfLabel,
-    slackParseText,
-    slackContainerLabel,
-    slackContainerScope,
-    loadSlackContainers,
-    containers: () => slackContainers,
-    truncated: () => slackContainersTruncated,
-    view: () => view,
-    loaded: () => {
-      viewLoadedAt.slack = Date.now();
-    },
-  });
-  async function renderSlackMirror(st) {
-    return governanceUI.slackActivity.renderSlackMirror(st);
-  }
   function deliverySurfaceLabel(event) {
     const type = event?.destination?.type;
-    if (type === "principal") return "Slack DM";
-    if (type === "slack") return "Slack";
-    if (type === "web") return "Web";
-    return type || "Unknown surface";
+    return pick({ principal: "Slack DM", slack: "Slack", web: "Web" }, type, type || "Unknown surface");
   }
-
-  function deliveryLabel(event) {
-    if (event.shadow) return "Shadow delivery";
-    return `${deliverySurfaceLabel(event)} delivery`;
-  }
-
+  const deliveryLabel = (event) => (event.shadow ? "Shadow delivery" : `${deliverySurfaceLabel(event)} delivery`);
   function slackMirrorRef(event) {
     const d = event?.destination || {};
     if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
     return { container: d.target.split(":")[0], ts: d.editRef };
   }
-
   function transcriptServices() {
     return {
-      api,
+      ...helpers(),
       scope,
       historyKind,
-      pageSize: TRANSCRIPT_PAGE_SIZE,
+      pageSize: 500,
       visibility: transcriptVisibility,
-      go,
-      stateToUrl,
-      pageShell,
-      shortName,
-      relTime,
-      fmtTime,
-      webUiAsButton,
-      adminErrors,
-      errorStripBox,
-      plural,
       entryHidden: transcriptEntryHidden,
-      renderToolEntry,
-      stepDurEl,
-      toolName,
-      toolLabelText,
-      toolPrimaryText,
-      toolStatusMeta,
-      toolCopyText,
-      firstLine,
-      copyButton,
-      payloadText,
-      payloadName,
-      isXmlishText,
-      renderXmlish,
-      renderMarkdown,
-      entryIsNoise,
-      titleCase,
-      brandSelfLabel,
-      wakeOriginLabel,
-      deliveryLabel,
-      deliverySurfaceLabel,
-      slackMirrorRef,
-      shortId,
-      metaChip,
-      deliveryFileBadges,
-      contextSections,
-      requestBody,
-      sumCacheUsage,
-      cacheMetaItems,
-      rawJsonLink,
-      fmtContextSize,
-      fmtTokens,
-      isStablePrefixMiss,
       current: (id, turn) => {
         const st = urlToState();
         return view === "history" && st.session === id && (turn == null ? !st.turn : String(st.turn) === String(turn));
@@ -3277,14 +2435,7 @@ export function startAdmin(host, env) {
       },
     };
   }
-  async function showTranscript(sessionId, limit, expand) {
-    return governanceUI.transcript.show(sessionId, limit, expand, transcriptServices());
-  }
-
-  function estimateTokens(text) {
-    const n = (text || "").length;
-    return n ? Math.max(1, Math.round(n / 4)) : 0;
-  }
+  const estimateTokens = (text) => ((text || "").length ? Math.max(1, Math.round(text.length / 4)) : 0);
   function fmtTokens(n) {
     if (!n) return "0 tokens";
     if (n < 20) return "< 20 tokens";
@@ -3292,7 +2443,6 @@ export function startAdmin(host, env) {
     if (n < 1000000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k tokens";
     return (n / 1000000).toFixed(1) + "m tokens";
   }
-
   function blockText(o) {
     if (o == null) return "";
     if (typeof o === "string") return o;
@@ -3300,36 +2450,29 @@ export function startAdmin(host, env) {
     if (Array.isArray(o)) return o.map(blockText).join("\n");
     if (typeof o.text === "string" && (o.type === "text" || o.type == null)) return o.text;
     if (o.type === "image") {
-      const mt = (o.source && o.source.media_type) || "image";
-      const data = o.source && typeof o.source.data === "string" ? o.source.data : "";
-      return "[image " + mt + (data ? " · " + data : "") + "]";
+      const data = typeof o.source?.data === "string" && o.source.data ? " · " + o.source.data : "";
+      return "[image " + (o.source?.media_type || "image") + data + "]";
     }
     if (o.type === "tool_use")
       return "[tool_use " + (o.name || "tool") + (o.id ? " · " + o.id : "") + "]\n" + stringify(o.input ?? {});
     if (o.type === "tool_result")
-      return (
-        "[tool_result" +
-        (o.tool_use_id ? " " + o.tool_use_id : "") +
-        (o.is_error ? " · error" : "") +
-        "]\n" +
-        blockText(o.content)
-      );
-    if (o.type === "thinking")
-      return (
-        "[thinking]\n" +
-        (typeof o.thinking === "string" ? o.thinking : "") +
-        (typeof o.signature === "string" ? "\n[signature " + o.signature + "]" : "")
-      );
+      return `[tool_result${o.tool_use_id ? " " + o.tool_use_id : ""}${o.is_error ? " · error" : ""}]\n${blockText(o.content)}`;
+    if (o.type === "thinking") {
+      const signature = typeof o.signature === "string" ? "\n[signature " + o.signature + "]" : "";
+      return "[thinking]\n" + (typeof o.thinking === "string" ? o.thinking : "") + signature;
+    }
     if (o.type === "redacted_thinking")
       return "[redacted_thinking" + (typeof o.data === "string" ? " " + o.data : "") + "]";
     if (o.type === "document") return "[document " + (o.title || o.name || "attachment") + "]";
     return stringify(o);
   }
   function messageEntryText(m) {
-    const role = m && typeof m === "object" ? m.role || "message" : "message";
-    const name = m && typeof m === "object" && m.name ? " (" + m.name + ")" : "";
-    const content = m && typeof m === "object" ? blockText(m.content) : blockText(m);
-    return "[" + String(role) + name + "]\n" + (content.length ? content : "(no content)");
+    const obj = m && typeof m === "object";
+    const content = blockText(obj ? m.content : m);
+    const name = obj && m.name ? " (" + m.name + ")" : "";
+    return (
+      "[" + String(obj ? m.role || "message" : "message") + name + "]\n" + (content.length ? content : "(no content)")
+    );
   }
   function systemToText(system) {
     if (system == null) return { text: "", cacheSplit: false };
@@ -3341,11 +2484,10 @@ export function startAdmin(host, env) {
       const t = b && typeof b === "object" && typeof b.text === "string" ? b.text : blockText(b);
       out += (i ? "\n" : "") + t;
       const cc = b && typeof b === "object" ? b.cache_control : null;
-      if (cc) {
-        const ttl = cc && typeof cc === "object" && cc.ttl ? " " + cc.ttl : "";
-        out += "\n\n────── cache breakpoint (" + ((cc && cc.type) || "ephemeral") + ttl + ") ──────\n";
-        cacheSplit = true;
-      }
+      if (!cc) return;
+      const ttl = typeof cc === "object" && cc.ttl ? " " + cc.ttl : "";
+      out += "\n\n────── cache breakpoint (" + (cc.type || "ephemeral") + ttl + ") ──────\n";
+      cacheSplit = true;
     });
     return { text: out, cacheSplit };
   }
@@ -3361,101 +2503,71 @@ export function startAdmin(host, env) {
       "\n\n(auth + anthropic-version headers are added by the provider SDK below the capture point, so they aren't shown)"
     );
   }
-  function requestBody(q) {
-    return q && q.promptEnvelope != null ? q.promptEnvelope : null;
-  }
+  const requestBody = (q) => (q && q.promptEnvelope != null ? q.promptEnvelope : null);
   function contextSections(request, transport) {
     const req = request && typeof request === "object" ? request : {};
     const messages = Array.isArray(req.messages) ? req.messages : [];
-    const params = {};
-    for (const [k, v] of Object.entries(req)) {
-      if (k !== "system" && k !== "messages" && k !== "tools") params[k] = v;
-    }
+    const params = Object.fromEntries(
+      Object.entries(req).filter(([k]) => !["system", "messages", "tools"].includes(k)),
+    );
+    const paramCount = Object.keys(params).length;
+    const count = (n, word) => n + " " + word + (n === 1 ? "" : "s");
     const sys = systemToText(req.system);
-    const sections = [
-      { key: "transport", label: "Transport", note: "model + headers", text: transportText(transport) },
-      {
-        key: "system",
-        label: "System prompt",
-        note: sys.cacheSplit ? "verbatim · cache split shown" : "verbatim",
-        text: sys.text,
-      },
-      {
-        key: "messages",
-        label: "Messages",
-        note: messages.length
-          ? messages.length + " message" + (messages.length === 1 ? "" : "s")
-          : "not re-captured per step; the transcript is the record",
-        text: messages.map(messageEntryText).join("\n\n"),
-      },
-      {
-        key: "tools",
-        label: "Tool schemas",
-        note: Array.isArray(req.tools) ? req.tools.length + " tool" + (req.tools.length === 1 ? "" : "s") : "tools",
-        text: req.tools == null ? "" : stringify(req.tools),
-      },
-      {
-        key: "params",
-        label: "Request params",
-        note: Object.keys(params).length + " field" + (Object.keys(params).length === 1 ? "" : "s"),
-        text: Object.keys(params).length ? stringify(params) : "",
-      },
-    ].filter((s) => s.text);
-    return sections.map((s) => ({ ...s, tokens: estimateTokens(s.text), chars: s.text.length }));
-  }
-  function contextTotal(sections) {
-    return sections.reduce((n, s) => n + s.tokens, 0);
+    const messageNote = messages.length
+      ? count(messages.length, "message")
+      : "not re-captured per step; the transcript is the record";
+    return [
+      ["transport", "Transport", "model + headers", transportText(transport)],
+      ["system", "System prompt", sys.cacheSplit ? "verbatim · cache split shown" : "verbatim", sys.text],
+      ["messages", "Messages", messageNote, messages.map(messageEntryText).join("\n\n")],
+      [
+        "tools",
+        "Tool schemas",
+        Array.isArray(req.tools) ? count(req.tools.length, "tool") : "tools",
+        req.tools == null ? "" : stringify(req.tools),
+      ],
+      ["params", "Request params", count(paramCount, "field"), paramCount ? stringify(params) : ""],
+    ]
+      .filter(([, , , text]) => text)
+      .map(([key, label, note, text]) => ({
+        key,
+        label,
+        note,
+        text,
+        tokens: estimateTokens(text),
+        chars: text.length,
+      }));
   }
   function callCacheUsage(q) {
     const u = q && q.usage;
     if (!u || typeof u !== "object") return null;
-    const read = Number(u.cacheRead) || 0,
-      write = Number(u.cacheWrite) || 0,
-      uncached = Number(u.input) || 0;
-    return { cacheRead: read, cacheWrite: write, uncachedInput: uncached };
+    return {
+      cacheRead: Number(u.cacheRead) || 0,
+      cacheWrite: Number(u.cacheWrite) || 0,
+      uncachedInput: Number(u.input) || 0,
+    };
   }
   function sumCacheUsage(requests) {
-    let saw = false,
-      cacheRead = 0,
-      cacheWrite = 0,
-      uncachedInput = 0;
-    for (const q of requests || []) {
-      const u = callCacheUsage(q);
-      if (!u) continue;
-      saw = true;
-      cacheRead += u.cacheRead;
-      cacheWrite += u.cacheWrite;
-      uncachedInput += u.uncachedInput;
-    }
-    return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
+    const usages = (requests || []).map(callCacheUsage).filter(Boolean);
+    const sum = (key) => usages.reduce((n, u) => n + u[key], 0);
+    return usages.length
+      ? { cacheRead: sum("cacheRead"), cacheWrite: sum("cacheWrite"), uncachedInput: sum("uncachedInput") }
+      : null;
   }
-
-  function realInputTokens(q) {
-    const u = callCacheUsage(q);
-    if (!u) return null;
-    const sum = u.cacheRead + u.cacheWrite + u.uncachedInput;
-    return sum > 0 ? sum : null;
-  }
+  const usageTotal = (u) => u.cacheRead + u.cacheWrite + u.uncachedInput;
   function fmtContextSize(q, sections) {
-    const real = realInputTokens(q);
-    return real != null ? fmtTokens(real) : "~" + fmtTokens(contextTotal(sections));
+    const u = callCacheUsage(q);
+    return u && usageTotal(u) > 0
+      ? fmtTokens(usageTotal(u))
+      : "~" + fmtTokens(sections.reduce((n, s) => n + s.tokens, 0));
   }
-  function cacheHitRatio(u) {
-    if (!u) return null;
-    const denom = u.cacheRead + u.cacheWrite + u.uncachedInput;
-    return denom > 0 ? u.cacheRead / denom : null;
-  }
+  const cacheHitRatio = (u) => (u && usageTotal(u) > 0 ? u.cacheRead / usageTotal(u) : null);
   function isStablePrefixMiss(u) {
     const ratio = cacheHitRatio(u);
-    if (ratio === null) return false;
-    return u.cacheWrite >= 1024 && ratio < 0.1;
+    return ratio !== null && u.cacheWrite >= 1024 && ratio < 0.1;
   }
-  function metaChip(text, kind = "") {
-    const s = document.createElement("span");
-    s.className = "meta-chip" + (kind ? " " + kind : "");
-    s.textContent = text;
-    return s;
-  }
+  const metaChip = (text, kind = "") =>
+    el("span", { className: "meta-chip" + (kind ? " " + kind : ""), textContent: text });
   function cacheMetaItems(u) {
     if (!u) return [];
     const ratio = cacheHitRatio(u);
@@ -3464,56 +2576,37 @@ export function startAdmin(host, env) {
     if (miss) out.push(metaChip("stable-prefix miss", "danger"));
     return out;
   }
-
   function durSeg(ms, label) {
-    const span = document.createElement("span");
     let cls = "";
     if (ms >= 30000) cls = "dur-hot";
     else if (ms >= 5000) cls = "dur-warm";
-    if (cls) span.className = cls;
-    span.textContent = fmtMs(ms);
+    const span = el("span." + cls, fmtMs(ms));
     if (!label) return span;
     const wrap = document.createDocumentFragment();
-    const lbl = document.createElement("span");
-    lbl.className = "seg-label";
-    lbl.textContent = label + " ";
-    wrap.append(lbl, span);
+    wrap.append(el("span.seg-label", label + " "), span);
     return wrap;
   }
-
   function stepDurEl(segs) {
     const parts = (segs || []).filter(([ms]) => ms != null && ms >= 0);
     if (!parts.length) return null;
-    const el = document.createElement("span");
-    el.className = "step-dur";
-    parts.forEach(([ms, label], i) => {
-      if (i) el.appendChild(document.createTextNode(" · "));
-      el.appendChild(durSeg(ms, label));
-    });
-    return el;
+    const node = el("span.step-dur");
+    parts.forEach(([ms, label], i) => node.append(...(i ? [" · "] : []), durSeg(ms, label)));
+    return node;
   }
   function rawJsonLink(requests, label = "Raw JSON") {
-    const a = document.createElement("a");
-    a.className = "context-raw";
-    let payload;
-    if (requests.length === 1) {
-      payload = requestBody(requests[0]);
-      if (requests[0]?.transport) payload = { request: requestBody(requests[0]), transport: requests[0].transport };
-    } else {
-      payload = requests.map((q) => ({
-        step: q.step,
-        model: q.model,
-        createdAt: q.createdAt,
-        truncated: !!q.truncated,
-        ...(q.transport ? { transport: q.transport } : {}),
-        request: requestBody(q),
-      }));
-    }
-    a.href = "#";
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-
+    let payload = requests.map((q) => ({
+      step: q.step,
+      model: q.model,
+      createdAt: q.createdAt,
+      truncated: !!q.truncated,
+      ...(q.transport ? { transport: q.transport } : {}),
+      request: requestBody(q),
+    }));
+    if (requests.length === 1)
+      payload = requests[0]?.transport
+        ? { request: requestBody(requests[0]), transport: requests[0].transport }
+        : requestBody(requests[0]);
+    const a = el("a.context-raw", { href: "#", target: "_blank", rel: "noopener", textContent: label });
     let url = null;
     a.addEventListener("click", () => {
       if (url) URL.revokeObjectURL(url);
@@ -3522,7 +2615,6 @@ export function startAdmin(host, env) {
     });
     return a;
   }
-
   async function downloadFile(f) {
     if (!f.openable) return;
     const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
@@ -3536,15 +2628,102 @@ export function startAdmin(host, env) {
       window.open(href, "_blank", "noreferrer");
       return;
     }
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = f.name || fileName(f.path);
-    a.rel = "noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    clickLink({ href, download: f.name || fileName(f.path) });
   }
-
+  function helpers() {
+    return {
+      orgId,
+      api,
+      pageShell,
+      go,
+      stateToUrl,
+      openScopeRow,
+      scopeKind,
+      shortName,
+      dirLabel,
+      plural,
+      relTime,
+      fmtTime,
+      fmtBytes,
+      shortId,
+      titleCase,
+      firstLine,
+      fileName,
+      fileKind,
+      fileSha256,
+      uploadErrorMessage,
+      downloadFile,
+      cronName,
+      shortSchedule,
+      fmtSchedule,
+      destinationSummary,
+      destinationDetails,
+      createdByCell,
+      packRepoLabel,
+      scopeCell,
+      statusBadge,
+      scopeRows,
+      buildScopeMultiSelect,
+      webUiAsButton,
+      adminErrors,
+      errorStripBox,
+      renderToolEntry,
+      stepDurEl,
+      toolName,
+      toolLabelText,
+      toolPrimaryText,
+      toolStatusMeta,
+      toolCopyText,
+      copyButton,
+      payloadText,
+      payloadName,
+      isXmlishText,
+      renderXmlish,
+      renderMarkdown,
+      entryIsNoise,
+      brandSelfLabel,
+      wakeOriginLabel,
+      deliveryLabel,
+      deliverySurfaceLabel,
+      slackMirrorRef,
+      metaChip,
+      deliveryFileBadges,
+      contextSections,
+      requestBody,
+      sumCacheUsage,
+      cacheMetaItems,
+      rawJsonLink,
+      fmtContextSize,
+      fmtTokens,
+      isStablePrefixMiss,
+      defaultShell,
+      navLink,
+      egressDetail,
+      historyKindMatches,
+      historyModeLabel,
+      selectScope,
+      adminErrorCount,
+      urlToState,
+      slackParseText,
+      slackContainerLabel,
+      slackContainerScope,
+      loadSlackContainers,
+      labelRole,
+      copyText,
+      openWebUiAs,
+      openUser,
+      fmtPct,
+    };
+  }
+  governanceUI.slackActivity.configure({
+    ...helpers(),
+    containers: () => slackContainers,
+    truncated: () => slackContainersTruncated,
+    view: () => view,
+    loaded: () => {
+      viewLoadedAt.slack = Date.now();
+    },
+  });
   route();
   return {
     route,
