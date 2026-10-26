@@ -1,5 +1,6 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
+import { MEMORY_FACT_MIGRATIONS } from "./postgres-memory-service.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -49,7 +50,7 @@ const SCHEMA = [
   )`,
 ];
 
-const FACT_HASH = "encode(sha256(convert_to(f.text, 'UTF8')), 'hex')";
+const FACT_HASH = "f.text_hash";
 const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit) || 1));
 
 function vectorWidth(dimensions: number | undefined): number | null {
@@ -61,6 +62,7 @@ function vectorWidth(dimensions: number | undefined): number | null {
 
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
   const db = createPgPool(connectionString, [
+    ...MEMORY_FACT_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
   ]);
