@@ -1,38 +1,34 @@
-import { emojiCompletion } from "./emoji-completion";
+import { createPasteView } from "./paste-view";
+import { createComposerQueue } from "./composer-queue";
+import {
+  attachmentSrc,
+  createComposerAttachments,
+  loadAnyAttachment,
+  openImagePreview,
+  textAttachment,
+} from "./composer-attachments";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "./app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import { getRuntimeConfig } from "./runtime-config-cache.ts";
-import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Agent } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-open";
 import type { Attachment } from "@earendil-works/pi-web-ui";
-import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
-import { html, nothing, render, type TemplateResult } from "lit";
-import { live } from "lit/directives/live.js";
+import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
+import { ArrowUp, Box, FileText, Paperclip, Square, X } from "lucide";
 import {
   api,
-  ApiError,
   approvalBlocksComposer,
-  mintSendKey,
   userSendMessage,
   type ApprovalDecision,
   type PendingApproval,
-  type QueuedRun,
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
-import { editQueuedRun, PENDING_APPROVAL_REASON, queueTurn, withdrawRun } from "./run-stream";
-import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_FILES_PER_MESSAGE,
-  oversizeAttachmentNote,
-  tooManyFilesNote,
-  uploadAttachments,
-  type CoreAttachment,
-} from "./attachments";
+import { PENDING_APPROVAL_REASON } from "./run-stream";
+import { MAX_FILES_PER_MESSAGE, uploadAttachments, type CoreAttachment } from "./attachments";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
 import { icon } from "./icons";
@@ -48,8 +44,8 @@ import { modelSupportsFastMode } from "./pi-models";
 import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
-import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
-import { clearDraft, newChatDraftKey, parsePairs, readStorage, saveDraft, writeStorage } from "./drafts";
+import { pasteChipLabel } from "./paste-text";
+import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
@@ -68,47 +64,20 @@ import {
 } from "./composer-loadout";
 
 import { createModelPicker } from "./model-picker";
+import {
+  carryModelPick,
+  forgetThreadPick,
+  hasThreadModelPick,
+  rememberThreadPick,
+  threadModelPick,
+} from "./thread-model-picks";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
-const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
-const THREAD_PICKS_CAP = 50;
-function loadThreadPicks(): Map<string, ModelOptionValue> {
-  return parsePairs(readStorage(THREAD_PICKS_STORAGE_KEY), THREAD_PICKS_CAP);
-}
-
-let threadModelPicks = loadThreadPicks();
 function runtimeScopeKey(scopeId: string | null): string | null {
   if (scopeId) return scopeId;
   const user = appState.me?.user;
   return user ? `personal:${user}` : null;
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
-    if (e.key === THREAD_PICKS_STORAGE_KEY) threadModelPicks = loadThreadPicks();
-  });
-}
-
-function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
-  const merged = loadThreadPicks();
-  for (const [ref, pick] of threadModelPicks) if (!merged.has(ref)) merged.set(ref, pick);
-  merged.delete(threadRef);
-  merged.set(threadRef, value);
-  while (merged.size > THREAD_PICKS_CAP) merged.delete(merged.keys().next().value as string);
-  threadModelPicks = merged;
-  writeStorage(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...merged]));
-}
-
-function forgetThreadPick(threadRef: string): void {
-  threadModelPicks = loadThreadPicks();
-  threadModelPicks.delete(threadRef);
-  writeStorage(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...threadModelPicks]));
-}
-
-function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void {
-  const pick = fromThreadRef ? threadModelPicks.get(fromThreadRef) : undefined;
-  if (pick) rememberThreadPick(toThreadRef, pick);
 }
 
 function modelOptionFor(value: ModelOptionValue, scopeKey?: string | null): ModelOption | undefined {
@@ -247,46 +216,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   const pastedTextIds = new Set<string>();
 
-  const queuedRuns = new Map<string, QueuedRun[]>();
-  let queuedEdit: { runId: string; threadRef: string; original: string; text: string; saving: boolean } | null = null;
-
-  function queuedRunsFor(threadRef: string | null): QueuedRun[] {
-    return (threadRef ? queuedRuns.get(threadRef) : undefined) ?? [];
-  }
-
-  function putRuns<T>(map: Map<string, T[]>, threadRef: string, runs: T[]): void {
-    if (runs.length) map.set(threadRef, runs);
-    else map.delete(threadRef);
-  }
-
-  function setQueuedRuns(threadRef: string, runs: QueuedRun[]): void {
-    putRuns(queuedRuns, threadRef, runs);
-  }
-
-  function forgetQueuedRun(threadRef: string, runId: string): void {
-    setQueuedRuns(
-      threadRef,
-      queuedRunsFor(threadRef).filter((r) => r.runId !== runId),
-    );
-  }
-
-  const steeringRuns = new Map<string, Array<QueuedRun & { ts: string }>>();
-
-  function steeringRunsFor(threadRef: string | null, agent: Agent): QueuedRun[] {
-    const steering = threadRef ? steeringRuns.get(threadRef) : undefined;
-    if (!threadRef || !steering) return [];
-    const settled = !agent.state.isStreaming && !ctx.chat.hasLiveRun();
-    const intakes = new Set(
-      agent.state.messages.flatMap((m) => {
-        const { steered, ts } = m as { steered?: boolean; ts?: string };
-        return steered && ts ? [ts] : [];
-      }),
-    );
-    const waiting = settled ? [] : steering.filter((run) => !intakes.has(run.ts));
-    putRuns(steeringRuns, threadRef, waiting);
-    return waiting;
-  }
-
   const fileDrag = createFileDragState((dragging) => {
     composerState.dragging = dragging;
     ctx.chat.drawActiveChat();
@@ -317,7 +246,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function threadPick(): ModelOptionValue | undefined {
-    return ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined;
+    return ctx.chat.state.threadRef ? threadModelPick(ctx.chat.state.threadRef) : undefined;
   }
 
   function currentModelOption(): ModelOption | undefined {
@@ -329,7 +258,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     return (
       !!selected &&
-      !(threadRef && threadModelPicks.has(threadRef)) &&
+      !(threadRef && hasThreadModelPick(threadRef)) &&
       effortOverride === undefined &&
       fastModeOverride === undefined &&
       restoredLoadout?.value !== selected.value
@@ -394,7 +323,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     loadout = loadLoadout(loadoutKey);
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
-    if (selected && threadRef && !threadModelPicks.has(threadRef)) {
+    if (selected && threadRef && !hasThreadModelPick(threadRef)) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout).find(
         (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
@@ -407,7 +336,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const saved = loadout.find((entry) => entry.value === selected.value);
     if (!saved) return;
     const normalized = normalizeLoadoutEntry(saved, selected);
-    if (threadRef && threadModelPicks.has(threadRef)) {
+    if (threadRef && hasThreadModelPick(threadRef)) {
       effortOverride ??= normalized.effort;
       fastModeOverride ??= normalized.fast;
     } else {
@@ -658,83 +587,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
-  function pasteViewDialog(agent: Agent): TemplateResult | typeof nothing {
-    const view = composerState.pasteView;
-    if (!view) return nothing;
-    return html`
-      <div
-        class="project-dialog-backdrop"
-        @click=${(e: MouseEvent) => e.target === e.currentTarget && closePasteView(agent)}
-        @keydown=${(e: KeyboardEvent) => e.key === "Escape" && closePasteView(agent)}
-      >
-        <div class="project-dialog paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-dialog-title">
-          <div class="project-dialog-head">
-            <div><h2 id="paste-dialog-title">Pasted text</h2></div>
-            <button
-              class="chip-x"
-              type="button"
-              aria-label="Close"
-              ${tip("Close")}
-              @click=${() => closePasteView(agent)}
-            >
-              ${icon(X, 16)}
-            </button>
-          </div>
-          <textarea
-            class="paste-dialog-text"
-            dir="auto"
-            @input=${(e: InputEvent) => {
-              view.text = (e.currentTarget as HTMLTextAreaElement).value;
-              view.dirty = true;
-            }}
-          >
-  ${view.initial}</textarea>
-          <div class="project-dialog-actions">
-            <button class="btn" type="button" @click=${() => removeAttachment(view.id, agent)}>Remove</button>
-            <button class="btn" type="button" @click=${() => insertPasteIntoDraft(agent)}>Insert into message</button>
-            <button class="btn primary" type="button" @click=${() => closePasteView(agent)}>Done</button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function openPasteView(id: string, agent: Agent): void {
-    const attachment = composerState.attachments.find((a) => a.id === id);
-    if (!attachment) return;
-    const text = attachment.extractedText ?? base64ToText(attachment.content);
-    composerState.pasteView = { id, text, initial: text, dirty: false };
-    ctx.chat.drawActiveChat(agent);
-    requestAnimationFrame(() => ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".paste-dialog-text")?.focus());
-  }
-
-  function closePasteView(agent: Agent): void {
-    const view = composerState.pasteView;
-    if (!view) return;
-    const attachment = composerState.attachments.find((a) => a.id === view.id);
-    if (attachment && view.dirty) {
-      const bytes = new TextEncoder().encode(view.text);
-      attachment.content = bytesToBase64(bytes);
-      attachment.size = bytes.length;
-      attachment.extractedText = view.text;
-    }
-    composerState.pasteView = null;
-    ctx.chat.drawActiveChat(agent);
-  }
-
-  function insertPasteIntoDraft(agent: Agent): void {
-    const view = composerState.pasteView;
-    if (!view) return;
-    const ta = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".composer-input");
-    const { draft, cursor } = insertIntoDraft(composerState.draft, view.text, ta ? ta.selectionStart : null);
-    composerState.draft = draft;
-    persistDraft();
-    composerState.pasteView = null;
-    removeAttachment(view.id, agent);
-    resizeComposer();
-    requestAnimationFrame(() => focusField(".composer-input", cursor));
-  }
-
   function focusField(selector: string, cursor?: number): void {
     const input = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(selector);
     input?.focus();
@@ -766,115 +618,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function canSteer(agent: Agent): boolean {
     return agent.state.isStreaming && !ctx.chat.isStopping() && ctx.chat.hasLiveRun();
-  }
-
-  function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
-    const threadRef = ctx.chat.state.threadRef;
-    const queued = queuedRunsFor(threadRef).filter((q) => !pendingSteers.has(q.runId));
-    if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
-      queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
-    if (!queued.length) return nothing;
-    const steerable = canSteer(agent);
-    return html`
-      <div class="queued-strip" role="list" aria-label="Queued messages">
-        ${queued.map((q) =>
-          queuedEdit?.runId === q.runId && queuedEdit.threadRef === ctx.chat.state.threadRef
-            ? html` <div class="queued-chip queued-editing" role="listitem">
-                <textarea
-                  class="queued-edit-input"
-                  ${emojiCompletion(queuedEdit.text)}
-                  aria-label="Edit queued message"
-                  rows="3"
-                  .value=${live(queuedEdit.text)}
-                  ?disabled=${queuedEdit.saving}
-                  @input=${(event: Event) => {
-                    if (queuedEdit) queuedEdit.text = (event.target as HTMLTextAreaElement).value;
-                  }}
-                  @keydown=${(event: KeyboardEvent) => {
-                    const save = event.key === "Enter" && (event.metaKey || event.ctrlKey);
-                    if (event.isComposing || queuedEdit?.saving || (!save && event.key !== "Escape")) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (save) void saveQueuedEdit(agent);
-                    else cancelQueuedEdit(agent);
-                  }}
-                ></textarea>
-                <button
-                  type="button"
-                  class="queued-steer"
-                  aria-keyshortcuts="Control+Enter Meta+Enter"
-                  ?disabled=${queuedEdit.saving}
-                  @click=${() => void saveQueuedEdit(agent)}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  class="queued-steer"
-                  ?disabled=${queuedEdit.saving}
-                  @click=${() => cancelQueuedEdit(agent)}
-                >
-                  Cancel
-                </button>
-              </div>`
-            : html`
-                <div class="queued-chip" role="listitem">
-                  <span class="queued-tag">Queued</span>
-                  <span class="queued-text" dir="auto" ${tip(q.text || "Files, no text")}
-                    >${q.text || (q.hasAttachments ? "(files)" : "")}</span
-                  >
-                  <button
-                    type="button"
-                    class="queued-steer"
-                    ?disabled=${!steerable}
-                    ${tip(
-                      steerable
-                        ? "Steer the running task with this instead of waiting"
-                        : "Nothing running can take this. It will go out as its own turn",
-                    )}
-                    @click=${() => void steerQueued(agent, q)}
-                  >
-                    ${icon(CornerDownRight, 13)}<span>Steer</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="queued-steer"
-                    aria-label="Edit queued message"
-                    @click=${() => {
-                      const edit = (queuedEdit = {
-                        runId: q.runId,
-                        threadRef: ctx.chat.state.threadRef!,
-                        original: q.text,
-                        text: q.text,
-                        saving: false,
-                      });
-                      ctx.chat.drawActiveChat(agent);
-                      requestAnimationFrame(() => {
-                        if (
-                          queuedEdit === edit &&
-                          ctx.chat.state.threadRef === edit.threadRef &&
-                          ctx.chat.state.agent === agent
-                        )
-                          focusField(".queued-edit-input");
-                      });
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    class="chip-x"
-                    aria-label="Remove queued message"
-                    ${tip("Remove")}
-                    @click=${() => void removeQueued(agent, q)}
-                  >
-                    ${icon(X, 13)}
-                  </button>
-                </div>
-              `,
-        )}
-      </div>
-    `;
   }
 
   function composerApprovalPanel(
@@ -1242,197 +985,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     focusComposerEnd();
   }
 
-  let failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
-
-  function queuedFilesKey(staged: readonly Attachment[]): string {
-    return staged.map((a) => a.id).join(",");
-  }
-
-  function queueSendKey(threadRef: string, text: string, filesKey: string): string {
-    return failedQueueSend?.threadRef === threadRef &&
-      failedQueueSend.text === text &&
-      failedQueueSend.filesKey === filesKey
-      ? failedQueueSend.idempotencyKey
-      : mintSendKey();
-  }
-
-  async function queueDraft(agent: Agent): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
-    const text = composerState.draft.trim();
-    const staged = composerState.attachments;
-    if ((!text && !staged.length) || !threadRef) return;
-    clearActiveDraft();
-    composerState.draft = "";
-    composerState.attachments = [];
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    clearComposerDom(agent);
-    const { uploaded, skipped } = await uploadAttachments(staged);
-    const stillHere = (): boolean => ctx.chat.state.threadRef === threadRef;
-    if (skipped.length && stillHere()) composerState.error = skipped.map((s) => s.note).join(" ");
-    const droppedIds = new Set(skipped.filter((s) => s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
-    const transientIds = new Set(skipped.filter((s) => !s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
-    const sendable = staged.filter((a) => !droppedIds.has(a.id));
-    if (!text && !uploaded.length) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
-      return ctx.chat.drawActiveChat(agent);
-    }
-    const steer = alwaysSteer() && canSteer(agent);
-    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
-    } else if (transientIds.size && stillHere()) {
-      restageAttachments(
-        staged.filter((a) => transientIds.has(a.id)),
-        composerState.error,
-      );
-    }
-    ctx.chat.drawActiveChat(agent);
-  }
-
-  function restoreStagedOnFailure(text: string, staged: Attachment[], note: string): void {
-    const typedSince = composerState.draft.trim();
-    composerState.draft = !typedSince || typedSince === text ? text : `${text}\n${composerState.draft}`;
-    restageAttachments(staged, note);
-  }
-
-  async function enqueueTurn(
-    agent: Agent,
-    threadRef: string,
-    text: string,
-    attachments: CoreAttachment[] = [],
-    filesKey = "",
-    steer = false,
-  ): Promise<boolean> {
-    const idempotencyKey = queueSendKey(threadRef, text, filesKey);
-    try {
-      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions, idempotencyKey, attachments);
-      failedQueueSend = null;
-      bumpSessionActivity(threadRef);
-      if (steer && canSteer(agent) && threadRef === ctx.chat.state.threadRef) void steerQueued(agent, queued, true);
-      else addQueuedRun(threadRef, queued);
-      return true;
-    } catch (err) {
-      failedQueueSend = { threadRef, text, filesKey, idempotencyKey };
-      composerState.error = errMessage(err, "Could not queue the message.");
-      return false;
-    }
-  }
-
-  function cancelQueuedEdit(agent: Agent): void {
-    if (queuedEdit?.saving) return;
-    queuedEdit = null;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    focusComposerEnd();
-  }
-
-  async function saveQueuedEdit(agent: Agent): Promise<void> {
-    const edit = queuedEdit;
-    if (!edit || edit.saving) return;
-    edit.saving = true;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    try {
-      await editQueuedRun(edit.runId, edit.text, edit.original);
-      setQueuedRuns(
-        edit.threadRef,
-        queuedRunsFor(edit.threadRef).map((q) => (q.runId === edit.runId ? { ...q, text: edit.text } : q)),
-      );
-      if (queuedEdit === edit) {
-        queuedEdit = null;
-        if (ctx.chat.state.threadRef === edit.threadRef && ctx.chat.state.agent === agent) focusComposerEnd();
-      }
-    } catch (error) {
-      if (ctx.chat.state.threadRef === edit.threadRef)
-        composerState.error =
-          error instanceof ApiError && error.status === 409
-            ? "That message changed or already started. Your edit was not saved."
-            : errMessage(error, "Could not edit the queued message.");
-    } finally {
-      edit.saving = false;
-      if (ctx.chat.state.threadRef === edit.threadRef) ctx.chat.drawActiveChat(agent);
-    }
-  }
-
-  async function removeQueued(agent: Agent, queued: QueuedRun): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
-    if (!threadRef) return;
-    composerState.error = "";
-    try {
-      await withdrawRun(queued.runId);
-    } catch (err) {
-      if (!(err instanceof ApiError && (err.status === 409 || err.status === 404))) {
-        composerState.error = errMessage(err, "Could not remove the queued message.");
-        return ctx.chat.drawActiveChat(agent);
-      }
-    }
-    forgetQueuedRun(threadRef, queued.runId);
-    ctx.chat.drawActiveChat(agent);
-  }
-
-  const pendingSteers = new Set<string>();
-
-  function addQueuedRun(threadRef: string, queued: QueuedRun): void {
-    setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
-  }
-
-  function markSteering(threadRef: string, queued: QueuedRun): void {
-    steeringRuns.set(threadRef, [
-      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== queued.runId),
-      { ...queued, ts: `queued-steer:${threadRef}:${queued.runId}` },
-    ]);
-  }
-
-  function unmarkSteering(threadRef: string, runId: string): void {
-    putRuns(
-      steeringRuns,
-      threadRef,
-      (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId),
-    );
-  }
-
-  async function steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
-    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) {
-      if (fresh && threadRef) addQueuedRun(threadRef, queued);
-      return;
-    }
-    pendingSteers.add(queued.runId);
-    composerState.error = "";
-    markSteering(threadRef, queued);
-    let steered = false;
-    let fallBackToQueue = fresh;
-    const here = (): boolean => agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef;
-    try {
-      const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
-      steered = outcome.ok;
-      if (outcome.ok || outcome.replayed) {
-        fallBackToQueue = false;
-        forgetQueuedRun(threadRef, queued.runId);
-        bumpSessionActivity(threadRef);
-        if (!outcome.ok && here())
-          agent.state.messages.push({ role: "user", content: queued.text, timestamp: Date.now() } as AgentMessage);
-      } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
-        fallBackToQueue = false;
-        forgetQueuedRun(threadRef, queued.runId);
-      } else {
-        reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
-        if (outcome.reason === "queued_changed" && here())
-          composerState.error = "The queued message changed. Try steering it again.";
-      }
-    } catch (err) {
-      reportHandledError("web:steer_queued", err);
-      if (here()) composerState.error = errMessage(err, "Could not confirm steering. Try again.");
-    } finally {
-      pendingSteers.delete(queued.runId);
-      if (!steered) unmarkSteering(threadRef, queued.runId);
-    }
-    if (fallBackToQueue) addQueuedRun(threadRef, queued);
-    if (!here()) return;
-    ctx.chat.drawActiveChat(agent);
-    ctx.chat.resumeIfIdle();
-  }
-
   let pendingSubmissions = 0;
   let disposed = false;
   const preventUnsafeUpdate = (event: Event): void => {
@@ -1567,206 +1119,36 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     );
   }
 
-  const LARGE_PASTE_CHARS = 2000;
+  const {
+    onComposerPaste,
+    onDragEnter,
+    onDragOver,
+    onDrop,
+    onFilesSelected,
+    pickFiles,
+    removeAttachment,
+    restageAttachments,
+  } = createComposerAttachments({ ctx, composerState, fileDrag, pastedTextIds, approvalPending });
 
-  async function onComposerPaste(e: ClipboardEvent, agent: Agent): Promise<void> {
-    const data = e.clipboardData;
-    if (!data) return;
-    const files = Array.from(data.items)
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-    if (files.length) {
-      e.preventDefault();
-      await addFiles(files, agent);
-      return;
-    }
-    const text = data.getData("text/plain");
-    if (text.length <= LARGE_PASTE_CHARS) return;
-    if (approvalPending() || composerState.processingFiles) return;
-    if (composerState.attachments.length >= MAX_FILES_PER_MESSAGE) return;
-    e.preventDefault();
-    const names = new Set(composerState.attachments.map((a) => a.fileName));
-    let n = 1;
-    while (names.has(n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`)) n++;
-    const attachment = textAttachment(
-      `paste_${Date.now()}_${Math.random()}`,
-      n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`,
-      "text/plain",
-      text,
-    );
-    pastedTextIds.add(attachment.id);
-    composerState.attachments = [...composerState.attachments, attachment];
-    ctx.chat.drawActiveChat(agent);
-  }
-
-  function textAttachment(id: string, fileName: string, mimeType: string, text: string): Attachment {
-    const bytes = new TextEncoder().encode(text);
-    const content = bytesToBase64(bytes);
-    return { id, type: "document", fileName, mimeType, size: bytes.length, content, extractedText: text };
-  }
-
-  async function onFilesSelected(e: Event, agent: Agent): Promise<void> {
-    const input = e.currentTarget as HTMLInputElement;
-    const files = Array.from(input.files ?? []);
-    input.value = "";
-    await addFiles(files, agent);
-  }
-
-  async function loadAnyAttachment(file: File): Promise<Attachment> {
-    try {
-      const { loadAttachment } = await import("@earendil-works/pi-web-ui");
-      return await loadAttachment(file);
-    } catch {
-      return {
-        id: `${file.name}_${Date.now()}_${Math.random()}`,
-        type: "document",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        size: file.size,
-        content: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
-      };
-    }
-  }
-
-  function restageAttachments(attachments: Attachment[], note: string): void {
-    const merged = [...attachments, ...composerState.attachments].filter(
-      (a, i, all) => all.findIndex((b) => b.id === a.id) === i,
-    );
-    const dropped = merged.slice(MAX_FILES_PER_MESSAGE);
-    composerState.attachments = merged.slice(0, MAX_FILES_PER_MESSAGE);
-    composerState.error = combineNote(note, dropped.length ? tooManyFilesNote(dropped.map((a) => a.fileName)) : null);
-  }
-
-  function combineNote(existing: string, note: string | null): string {
-    if (!note) return existing;
-    return existing ? `${existing} ${note}` : note;
-  }
-
-  function planAdmission(files: File[], folderCount: number): { files: File[]; folders: number; note: string | null } {
-    const notes: string[] = [];
-    const sized: File[] = [];
-    for (const file of files) {
-      if (file.size > MAX_ATTACHMENT_BYTES) notes.push(oversizeAttachmentNote(file.name));
-      else sized.push(file);
-    }
-    const room = Math.max(0, MAX_FILES_PER_MESSAGE - composerState.attachments.length);
-    const admittedFiles = sized.slice(0, room);
-    const admittedFolders = Math.min(folderCount, Math.max(0, room - admittedFiles.length));
-    const overflow = [
-      ...sized.slice(room).map((f) => f.name),
-      ...Array.from({ length: folderCount - admittedFolders }, () => "a folder"),
-    ];
-    if (overflow.length) notes.push(tooManyFilesNote(overflow));
-    return { files: admittedFiles, folders: admittedFolders, note: notes.length ? notes.join(" ") : null };
-  }
-
-  async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = []): Promise<void> {
-    if ((!files.length && !folders.length) || approvalPending()) return;
-    if (composerState.processingFiles) {
-      composerState.error = "Still preparing the previous drop. Try again in a moment.";
-      ctx.chat.drawActiveChat(agent);
-      return;
-    }
-    composerState.processingFiles = true;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    const plan = planAdmission(files, folders.length);
-    try {
-      const zipped: File[] = [];
-      for (const folder of folders.slice(0, plan.folders)) zipped.push(await folderToZipFile(folder));
-      const loaded = await Promise.all([...plan.files, ...zipped].map((file) => loadAnyAttachment(file)));
-      composerState.attachments = [...composerState.attachments, ...loaded];
-      if (plan.note) composerState.error = plan.note;
-    } catch (err) {
-      let message: string;
-      if (err instanceof FolderDropError) message = err.message;
-      else if (isFolderReadError(err))
-        message = "That drop included a folder this browser can't read. Zip it and drop the archive instead.";
-      else message = errMessage(err, "Could not attach that file.");
-      composerState.error = combineNote(plan.note ?? "", message);
-    } finally {
-      composerState.processingFiles = false;
-      ctx.chat.drawActiveChat(agent);
-    }
-  }
-
-  function dragHasFiles(e: DragEvent): boolean {
-    const types = e.dataTransfer?.types;
-    return types ? Array.from(types).includes("Files") : false;
-  }
-
-  function onDragEnter(e: DragEvent): void {
-    if (!dragHasFiles(e)) return;
-    e.preventDefault();
-    fileDrag.enter(e);
-  }
-
-  function onDragOver(e: DragEvent): void {
-    if (!dragHasFiles(e)) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-  }
-
-  async function onDrop(e: DragEvent, agent: Agent): Promise<void> {
-    if (!dragHasFiles(e)) return;
-    e.preventDefault();
-    fileDrag.reset();
-    const { files, folders } = splitDropItems(Array.from(e.dataTransfer?.items ?? []));
-    if (!files.length && !folders.length) files.push(...Array.from(e.dataTransfer?.files ?? []));
-    ctx.chat.drawActiveChat(agent);
-    await addFiles(files, agent, folders);
-  }
-
-  function pickFiles(): void {
-    if (approvalPending()) return;
-    ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
-  }
-
-  function attachmentSrc(a: Attachment): string {
-    return a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`;
-  }
-
-  function openImagePreview(attachment: Attachment): void {
-    const dialog = document.createElement("dialog");
-    dialog.className = "project-dialog attachment-preview";
-    dialog.setAttribute("aria-label", attachment.fileName);
-    dialog.addEventListener(
-      "close",
-      () => {
-        render(nothing, dialog);
-        dialog.remove();
-      },
-      { once: true },
-    );
-    document.body.append(dialog);
-    render(
-      html`
-        <div class="attachment-preview-head">
-          <span dir="auto">${attachment.fileName}</span>
-          <button type="button" class="btn compact" @click=${() => dialog.close()}>Close</button>
-        </div>
-        <div class="attachment-preview-body">
-          <button
-            type="button"
-            aria-label="Toggle actual image size"
-            @click=${(event: Event) => (event.currentTarget as HTMLElement).classList.toggle("actual-size")}
-          >
-            <img src=${attachmentSrc(attachment)} alt=${attachment.fileName} />
-          </button>
-        </div>
-      `,
-      dialog,
-    );
-    dialog.showModal();
-  }
-
-  function removeAttachment(id: string, agent: Agent): void {
-    composerState.attachments = composerState.attachments.filter((a) => a.id !== id);
-    pastedTextIds.delete(id);
-    if (composerState.pasteView?.id === id) composerState.pasteView = null;
-    ctx.chat.drawActiveChat(agent);
-  }
+  const { queueDraft, queuedRunsFor, queuedStrip, restoreStagedOnFailure, setQueuedRuns, steeringRunsFor } =
+    createComposerQueue({
+      ctx,
+      composerState,
+      canSteer,
+      clearActiveDraft,
+      clearComposerDom,
+      focusComposerEnd,
+      focusField,
+      restageAttachments,
+    });
+  const { closePasteView, openPasteView, pasteViewDialog } = createPasteView({
+    ctx,
+    composerState,
+    focusField,
+    persistDraft,
+    removeAttachment,
+    resizeComposer,
+  });
 
   function clearChatSelection(): void {
     if (ctx.chat.state.threadRef) forgetThreadPick(ctx.chat.state.threadRef);
