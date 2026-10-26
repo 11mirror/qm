@@ -132,7 +132,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <label for="ambient-enabled">Ambient behavior</label>
         <p class="hint" style="margin: 2px 0 6px">
           When off, the agent never wakes on overheard messages in this channel; it only responds to direct @mentions.
-          Default: on only when the channel has instructions (or an action-mode bot is set below), otherwise mention-only.
+          Default: on only when the channel has instructions (or an action-mode bot is set below), otherwise
+          mention-only.
         </p>
         <select
           id="ambient-enabled"
