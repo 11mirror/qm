@@ -207,21 +207,11 @@ export class CredentialState extends SettingState {
   }
 }
 export const credentialState = new CredentialState();
-export function configureCredentials(options: any) {
-  config = options;
-}
-export function credentialStatus(message: string, tone: string) {
-  credentialState.message = message;
-  credentialState.tone = tone;
-  credentialState.saving = tone === "saving";
-  credentialState.render();
-}
-export function credentialLoading(message = "Loading credentials…", retry = false) {
-  credentialState.rows = [];
-  credentialState.listMessage = message;
-  credentialState.listRetry = retry;
-  credentialState.render();
-}
+export const configureCredentials = (options: any) => void (config = options);
+export const credentialStatus = (message: string, tone: string) =>
+  Object.assign(credentialState, { message, tone, saving: tone === "saving" }).render();
+export const credentialLoading = (listMessage = "Loading credentials…", listRetry = false) =>
+  Object.assign(credentialState, { rows: [], listMessage, listRetry }).render();
 export function loadCredentials(rows: Data[], directory: Data[], channels: Data[], scopes: Data[], scope: string) {
   Object.assign(credentialState, { rows, directory, channels, scopes, scope, listMessage: "", listRetry: false });
   if (!credentialState.open) credentialState.baseline = JSON.stringify(credentialState.collect());

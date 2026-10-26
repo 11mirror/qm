@@ -187,9 +187,7 @@ let soulActions: { formatTime: (time: any) => string; restore: (revision: Data) 
   formatTime: String,
   restore: async () => {},
 };
-export function configureSoul(actions: typeof soulActions) {
-  soulActions = actions;
-}
+export const configureSoul = (actions: typeof soulActions) => void (soulActions = actions);
 export function refreshSoul(data: Data) {
   const s = states.get("soul")!;
   s.draft.expectedVersion = data.soulVersion || 0;

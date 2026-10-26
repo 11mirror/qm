@@ -12,9 +12,7 @@ export type Context = {
   fmtTime: (value: string) => string;
 };
 export let context: Context;
-export function configure(value: Context) {
-  context = value;
-}
+export const configure = (value: Context) => void (context = value);
 export class SlackSetting extends SettingState {
   scope = "";
   collect() {

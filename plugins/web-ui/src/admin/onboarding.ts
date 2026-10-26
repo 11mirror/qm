@@ -294,7 +294,5 @@ export class Onboarding {
 }
 const controller = new Onboarding();
 export const mount = () => controller.mount();
-export const configure = (context: Data) => {
-  controller.context = context;
-};
+export const configure = (context: Data) => void (controller.context = context);
 export const load = () => controller.load();

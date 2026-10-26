@@ -21,9 +21,7 @@ export const provider = {
   session: 0,
 };
 let redraw = () => {};
-export function configureProviders(options: any) {
-  config = options;
-}
+export const configureProviders = (options: any) => void (config = options);
 function changeProvider(key: string, value: unknown) {
   provider.draft[key] = value;
   provider.revision++;
