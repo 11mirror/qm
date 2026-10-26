@@ -2552,6 +2552,18 @@ export function buildApp(
     ],
     { createSweeper, leaderLease, advisoryLock },
   );
+  // Started together once background work is admitted, and stopped together.
+  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [
+    reaper,
+    ...(processReaper ? [processReaper] : []),
+    semanticMemory,
+    ...(config.skillSyncPollMs > 0
+      ? [{ start: () => skillSyncEngine.start(config.skillSyncPollMs), stop: () => skillSyncEngine.stop() }]
+      : []),
+    ...(fileUploads ? [fileUploads] : []),
+    wakeSweep,
+    periodicJobs,
+  ];
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
@@ -2576,19 +2588,13 @@ export function buildApp(
     turnRunner?.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      reaper.start();
-      processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
         .then(() => {
           if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(config.monitorPollMs);
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
-      semanticMemory.start();
-      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
-      fileUploads?.start();
-      wakeSweep.start();
-      periodicJobs.start();
+      for (const service of periodicServices) service.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2602,13 +2608,7 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      reaper.stop(),
-      processReaper?.stop(),
-      semanticMemory.stop(),
-      skillSyncEngine.stop(),
-      fileUploads?.stop(),
-      wakeSweep.stop(),
-      periodicJobs.stop(),
+      ...periodicServices.map((service) => service.stop()),
       preemptionSweeper.stop(),
       turnRunner?.stopClaims(),
       ...workers.map((worker) => worker.stopClaims()),
