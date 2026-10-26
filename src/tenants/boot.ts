@@ -36,6 +36,9 @@ export async function bootTenant(
   await built.sandboxResources.initialize();
   const backfilledFires = await built.crons.backfillFires();
   if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
+  const rewrittenCredentials = (await built.keychain?.normalizeLegacyCredentials()) ?? 0;
+  if (rewrittenCredentials > 0)
+    console.log(`[qm] rewrote ${rewrittenCredentials} keychain credential(s) to the current shape`);
   const envSlackConfig = slackPluginConfigFromEnv(env);
   const slackConfig = envSlackConfig;
   const envSlackAttempted = Boolean(env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN);
