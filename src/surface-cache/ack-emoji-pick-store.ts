@@ -1,5 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
-import { tenant } from "../tenant.ts";
+import { createDecisionLogStore, type DecisionLogStore } from "./decision-log-store.ts";
 
 type AckPickOutcome = "picked" | "declined";
 
@@ -19,129 +18,43 @@ type AckEmojiPick = {
   createdAt: number;
 };
 
-type AckPickCounts = Record<AckPickOutcome, number>;
-
 type AckEmojiPickSummary = Omit<AckEmojiPick, "candidates">;
 
-export interface AckEmojiPickStore {
-  record(p: AckEmojiPick): Promise<void>;
-  list(opts?: {
-    channel?: string;
-    outcome?: AckPickOutcome[];
-    before?: number;
-    beforeId?: number;
-    limit?: number;
-  }): Promise<AckEmojiPickSummary[]>;
-  get(id: number): Promise<AckEmojiPick | null>;
-  counts(opts?: { channel?: string }): Promise<AckPickCounts>;
-  close(): Promise<void>;
-}
-
-const emptyCounts = (): AckPickCounts => ({ picked: 0, declined: 0 });
+export type AckEmojiPickStore = DecisionLogStore<AckEmojiPick, AckPickOutcome, AckEmojiPickSummary>;
 
 export function createPostgresAckEmojiPickStore(connectionString: string): AckEmojiPickStore {
-  const { q, close } = createPgPool(connectionString, "surface-cache/ack-emoji-pick/0001", [
-    `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
+  return createDecisionLogStore<AckEmojiPick, AckPickOutcome, AckEmojiPickSummary>(connectionString, {
+    table: "ack_emoji_picks",
+    migrationId: "surface-cache/ack-emoji-pick/0001",
+    migrations: [
+      `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,
         outcome TEXT NOT NULL, picked TEXT, icon TEXT, message TEXT, candidates TEXT, model TEXT,
         latency_ms INT, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
+      `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
         ON ack_emoji_picks(org_id, channel, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
+      `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
         ON ack_emoji_picks(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
+      `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
         ON ack_emoji_picks(org_id, outcome)`,
-  ]);
-  const row = (r: Record<string, unknown>): AckEmojiPick => ({
-    id: Number(r.id),
-    orgId: r.org_id as string,
-    surface: r.surface as string,
-    channel: r.channel as string,
-    ts: r.ts as string,
-    outcome: r.outcome as AckPickOutcome,
-    ...(r.picked != null ? { picked: r.picked as string } : {}),
-    ...(r.icon != null ? { icon: r.icon as string } : {}),
-    ...(r.message != null ? { message: r.message as string } : {}),
-    ...(r.candidates != null ? { candidates: r.candidates as string } : {}),
-    ...(r.model != null ? { model: r.model as string } : {}),
-    ...(r.latency_ms != null ? { latencyMs: Number(r.latency_ms) } : {}),
-    createdAt: Number(r.created_at),
+    ],
+    scopeColumn: "channel",
+    outcomeColumn: "outcome",
+    outcomes: ["picked", "declined"],
+    columns: [
+      ["surface", "surface", "text", true],
+      ["channel", "channel", "text", true],
+      ["ts", "ts", "text", true],
+      ["outcome", "outcome", "text", true],
+      ["picked", "picked", "text"],
+      ["icon", "icon", "text"],
+      ["message", "message", "text"],
+      ["candidates", "candidates", "text"],
+      ["model", "model", "text"],
+      ["latency_ms", "latencyMs", "int"],
+    ],
+    omitFromList: ["candidates"],
   });
-  return {
-    async record(p) {
-      await q(
-        `INSERT INTO ack_emoji_picks(org_id, surface, channel, ts, outcome, picked, icon, message, candidates, model, latency_ms, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [
-          tenant().orgId,
-          p.surface,
-          p.channel,
-          p.ts,
-          p.outcome,
-          p.picked ?? null,
-          p.icon ?? null,
-          p.message ?? null,
-          p.candidates ?? null,
-          p.model ?? null,
-          p.latencyMs ?? null,
-          p.createdAt,
-        ],
-      );
-    },
-    async list(opts) {
-      const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const where = ["org_id = $1"];
-      const args: unknown[] = [tenant().orgId];
-      if (opts?.channel) {
-        args.push(opts.channel);
-        where.push(`channel = $${args.length}`);
-      }
-      if (opts?.outcome?.length) {
-        const ph = opts.outcome.map((d) => {
-          args.push(d);
-          return `$${args.length}`;
-        });
-        where.push(`outcome IN (${ph.join(",")})`);
-      }
-      if (opts?.before != null) {
-        args.push(opts.before);
-        const c = `$${args.length}`;
-        if (opts.beforeId != null) {
-          args.push(opts.beforeId);
-          where.push(`(created_at < ${c} OR (created_at = ${c} AND id < $${args.length}))`);
-        } else {
-          where.push(`created_at < ${c}`);
-        }
-      }
-      args.push(limit);
-      const rows = await q(
-        `SELECT id, org_id, surface, channel, ts, outcome, picked, icon, message, model, latency_ms, created_at
-         FROM ack_emoji_picks WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT $${args.length}`,
-        args,
-      );
-      return rows.map(row);
-    },
-    async get(id) {
-      const rows = await q("SELECT * FROM ack_emoji_picks WHERE org_id = $1 AND id = $2", [tenant().orgId, id]);
-      return rows[0] ? row(rows[0]) : null;
-    },
-    async counts(opts) {
-      const args: unknown[] = [tenant().orgId];
-      let where = "org_id = $1";
-      if (opts?.channel) {
-        args.push(opts.channel);
-        where += ` AND channel = $${args.length}`;
-      }
-      const rows = await q(
-        `SELECT outcome, COUNT(*)::int AS n FROM ack_emoji_picks WHERE ${where} GROUP BY outcome`,
-        args,
-      );
-      const out = emptyCounts();
-      for (const r of rows) if ((r.outcome as string) in out) out[r.outcome as AckPickOutcome] = Number(r.n);
-      return out;
-    },
-    close,
-  };
 }

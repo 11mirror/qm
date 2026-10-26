@@ -397,13 +397,11 @@ export function createPostgresSurfaceCache(
     async listContainers(opts = {}) {
       const limit = clampLimit(opts.limit, MAX_READ_LIMIT);
       const rows = await q(
-        `SELECT s.*, COALESCE(m.n, 0) AS message_count
-           FROM channel_state s
-           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE org_id = $1 AND deleted = FALSE GROUP BY container) m
-             ON m.container = s.container
-          WHERE s.org_id = $1 AND s.surface = $3
-          ORDER BY s.updated_at DESC
-          LIMIT $2`,
+        `SELECT s.*,
+                (SELECT COUNT(*)::int FROM channel_messages m
+                  WHERE m.org_id = $1 AND m.container = s.container AND m.deleted = FALSE) AS message_count
+           FROM (SELECT * FROM channel_state WHERE org_id = $1 AND surface = $3 ORDER BY updated_at DESC LIMIT $2) s
+          ORDER BY s.updated_at DESC`,
         [tenant().orgId, limit, opts.surface ?? SLACK],
       );
       return rows.map((r) => {

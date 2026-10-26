@@ -32,7 +32,7 @@ async function contract(store: AckEmojiPickStore): Promise<void> {
   assert.equal(all.length, 3);
   assert.equal(all[0]!.createdAt, 300, "newest first");
 
-  const c1 = await store.list({ channel: "C1" });
+  const c1 = await store.list({ scope: "C1" });
   assert.equal(c1.length, 2, "channel filter");
   const pick = c1.find((p) => p.outcome === "picked")!;
   assert.equal((pick as { candidates?: string }).candidates, undefined, "list omits the heavy candidate slate");
@@ -44,7 +44,7 @@ async function contract(store: AckEmojiPickStore): Promise<void> {
   const detail = await store.get(pick.id!);
   assert.equal(detail!.candidates, "pirate_flag bug eyes crab");
 
-  const declined = await store.list({ outcome: ["declined"] });
+  const declined = await store.list({ outcomes: ["declined"] });
   assert.deepEqual(
     declined.map((p) => p.outcome),
     ["declined"],
@@ -60,14 +60,14 @@ async function contract(store: AckEmojiPickStore): Promise<void> {
 
   const counts = await store.counts();
   assert.deepEqual(counts, { picked: 2, declined: 1 });
-  assert.deepEqual(await store.counts({ channel: "C1" }), { picked: 1, declined: 1 }, "counts respect channel");
+  assert.deepEqual(await store.counts({ scope: "C1" }), { picked: 1, declined: 1 }, "counts respect channel");
 
   await store.record({ surface: "slack", channel: "C9", ts: "5.0", outcome: "picked", picked: "fire", createdAt: 500 });
   await store.record({ surface: "slack", channel: "C9", ts: "5.1", outcome: "picked", picked: "zap", createdAt: 500 });
-  const tieHead = await store.list({ channel: "C9", limit: 1 });
+  const tieHead = await store.list({ scope: "C9", limit: 1 });
   assert.equal(tieHead.length, 1);
   const tieNext = await store.list({
-    channel: "C9",
+    scope: "C9",
     before: tieHead[0]!.createdAt,
     beforeId: tieHead[0]!.id,
     limit: 1,

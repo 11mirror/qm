@@ -27,7 +27,7 @@ async function contract(store: AmbientJudgmentStore): Promise<void> {
   assert.equal(all.length, 3);
   assert.equal(all[0]!.createdAt, 300, "newest first");
 
-  const c1 = await store.list({ container: "C1" });
+  const c1 = await store.list({ scope: "C1" });
   assert.equal(c1.length, 2, "container filter");
   const act = c1.find((j) => j.decision === "act")!;
   assert.equal((act as { prompt?: string }).prompt, undefined, "list omits the heavy prompt");
@@ -41,7 +41,7 @@ async function contract(store: AmbientJudgmentStore): Promise<void> {
   assert.equal(detail!.prompt, "PROMPT-A");
   assert.equal(detail!.askedBy, "2.0");
 
-  const judged = await store.list({ decision: ["act", "ignore"] });
+  const judged = await store.list({ outcomes: ["act", "ignore"] });
   assert.deepEqual(judged.map((j) => j.decision).sort(), ["act", "ignore"], "decision filter excludes fastlane");
 
   const before = await store.list({ before: 300 });
@@ -53,21 +53,17 @@ async function contract(store: AmbientJudgmentStore): Promise<void> {
 
   const counts = await store.counts();
   assert.deepEqual(counts, { act: 1, ignore: 1, fastlane: 1 });
-  assert.deepEqual(
-    await store.counts({ container: "C1" }),
-    { act: 1, ignore: 1, fastlane: 0 },
-    "counts respect container",
-  );
+  assert.deepEqual(await store.counts({ scope: "C1" }), { act: 1, ignore: 1, fastlane: 0 }, "counts respect container");
 
   const one = await store.list({ limit: 1 });
   assert.equal(one.length, 1);
 
   await store.record({ surface: "slack", container: "C9", decision: "ignore", createdAt: 500 });
   await store.record({ surface: "slack", container: "C9", decision: "ignore", createdAt: 500 });
-  const tieHead = await store.list({ container: "C9", limit: 1 });
+  const tieHead = await store.list({ scope: "C9", limit: 1 });
   assert.equal(tieHead.length, 1);
   const tieNext = await store.list({
-    container: "C9",
+    scope: "C9",
     before: tieHead[0]!.createdAt,
     beforeId: tieHead[0]!.id,
     limit: 1,
