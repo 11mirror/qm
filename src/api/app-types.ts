@@ -4,6 +4,7 @@ import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";
+import type { SecretKey } from "../connectors/connector-client-store.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
 import type {
@@ -637,6 +638,8 @@ export interface AppDeps {
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
   contextRequests: DurableMap<SurfaceContextRequest>;
+  contextRequestCreated?: EventBus<string>;
+  contextViewerTokenKey?: SecretKey;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
