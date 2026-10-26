@@ -1,8 +1,9 @@
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
+import type { AuditLog } from "../audit/audit-log.ts";
 import {
   credentialInjectionError,
   credentialRequestHeaders,
@@ -86,32 +87,45 @@ export function brokerRequestHeaders(
   return { ...headers, ...injected };
 }
 
+export function upstreamFailureCode(error: unknown): string {
+  for (let cause = error; cause instanceof Error; cause = cause.cause) {
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code === "string" && code) return code;
+  }
+  return error instanceof Error ? error.name : "unknown";
+}
+
+export function upstreamUnreachable(code: string): { error: string; message: string } {
+  return { error: "upstream_unreachable", message: `the credential's host could not be reached (${code})` };
+}
+
 export function brokerMethodAllowed(rec: DecryptedServiceCredential, method: string): boolean {
   return (rec.allowedMethods?.length ? rec.allowedMethods : ["GET"]).some((m) => m.toUpperCase() === method);
 }
 
 interface BrokerSinks {
   usage?: CredentialUsageSink;
-  audit?: (e: {
-    principalId: string;
-    action: string;
-    resource: string;
-    scopeLabel: string;
-    status?: string;
-    detail?: string;
-  }) => void;
+  audit?: Pick<AuditLog, "record">;
+}
+
+export function brokerSinks(deps: { credentialUsage?: CredentialUsageSink; auditLog?: AuditLog }): BrokerSinks {
+  return {
+    ...(deps.credentialUsage ? { usage: deps.credentialUsage } : {}),
+    ...(deps.auditLog ? { audit: deps.auditLog } : {}),
+  };
 }
 
 export function recordBrokerOutcome(
   sinks: BrokerSinks,
   claims: CapabilityClaims,
-  kind: "broker" | "git",
+  kind: "broker" | "http",
   call: { slug: string; host: string; status: "ok" | "error" | "denied"; upstreamStatus?: number; detail?: string },
 ): void {
   const { slug, host, status, upstreamStatus, detail } = call;
   const who = { scopeLabel: claims.scopeId, principalId: claims.actorId };
   sinks.usage?.record({ slug, host, status, ...(upstreamStatus === undefined ? {} : { upstreamStatus }), ...who });
-  sinks.audit?.({
+  sinks.audit?.record({
+    at: Date.now(),
     ...who,
     action: `credential.${kind}.${status === "ok" ? "use" : status}`,
     resource: slug || "(none)",
@@ -242,12 +256,9 @@ export async function brokerCredentialCall(
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
   } catch (error) {
-    swallow(`credential broker: ${rec.host} unreachable`, error);
-    recordBrokerOutcome(opts, claims, "broker", { slug, host: rec.host, status: "error" });
-    return {
-      status: 502,
-      json: { error: "upstream_unreachable", message: "the credential's host could not be reached" },
-    };
+    const detail = upstreamFailureCode(error);
+    recordBrokerOutcome(opts, claims, "broker", { slug, host: rec.host, status: "error", detail });
+    return { status: 502, json: upstreamUnreachable(detail) };
   }
 
   let text = await resp.text();

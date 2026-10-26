@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
-import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
+import { parseRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -68,21 +68,19 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
-  const grants = (await deps.acl?.list()) ?? [];
-  const deployments = await app.listDeployments();
-  const granted = deployments.filter(
-    (d) =>
-      d.status !== "archived" &&
-      grants.some(
-        (g) =>
-          g.ownerScopeId === d.ownerScopeId &&
-          g.ref === encodeRef(deployRef(d.id)) &&
-          g.granteeScopeId === `personal:${email}` &&
-          g.permission === "read",
-      ),
-  );
+  const grantee = `personal:${email}`;
+  const sharedDeployments = ((await deps.acl?.list()) ?? []).flatMap((g) => {
+    const ref = parseRef(g.ref);
+    return g.granteeScopeId === grantee && g.permission === "read" && ref.kind === "deploy"
+      ? [{ id: ref.id, ownerScopeId: g.ownerScopeId }]
+      : [];
+  });
   const allowedOwners = await Promise.all(
-    granted.map((d) => externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId)),
+    sharedDeployments.map(async (shared) => {
+      const d = await app.getDeployment(shared.id);
+      if (!d || d.id !== shared.id || d.ownerScopeId !== shared.ownerScopeId || d.status === "archived") return false;
+      return externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId);
+    }),
   );
   const appOnly = allowedOwners.some(Boolean);
   return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });

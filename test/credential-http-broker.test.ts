@@ -101,7 +101,7 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
       };
     },
   };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+  const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
   await brokerCredentialHttp(c);
 
   assert.equal(await text(c.res), "0000");
@@ -140,7 +140,7 @@ test("git HTTP broker sends a credential's fixed headers over a caller's case va
       return { status: 200, headers: {}, body: Readable.from(["0000"]) };
     },
   };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+  const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
   await brokerCredentialHttp(c);
   await text(c.res);
   assert.deepEqual(seen, {
@@ -171,7 +171,7 @@ test("git HTTP broker refuses an env-delivery record like a missing credential",
       return { status: 200, headers: {}, body: Readable.from(["0000"]) };
     },
   };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
+  const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
   await brokerCredentialHttp(c);
   assert.equal(c.res.statusCode, 404);
   assert.equal(fetched, false, "no upstream git fetch happens");
@@ -179,9 +179,9 @@ test("git HTTP broker refuses an env-delivery record like a missing credential",
 
 test("git HTTP broker refuses encoded parent traversal past the repo path", async () => {
   for (const path of [
-    "/v1/credentials/git/gitlab/acme/repo.git/..%2fother-repo.git/info/refs",
-    "/v1/credentials/git/gitlab/acme/repo.git/%2e%2e%2fother-repo.git/info/refs",
-    "/v1/credentials/git/gitlab/acme/repo.git/%252e%252e%252fother/info/refs",
+    "/v1/credentials/http/gitlab/acme/repo.git/..%2fother-repo.git/info/refs",
+    "/v1/credentials/http/gitlab/acme/repo.git/%2e%2e%2fother-repo.git/info/refs",
+    "/v1/credentials/http/gitlab/acme/repo.git/%252e%252e%252fother/info/refs",
   ]) {
     let fetched = false;
     const deps: ServerDeps = {
@@ -232,7 +232,7 @@ test("git HTTP broker cannot use a Composio key for project-wide discovery or ex
         throw new Error("must not contact upstream");
       },
     } as unknown as ServerDeps;
-    const c = ctx("/v1/credentials/git/gitlab/api/v3.1/connected_accounts", method, deps);
+    const c = ctx("/v1/credentials/http/gitlab/api/v3.1/connected_accounts", method, deps);
     await brokerCredentialHttp(c);
     await text(c.res);
     assert.equal(c.res.statusCode, 403);

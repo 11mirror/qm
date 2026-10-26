@@ -929,7 +929,7 @@ test("git http broker streams smart-http GET and POST through an entitled servic
 
     const token = await brokerToken(["gitlab"]);
     const discovery = await fetch(
-      `${srv.base}/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-receive-pack`,
+      `${srv.base}/v1/credentials/http/gitlab/acme/repo.git/info/refs?service=git-receive-pack`,
       {
         headers: { "x-agent-capability": token, "git-protocol": "version=2" },
       },
@@ -938,7 +938,7 @@ test("git http broker streams smart-http GET and POST through an entitled servic
     assert.match(discovery.headers.get("content-type") ?? "", /x-git-receive-pack-advertisement/);
     assert.match(await discovery.text(), /git-receive-pack/);
 
-    const push = await fetch(`${srv.base}/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack`, {
+    const push = await fetch(`${srv.base}/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack`, {
       method: "POST",
       headers: {
         "x-agent-capability": token,
@@ -976,7 +976,7 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
       allowedMethods: ["GET"],
       allowedPathPrefixes: ["/acme/repo.git"],
     });
-    const path = `${srv.base}/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack`;
+    const path = `${srv.base}/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack`;
 
     assert.equal((await fetch(path)).status, 401);
     assert.equal(

@@ -58,7 +58,7 @@ describe("a published app's broker token follows the app it was minted for, on e
         body: JSON.stringify({ credential: "sample-api", url: "https://relay.example/sample-api/me" }),
       }),
     git: (token: string) =>
-      fetch(`${base}/v1/credentials/git/sample-api/sample-api/repo.git/info/refs?service=git-upload-pack`, {
+      fetch(`${base}/v1/credentials/http/sample-api/sample-api/repo.git/info/refs?service=git-upload-pack`, {
         headers: { "x-agent-capability": token },
       }),
   };
@@ -137,7 +137,7 @@ describe("a published app's broker token follows the app it was minted for, on e
 
   it("is refused without a token, with the wrong audience, and after scope membership is revoked", async () => {
     deployments.set("d1", running("d1"));
-    assert.equal((await fetch(`${base}/v1/credentials/git/sample-api/sample-api/repo.git/info/refs`)).status, 401);
+    assert.equal((await fetch(`${base}/v1/credentials/http/sample-api/sample-api/repo.git/info/refs`)).status, 401);
     assert.deepEqual(await statuses(() => tokenFor("d1", "publisher", CONTROL_PLANE_AUD)), { broker: 403, git: 403 });
     scopeAuthorized = false;
     try {
