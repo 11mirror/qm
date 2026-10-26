@@ -3963,7 +3963,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: schema,
       async execute(callId, params, signal, onUpdate, ctx) {
         const action = isObj(params) ? String(params.action) : "";
-        const rule = "" in rules ? rules[""] : Object.hasOwn(rules, action) ? rules[action] : undefined;
+        const key = "" in rules ? "" : action;
+        const rule = Object.hasOwn(rules, key) ? rules[key] : undefined;
         const missing = rule?.required.find(
           (key) =>
             !isObj(params) ||
