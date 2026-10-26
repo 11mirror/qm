@@ -11,7 +11,8 @@ import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 import { isMainThread } from "node:worker_threads";
 import { multitenant, serveTenantsByHost } from "../../chassis/src/tenant-workers.ts";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
@@ -52,7 +53,7 @@ import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { isUiChannel, UI_CHANNEL_COOKIE } from "../../chassis/src/ui-release.ts";
-import { ALERT_ICON, cardPage, LOCK_ICON } from "../../chassis/src/card-page.ts";
+import { ALERT_ICON, CARD_SCENE_PATH, cardPage as chassisCardPage, LOCK_ICON } from "../../chassis/src/card-page.ts";
 import {
   json,
   escapeHtml,
@@ -121,6 +122,11 @@ export {
 };
 
 let modelProviderConfigured: boolean | undefined;
+let brandLabel = "QM";
+const cardPage = (o: Parameters<typeof chassisCardPage>[0]): string => chassisCardPage({ ...o, brand: brandLabel });
+const CARD_SCENE_FILE = fileURLToPath(
+  new URL("../../../desktop/assets/becalmed-off-halfway-rock.webp", import.meta.url),
+);
 let surfaceConfigNextAt = 0;
 let surfaceConfigInflight: Promise<void> | null = null;
 function refreshSurfaceConfig(): Promise<void> {
@@ -153,13 +159,19 @@ async function coreCall<T extends object>(
 
 async function fetchSurfaceConfig(): Promise<void> {
   try {
-    const r = await coreCall<{ modelProviderConfigured?: unknown }>("GET", "/v1/surface-config", {
-      signal: AbortSignal.timeout(2_000),
-    });
+    const r = await coreCall<{ modelProviderConfigured?: unknown; branding?: { selfLabel?: unknown } }>(
+      "GET",
+      "/v1/surface-config",
+      {
+        signal: AbortSignal.timeout(2_000),
+      },
+    );
     if (r.ok) {
       const body = r.body;
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
+      const label = body.branding?.selfLabel;
+      brandLabel = typeof label === "string" && label.trim() ? label.trim() : "QM";
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
     } else console.warn(`[portal] surface-config returned HTTP ${r.status}`);
   } catch (error) {
@@ -265,7 +277,19 @@ function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
 }
 
 const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+let cardScene: Buffer | undefined;
+async function serveCardScene(res: ServerResponse): Promise<void> {
+  try {
+    cardScene ??= await readFile(CARD_SCENE_FILE);
+    res.writeHead(200, { "content-type": "image/webp", "cache-control": "public, max-age=86400" });
+    res.end(cardScene);
+  } catch (error) {
+    console.warn(`[portal] page background unavailable: ${errMessage(error)}`);
+    json(res, 404, { error: "not_found" });
+  }
+}
 
 function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
   sendBuffered(
@@ -699,6 +723,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   void refreshSurfaceConfig();
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
+  if (method === "GET" && pathname === CARD_SCENE_PATH) return serveCardScene(res);
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(

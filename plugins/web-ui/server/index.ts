@@ -77,8 +77,9 @@ const DIST = join(ROOT, "dist-web");
 const UI = createUiDocuments(DIST, process.env.WEB_UI_RELEASES_URL);
 const uiDocument = UI.document;
 
-function sendReleaseError(res: ServerResponse, error: unknown): void {
-  const page = releaseErrorPage(error);
+async function sendReleaseError(res: ServerResponse, error: unknown): Promise<void> {
+  const { selfLabel } = await brandingCache.forRender();
+  const page = releaseErrorPage(error, typeof selfLabel === "string" ? selfLabel : undefined);
   sendHtml(res, page.status, page.html);
 }
 
@@ -348,7 +349,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     try {
       document = await uiDocument(req, "index.html");
     } catch (error) {
-      sendReleaseError(res, error);
+      await sendReleaseError(res, error);
       return true;
     }
     if (document === null) return false;

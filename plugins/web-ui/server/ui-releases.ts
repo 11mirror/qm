@@ -137,7 +137,7 @@ export function createUiDocuments(dist: string, releasesUrl: string | undefined)
   };
 }
 
-export function releaseErrorPage(error: unknown): { status: number; html: string } {
+export function releaseErrorPage(error: unknown, brand?: string): { status: number; html: string } {
   if (!(error instanceof UiReleaseError)) throw error;
   return {
     status: error.status,
@@ -149,6 +149,7 @@ export function releaseErrorPage(error: unknown): { status: number; html: string
       warn: true,
       actions: `<a class="btn primary" href="/?ui=live">Open the current release</a>`,
       help: "",
+      brand,
     }),
   };
 }
