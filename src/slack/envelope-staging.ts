@@ -1,6 +1,7 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { AckGate } from "./deferred-ack.ts";
 
 export interface StagedEnvelope {
   body: Record<string, unknown>;
@@ -10,24 +11,12 @@ export interface StagedEnvelope {
   claimedUntil?: number;
 }
 
-interface ReplayGate {
-  persisted(): void;
-  failed(reason?: string): void;
-}
-
 export interface EnvelopeStaging {
   keyFor(body: Record<string, unknown>): string | null;
   stage(key: string, body: Record<string, unknown>): Promise<boolean>;
   accepted(key: string): void;
-  sweep(replay: (body: Record<string, unknown>, gate: ReplayGate) => Promise<void>): Promise<number>;
+  sweep(replay: (body: Record<string, unknown>, gate: AckGate) => Promise<void>): Promise<number>;
 }
-
-const STAGE_TIMEOUT_MS = 300;
-const ABANDON_AFTER_MS = 24 * 60 * 60_000;
-const STALE_AFTER_MS = 3 * 60_000;
-const CLAIM_MS = 5 * 60_000;
-const MAX_ATTEMPTS = 5;
-const REPLAY_WAIT_MS = 10_000;
 
 export function envelopeKey(account: string, body: Record<string, unknown>): string | null {
   const event = body.event as { type?: string; channel?: string; ts?: string; event_ts?: string } | undefined;
@@ -48,10 +37,7 @@ export function createEnvelopeStaging(
   },
 ): EnvelopeStaging {
   const now = opts.now ?? Date.now;
-  const stageTimeoutMs = opts.stageTimeoutMs ?? STAGE_TIMEOUT_MS;
-  const staleAfterMs = opts.staleAfterMs ?? STALE_AFTER_MS;
-  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
-  const replayWaitMs = opts.replayWaitMs ?? REPLAY_WAIT_MS;
+  const { stageTimeoutMs = 300, staleAfterMs = 3 * 60_000, maxAttempts = 5, replayWaitMs = 10_000 } = opts;
   const inflight = new Map<string, Promise<boolean>>();
   const clear = (key: string): void => {
     void (inflight.get(key) ?? Promise.resolve())
@@ -76,7 +62,7 @@ export function createEnvelopeStaging(
       const at = now();
       let replayed = 0;
       for (const [key, staged] of await map.entries()) {
-        if (staged.receivedAt < at - ABANDON_AFTER_MS) {
+        if (staged.receivedAt < at - 24 * 60 * 60_000) {
           await map.delete(key);
           continue;
         }
@@ -84,7 +70,7 @@ export function createEnvelopeStaging(
         if (staged.receivedAt > at - staleAfterMs || (staged.claimedUntil ?? 0) > at) continue;
         if (staged.attempts >= maxAttempts) continue;
         let won = !map.update;
-        const claim = { attempts: staged.attempts + 1, claimedUntil: at + CLAIM_MS };
+        const claim = { attempts: staged.attempts + 1, claimedUntil: at + 5 * 60_000 };
         const claimed = map.update
           ? await map.update(key, (v) => {
               if ((v.claimedUntil ?? 0) > at) return v;
@@ -99,7 +85,7 @@ export function createEnvelopeStaging(
           );
         replayed++;
         let failed = false;
-        const gate: ReplayGate = {
+        const gate: AckGate = {
           persisted: () => clear(key),
           failed: () => {
             failed = true;

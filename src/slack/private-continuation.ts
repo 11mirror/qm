@@ -40,12 +40,9 @@ export async function continueInPrivate(
   if (typeof dm !== "string" || !dm.startsWith("D")) throw new Error("Could not open the requester's private DM");
   const { channel, threadTs } = parseDeliveryTarget(source.deliveryTarget);
   const key = `private-continuation:${runId}`;
-  await postWithVerify(
-    client,
-    { ...slackReplyArgs(channel, PRIVATE_CONTINUATION_ACK, threadTs, { threadOnly: true }) },
-    `${key}:ack`,
-    { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" },
-  );
+  const post = (args: ReturnType<typeof slackReplyArgs>, key: string) =>
+    postWithVerify(client, { ...args }, key, { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" });
+  await post(slackReplyArgs(channel, PRIVATE_CONTINUATION_ACK, threadTs, { threadOnly: true }), `${key}:ack`);
   const result = await core.submitTurn({
     actor,
     source: {
@@ -91,26 +88,10 @@ export async function continueInPrivate(
     if (outcome.status === "ok") {
       const text = toSlackMrkdwn(cleanAgentReplyForSlack(outcome.reply ?? "").text);
       if (outcome.attachments?.length) await uploadAttachments(client, dm, undefined, outcome.attachments, core);
-      if (text)
-        await postWithVerify(
-          client,
-          { ...slackReplyArgs(dm, text, undefined, { unfurlLinks: false }) },
-          `run:${dmRunId}`,
-          { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" },
-        );
+      if (text) await post(slackReplyArgs(dm, text, undefined, { unfurlLinks: false }), `run:${dmRunId}`);
     } else if (outcome.status === "failed" || outcome.status === "refused") {
-      await postWithVerify(
-        client,
-        {
-          ...slackReplyArgs(
-            dm,
-            `I couldn't finish the private continuation: ${userFacingFailureClause(outcome)}`,
-            undefined,
-          ),
-        },
-        `run:${dmRunId}`,
-        { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" },
-      );
+      const text = `I couldn't finish the private continuation: ${userFacingFailureClause(outcome)}`;
+      await post(slackReplyArgs(dm, text, undefined), `run:${dmRunId}`);
     }
     await core.ackRunDelivery(dmRunId);
   } finally {
