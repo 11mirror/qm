@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createMemoryStrategy } from "../src/memory/strategy.ts";
+import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import {
   floorFailures,
@@ -38,7 +38,7 @@ test("parseBenchConversation rejects malformed input", () => {
 
 test("replayConversation runs every turn through the strategy and writes the notebook", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
-  const { strategy } = createMemoryStrategy("per-turn", { harness: createMockHarness().models, memory });
+  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   const conv: BenchConversation = {
     id: "t",
     description: "test",
@@ -51,14 +51,6 @@ test("replayConversation runs every turn through the strategy and writes the not
   const notebook = await memory.read("user:U1");
   assert.match(notebook, /billing service/);
   assert.match(notebook, /terse replies/);
-});
-
-test("replayConversation tolerates strategies with no automatic capture (agent-only)", async () => {
-  const memory = createPostgresMemoryService(testDatabaseUrl());
-  const { strategy } = createMemoryStrategy("agent-only", { harness: createMockHarness().models, memory });
-  const conv: BenchConversation = { id: "t", description: "test", turns: [{ input: "hi", reply: "yo" }] };
-  await replayConversation(strategy, "user:U1", conv);
-  assert.equal(await memory.read("user:U1"), "");
 });
 
 test("renderJudgeInput includes the transcript and marks an empty notebook", () => {
@@ -81,7 +73,7 @@ test("parseJudgeVerdict reads plain JSON, fenced JSON, and clamps out-of-range s
   assert.throws(() => parseJudgeVerdict("no json here"));
 });
 
-function result(kind: "per-turn" | "agent-only", id: string, s: number, st: number, i: number): BenchResult {
+function result(kind: string, id: string, s: number, st: number, i: number): BenchResult {
   return {
     kind,
     conversationId: id,
