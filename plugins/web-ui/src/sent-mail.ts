@@ -76,7 +76,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
   chatError = "";
   draw();
   try {
-    const text = detail.html ? plainSnippet(detail.body) : detail.body;
+    const text = detail.html ? htmlText(detail.body) : detail.body;
     const result = await api<{ item: LedgerItem }>("/api/inbox/sent-chat", {
       method: "POST",
       body: JSON.stringify({
@@ -218,6 +218,24 @@ function plainSnippet(value: string): string {
   return doc.body.textContent ?? "";
 }
 
+const BLOCK_ELEMENTS = "p,div,tr,li,h1,h2,h3,h4,h5,h6,blockquote,pre,section,article,header,footer,hr";
+
+function collapseWhitespace(node: Node): void {
+  for (const child of node.childNodes) {
+    if (child.nodeType === child.TEXT_NODE) child.nodeValue = child.nodeValue!.replace(/\s+/g, " ");
+    else if (child.nodeName !== "PRE") collapseWhitespace(child);
+  }
+}
+
+function htmlText(value: string): string {
+  const { body } = new DOMParser().parseFromString(value, "text/html");
+  for (const hidden of body.querySelectorAll("style,script,template")) hidden.remove();
+  collapseWhitespace(body);
+  for (const br of body.querySelectorAll("br")) br.replaceWith("\n");
+  for (const block of body.querySelectorAll(BLOCK_ELEMENTS)) block.append("\n");
+  return (body.textContent ?? "").replace(/ *\n */g, "\n").trim();
+}
+
 export function sentMailTpl(
   draw: () => void,
   open: (message: SentEmail) => void = (message) => void openSentEmail(message, draw),
@@ -289,9 +307,7 @@ export function sentEmailPageTpl(
 ): TemplateResult | typeof nothing {
   if (!selected) return nothing;
   const message = selected;
-  const body = detail?.html
-    ? plainSnippet(detail.body.replace(/<br\s*\/?>(|\s)|<\/(p|div|tr|li|h[1-6])>/gi, "\n"))
-    : detail?.body;
+  const body = detail?.html ? htmlText(detail.body) : detail?.body;
   return html`
     <div class="pane-head inbox-item-head src-gmail">
       <div class="inbox-item-head-copy">

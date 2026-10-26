@@ -1,5 +1,6 @@
 import { html, LitElement, nothing } from "lit";
 import { UI_BASE } from "./deep-link.ts";
+import { reportHandledError } from "./browser-errors.ts";
 
 export abstract class SlackStatus extends LitElement {
   protected request?: AbortController;
@@ -31,7 +32,7 @@ export abstract class SlackStatus extends LitElement {
 
   protected async installation(
     apply: (response: Response) => Promise<void>,
-    fail: () => void,
+    fail: (error: unknown) => void,
     poll: () => boolean,
   ): Promise<void> {
     if (this.request || !this.isConnected) return;
@@ -47,8 +48,9 @@ export abstract class SlackStatus extends LitElement {
           cache: "no-store",
         }),
       );
-    } catch {
-      fail();
+    } catch (error) {
+      reportHandledError("slack-installation-status", error);
+      fail(error);
     } finally {
       clearTimeout(timeout);
       this.request = undefined;
@@ -83,7 +85,7 @@ class SlackSetup extends SlackStatus {
           submitUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=setup` ||
           installUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=install`
         )
-          throw new Error("Status unavailable");
+          throw Error("Slack setup links do not match this deployment");
         this.links = { tokenUrl, submitUrl, installUrl };
         this.appReady = data.setup.appReady === true;
         this.connected = data.configured === true && data.setup.connected === true;
