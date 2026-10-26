@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { readCappedText } from "../util/response-body.ts";
 import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
@@ -116,25 +117,9 @@ async function readCatalog(
   });
   if (!response.ok)
     throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
-  if (!response.body || Number(response.headers.get("content-length")) > MAX_BYTES)
-    throw new Error("Gateway catalog exceeds size limit");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let body = "";
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_BYTES) throw new Error("Gateway catalog exceeds size limit");
-      body += decoder.decode(chunk.value, { stream: true });
-    }
-    body += decoder.decode();
-  } finally {
-    void reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
+  const tooLarge = () => new Error("Gateway catalog exceeds size limit");
+  const body = await readCappedText(response, MAX_BYTES, tooLarge);
+  if (body === undefined) throw tooLarge();
   const data = record(JSON.parse(body))?.data;
   if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
   return data;

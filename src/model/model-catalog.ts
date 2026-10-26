@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { readCappedText } from "../util/response-body.ts";
 import { gatewayModelCatalog, gatewayModelsVersion } from "./gateway-models.ts";
 import { modelSupported, registerOpenRouterCatalogModel, resolveModel, selectableBaseModels } from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
@@ -42,25 +43,8 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_CATALOG_BYTES)
-    throw new Error("OpenRouter catalog is too large");
-  if (!response.body) throw new Error("OpenRouter catalog has no body");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = "";
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    bytes += chunk.value.byteLength;
-    if (bytes > MAX_CATALOG_BYTES) {
-      await reader.cancel();
-      throw new Error("OpenRouter catalog is too large");
-    }
-    text += decoder.decode(chunk.value, { stream: true });
-  }
-  text += decoder.decode();
+  const text = await readCappedText(response, MAX_CATALOG_BYTES, () => new Error("OpenRouter catalog is too large"));
+  if (text === undefined) throw new Error("OpenRouter catalog has no body");
   return JSON.parse(text) as unknown;
 }
 
