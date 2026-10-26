@@ -13,6 +13,7 @@ import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createMemoryEventBus } from "../util/event-bus.ts";
+import type { ContextRequestEvent } from "./app-types.ts";
 import {
   reachPost,
   withSlackUnfurlOption,
@@ -70,7 +71,8 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestCreated = deps.contextRequestCreated ?? createMemoryEventBus<string>("context requests");
+  const contextRequestEvents =
+    deps.contextRequestEvents ?? createMemoryEventBus<ContextRequestEvent>("context requests");
   const viewerTokenKey = deps.contextViewerTokenKey ?? deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
   const withViewerToken = ({ sealedViewerToken, ...request }: SurfaceContextRequest): SurfaceContextRequest => {
     if (!sealedViewerToken) return request;
@@ -247,11 +249,12 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         await contextRequests.merge(request.id, settledContext(outcome));
         return request;
       }
-      contextRequestCreated.emit(request.id);
+      contextRequestEvents.emit({ kind: "created", id: request.id });
       return request;
     },
     onContextRequestCreated(listener) {
-      return contextRequestCreated.subscribe((id) => {
+      return contextRequestEvents.subscribe(({ kind, id }) => {
+        if (kind !== "created") return;
         void contextRequests
           .get(id)
           .then((request) => {
@@ -277,7 +280,23 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         .map(withViewerToken);
     },
     async fulfillContextRequest(id, outcome) {
-      return (await contextRequests.merge(id, { ...settledContext(outcome), sealedViewerToken: undefined })) != null;
+      const settled =
+        (await contextRequests.merge(id, { ...settledContext(outcome), sealedViewerToken: undefined })) != null;
+      if (settled) contextRequestEvents.emit({ kind: "settled", id });
+      return settled;
+    },
+    awaitContextRequestEvent(kind, id, ms) {
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          stop();
+          resolve();
+        };
+        const timer = setTimeout(done, ms);
+        const stop = contextRequestEvents.subscribe((event) => {
+          if (event.kind === kind && (id === null || event.id === id)) done();
+        });
+      });
     },
     setRunDeliveryState: (runId, state) => deps.runs.setDeliveryState(runId, null, state),
 
