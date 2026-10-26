@@ -23,7 +23,7 @@ import { messageWithForwardedContent } from "./forwards.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { ActorAssertion } from "./identity.ts";
 import type { DenyResponder } from "./allow-from.ts";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
 
@@ -115,7 +115,8 @@ export function registerSlackEvents(
           actor: { externalId: event.bot_id, isBot: true, ...(bot.name ? { displayName: String(bot.name) } : {}) },
         };
       }
-    } catch {
+    } catch (err) {
+      swallow("slack: bots.info", err);
       return { userId: event.bot_id };
     }
     return { userId: event.bot_id };
