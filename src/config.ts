@@ -24,13 +24,7 @@ import {
   type SecurityScreenMode,
 } from "./security/security-posture.ts";
 import { DEFAULT_SHARING_POSTURE, type SharingPosture } from "./resolution/sharing-posture.ts";
-import {
-  parseSlackContextSource,
-  type SlackContextSource,
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -64,7 +58,6 @@ interface TenantConfig {
 
 interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   productAnalytics?: { apiKey: string; host?: string };
-  slackContextSource?: SlackContextSource;
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   production: boolean;
@@ -897,7 +890,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     capabilityTokenCompression: e.CAPABILITY_TOKEN_COMPRESSION ?? false,
     requireSignedPortalIdentity: e.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     layerEnv: { ...env },
-    slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     filesDirectUploadsEnabled: e.FILES_DIRECT_UPLOADS_ENABLED ?? false,
     deployGitDir: join(dataDir, "deploy-git"),

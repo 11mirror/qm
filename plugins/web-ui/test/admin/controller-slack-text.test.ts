@@ -3,10 +3,14 @@ import test from "node:test";
 import { mountAdmin } from "./fixture.ts";
 
 async function render(text: string) {
-  const admin = await mountAdmin("/settings/slack?container=C1", {
+  const admin = await mountAdmin("/settings/judgments?jid=1", {
     "/scopes": { scopes: [], environments: [] },
-    "/slack-mirror": { containers: [{ container: "C1", name: "eng", kind: "channel", members: [] }] },
-    "/slack-mirror/messages": {
+    "/ambient-context": { containers: [{ container: "C1", name: "eng", kind: "channel", members: [] }] },
+    "/ambient-judgments": {
+      judgment: { id: 1, container: "C1", tsFrom: "1.0", tsTo: "1.0", decision: "act", createdAt: 1 },
+      workspaceUrl: null,
+    },
+    "/ambient-context/messages": {
       messages: [
         {
           container: "C1",
@@ -45,7 +49,7 @@ test("Slack messages format quotes, safe links and mentions without dropping pro
   assert.equal(link!.rel, "noopener");
 });
 
-test("Slack shortcodes in mirrored messages render as the emoji Slack shows", async () => {
+test("Slack shortcodes in stored messages render as the emoji Slack shows", async () => {
   assert.equal(
     content(
       await render(":white_check_mark: :large_green_circle: :flag-us: :sweat-smile: :+1: :calendar: :not_an_emoji:"),

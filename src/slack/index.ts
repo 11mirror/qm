@@ -212,7 +212,6 @@ export async function startSlackPlugin(
     core,
     ids,
     historyClient,
-    source: cfg.contextSource ?? "live",
     ...historyRateLimitOptions,
   });
   const serializer = createConversationSerializer({
@@ -335,8 +334,7 @@ export async function startSlackPlugin(
     allowActor,
     denyResponder,
     webUiPublicUrl: cfg.webUiPublicUrl || undefined,
-    backfillHistory:
-      cfg.contextSource === "mirror" ? (client: unknown, channel: string) => readHistory(client, channel) : undefined,
+    backfillHistory: (client: unknown, channel: string) => readHistory(client, channel),
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({

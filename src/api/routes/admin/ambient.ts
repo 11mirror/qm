@@ -1,14 +1,13 @@
 import type { DecisionLogStore } from "../../../surface-cache/decision-log-store.ts";
-import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
 import { badRequest, limitParam, notFound, orgAdmin } from "./common.ts";
 import { type ApiCtx } from "../route.ts";
 import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
 
-const SLACK_MIRROR_PAGE_MAX = 400;
-const SLACK_MIRROR_PAGE_DEFAULT = 200;
+const CONTEXT_PAGE_MAX = 400;
+const CONTEXT_PAGE_DEFAULT = 200;
 
-async function mirrorNames(deps: ApiCtx["deps"]) {
+async function directoryNames(deps: ApiCtx["deps"]) {
   const members = deps.directory ? await deps.directory.list() : [];
   const byId = new Map<string, string>();
   for (const m of members) {
@@ -30,45 +29,32 @@ async function mirrorNames(deps: ApiCtx["deps"]) {
   };
 }
 
-export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
+export async function listAmbientContainers(ctx: ApiCtx): Promise<void> {
   const { res, app } = ctx;
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const { scope } = authz;
-  authz.audit("slack_mirror.read", "slack-mirror");
-  const raw = await app.listSurfaceContainers({ limit: SLACK_MIRROR_PAGE_MAX + 1 });
-  const hasMore = raw.length > SLACK_MIRROR_PAGE_MAX;
+  authz.audit("ambient_context.read", "ambient-context");
+  const raw = await app.listSurfaceContainers({ limit: CONTEXT_PAGE_MAX + 1 });
+  const hasMore = raw.length > CONTEXT_PAGE_MAX;
   const channelsById = new Map((await app.directoryChannels()).map((c) => [c.channelId.toLowerCase(), c.name]));
-  const containers = (hasMore ? raw.slice(0, SLACK_MIRROR_PAGE_MAX) : raw).map((c) => ({
+  const containers = (hasMore ? raw.slice(0, CONTEXT_PAGE_MAX) : raw).map((c) => ({
     ...c,
     name: c.name ?? channelsById.get(c.container.toLowerCase()),
   }));
-  return sendJson(res, 200, { scopeId: scope, containers, hasMore, limit: SLACK_MIRROR_PAGE_MAX });
+  return sendJson(res, 200, { scopeId: scope, containers, hasMore, limit: CONTEXT_PAGE_MAX });
 }
 
-export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
+export async function listAmbientMessages(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const { scope } = authz;
   const container = (url.searchParams.get("container") ?? "").trim();
-  const q = (url.searchParams.get("q") ?? "").trim();
-  if (!container && !q) return badRequest(res, "container or q required");
-  const limit = limitParam(url, SLACK_MIRROR_PAGE_DEFAULT, SLACK_MIRROR_PAGE_MAX);
-  authz.audit("slack_mirror.messages.read", container || `search:${q}`);
-  const names = await mirrorNames(deps);
-  const withNames = (rows: Awaited<ReturnType<App["readSurfaceMessages"]>>) =>
-    rows.map((m) => ({
-      ...m,
-      authorName: m.authorName ?? names.author(m.authorId),
-      mentions: names.mentions(m.text, m.mentions),
-    }));
-  if (q) {
-    const found = await app.searchSurface(q, { ...(container ? { container } : {}), limit: limit + 1 });
-    const truncated = found.length > limit;
-    const messages = withNames(truncated ? found.slice(0, limit) : found);
-    return sendJson(res, 200, { scopeId: scope, mode: "search", query: q, messages, hasMore: truncated, limit });
-  }
+  if (!container) return badRequest(res, "container required");
+  const limit = limitParam(url, CONTEXT_PAGE_DEFAULT, CONTEXT_PAGE_MAX);
+  authz.audit("ambient_context.messages.read", container);
+  const names = await directoryNames(deps);
   const before = url.searchParams.get("before") ?? undefined;
   const raw = await app.readSurfaceMessages(container, {
     limit: limit + 1,
@@ -77,8 +63,12 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
     ...(before ? { before } : {}),
   });
   const hasMore = raw.length > limit;
-  const messages = withNames(hasMore ? raw.slice(raw.length - limit) : raw);
-  return sendJson(res, 200, { scopeId: scope, mode: "timeline", container, messages, hasMore, limit });
+  const messages = (hasMore ? raw.slice(raw.length - limit) : raw).map((m) => ({
+    ...m,
+    authorName: m.authorName ?? names.author(m.authorId),
+    mentions: names.mentions(m.text, m.mentions),
+  }));
+  return sendJson(res, 200, { scopeId: scope, container, messages, hasMore, limit });
 }
 
 async function listDecisionLog<Outcome extends string>(
