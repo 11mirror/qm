@@ -39,14 +39,11 @@ export function startAdmin(host, env) {
   });
   const scAddButton = $("sc-add");
   const scStatusHome = $("st-service-credentials").parentElement;
-  const dialog = document.createElement("dialog");
-  dialog.id = "sc-dialog";
-  dialog.className = "custom-provider-dialog credential-dialog";
-  dialog.setAttribute("aria-labelledby", "sc-dialog-title");
-  dialog.setAttribute("aria-describedby", "sc-dialog-description");
-  dialog.innerHTML =
-    '<div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div>';
-  $("card-service-credentials").appendChild(dialog);
+  $("card-service-credentials").insertAdjacentHTML(
+    "beforeend",
+    '<dialog id="sc-dialog" class="custom-provider-dialog credential-dialog" aria-labelledby="sc-dialog-title" aria-describedby="sc-dialog-description"><div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div></dialog>',
+  );
+  const dialog = $("sc-dialog");
   dialog.insertBefore($("sc-editor"), $("sc-dialog-actions"));
   $("sc-dialog-actions").append($("sc-reset"), $("sc-save"));
   const dismiss = () => {
@@ -58,18 +55,11 @@ export function startAdmin(host, env) {
     dismiss();
   });
   dialog.addEventListener("click", (event) => {
-    const rect = dialog.getBoundingClientRect();
-    if (
-      event.target === dialog &&
-      (event.clientX < rect.left ||
-        event.clientX > rect.right ||
-        event.clientY < rect.top ||
-        event.clientY > rect.bottom)
-    )
-      dismiss();
+    const { left, right, top, bottom } = dialog.getBoundingClientRect();
+    const { clientX: x, clientY: y } = event;
+    if (event.target === dialog && (x < left || x > right || y < top || y > bottom)) dismiss();
   });
   function openScDialog() {
-    const dialog = $("sc-dialog");
     $("sc-dialog-title").textContent = scEditing ? "Edit credential" : "Add credential";
     setStatus("st-service-credentials", "", "");
     $("sc-dialog-actions").prepend($("st-service-credentials"));

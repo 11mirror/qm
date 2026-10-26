@@ -1,5 +1,5 @@
 import { mountTemplate } from "./shared.ts";
-import { cardClass, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { cardClass, closeIcon, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
 import { mountCredentials } from "./settings-credentials.ts";
 export {
@@ -173,19 +173,9 @@ function card(s: SettingsState) {
             html`<span data-chip=${id} class="model-chip"
               ><span>${label(s, id)}</span
               ><button type="button" aria-label=${"Remove " + id} @click=${() => s.remove(id)}>
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  aria-hidden="true"
-                >
-                  <path d="m4 4 8 8M12 4l-8 8" />
-                </svg></button
-            ></span>`,
+                ${closeIcon(12)}
+              </button></span
+            >`,
         )}
       </div>
     </div>

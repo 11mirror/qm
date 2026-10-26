@@ -6,6 +6,20 @@ import type { SettingState } from "./setting-state.ts";
 export const cardClass = (s: SettingState, kind: string, extra: Record<string, boolean> = {}) =>
   classMap({ card: true, [kind]: true, hidden: !s.available, dirty: s.dirty, ...extra });
 
+export const closeIcon = (size: number) =>
+  html`<svg
+    width=${size}
+    height=${size}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    aria-hidden="true"
+  >
+    <path d="m4 4 8 8M12 4l-8 8" />
+  </svg>`;
+
 export function saveButton(s: SettingState, label = "Apply", disabled = false) {
   return html`<button
     class=${classMap({ primary: true, dirty: s.dirty })}

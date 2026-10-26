@@ -21,7 +21,6 @@ export const provider = {
   session: 0,
 };
 let redraw = () => {};
-const mountedSummaries = new WeakSet<HTMLElement>();
 export function configureProviders(options: any) {
   config = options;
 }
@@ -176,12 +175,8 @@ function renderRows() {
   if (table) table.hidden = !provider.rows.length;
   const summary = document.getElementById("custom-provider-summary");
   if (summary) {
-    if (!mountedSummaries.has(summary)) {
-      summary.replaceChildren();
-      mountedSummaries.add(summary);
-    }
     summary.hidden = !!provider.rows.length;
-    render(html`No custom providers.`, summary);
+    summary.textContent = "No custom providers.";
   }
   const empty = document.getElementById("custom-provider-empty");
   if (empty) empty.hidden = !!provider.rows.length;

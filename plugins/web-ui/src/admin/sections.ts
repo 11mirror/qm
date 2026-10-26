@@ -15,29 +15,13 @@ export const ADMIN_VIEWS = new Set([
   "keychain",
 ]);
 
-export const VIEW_TITLE: Record<string, string> = {
-  general: "General",
-  onboarding: "Onboarding",
-  governance: "Governance",
-  models: "Models",
-  credentials: "Credentials",
-  customize: "Customize",
-  connectors: "Connectors",
-  users: "Users",
-  keychain: "Keychain",
-  user: "User",
-  spend: "Spend",
-  egress: "Egress",
+const TITLES: Record<string, string> = {
   history: "Sessions",
-  files: "Files",
-  memory: "Memory",
-  errors: "Errors",
-  audit: "Audit",
-  skills: "Skills",
-  crons: "Crons",
   deployments: "Apps",
   slack: "Slack messages",
   "slack-settings": "Slack",
-  judgments: "Judgments",
   ackemoji: "Ack emoji",
 };
+export const VIEW_TITLE: Record<string, string> = Object.fromEntries(
+  ["general", ...ADMIN_VIEWS].map((view) => [view, TITLES[view] || view[0].toUpperCase() + view.slice(1)]),
+);

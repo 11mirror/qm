@@ -1,4 +1,4 @@
-import { cardClass, choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
+import { cardClass, closeIcon, choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
 import { html, type TemplateResult } from "lit";
 import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
@@ -466,18 +466,7 @@ function ruleTemplate(s: GovernanceState, r: GovernanceState["rules"][number], i
         s.changed();
       }}
     >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        aria-hidden="true"
-      >
-        <path d="m4 4 8 8M12 4l-8 8" />
-      </svg>
+      ${closeIcon(14)}
     </button>
   </div>`;
 }
