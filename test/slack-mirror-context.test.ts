@@ -24,7 +24,6 @@ function fixture() {
   const readHistory = createSlackHistoryReader({
     core,
     ids,
-    source: "mirror",
     managed: true,
     setupUrl: "https://qm.test/admin/?setup=slack",
   });
@@ -197,7 +196,6 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
     deps: {
       outbound: {},
       surfaceCache: cache,
-      slackContextSource: "mirror",
       surfaceContext: {
         pull: async () => ({
           messages: [{ ts: "2.000000", threadTs: "1.000000", text: "reply" }],
@@ -413,7 +411,7 @@ test("automatic context keeps the thread parent and recent exchange but excludes
   );
 });
 
-for (const source of ["live", "mirror", "explicit-live"] as const) {
+for (const source of ["cached", "explicit-live"] as const) {
   test(`own status cards are excluded from ${source} history and backfill`, async () => {
     const f = fixture();
     const messages = [
@@ -422,11 +420,7 @@ for (const source of ["live", "mirror", "explicit-live"] as const) {
       { user: "UBOT", ts: "3", text: "ordinary answer" },
       { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
     ];
-    const read = createSlackHistoryReader({
-      core: f.core,
-      ids,
-      source: source === "explicit-live" ? "mirror" : source,
-    });
+    const read = createSlackHistoryReader({ core: f.core, ids });
     const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
     const result = await read(client, "C1", "1", undefined, false, source === "explicit-live");
     assert.deepEqual(
@@ -464,7 +458,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
       replies: async () => ({ messages: [{ ts: "1.0", text: "waiting", user: "U1" }] }),
     },
   };
-  const readHistory = createSlackHistoryReader({ core, ids, source: "mirror", historyClient });
+  const readHistory = createSlackHistoryReader({ core, ids, historyClient });
   let outcome: any;
   const fulfiller = createSurfaceContextFulfiller({
     core: {
@@ -531,7 +525,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
 
 test("explicit live reads reject truncated threads instead of returning an unusable backward cursor", async () => {
   const f = fixture();
-  const read = createSlackHistoryReader({ core: f.core, ids, source: "mirror", managed: true });
+  const read = createSlackHistoryReader({ core: f.core, ids, managed: true });
   const client = {
     conversations: {
       replies: async ({ limit }: { limit: number }) => ({

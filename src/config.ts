@@ -22,13 +22,7 @@ import {
   type SecurityScreenMode,
 } from "./security/security-posture.ts";
 import { DEFAULT_SHARING_POSTURE, type SharingPosture } from "./resolution/sharing-posture.ts";
-import {
-  parseSlackContextSource,
-  type SlackContextSource,
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -62,7 +56,6 @@ interface TenantConfig {
 
 interface DeploymentConfig {
   productAnalytics?: { apiKey: string; host?: string };
-  slackContextSource?: SlackContextSource;
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   production: boolean;
@@ -1043,7 +1036,6 @@ function loadDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentConfig {
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     layerEnv: { ...env },
-    slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     seedSkills: true,
     skillsSeedDir: resolve("./skills-seed"),
