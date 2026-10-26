@@ -291,6 +291,12 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     contentUpdates.clear();
   }
 
+  function observe(previous: HTMLElement | null, next: HTMLElement | null): HTMLElement | null {
+    if (previous) observer?.unobserve(previous);
+    if (next) observer?.observe(next);
+    return next;
+  }
+
   function sync(element: HTMLElement | null): void {
     let changed = false;
     if (scroller !== element) {
@@ -319,9 +325,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     if (stack !== nextStack) {
       changed = true;
       filledAtSize = null;
-      if (stack) observer?.unobserve(stack);
-      stack = nextStack;
-      if (stack) observer?.observe(stack);
+      stack = observe(stack, nextStack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
     const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
@@ -329,26 +333,20 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     const nextPrompt = pinPrompt ? (prompts?.item(prompts.length - 1) ?? null) : null;
     if (pins !== nextPins) {
       changed = true;
-      if (pins) observer?.unobserve(pins);
-      pins = nextPins;
-      if (pins) observer?.observe(pins);
+      pins = observe(pins, nextPins);
     }
     if (prompt !== nextPrompt || promptKey !== nextPrompt?.dataset.index) {
       changed = true;
       clearPrompt();
-      if (prompt) observer?.unobserve(prompt);
-      prompt = nextPrompt;
+      prompt = observe(prompt, nextPrompt);
       promptKey = prompt?.dataset.index;
-      if (prompt) observer?.observe(prompt);
     }
     prompt?.classList.add("latest-prompt");
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;
       remeasure = true;
-      if (content) observer?.unobserve(content);
-      content = nextContent;
-      if (content) observer?.observe(content);
+      content = observe(content, nextContent);
     }
     if (changed) syncSticky();
     fillViewport();
