@@ -29,6 +29,7 @@ export interface FakeModal {
   terminate(name: string): void;
   terminateAllRunning(): void;
   failTerminateOnce(): void;
+  holdNameAfterTerminate(createAttempts: number): void;
   execScripts(): string[];
   tagsOf(sandboxId: string): Record<string, string>;
   createUntracked(tags: Record<string, string>): string;
@@ -45,6 +46,8 @@ export function installFakeModal(): FakeModal {
   let nextId = 1;
   let clock = 0;
   let terminateFailures = 0;
+  let nameHold = 0;
+  const heldNames = new Map<string, number>();
   let restoreFailures = 0;
   let snapshots = 0;
   let snapshotHook: (() => Promise<void>) | null = null;
@@ -71,6 +74,8 @@ export function installFakeModal(): FakeModal {
   };
 
   const kill = (r: FakeRecord): void => {
+    if (nameHold > 0 && r.name) heldNames.set(r.name, nameHold);
+    nameHold = 0;
     r.state = "terminated";
     rmSync(r.home, { recursive: true, force: true });
   };
@@ -149,6 +154,11 @@ export function installFakeModal(): FakeModal {
     lifetimeMs: 24 * 3600_000,
     async create(opts): Promise<ModalSession> {
       if (opts.name) {
+        const held = heldNames.get(opts.name) ?? 0;
+        if (held > 0) {
+          heldNames.set(opts.name, held - 1);
+          throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
+        }
         const existing = byName(opts.name);
         if (existing && existing.state === "running") {
           throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
@@ -202,6 +212,9 @@ export function installFakeModal(): FakeModal {
     },
     failTerminateOnce: () => {
       terminateFailures++;
+    },
+    holdNameAfterTerminate: (createAttempts) => {
+      nameHold = createAttempts;
     },
     execScripts: () => [...execScripts],
     tagsOf: (sandboxId) => {

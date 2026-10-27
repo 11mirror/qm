@@ -231,11 +231,25 @@ async function releaseHold(t: TurnSandboxState, handle: SandboxHandle): Promise<
 function provision(t: TurnSandboxState, eager = false): Promise<SandboxHandle> {
   const { emitGapWork, box } = t;
   if (!eager) box.used = true;
-  t.provisionInFlight ??= doProvision(t, eager ? () => {} : emitGapWork, eager).catch((err) => {
+  t.provisionInFlight ??= doProvision(t, eager ? () => {} : emitGapWork, eager).catch((err: unknown) => {
     t.provisionInFlight = null;
+    recordProvisionFailure(t, err, eager);
     throw err;
   });
   return t.provisionInFlight;
+}
+
+function recordProvisionFailure(t: TurnSandboxState, error: unknown, eager: boolean): void {
+  const { deps, input, actor, session, scopeId, turnKey } = t;
+  deps.auditLog?.record({
+    at: Date.now(),
+    principalId: actor.id,
+    action: "sandbox.scoped.provision_failed",
+    resource: turnKey,
+    scopeLabel: scopeId,
+    detail: JSON.stringify({ runId: input.runId, sessionId: session.id, eager, error: errMessage(error) }),
+  });
+  reportSandboxError(t, "provision_failed", error);
 }
 
 async function doProvision(

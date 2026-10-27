@@ -40,6 +40,8 @@ class ModalInvalidError extends Error {}
 class ModalTimeoutError extends Error {}
 let modalFault: { exec?: Error; read?: Error; write?: Error; create?: Error; terminate?: Error } = {};
 let modalPoll: number | null | Error = null;
+const modalTerminated: string[] = [];
+const modalWaited: string[] = [];
 const modalSandbox = {
   sandboxId: "sb-native",
   async poll() {
@@ -48,6 +50,11 @@ const modalSandbox = {
   },
   async terminate() {
     if (modalFault.terminate) throw modalFault.terminate;
+    modalTerminated.push("sb-native");
+  },
+  async wait() {
+    modalWaited.push("sb-native");
+    return 137;
   },
   async exec(args: string[], params: Record<string, unknown>) {
     if (modalFault.exec) throw modalFault.exec;
@@ -362,6 +369,17 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
   await client.terminate("sb-native");
   modalPoll = new ModalInvalidError("malformed sandbox id");
   await assert.rejects(client.fromId("not-a-sandbox"), ModalSandboxGoneError, "an unknown id is a gone sandbox");
+});
+
+test("Modal terminate returns only once the sandbox has stopped, so its name is free to reuse", async () => {
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({ name: "scope" });
+  modalTerminated.length = 0;
+  modalWaited.length = 0;
+  await session.terminate();
+  await client.terminate("sb-native");
+  assert.deepEqual(modalTerminated, ["sb-native", "sb-native"]);
+  assert.deepEqual(modalWaited, ["sb-native", "sb-native"]);
 });
 
 test("E2B sends explicit pause lifecycle, reads state without connect, and surfaces failed pause", async () => {
