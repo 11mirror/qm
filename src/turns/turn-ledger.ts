@@ -94,6 +94,30 @@ const TURN_TENANT_QUEUES_MIGRATION = {
   ],
 };
 
+const TURN_FENCE_WITHOUT_ENGINE_MIGRATION = {
+  id: "turns/0003-fence-without-engine",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_turn_fence(p_turn text, p_token text) RETURNS boolean LANGUAGE plpgsql AS $qm_turn_fence$
+     DECLARE
+       v_queue text;
+       v_run uuid;
+       v_ok boolean;
+     BEGIN
+       SELECT absurd_queue, absurd_run_id INTO v_queue, v_run FROM runs
+        WHERE id = p_turn AND status = 'running' AND lease_token = p_token
+        FOR SHARE;
+       IF v_queue IS NULL OR v_run IS NULL THEN
+         RETURN false;
+       END IF;
+       EXECUTE format(
+         'SELECT true FROM absurd.%I WHERE run_id = $1 AND ((state = ''running'' AND claimed_by = $2) OR state = ''cancelled'') FOR SHARE',
+         'r_' || v_queue || COALESCE('_t' || left(replace(NULLIF(current_setting('qm.tenant_id', true), ''), '-', ''), 12), ''))
+         INTO v_ok USING v_run, p_token;
+       RETURN COALESCE(v_ok, false);
+     END $qm_turn_fence$`,
+  ],
+};
+
 export type TurnOutcome =
   { status: "done"; result: TurnResult } | { status: "failed"; result: TurnResult; countsAsError?: boolean };
 
@@ -124,7 +148,6 @@ export interface TurnLedger {
   withdraw(turnId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
   cancelTree(threadRefs: readonly string[]): Promise<number>;
   repairCandidates(limit?: number): Promise<RepairCandidate[]>;
-  adoptLegacy(limit?: number): Promise<number>;
   repair(candidate: RepairCandidate, result: TurnResult): Promise<Run | null>;
   release(candidate: RepairCandidate): Promise<void>;
   cleanup(): Promise<number>;
@@ -213,7 +236,7 @@ async function start(client: PoolClient, run: Run): Promise<void> {
 
 async function advance(client: PoolClient, threadRef: string, ending: string): Promise<void> {
   const parked = await client.query(
-    `SELECT * FROM runs WHERE session_id = $1 AND engine = 'absurd' AND status = 'pending' AND id <> $2
+    `SELECT * FROM runs WHERE session_id = $1 AND status = 'pending' AND id <> $2
        AND absurd_task_id IS NOT NULL AND (last_stop::jsonb)->>'kind' = 'parked'
      ORDER BY created_at ASC, seq ASC LIMIT 1 FOR UPDATE`,
     [threadRef, ending],
@@ -266,7 +289,7 @@ async function requeue(client: PoolClient, queue: TurnQueue, absurdRunId: string
 
 async function askToYield(client: PoolClient, activeId: string): Promise<boolean> {
   const { rows } = await client.query(
-    `SELECT * FROM runs WHERE id = $1 AND engine = 'absurd' AND claim_priority = $2 AND status IN ('pending','running')
+    `SELECT * FROM runs WHERE id = $1 AND claim_priority = $2 AND status IN ('pending','running')
      FOR UPDATE`,
     [activeId, BACKGROUND_PRIORITY],
   );
@@ -312,37 +335,12 @@ async function begin(
     const { rows } = await client.query(
       `UPDATE runs SET status = 'running', lease_token = $2, lease_expires_at = NULL, worker_id = $3,
          attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5
-       WHERE id = $1 AND engine = 'absurd' AND absurd_queue = $6 AND status IN ('pending','running')
+       WHERE id = $1 AND absurd_queue = $6 AND status IN ('pending','running')
        RETURNING *`,
       [turnId, token, workerId, Date.now(), absurdRunId, queue],
     );
     return rows[0] ? rowToRun(rows[0]) : null;
   });
-}
-
-async function legacyLeased(client: PoolClient, threadRef: string): Promise<boolean> {
-  const { rows } = await client.query(
-    `SELECT 1 FROM runs WHERE session_id = $1 AND engine = 'legacy' AND status = 'running' AND lease_expires_at > $2
-     LIMIT 1`,
-    [threadRef, Date.now()],
-  );
-  return rows.length > 0;
-}
-
-// A run the legacy engine enqueued becomes a queued Absurd turn once no old process holds it: pending rows at once,
-// running rows when their lease lapses. The thread then starts its oldest queued turn if none is active.
-async function adoptThread(client: PoolClient, threadRef: string): Promise<number> {
-  const active = await lockPointer(client, threadRef);
-  if (await legacyLeased(client, threadRef)) return 0;
-  const { rowCount } = await client.query(
-    `UPDATE runs SET engine = 'absurd', status = 'queued', absurd_queue = ($2::text[])[claim_priority + 1],
-       lease_token = NULL, lease_expires_at = NULL, worker_id = NULL,
-       last_stop = COALESCE(last_stop, CASE WHEN status = 'running' THEN $3 END)
-     WHERE session_id = $1 AND engine = 'legacy' AND status IN ('pending','running')`,
-    [threadRef, [0, 1, 2].map((p) => turnQueueFor(p as RunPriority)), JSON.stringify({ kind: "lease_expired" })],
-  );
-  if (active === null) await advance(client, threadRef, "");
-  return rowCount ?? 0;
 }
 
 async function cancelLocked(
@@ -402,8 +400,8 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
           }
           const { rows } = await client.query(
             `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at,
-               claim_priority, engine, absurd_queue)
-             VALUES ($1, $2, 'queued', $3, $4, 0, $5, $6, $7, 'absurd', $8)
+               claim_priority, absurd_queue)
+             VALUES ($1, $2, 'queued', $3, $4, 0, $5, $6, $7, $8)
              ON CONFLICT (${tenantCols("idempotency_key")}) DO NOTHING RETURNING *`,
             [
               randomUUID(),
@@ -419,7 +417,6 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
           inserted = rows[0];
         }
         const queued = rowToRun(inserted);
-        if (await legacyLeased(client, sessionId)) return { run: queued, deduped: false };
         if (active && !(priority === 0 && (await askToYield(client, active)))) return { run: queued, deduped: false };
         await start(client, queued);
         return { run: { ...queued, status: "pending" }, deduped: false };
@@ -625,9 +622,7 @@ function cancellation(ctx: LedgerContext): Pick<TurnLedger, "cancel" | "withdraw
   };
 }
 
-function upkeep(
-  ctx: LedgerContext,
-): Pick<TurnLedger, "repairCandidates" | "adoptLegacy" | "repair" | "cleanup" | "release"> {
+function upkeep(ctx: LedgerContext): Pick<TurnLedger, "repairCandidates" | "repair" | "cleanup" | "release"> {
   const { db, tx, settle } = ctx;
   return {
     async repairCandidates(limit = 100) {
@@ -654,21 +649,6 @@ function upkeep(
         turnId: String(row.active_turn_id),
         reason: repairReason(row),
       }));
-    },
-
-    async adoptLegacy(limit = 100) {
-      const { rows } = await db.query(
-        `SELECT DISTINCT session_id FROM runs WHERE status IN ('pending','running','queued')
-           AND ((engine = 'legacy' AND (status = 'pending' OR lease_expires_at <= $2))
-             OR (status = 'queued' AND NOT EXISTS (
-               SELECT 1 FROM session_turn_pointers p WHERE p.tenant_id = qm_tenant_id()
-                 AND p.thread_ref = runs.session_id AND p.active_turn_id IS NOT NULL)))
-         LIMIT $1`,
-        [limit, Date.now()],
-      );
-      let adopted = 0;
-      for (const row of rows) adopted += await tx((client) => adoptThread(client, String(row.session_id)));
-      return adopted;
     },
 
     async repair({ threadRef, turnId }, result) {
@@ -707,7 +687,11 @@ function upkeep(
 }
 
 export function createTurnLedger(connectionString: string, opts: { onTerminal?: (run: Run) => void } = {}): TurnLedger {
-  const db: PgPool = createPgPool(connectionString, [TURN_LEDGER_MIGRATION, TURN_TENANT_QUEUES_MIGRATION]);
+  const db: PgPool = createPgPool(connectionString, [
+    TURN_LEDGER_MIGRATION,
+    TURN_TENANT_QUEUES_MIGRATION,
+    TURN_FENCE_WITHOUT_ENGINE_MIGRATION,
+  ]);
   const ctx: LedgerContext = {
     db,
     tx: async (fn) => withPgTransaction(await db.pool(), fn),
