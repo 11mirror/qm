@@ -5,36 +5,50 @@ import type { SessionStore, SpendRow } from "../../src/sessions/session-store.ts
 const DAY = 86_400_000;
 const BASE = Date.UTC(2021, 0, 1);
 
-export async function assertSpendRollupParity(
-  makeStore: (now: () => number) => SessionStore,
-  prefix: string,
-): Promise<void> {
-  const clock = { at: BASE + 6 * 3_600_000 };
-  const store = makeStore(() => clock.at);
-  const alice = scopeId("personal", `${prefix}-alice`);
-  const bob = scopeId("personal", `${prefix}-bob`);
-  const channel = scopeId("channel", `${prefix}-C1`);
-  const mine = new Set<string>([alice, bob, channel]);
+type Recorder = (
+  threadRef: string,
+  type: SessionType,
+  scope: string,
+  costUsd: number | null,
+  model?: string,
+) => Promise<{ id: string }>;
 
-  const record = async (
-    threadRef: string,
-    type: SessionType,
-    scope: string,
-    costUsd: number | null,
-    model = "mock",
-  ) => {
-    const session = await store.getOrCreateByThread(threadRef, type, scope);
-    await store.recordLlmRequest(session.id, {
-      turnSeq: null,
-      step: 0,
-      model,
-      scopeLabel: scope,
-      usage:
-        costUsd === null ? null : { input: 100, output: 20, cacheRead: 400, cacheWrite: 40, totalTokens: 560, costUsd },
-    });
-    return session;
+interface ParityCtx {
+  store: SessionStore;
+  clock: { at: number };
+  prefix: string;
+  alice: ReturnType<typeof scopeId>;
+  bob: ReturnType<typeof scopeId>;
+  channel: ReturnType<typeof scopeId>;
+  record: Recorder;
+}
+
+function spendRow(
+  day: number,
+  scope: string,
+  model: string,
+  origin: SpendRow["origin"],
+  cronId: string | null,
+  calls: number,
+  costUsd: number,
+): SpendRow {
+  return {
+    day,
+    scopeId: scope,
+    model,
+    origin,
+    cronId,
+    calls,
+    costUsd,
+    input: 100 * calls,
+    output: 20 * calls,
+    cacheRead: 400 * calls,
+    cacheWrite: 40 * calls,
   };
+}
 
+async function assertWindowedRollup({ store, clock, prefix, alice, bob, channel, record }: ParityCtx): Promise<void> {
+  const mine = new Set<string>([alice, bob, channel]);
   await record(`${prefix}:alice-live-a`, "dm", alice, 1.5);
   await record(`${prefix}:alice-live-b`, "dm", alice, 0.25);
   await record(`${prefix}:alice-live-a`, "dm", alice, 0.75, "other-model");
@@ -64,91 +78,19 @@ export async function assertSpendRollupParity(
   };
   const sorted = [...rollup].sort(byKey);
 
-  const expected: SpendRow[] = (
-    [
-      {
-        day,
-        scopeId: alice,
-        model: "other-model",
-        origin: "conversation",
-        cronId: null,
-        calls: 1,
-        costUsd: 0.75,
-        input: 100,
-        output: 20,
-        cacheRead: 400,
-        cacheWrite: 40,
-      },
-      {
-        day,
-        scopeId: alice,
-        model: "mock",
-        origin: "conversation",
-        cronId: null,
-        calls: 2,
-        costUsd: 1.75,
-        input: 200,
-        output: 40,
-        cacheRead: 800,
-        cacheWrite: 80,
-      },
-      {
-        day,
-        scopeId: alice,
-        model: "mock",
-        origin: "cron",
-        cronId: `${prefix}-nightly`,
-        calls: 1,
-        costUsd: 0.5,
-        input: 100,
-        output: 20,
-        cacheRead: 400,
-        cacheWrite: 40,
-      },
-      {
-        day,
-        scopeId: channel,
-        model: "mock",
-        origin: "conversation",
-        cronId: null,
-        calls: 1,
-        costUsd: 2,
-        input: 100,
-        output: 20,
-        cacheRead: 400,
-        cacheWrite: 40,
-      },
-      {
-        day: day + 1,
-        scopeId: alice,
-        model: "mock",
-        origin: "conversation",
-        cronId: null,
-        calls: 1,
-        costUsd: 0.125,
-        input: 100,
-        output: 20,
-        cacheRead: 400,
-        cacheWrite: 40,
-      },
-      {
-        day: day + 1,
-        scopeId: bob,
-        model: "mock",
-        origin: "conversation",
-        cronId: null,
-        calls: 1,
-        costUsd: 4,
-        input: 100,
-        output: 20,
-        cacheRead: 400,
-        cacheWrite: 40,
-      },
-    ] satisfies SpendRow[]
-  ).sort(byKey);
+  const expected = [
+    spendRow(day, alice, "other-model", "conversation", null, 1, 0.75),
+    spendRow(day, alice, "mock", "conversation", null, 2, 1.75),
+    spendRow(day, alice, "mock", "cron", `${prefix}-nightly`, 1, 0.5),
+    spendRow(day, channel, "mock", "conversation", null, 1, 2),
+    spendRow(day + 1, alice, "mock", "conversation", null, 1, 0.125),
+    spendRow(day + 1, bob, "mock", "conversation", null, 1, 4),
+  ].sort(byKey);
 
   assert.deepEqual(sorted, expected);
+}
 
+async function assertInheritedOrigins({ store, clock, prefix, alice, bob, record }: ParityCtx): Promise<void> {
   clock.at = BASE;
   const child = async (name: string, parentId: string) => {
     const session = await record(`agent:main:subagent:${prefix}-${name}`, "dm", alice, 0.01, `${prefix}-${name}`);
@@ -197,7 +139,9 @@ export async function assertSpendRollupParity(
     assert.equal(row.calls, 1);
     assert.equal(row.costUsd, 0.01);
   }
+}
 
+async function assertChangingParent({ store, clock, prefix, alice, bob, record }: ParityCtx): Promise<void> {
   clock.at = BASE + 123;
   const changing = await record(`${prefix}:changing`, "dm", alice, 0, `${prefix}-changing`);
   const range = { from: clock.at, to: clock.at + 1 };
@@ -220,4 +164,39 @@ export async function assertSpendRollupParity(
   assert.equal((await readChanging())[0]!.cronId, null);
   await store.deleteSession(changing.id);
   assert.deepEqual(await readChanging(), []);
+}
+
+export async function assertSpendRollupParity(
+  makeStore: (now: () => number) => SessionStore,
+  prefix: string,
+): Promise<void> {
+  const clock = { at: BASE + 6 * 3_600_000 };
+  const store = makeStore(() => clock.at);
+  const alice = scopeId("personal", `${prefix}-alice`);
+  const bob = scopeId("personal", `${prefix}-bob`);
+  const channel = scopeId("channel", `${prefix}-C1`);
+
+  const record = async (
+    threadRef: string,
+    type: SessionType,
+    scope: string,
+    costUsd: number | null,
+    model = "mock",
+  ) => {
+    const session = await store.getOrCreateByThread(threadRef, type, scope);
+    await store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model,
+      scopeLabel: scope,
+      usage:
+        costUsd === null ? null : { input: 100, output: 20, cacheRead: 400, cacheWrite: 40, totalTokens: 560, costUsd },
+    });
+    return session;
+  };
+
+  const ctx = { store, clock, prefix, alice, bob, channel, record };
+  await assertWindowedRollup(ctx);
+  await assertInheritedOrigins(ctx);
+  await assertChangingParent(ctx);
 }

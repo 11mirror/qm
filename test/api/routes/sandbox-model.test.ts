@@ -1,22 +1,22 @@
-import "./support/auto-fake-sprites.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { test } from "node:test";
+import "../../support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createServer as httpServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
-import type { ServerDeps } from "../src/api/deps.ts";
+import { serverDeps } from "../../../src/wiring.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { createServer } from "../../../src/api/server.ts";
+import type { ServerDeps } from "../../../src/api/deps.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
   CONTROL_PLANE_AUD,
   SANDBOX_MODEL_AUD,
-} from "../src/auth/capability-token.ts";
-import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+} from "../../../src/auth/capability-token.ts";
+import { testConfig, TEST_CAPABILITY_SECRET } from "../../support/test-config.ts";
+import type { ProvisionOptions } from "../../../src/sandbox/sandbox.ts";
 
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
@@ -46,15 +46,15 @@ async function listen(server: ReturnType<typeof httpServer>): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-test("sandbox SDK calls reach the company gateway with the sandbox token as their API key", async (t) => {
+async function gatewayUpstream(t: TestContext) {
   const calls: Array<{ url: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }> = [];
-  let status = 200;
+  const state = { status: 200 };
   const upstream = httpServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     calls.push({ url: req.url!, headers: req.headers, body: JSON.parse(raw) });
-    if (status !== 200) {
-      res.writeHead(status, { "content-type": "application/json", "retry-after": "7" });
+    if (state.status !== 200) {
+      res.writeHead(state.status, { "content-type": "application/json", "retry-after": "7" });
       return void res.end(JSON.stringify({ error: { message: `rejected key ${key}` } }));
     }
     if (req.url === "/v1/messages") {
@@ -65,8 +65,13 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "scored" } }] }));
   });
-  const upstreamUrl = await listen(upstream);
+  const url = await listen(upstream);
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+  return { calls, state, url };
+}
+
+test("sandbox SDK calls reach the company gateway with the sandbox token as their API key", async (t) => {
+  const { calls, state, url: upstreamUrl } = await gatewayUpstream(t);
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
   let overBudget = false;
@@ -171,16 +176,16 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(anonymous.status, 401);
   assert.equal(calls.length, 4);
 
-  status = 429;
+  state.status = 429;
   const limited = await openai(chat);
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get("retry-after"), "7");
   assert.ok(!(await limited.text()).includes(key));
   for (const upstreamStatus of [401, 403, 500]) {
-    status = upstreamStatus;
+    state.status = upstreamStatus;
     assert.equal((await openai(chat)).status, 502, String(upstreamStatus));
   }
-  status = 200;
+  state.status = 200;
 
   overBudget = true;
   assert.equal((await openai(chat)).status, 429);

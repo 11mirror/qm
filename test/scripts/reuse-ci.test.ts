@@ -112,149 +112,60 @@ test("reuses the full tested merge tree, not the PR head SHA or an artifact name
 
 test("changed bases, trees, workflow, producer identity, attempts and missing gates cannot reuse", async () => {
   for (const change of [
-    (f: any) => {
-      f.data[`commits/${release}`].parents.push({ sha: head });
-    },
-    (f: any) => {
-      f.data[`commits/${release}/pulls?per_page=100`] = [];
-    },
-    (f: any) => {
-      f.data[`commits/${release}/pulls?per_page=100`].push(f.pull);
-    },
-    (f: any) => {
-      f.pull.merged = false;
-    },
-    (f: any) => {
-      f.pull.head.repo.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.pull.base.ref = "other";
-    },
-    (f: any) => {
-      f.pull.base.repo.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.data[`contents/.github/workflows/cicd.yml?ref=${release}`].sha = base;
-    },
-    (f: any) => {
-      f.data[`contents/scripts/reuse-ci.ts?ref=${release}`].sha = base;
-    },
-    (f: any) => {
-      f.scan.conclusion = "failure";
-    },
-    (f: any) => {
-      f.scan.head_branch = "refs/pull/8/head";
-    },
-    (f: any) => {
-      f.scan.path = ".github/workflows/fake.yml";
-    },
-    (f: any) => {
-      f.scan.head_sha = release;
-    },
-    (f: any) => {
-      f.scan.repository.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].total_count = 101;
-    },
-    (f: any) => {
-      f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].workflow_runs.push({
+    (f: any) => void f.data[`commits/${release}`].parents.push({ sha: head }),
+    (f: any) => void (f.data[`commits/${release}/pulls?per_page=100`] = []),
+    (f: any) => void f.data[`commits/${release}/pulls?per_page=100`].push(f.pull),
+    (f: any) => void (f.pull.merged = false),
+    (f: any) => void (f.pull.head.repo.full_name = "fork/qm"),
+    (f: any) => void (f.pull.base.ref = "other"),
+    (f: any) => void (f.pull.base.repo.full_name = "fork/qm"),
+    (f: any) => void (f.data[`contents/.github/workflows/cicd.yml?ref=${release}`].sha = base),
+    (f: any) => void (f.data[`contents/scripts/reuse-ci.ts?ref=${release}`].sha = base),
+    (f: any) => void (f.scan.conclusion = "failure"),
+    (f: any) => void (f.scan.head_branch = "refs/pull/8/head"),
+    (f: any) => void (f.scan.path = ".github/workflows/fake.yml"),
+    (f: any) => void (f.scan.head_sha = release),
+    (f: any) => void (f.scan.repository.full_name = "fork/qm"),
+    (f: any) => void (f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].total_count = 101),
+    (f: any) =>
+      void f.data[`actions/runs?event=dynamic&head_sha=${head}&per_page=100`].workflow_runs.push({
         ...f.scan,
         id: 31,
         run_number: 6,
         conclusion: "failure",
-      });
-    },
-    (f: any) => {
-      f.run.conclusion = "failure";
-    },
-    (f: any) => {
-      f.run.event = "push";
-    },
-    (f: any) => {
-      f.run.path = ".github/workflows/fake.yml";
-    },
-    (f: any) => {
-      f.run.head_repository.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.run.repository.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.run.head_sha = release;
-    },
-    (f: any) => {
-      f.run.head_branch = "other";
-    },
-    (f: any) => {
-      f.run.created_at = new Date(now - 25 * 3600_000).toISOString();
-    },
-    (f: any) => {
-      f.run.created_at = "invalid";
-    },
-    (f: any) => {
-      f.run.created_at = new Date(now + 1).toISOString();
-    },
-    (f: any) => {
-      f.data[`actions/workflows/cicd.yml/runs?event=pull_request&head_sha=${head}&per_page=100`].total_count = 101;
-    },
-    (f: any) => {
-      f.data["actions/runs/10/attempts/2/jobs?per_page=100"].total_count = 101;
-    },
-    (f: any) => {
-      f.jobs[0].conclusion = "skipped";
-    },
-    (f: any) => {
-      f.jobs[0].run_attempt = 1;
-    },
-    (f: any) => {
-      f.jobs[0].run_id = 11;
-    },
-    (f: any) => {
-      f.jobs[0].head_sha = release;
-    },
-    (f: any) => {
-      f.jobs.splice(1, 1);
-    },
-    (f: any) => {
-      f.jobs.push(f.jobs[0]);
-    },
-    (f: any) => {
-      f.jobs.at(-1).steps.pop();
-    },
-    (f: any) => {
-      f.jobs.at(-1).steps[0].conclusion = "skipped";
-    },
-    (f: any) => {
-      f.receipt.runId++;
-    },
-    (f: any) => {
-      f.receipt.attempt--;
-    },
-    (f: any) => {
-      f.receipt.pr++;
-    },
-    (f: any) => {
-      f.receipt.tree = head;
-    },
-    (f: any) => {
-      f.data[`commits/${tested}`].parents[0].sha = head;
-    },
-    (f: any) => {
-      f.data[`commits/${tested}`].parents[1].sha = release;
-    },
-    (f: any) => {
-      f.data[`commits/${tested}`].commit.tree.sha = head;
-    },
-    (f: any) => {
-      f.data[`commits/${release}`].commit.tree.sha = head;
-    },
-    (f: any) => {
-      f.data["actions/runs/10"].run_attempt++;
-    },
-    (f: any) => {
-      f.data["actions/runs/10"].status = "in_progress";
-    },
+      }),
+    (f: any) => void (f.run.conclusion = "failure"),
+    (f: any) => void (f.run.event = "push"),
+    (f: any) => void (f.run.path = ".github/workflows/fake.yml"),
+    (f: any) => void (f.run.head_repository.full_name = "fork/qm"),
+    (f: any) => void (f.run.repository.full_name = "fork/qm"),
+    (f: any) => void (f.run.head_sha = release),
+    (f: any) => void (f.run.head_branch = "other"),
+    (f: any) => void (f.run.created_at = new Date(now - 25 * 3600_000).toISOString()),
+    (f: any) => void (f.run.created_at = "invalid"),
+    (f: any) => void (f.run.created_at = new Date(now + 1).toISOString()),
+    (f: any) =>
+      void (f.data[`actions/workflows/cicd.yml/runs?event=pull_request&head_sha=${head}&per_page=100`].total_count =
+        101),
+    (f: any) => void (f.data["actions/runs/10/attempts/2/jobs?per_page=100"].total_count = 101),
+    (f: any) => void (f.jobs[0].conclusion = "skipped"),
+    (f: any) => void (f.jobs[0].run_attempt = 1),
+    (f: any) => void (f.jobs[0].run_id = 11),
+    (f: any) => void (f.jobs[0].head_sha = release),
+    (f: any) => void f.jobs.splice(1, 1),
+    (f: any) => void f.jobs.push(f.jobs[0]),
+    (f: any) => void f.jobs.at(-1).steps.pop(),
+    (f: any) => void (f.jobs.at(-1).steps[0].conclusion = "skipped"),
+    (f: any) => void f.receipt.runId++,
+    (f: any) => void f.receipt.attempt--,
+    (f: any) => void f.receipt.pr++,
+    (f: any) => void (f.receipt.tree = head),
+    (f: any) => void (f.data[`commits/${tested}`].parents[0].sha = head),
+    (f: any) => void (f.data[`commits/${tested}`].parents[1].sha = release),
+    (f: any) => void (f.data[`commits/${tested}`].commit.tree.sha = head),
+    (f: any) => void (f.data[`commits/${release}`].commit.tree.sha = head),
+    (f: any) => void f.data["actions/runs/10"].run_attempt++,
+    (f: any) => void (f.data["actions/runs/10"].status = "in_progress"),
   ]) {
     const f = fixture();
     change(f);
