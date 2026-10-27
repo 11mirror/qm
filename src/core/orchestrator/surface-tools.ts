@@ -80,34 +80,51 @@ function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFile
   }));
 }
 
+type SurfaceTurn = SurfaceToolsContext & {
+  here: Destination;
+  outbound: NonNullable<OrchestratorDeps["outbound"]>;
+  rateLimitRecipient: { rateLimitRecipient?: { target: string; user: string } };
+};
+
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
+  const { deps, input, actor, strictReadOnly, defaultDestination } = ctx;
+  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.outbound)) return undefined;
+  const turn: SurfaceTurn = {
+    ...ctx,
+    here: defaultDestination,
+    outbound: deps.outbound,
+    rateLimitRecipient:
+      input.origin?.kind === "human" &&
+      !isSessionTurn(input) &&
+      defaultDestination.type === "slack" &&
+      defaultDestination.target
+        ? { rateLimitRecipient: { target: defaultDestination.target, user: actor.id } }
+        : {},
+  };
+  const coverageForTurn = surfaceCoverage(turn);
+  return {
+    ...postingTools(turn),
+    ...readingTools(turn, coverageForTurn),
+    ...searchTool(turn, coverageForTurn),
+    ...channelTools(turn),
+  };
+}
+
+function destinationTools(turn: SurfaceTurn) {
   const {
     deps,
     input,
     actor,
     conversation,
-    session,
-    scopeId,
-    strictReadOnly,
-    defaultDestination,
     blobTransfer,
     fileRegistration,
     provision,
     postProvenance,
     postKeys,
     spine,
-  } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.outbound)) return undefined;
-  const outbound = deps.outbound;
-  const currentDestination = defaultDestination;
-  const rateLimitRecipient =
-    input.origin?.kind === "human" &&
-    !isSessionTurn(input) &&
-    currentDestination.type === "slack" &&
-    currentDestination.target
-      ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
-      : {};
-  let editRefConsumed = false;
+    outbound,
+    here: currentDestination,
+  } = turn;
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -182,20 +199,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return { ok: false, message: errMessage(e) };
     }
   };
-  let coverageChecked = false;
-  let coverageSince: string | undefined;
-  const coverageForTurn = async (): Promise<string | undefined> => {
-    if (coverageChecked) return coverageSince;
-    coverageChecked = true;
-    const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
-    if (!deps.surfaceCache || !container) return coverageSince;
-    const cacheContainer = currentDestination.type === "slack" ? parseDeliveryTarget(container).channel : container;
-    const st = await deps.surfaceCache
-      .containerState(cacheContainer)
-      .catch(swallowAs("surface cache: container coverage", null));
-    coverageSince = st?.oldestTs ? isoFromTs(st.oldestTs) || undefined : undefined;
-    return coverageSince;
-  };
   const resolveFiles = async (
     files?: readonly OutboundFile[],
     sandboxId?: string,
@@ -210,7 +213,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       blobTransfer,
       fileRegistration,
       [],
-      ctx.openStored,
+      turn.openStored,
     );
     const bad = [
       ...r.missing.map((p) => `${p} (not found)`),
@@ -221,6 +224,18 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return { ok: false, message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the path(s) and retry` };
     return { ok: true, attachments: r.attachments };
   };
+  return { resolveDestination, enqueue, resolveFiles };
+}
+
+const targetOf = (input: { channel?: string; participants?: readonly string[] }) => ({
+  ...(input.channel !== undefined ? { channel: input.channel } : {}),
+  ...(input.participants !== undefined ? { participants: input.participants } : {}),
+});
+
+function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach" | "react" | "edit" | "delete"> {
+  const { deps, input, conversation, postKeys, spine, here: currentDestination } = turn;
+  const { resolveDestination, enqueue, resolveFiles } = destinationTools(turn);
+  let editRefConsumed = false;
   return {
     post: async (postText, opts, files, sandboxId) => {
       const seq = postKeys.take();
@@ -269,10 +284,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     },
     react: async (input: SurfaceReactInput) => {
       const seq = postKeys.take();
-      const d = await resolveDestination({
-        ...(input.channel !== undefined ? { channel: input.channel } : {}),
-        ...(input.participants !== undefined ? { participants: input.participants } : {}),
-      });
+      const d = await resolveDestination(targetOf(input));
       if (!d.ok) return { ok: false, message: d.message };
       if (d.destination.type === "principal")
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
@@ -280,22 +292,44 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     },
     edit: async (input: SurfaceEditInput) => {
       const seq = postKeys.take();
-      const d = await resolveDestination({
-        ...(input.channel !== undefined ? { channel: input.channel } : {}),
-        ...(input.participants !== undefined ? { participants: input.participants } : {}),
-      });
+      const d = await resolveDestination(targetOf(input));
       if (!d.ok) return { ok: false, message: d.message };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
     },
     delete: async (input: SurfaceDeleteInput) => {
       const seq = postKeys.take();
-      const d = await resolveDestination({
-        ...(input.channel !== undefined ? { channel: input.channel } : {}),
-        ...(input.participants !== undefined ? { participants: input.participants } : {}),
-      });
+      const d = await resolveDestination(targetOf(input));
       if (!d.ok) return { ok: false, message: d.message };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
+  };
+}
+
+function surfaceCoverage(turn: SurfaceTurn): () => Promise<string | undefined> {
+  const { deps, conversation, here: currentDestination } = turn;
+  let coverageChecked = false;
+  let coverageSince: string | undefined;
+  const coverageForTurn = async (): Promise<string | undefined> => {
+    if (coverageChecked) return coverageSince;
+    coverageChecked = true;
+    const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
+    if (!deps.surfaceCache || !container) return coverageSince;
+    const cacheContainer = currentDestination.type === "slack" ? parseDeliveryTarget(container).channel : container;
+    const st = await deps.surfaceCache
+      .containerState(cacheContainer)
+      .catch(swallowAs("surface cache: container coverage", null));
+    coverageSince = st?.oldestTs ? isoFromTs(st.oldestTs) || undefined : undefined;
+    return coverageSince;
+  };
+  return coverageForTurn;
+}
+
+function readingTools(
+  turn: SurfaceTurn,
+  coverageForTurn: () => Promise<string | undefined>,
+): Pick<SurfaceToolDeps, "readThread" | "whatsNew" | "readMembers" | "readFile"> {
+  const { deps, input, actor, conversation, blobTransfer, here: currentDestination, rateLimitRecipient } = turn;
+  return {
     readThread: async (opts?: { limit?: number }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
       if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
@@ -349,6 +383,49 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(coverage ? { coverageSince: coverage } : {}),
       };
     },
+    readMembers: async () => {
+      const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");
+      if (!roster.length) return { ok: true, members: [] };
+      return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
+    },
+    readFile: async (ref: string) => {
+      const id = ref.trim();
+      if (!/^[0-9a-f]{32}$/.test(id))
+        return {
+          ok: false,
+          message: "that doesn't look like a file I can read — pass the reference shown next to the file in a thread.",
+        };
+      let blob;
+      try {
+        blob = await blobTransfer.open(id);
+      } catch (e) {
+        return { ok: false, message: errMessage(e) };
+      }
+      if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
+      if (blob.sizeBytes > MAX_BLOB_BYTES) {
+        blob.stream.destroy();
+        return {
+          ok: false,
+          message: `that file is ${blob.sizeBytes} bytes — too large to read inline (limit ${MAX_BLOB_BYTES}).`,
+        };
+      }
+      const bytes = await collectBlob(blob.stream);
+      if (!headLooksLikeText(bytes.subarray(0, 8000)))
+        return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
+      const decoded = bytes.toString("utf8");
+      const content =
+        decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
+      return { ok: true, content, sizeBytes: blob.sizeBytes };
+    },
+  };
+}
+
+function searchTool(
+  turn: SurfaceTurn,
+  coverageForTurn: () => Promise<string | undefined>,
+): Pick<SurfaceToolDeps, "search"> {
+  const { deps, input, actor, conversation, here: currentDestination, rateLimitRecipient } = turn;
+  return {
     search: async (query: string, opts?: { limit?: number; source?: "mirror" | "slack" }) => {
       const q = query.trim();
       const coverage = await coverageForTurn();
@@ -447,40 +524,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(result.note ? { message: result.note } : {}),
       });
     },
-    readMembers: async () => {
-      const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");
-      if (!roster.length) return { ok: true, members: [] };
-      return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
-    },
-    readFile: async (ref: string) => {
-      const id = ref.trim();
-      if (!/^[0-9a-f]{32}$/.test(id))
-        return {
-          ok: false,
-          message: "that doesn't look like a file I can read — pass the reference shown next to the file in a thread.",
-        };
-      let blob;
-      try {
-        blob = await blobTransfer.open(id);
-      } catch (e) {
-        return { ok: false, message: errMessage(e) };
-      }
-      if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
-      if (blob.sizeBytes > MAX_BLOB_BYTES) {
-        blob.stream.destroy();
-        return {
-          ok: false,
-          message: `that file is ${blob.sizeBytes} bytes — too large to read inline (limit ${MAX_BLOB_BYTES}).`,
-        };
-      }
-      const bytes = await collectBlob(blob.stream);
-      if (!headLooksLikeText(bytes.subarray(0, 8000)))
-        return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
-      const decoded = bytes.toString("utf8");
-      const content =
-        decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
-      return { ok: true, content, sizeBytes: blob.sizeBytes };
-    },
+  };
+}
+
+function channelTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "getChannelBehavior" | "setChannelBehavior"> {
+  const { deps, actor, conversation, session, scopeId } = turn;
+  return {
     getChannelBehavior: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "channel settings aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
