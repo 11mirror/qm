@@ -1,7 +1,7 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness, SESSION } from "./deep-link-boot-fixture.ts";
+import { harness, SESSION } from "./support/deep-link-boot-fixture.ts";
 
 test("Slack message bubbles render the message text without template whitespace", async () => {
   const text = "can you switch to fable here?\nsecond line";
