@@ -37,7 +37,7 @@ export function buildWorkers(
   const {
     config,
     gates,
-    pgArtifactMap,
+    pgPool,
     turnLedger,
     late,
     databaseUrl,
@@ -59,7 +59,7 @@ export function buildWorkers(
     : undefined;
   const instanceRegistry: InstanceRegistry =
     !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
-      ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
+      ? createPostgresInstanceRegistry(pgPool, {
           instanceId: randomUUID(),
           buildSha: config.buildSha,
           startedAt: Date.now(),

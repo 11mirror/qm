@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";

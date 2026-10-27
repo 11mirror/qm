@@ -1,6 +1,6 @@
 import { turnFenceHeld } from "../turns/turn-fence.ts";
 import { randomUUID } from "node:crypto";
-import { jsonbStringify } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";

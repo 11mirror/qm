@@ -1,9 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { createConfigStore } from "../../src/resolution/config-store.ts";
 import { createSandboxBodies, type SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
@@ -56,19 +54,7 @@ export function testMigratedDatabaseUrl(): string {
   return databaseUrl(createDatabaseSync({ template: process.env.QM_TEST_TEMPLATE_DATABASE ?? "" }));
 }
 
-let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
-
-function sharedDatabase(): NonNullable<typeof shared> {
-  if (!shared) {
-    const url = testDatabaseUrl();
-    shared = { url, maps: createPostgresMapFactory(url) };
-  }
-  return shared;
-}
-
-export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
-  return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
-}
+let shared: string | undefined;
 
 export function testSandboxBodies<T extends object>(migration: MapConversion): SandboxBodies<T> {
   return createSandboxBodies<T>(testDatabaseUrl(), migration);
@@ -79,7 +65,7 @@ export function testQuery(url: string, text: string) {
 }
 
 export function testPgPool(): PgPool {
-  return createPgPool(sharedDatabase().url);
+  return createPgPool((shared ??= testDatabaseUrl()));
 }
 
 export function testAdvisoryLock(): AdvisoryLock {

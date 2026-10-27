@@ -27,7 +27,7 @@ import { createPostgresErrorLog } from "../admin/postgres-error-log.ts";
 import type { StoresModule } from "./stores.ts";
 
 export function buildFiles(w: Head & StoresModule) {
-  const { databaseUrl, managesArtifactHome, config, configStore, pgArtifactMap } = w;
+  const { databaseUrl, managesArtifactHome, config, configStore, pgPool } = w;
 
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
@@ -74,7 +74,7 @@ export function buildFiles(w: Head & StoresModule) {
   const mcpServers = createMcpServerStore(databaseUrl);
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const toolOutput = createPostgresToolOutputStore({
-    pool: pgArtifactMap.pool,
+    pool: pgPool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
   return {
