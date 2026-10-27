@@ -567,8 +567,8 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
     {
       sessions: { descendantsOf: async () => [{ ...child, rootId: root.id }] },
       runs: {
-        inFlightForThread: async (threadRef: string) =>
-          [{ id: `run-${threadRef}`, status: "running" }] as unknown as Run[],
+        inFlightForThreads: async (threadRefs: readonly string[]) =>
+          threadRefs.map((threadRef) => ({ id: `run-${threadRef}`, status: "running" })) as unknown as Run[],
         cancelTree: async () => 0,
       },
       signals: {
