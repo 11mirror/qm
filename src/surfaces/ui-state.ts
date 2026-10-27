@@ -1,6 +1,6 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { lockedRow } from "../persistence/locked-row.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface PersistedUiState {
   value: unknown;
@@ -14,7 +14,7 @@ export const UI_STATE_MAX_FUTURE_SKEW_MS = 300_000;
 const WEB_UI_STATE: TableSpec = {
   table: "web_ui_state",
   key: "id",
-  columns: { value: { type: "jsonb" }, updatedAt: { type: "bigint", required: true } },
+  columns: cols(`value jsonb, updatedAt bigint!`),
 };
 
 export const WEB_UI_STATE_MIGRATION = mapToTableMigration("surfaces/ui-state/0001-typed", WEB_UI_STATE);

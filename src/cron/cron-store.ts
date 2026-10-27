@@ -1,6 +1,6 @@
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
 import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
@@ -95,18 +95,9 @@ const CRONS: TableSpec = {
   keyIsField: true,
   columns: {
     ...TRIGGER_COLUMNS,
-    runtime: { type: "jsonb" },
-    schedule: { type: "jsonb", required: true },
-    nextFireAt: { type: "bigint" },
-    deferUntil: { type: "bigint" },
-    title: { type: "text" },
-    archived: { type: "boolean" },
-    action: { type: "text" },
-    message: { type: "text" },
-    inbox: { type: "jsonb" },
-    unattendedGrants: { type: "text[]" },
-    sessionRef: { type: "text" },
-    lastFireNote: { type: "jsonb" },
+    ...cols(`runtime jsonb, schedule jsonb!, nextFireAt bigint, deferUntil bigint, title text,
+    archived boolean, action text, message text, inbox jsonb, unattendedGrants text[],
+    sessionRef text, lastFireNote jsonb`),
   },
 };
 

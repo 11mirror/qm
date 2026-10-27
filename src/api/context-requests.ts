@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 
@@ -7,15 +7,8 @@ const CONTEXT_REQUESTS: TableSpec = {
   table: "context_requests",
   key: "id",
   keyIsField: true,
-  columns: {
-    source: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    status: { type: "text", required: true },
-    query: { type: "jsonb", required: true },
-    result: { type: "jsonb" },
-    error: { type: "text" },
-    sealedViewerToken: { type: "text" },
-  },
+  columns: cols(`source text!, createdAt bigint!, status text!, query jsonb!, result jsonb, error text,
+    sealedViewerToken text`),
 };
 
 export const CONTEXT_REQUESTS_MIGRATION = mapToTableMigration("api/context-requests/0001-typed", CONTEXT_REQUESTS);

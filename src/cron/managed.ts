@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { columnName, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, columnName, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Cron } from "../types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -13,10 +13,7 @@ export interface ManagedCronClaim {
   arming?: boolean;
 }
 
-export const MANAGED_CRON_COLUMNS = {
-  cronId: { type: "text" },
-  arming: { type: "boolean" },
-} as const;
+export const MANAGED_CRON_COLUMNS = cols(`cronId text, arming boolean`);
 
 export interface ManagedCronProfiles<T extends ManagedCronClaim> {
   get(key: string): Promise<T | null>;

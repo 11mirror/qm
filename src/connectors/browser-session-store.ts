@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "./connector-client-store.ts";
 import { swallow } from "../util/errors.ts";
 
@@ -18,7 +18,7 @@ const BROWSER_SESSIONS: TableSpec = {
   table: "browser_sessions",
   key: "principalId",
   keyIsField: true,
-  columns: { stateEnc: { type: "text", required: true }, updatedAt: { type: "bigint", required: true } },
+  columns: cols(`stateEnc text!, updatedAt bigint!`),
 };
 
 export const BROWSER_SESSIONS_MIGRATION = mapToTableMigration(

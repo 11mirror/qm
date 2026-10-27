@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface ComposioReturn {
   url: string | null;
@@ -20,25 +20,14 @@ export interface SlackAccountLink {
 const COMPOSIO_RETURNS: TableSpec = {
   table: "composio_returns",
   key: "id",
-  columns: {
-    url: { type: "text" },
-    toolkit: { type: "text", required: true },
-    expiresAt: { type: "bigint", required: true },
-  },
+  columns: cols(`url text, toolkit text!, expiresAt bigint!`),
 };
 
 const SLACK_ACCOUNTS: TableSpec = {
   table: "slack_accounts",
   key: "principalId",
   keyIsField: true,
-  columns: {
-    accountId: { type: "text", required: true },
-    memberId: { type: "text", required: true },
-    userId: { type: "text", required: true },
-    teamId: { type: "text", required: true },
-    user: { type: "text", required: true },
-    workspace: { type: "text", required: true },
-  },
+  columns: cols(`accountId text!, memberId text!, userId text!, teamId text!, user text!, workspace text!`),
 };
 
 export const COMPOSIO_RETURNS_MIGRATION = mapToTableMigration(

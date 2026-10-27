@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { SkillFile } from "./skill-store.ts";
 
 export interface SkillBundle {
@@ -30,11 +30,7 @@ const SKILL_BUNDLES: TableSpec = {
   table: "skill_bundles",
   key: "packId",
   keyIsField: true,
-  columns: {
-    commit: { type: "text", required: true },
-    files: { type: "jsonb", required: true },
-    hash: { type: "text", required: true },
-  },
+  columns: cols(`commit text!, files jsonb!, hash text!`),
 };
 
 export const SKILL_BUNDLES_MIGRATION = mapToTableMigration("skills/bundles/0001-typed", SKILL_BUNDLES);

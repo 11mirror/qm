@@ -1,6 +1,6 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
@@ -33,12 +33,7 @@ const MODEL_CREDENTIALS: TableSpec = {
   table: "model_credentials",
   key: "provider",
   keyIsField: true,
-  columns: {
-    secretEnc: { type: "text" },
-    disabled: { type: "boolean" },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-  },
+  columns: cols(`secretEnc text, disabled boolean, updatedAt bigint!, updatedBy text!`),
 };
 
 export const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-typed", MODEL_CREDENTIALS);

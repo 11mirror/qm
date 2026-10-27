@@ -1,6 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { lockedRow } from "../persistence/locked-row.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { ErrorCode } from "@slack/web-api";
 import { SLACK_AUTH_ERRORS, slackErrorCode } from "../slack/payloads.ts";
@@ -87,20 +87,9 @@ const SLACK_INSTALLATION: TableSpec = {
   table: "slack_installation",
   key: "orgId",
   keyIsField: true,
-  columns: {
-    disabled: { type: "boolean", required: true },
-    serviceBlocked: { type: "boolean" },
-    botTokenEnc: { type: "text" },
-    appTokenEnc: { type: "text" },
-    appId: { type: "text" },
-    installId: { type: "text" },
-    installedAt: { type: "bigint" },
-    teamId: { type: "text" },
-    teamName: { type: "text" },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-    version: { type: "text", required: true },
-  },
+  columns: cols(`disabled boolean!, serviceBlocked boolean, botTokenEnc text, appTokenEnc text, appId text,
+    installId text, installedAt bigint, teamId text, teamName text, updatedAt bigint!,
+    updatedBy text!, version text!`),
 };
 
 export const SLACK_INSTALLATION_MIGRATION = mapToTableMigration(

@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { AckGate } from "./deferred-ack.ts";
@@ -29,13 +29,7 @@ export function envelopeKey(account: string, body: Record<string, unknown>): str
 const STAGED_ENVELOPES: TableSpec = {
   table: "slack_staged_envelopes",
   key: "id",
-  columns: {
-    body: { type: "jsonb", required: true },
-    account: { type: "text", required: true },
-    receivedAt: { type: "bigint", required: true },
-    attempts: { type: "bigint", required: true },
-    claimedUntil: { type: "bigint" },
-  },
+  columns: cols(`body jsonb!, account text!, receivedAt bigint!, attempts bigint!, claimedUntil bigint`),
 };
 
 export const STAGED_ENVELOPES_MIGRATION = mapToTableMigration("slack/staged-envelopes/0001-typed", STAGED_ENVELOPES);

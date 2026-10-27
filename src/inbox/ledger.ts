@@ -5,7 +5,7 @@ import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThre
 import { isResolved } from "./view.ts";
 import { adapterForItem, conversationKeyOf, inboxMetadataKeys, sourceAdapters } from "./sources/index.ts";
 import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -247,29 +247,11 @@ const CRON_ITEMS: TableSpec = {
   table: "cron_items",
   key: "id",
   keyIsField: true,
-  columns: {
-    cronId: { type: "text", required: true },
-    sourceKey: { type: "text", required: true },
-    sourceSummary: { type: "text" },
-    source: { type: "text" },
-    sourcePayload: { type: "jsonb" },
-    conversationKey: { type: "text" },
-    sourceAt: { type: "double precision" },
-    inboxPreview: { type: "jsonb" },
-    proposal: { type: "jsonb" },
-    agentDrafts: { type: "jsonb" },
-    agentMentionKeys: { type: "text[]" },
-    thread: { type: "jsonb" },
-    status: { type: "text", required: true },
-    parkedReason: { type: "text" },
-    actedAt: { type: "bigint" },
-    actionKind: { type: "text" },
-    actionResult: { type: "text" },
-    decisionAt: { type: "double precision" },
-    decisionToken: { type: "text" },
-    createdAt: { type: "bigint", required: true },
-    updatedAt: { type: "bigint", required: true },
-  },
+  columns: cols(`cronId text!, sourceKey text!, sourceSummary text, source text, sourcePayload jsonb,
+    conversationKey text, sourceAt float, inboxPreview jsonb, proposal jsonb, agentDrafts jsonb,
+    agentMentionKeys text[], thread jsonb, status text!, parkedReason text, actedAt bigint,
+    actionKind text, actionResult text, decisionAt float, decisionToken text, createdAt bigint!,
+    updatedAt bigint!`),
 };
 
 export const CRON_ITEMS_MIGRATION = mapToTableMigration("triggers/cron-items/0001-typed", CRON_ITEMS, {

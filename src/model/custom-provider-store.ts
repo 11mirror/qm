@@ -1,6 +1,6 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
 export interface StoredCustomProvider extends CustomProviderSpec {
@@ -29,16 +29,8 @@ const CUSTOM_PROVIDERS: TableSpec = {
   table: "custom_model_providers",
   key: "id",
   keyIsField: true,
-  columns: {
-    name: { type: "text", required: true },
-    protocol: { type: "text", required: true },
-    baseUrl: { type: "text", required: true },
-    models: { type: "jsonb", required: true },
-    apiKeyEnc: { type: "text" },
-    disabled: { type: "boolean" },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-  },
+  columns: cols(`name text!, protocol text!, baseUrl text!, models jsonb!, apiKeyEnc text, disabled boolean,
+    updatedAt bigint!, updatedBy text!`),
 };
 
 export const CUSTOM_PROVIDERS_MIGRATION = mapToTableMigration("model/custom-providers/0001-typed", CUSTOM_PROVIDERS);

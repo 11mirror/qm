@@ -1,5 +1,11 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type ColumnSpec, type MapConversion } from "../persistence/typed-table.ts";
+import {
+  cols,
+  mapToTableMigration,
+  tableCodec,
+  type ColumnSpec,
+  type MapConversion,
+} from "../persistence/typed-table.ts";
 
 export interface SandboxBodies<T> {
   get(scopeId: string): Promise<T | null>;
@@ -9,14 +15,9 @@ export interface SandboxBodies<T> {
   delete(scopeId: string): Promise<void>;
 }
 
-const BODY_COLUMNS: Record<string, ColumnSpec> = {
-  initializationPending: { type: "boolean" },
-  lastSnapshotMs: { type: "bigint" },
-  homeDirty: { type: "boolean" },
-  snapshotError: { type: "text" },
-  checkpointId: { type: "text" },
-  checkpointAtMs: { type: "bigint" },
-};
+const BODY_COLUMNS: Record<string, ColumnSpec> =
+  cols(`initializationPending boolean, lastSnapshotMs bigint, homeDirty boolean, snapshotError text,
+    checkpointId text, checkpointAtMs bigint`);
 
 export function sandboxBodiesMigration(
   table: string,

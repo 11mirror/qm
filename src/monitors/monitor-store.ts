@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Monitor } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -42,16 +42,8 @@ const MONITORS: TableSpec = {
   keyIsField: true,
   columns: {
     ...TRIGGER_COLUMNS,
-    processId: { type: "text", required: true },
-    command: { type: "text", required: true },
-    purpose: { type: "text" },
-    threadRef: { type: "text", required: true },
-    instructions: { type: "text" },
-    pattern: { type: "text" },
-    cursor: { type: "bigint", required: true },
-    tail: { type: "text" },
-    expiresAt: { type: "bigint" },
-    lastError: { type: "text" },
+    ...cols(`processId text!, command text!, purpose text, threadRef text!, instructions text, pattern text,
+    cursor bigint!, tail text, expiresAt bigint, lastError text`),
   },
 };
 
