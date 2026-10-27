@@ -421,7 +421,7 @@ function emojiChips(s: SlackSetting) {
 }
 function emojiResults(s: SlackSetting) {
   if (emoji.error) return html`<div class="emoji-picker-empty">${emoji.error}</div>`;
-  const q = emoji.query.trim().toLowerCase().replace(/:/g, ""),
+  const q = emoji.query.trim().toLowerCase().replaceAll(":", ""),
     taken = new Set(s.draft.names || []),
     sections = new Map<string, string[][]>();
   const custom = Object.keys(emoji.catalog)
