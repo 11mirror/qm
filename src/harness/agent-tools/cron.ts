@@ -70,58 +70,40 @@ function cronTool(kit: ToolKit) {
 
 function cronParams() {
   return Type.Object({
-    action: Type.Union(
-      [
-        Type.Literal("create"),
-        Type.Literal("list"),
-        Type.Literal("get"),
-        Type.Literal("runs"),
-        Type.Literal("patch"),
-        Type.Literal("delete"),
-        Type.Literal("run"),
-        Type.Literal("disable"),
-        Type.Literal("note"),
-      ],
-      {
-        description:
-          "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, or note — leave a short shift-change note for its next fire.",
-      },
-    ),
-    id: optionalString("get/runs/patch/delete/run/disable/note only: the cron id."),
-    title: optionalString(
-      'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
-    ),
+    action: Type.Union([
+      Type.Literal("create"),
+      Type.Literal("list"),
+      Type.Literal("get"),
+      Type.Literal("runs"),
+      Type.Literal("patch"),
+      Type.Literal("delete"),
+      Type.Literal("run"),
+      Type.Literal("disable"),
+      Type.Literal("note"),
+    ]),
+    id: optionalString("The cron id (all actions except create/list)."),
+    title: optionalString('create/patch: distinctive 2-5 word label for what it is FOR, e.g. "Gmail unread digest".'),
     schedule: Type.Optional(
       Type.Object(
         {
           cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
-          timezone: optionalString('IANA timezone for a cron schedule, e.g. "America/Los_Angeles".'),
-          everyMs: optionalInteger(
-            "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
-          ),
-          firstFireAt: optionalInteger(
-            "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
-          ),
+          timezone: optionalString('IANA timezone, e.g. "America/Los_Angeles".'),
+          everyMs: optionalInteger("Interval in ms for sub-day polling; >= 24h rejected."),
+          firstFireAt: optionalInteger("Epoch ms for a one-shot; past times rejected."),
         },
-        { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
+        { description: "create/patch: {cron,timezone} | {everyMs} | {firstFireAt}." },
       ),
     ),
-    task: optionalString("create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text."),
-    text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
-    recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
-    channel: optionalString("create: a channel name to post to (core resolves it)."),
-    session: optionalBoolean(
-      "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
-    ),
-    unfurlLinks: optionalBoolean(
-      "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-    ),
+    task: optionalString("create/patch: prompt re-evaluated at fire time. Use this OR text."),
+    text: optionalString("create/patch: exact words to send verbatim. Use this OR task."),
+    recipient: optionalString("create: a teammate's name to DM."),
+    channel: optionalString("create: a channel name to post to."),
+    session: optionalBoolean("Show as ongoing work in this conversation. create: default true; patch: omit to keep."),
+    unfurlLinks: optionalBoolean("create/patch: false suppresses Slack link previews."),
     note: Type.Optional(
       Type.String({
         maxLength: CRON_FIRE_NOTE_MAX_CHARS,
-        description:
-          `note only: the shift-change note for the cron's next fire — one or two sentences (max ${CRON_FIRE_NOTE_MAX_CHARS} chars): ` +
-          "outcome + anything the next fire must know. Overwrites the previous note.",
+        description: `note: the shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars).`,
       }),
     ),
     runtime: Type.Optional(
@@ -136,34 +118,28 @@ function cronParams() {
         ],
         {
           description:
-            "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
+            "create/patch: runtime override for an agent task (null clears). Use runtime get for approved models/harnesses; auto effort unsupported. Prefer a cheap model and low effort for simple tasks.",
         },
       ),
     ),
     unattendedGrants: Type.Optional(
       Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
         description:
-          "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
+          "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
       }),
     ),
     inbox: optionalBoolean(
       "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
     ),
-    enabled: optionalBoolean("patch only: false pauses the cron, true resumes it."),
-    archived: optionalBoolean("patch only: true archives the cron."),
+    enabled: optionalBoolean("patch: false pauses, true resumes."),
+    archived: optionalBoolean("patch: true archives the cron."),
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
-        description:
-          "list: page size (default 25, max 100). runs: return only the latest N retained fire log entries; omit for all retained entries.",
+        description: "list: page size (default 25, max 100). runs: latest N entries.",
       }),
     ),
-    offset: Type.Optional(
-      Type.Integer({
-        minimum: 0,
-        description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
-      }),
-    ),
+    offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
   });
 }
 
@@ -355,63 +331,41 @@ function webhookTool(kit: ToolKit) {
     name: "webhook",
     label: "webhook",
     description:
-      "Register and manage inbound webhooks — run a turn whenever an external system (GitHub, Stripe, " +
-      "Slack, CI, a vendor — anything that can POST) calls a URL. Confirm with the user before creating one.\n" +
-      "action=create takes `action` (what to do on each event; the event payload is appended " +
-      "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
-      'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      `\`destinationKey\` (a key from the "Where scheduled tasks post" menu). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
-      `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
-      "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
-      "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +
-      "relay BOTH to the user verbatim — the `url` is already the full public inbound URL (hand it over as-is) " +
-      "and the `secret` — so they can point GitHub/Stripe/etc. at it. Until they do, it never fires.\n" +
-      "action=list pages through your webhooks (secrets elided, task text flattened and capped at 2000 chars, " +
-      "25 per page — a footer line names the offset for the next page when there's more); action=update replaces one's task in place " +
-      "(same URL and secret, used from the next event; live owner turns only); action=disable pauses one by id.",
+      "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
+      'create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (a key from the "Where scheduled tasks post" menu). ' +
+      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one. ` +
+      "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
+      "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
-      action: Type.Union(
-        [Type.Literal("create"), Type.Literal("list"), Type.Literal("update"), Type.Literal("disable")],
-        {
-          description:
-            "create an inbound webhook, list yours, update one's task in place by id (URL and secret unchanged), or disable one by id.",
-        },
-      ),
-      id: optionalString("update and disable: the webhook id."),
-      task: optionalString("create and update: what to do on each event (the payload is appended automatically)."),
+      action: Type.Union([
+        Type.Literal("create"),
+        Type.Literal("list"),
+        Type.Literal("update"),
+        Type.Literal("disable"),
+      ]),
+      id: optionalString("update/disable: the webhook id."),
+      task: optionalString("create/update: what to do on each event."),
       verification: Type.Optional(
         Type.Object(
           {
-            scheme: Type.Union(
-              WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme)),
-              { description: "how the inbound request is authenticated." },
-            ),
-            secret: Type.String({
-              description: `the signing secret (from the sender for ${SENDER_WEBHOOK_SCHEMES.join("/")}; self-generated for hmac-sha256).`,
-            }),
+            scheme: Type.Union(WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme))),
+            secret: Type.String({ description: "The signing secret." }),
           },
-          { description: "create only: the inbound authentication scheme + secret." },
+          { description: "create: request authentication." },
         ),
       ),
       filters: Type.Optional(
         Type.Array(
           Type.Object({
-            path: Type.String({ description: 'dotted path into the event payload, e.g. "action".' }),
-            in: Type.Array(Type.String(), {
-              description: "values that pass; the turn is skipped unless the path's value is one of these.",
-            }),
+            path: Type.String({ description: "Dotted path into the payload." }),
+            in: Type.Array(Type.String(), { description: "Values that pass." }),
           }),
-          { description: "create only: skip the turn unless the event matches (cheap pre-gating)." },
+          { description: 'create: skip the turn unless the payload matches, e.g. [{path:"action",in:["opened"]}].' },
         ),
       ),
-      destinationKey: optionalString('create only: a key from the "Where scheduled tasks post" menu.'),
-      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list only: page size (default 25, max 100)." })),
-      offset: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
-        }),
-      ),
+      destinationKey: optionalString('create: a key from the "Where scheduled tasks post" menu.'),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list: page size (default 25, max 100)." })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;

@@ -19,27 +19,13 @@ function memoryTool(kit: ToolKit) {
     name: "memory",
     label: "memory",
     description:
-      "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
-      "you're a colleague who remembers, not a fresh chat each time). Reads may span authorized " +
-      "notebooks; writes only change this conversation's own notebook. " +
-      'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
-      "across every notebook this conversation may read — check what you already know before asking. " +
-      "Only a bounded selection of memories is loaded into context; search the full notebooks " +
-      "for facts missing from that selection. Keep memory concise. Save pointers to data, never the data " +
-      "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
-      "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
-      "it holds. If a fact is a list that grows, it's a file. Files are this " +
-      "conversation's own (a pointer read from another conversation is a hint of where state " +
-      "lives, not a path you can open). " +
-      'action="add" saves new `facts` ([{text}, …]) now — short, self-contained facts (a preference, ' +
-      "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
-      "one-off trivia, or anything already recorded somewhere you can look up. " +
-      'action="read" lists this conversation\'s notebook, each fact with its #id; pass `scope` from a search result to read another authorized notebook. ' +
-      'action="edit" replaces the text of existing facts (`facts`: [{id, text}, …]); ' +
-      'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a contradicting one, ' +
-      "and delete what is wrong or stale. Ids come from search or read; an edit or delete that names any id " +
-      "not in this conversation's notebook changes nothing and says which ids were bad.",
+      "Your durable memory of the person or team you work for; it persists across conversations and surfaces. It is not a file: writing MEMORY.md does nothing. " +
+      "Reads may span authorized notebooks; writes change only this conversation's notebook. " +
+      "search: facts matching every word of `query` across readable notebooks — only a bounded selection is loaded into context, so search before asking. " +
+      "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
+      "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
+      "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
+      "edit: replace facts' text by id; delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: memoryParams(),
     execute: (callId, params) => runMemoryAction(kit, callId, params),
   });
@@ -48,27 +34,28 @@ function memoryTool(kit: ToolKit) {
 
 function memoryParams() {
   return Type.Object({
-    action: Type.Union(
-      [Type.Literal("search"), Type.Literal("read"), Type.Literal("add"), Type.Literal("edit"), Type.Literal("delete")],
-      { description: "search facts, read this notebook, or add, edit, or delete facts." },
-    ),
-    query: optionalString("search only: words to look for among your remembered facts (all must match)."),
-    limit: optionalInteger("search only: max facts to return (default 20)."),
-    scope: optionalString(
-      "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
-    ),
+    action: Type.Union([
+      Type.Literal("search"),
+      Type.Literal("read"),
+      Type.Literal("add"),
+      Type.Literal("edit"),
+      Type.Literal("delete"),
+    ]),
+    query: optionalString("search: words to look for (all must match)."),
+    limit: optionalInteger("search: max facts (default 20)."),
+    scope: optionalString("search/read: notebook scope ID from a search result; omit for all readable / your own."),
     facts: Type.Optional(
       Type.Array(
         Type.Object({
-          id: optionalString("edit only: the fact's id, e.g. #42."),
+          id: optionalString("edit: the fact's id, e.g. #42."),
           text: Type.String({
-            description: "one short self-contained fact — a pointer to data, never the data itself.",
+            description: "One short self-contained fact.",
           }),
         }),
         { description: "add: [{text}, …]; edit: [{id, text}, …]." },
       ),
     ),
-    ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
+    ids: Type.Optional(Type.Array(Type.String(), { description: "delete: ids of the facts to forget." })),
   });
 }
 
@@ -172,18 +159,12 @@ function historyTool(kit: ToolKit) {
     name: "history",
     label: "history",
     description:
-      "Search or reopen THIS conversation's own durable transcript — past turns and tool calls, " +
-      "including parts compacted out of your current context. Tool results are excluded. Use it when something " +
-      'earlier in this conversation is referenced but not in front of you ("that file from last ' +
-      'week", "what did we decide"). Distinct from `memory` search, which searches remembered facts ' +
-      "across conversations; `history` searches only this one, verbatim. With `query`, matching is " +
-      "case-insensitive, all terms must match, and the newest matching entries return, each tagged " +
-      "kind#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
-      "to follow a kind#seq pointer from a search hit or an earlier-conversation summary.",
+      "Search or reopen this conversation's own transcript (including parts compacted out of context; tool results excluded) when something said earlier is not in front of you. " +
+      "`query` returns the newest matching entries tagged kind#seq; `seq` returns one entry (very long ones trimmed in the middle).",
     parameters: Type.Object({
-      query: optionalString("Words to look for in this conversation's transcript (all must match)."),
-      seq: optionalInteger("Reopen the single entry with this seq in full, instead of searching."),
-      limit: optionalInteger("Max entries to return (default 20, query mode only)."),
+      query: optionalString("Words to find (all must match, case-insensitive)."),
+      seq: optionalInteger("Reopen this entry instead of searching."),
+      limit: optionalInteger("Max entries for query mode (default 20)."),
     }),
     async execute(callId, params) {
       const tc = ref.current;

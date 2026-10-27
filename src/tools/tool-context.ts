@@ -63,13 +63,12 @@ export interface ToolContextDeps {
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
+  provisionJobComputer?: () => Promise<SandboxHandle>;
   provisionResource?: (
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  provisionOwnerAuth?: () => Promise<SandboxHandle>;
-  ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
   reach?: {
@@ -134,8 +133,16 @@ export interface ToolContextDeps {
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
-  const { writableScopeId, memory, fallbackMounts, persistExclude, accessSandbox, machine, provisionForCommand } =
-    sandboxAccess(deps);
+  const {
+    writableScopeId,
+    memory,
+    fallbackMounts,
+    persistExclude,
+    accessSandbox,
+    machine,
+    provisionForCommand,
+    authorizeExecution,
+  } = sandboxAccess(deps);
   const { runId, timed, once, controlOp, surfaceOp } = callLedger(deps);
   const { selectCredentials, stageCredentials } = credentialStaging(deps, { writableScopeId });
   return {
@@ -145,7 +152,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...fileOps(deps, { writableScopeId, memory, fallbackMounts, persistExclude, machine, timed, once }),
     ...publishOps(deps, { writableScopeId, accessSandbox, machine, once }),
     ...memoryAndHistoryOps(deps, { writableScopeId, memory, runId, timed, once }),
-    ...backgroundOps(deps, { writableScopeId, provisionForCommand, once, selectCredentials, stageCredentials }),
+    ...backgroundOps(deps, {
+      writableScopeId,
+      provisionForCommand,
+      authorizeExecution,
+      once,
+      selectCredentials,
+      stageCredentials,
+    }),
     ...controlOps(deps, { controlOp }),
     ...surfaceOps(deps, { surfaceOp }),
   };

@@ -1,5 +1,7 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { Session } from "../../types.ts";
+import { resolveEnvironmentId } from "../../environments/environment-store.ts";
+import type { CommandCredential } from "../../tools/primitives.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { type Destination } from "../../types.ts";
 import { personalScope } from "../../types.ts";
@@ -26,6 +28,7 @@ import {
   createCatalogState,
   credentialBroker,
   grantedServiceCredSlugs,
+  placeCredential,
   registerBrokeredTools,
   registerConnectorCredentials,
   registerKeychainCredentials,
@@ -60,7 +63,15 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
       scope: scopeId,
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
-  const c = createCatalogState(ctx, strictReadOnly, openSpeakerKeychain, openAutomationKeychain);
+  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
+  const sharedScope =
+    !external &&
+    (scopeId !== personalScope(actor.id) ||
+      environmentId !== scopeId ||
+      ((await deps.environments?.attachmentsFor(environmentId)) ?? []).some(
+        (attachment) => attachment.scopeId !== scopeId,
+      ));
+  const c = createCatalogState(ctx, strictReadOnly, openSpeakerKeychain, openAutomationKeychain, sharedScope);
   const { connectorEnv } = c;
   const addCredential = addCredentialToCatalog.bind(null, c);
   const catalogBroker = credentialBroker(c, []);
@@ -100,7 +111,7 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   registerBrokeredTools(c, addCredential);
   return {
     openSpeakerKeychain,
-    ownerAuthAvailable: c.isolateOwnerKeychain,
+    placeCredential: (credential: CommandCredential) => placeCredential(c, credential),
     connectorEnv,
     commandCredentials: c.commandCredentials,
     credentialDescriptions: c.credentialDescriptions,
@@ -126,8 +137,8 @@ async function mintControlTokens(
   browserSelection: Awaited<ReturnType<typeof resolveBrowserModel>> | undefined,
 ) {
   const { deps, input, actor, conversation, external, allInternal, liveTurn, liveAuthorTurn, automatedTurn } = c;
-  const { scopeId, turnTimezone, strictReadOnly, connectorEnv, scopeAttestation, sandboxTokenExpiry } = c;
-  const { openSpeakerKeychain, openAutomationKeychain } = c;
+  const { turnTimezone, strictReadOnly, connectorEnv, scopeAttestation, sandboxTokenExpiry } = c;
+  const { ownCredentialsAllowed } = c;
   const { delivery, defaultDestination: destination, session } = turn;
   let actorIsOrgAdmin = false;
   let sandboxModelGateway = false;
@@ -144,11 +155,7 @@ async function mintControlTokens(
     controlClaims = {
       ...scopeAttestation,
       aud: CONTROL_PLANE_AUD,
-      ...(!external &&
-      allInternal &&
-      (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
-        ? { ownerConnections: true }
-        : {}),
+      ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
       exp: sandboxTokenExpiry,
       ...(turnTimezone ? { timezone: turnTimezone } : {}),
       ...(destination ? { destination } : {}),

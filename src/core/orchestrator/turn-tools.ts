@@ -157,13 +157,13 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
   const { deps, actor, conversation, scopeId } = ctx;
   const { memoryScopeId } = turn.context;
   const { defaultDestination } = turn.framed;
-  const { provision, provisionResource } = turn.sandboxes;
+  const { provision, provisionJobSandbox } = turn.sandboxes;
   const backgroundBroker =
     deps.processes && supportsProcessSessions(deps.sandbox)
       ? createBackgroundBroker({
           sandbox: deps.sandbox,
           registry: deps.processes,
-          provisionSandbox: provisionResource,
+          provisionSandbox: provisionJobSandbox,
           onExit: (handle, processId) =>
             finishProcessCredentials(
               {
@@ -302,6 +302,7 @@ function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
     registerKeychainCredentials,
     registerConnectorCredentials,
     registerServiceCredentials,
+    placeCredential,
   } = catalog;
   return async (handles: Parameters<typeof credentialBroker>[0]) => {
     const refreshed = new Map<string, CommandCredential>();
@@ -317,7 +318,7 @@ function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
         return;
       }
       identities.set(credential.handle, identity);
-      refreshed.set(credential.handle, credential);
+      refreshed.set(credential.handle, placeCredential(credential));
     };
     const broker = credentialBroker(handles);
     await registerKeychainCredentials(add, broker);
@@ -371,12 +372,11 @@ function createTurnToolContext(
   const { sessionSyscalls, visibleSkillsForTurn } = turn.framed;
   const { connectorEnv, commandCredentials, actorIsOrgAdmin, controlClaims } = turn.catalog;
   const {
-    ownerAuthCommand,
     provision,
     provisionScratch,
     accessResource,
     provisionResource,
-    provisionOwnerAuth,
+    provisionJobComputer,
     useSkill,
     provisionForReach,
     invalidateProvision,
@@ -399,10 +399,9 @@ function createTurnToolContext(
     invalidateProvision,
     provision,
     provisionScratch,
+    provisionJobComputer,
     provisionResource,
     accessSandboxResource: accessResource,
-    ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
-    ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
     useSkill,
     listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
     ...(reachAvailable

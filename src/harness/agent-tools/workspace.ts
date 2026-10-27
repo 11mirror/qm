@@ -30,15 +30,13 @@ function skillTools(kit: ToolKit) {
       name: search ? "search_skills" : "list_skills",
       label: search ? "Search skills" : "List skills",
       description: search
-        ? "Search current-scope and organization skills by name or description, including omitted skills. To search a carried source listed in the sharing context, set source. Read a skill before using it."
-        : "Browse current-scope and organization skills, including omitted or new skills. Set source to browse a carried source listed in the sharing context. Follow nextOffset within the same source; does not start a sandbox.",
+        ? "Search current-scope and org skills by name or description, including ones left out of the per-turn index (set source for a carried one); read one before using it."
+        : "Browse current-scope and org skills, including ones left out of the per-turn index (set source for a carried one); page with nextOffset.",
       parameters: Type.Object({
         ...(search
           ? { query: Type.String({ minLength: 1, description: "Words to find in skill names or descriptions." }) }
           : {}),
-        source: optionalString(
-          "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
-        ),
+        source: optionalString("A carried source from the sharing context; omit for current scope and org."),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       }),
@@ -62,12 +60,12 @@ function skillTools(kit: ToolKit) {
     name: "skill",
     label: "skill",
     description:
-      "Load a skill by name before relying on it; use list or search for any left out of the per-turn index. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
+      "Load a skill's SKILL.md (or the file at `path`) before relying on it. Any scripts it ships are synced to a reported directory on the computer.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name from the skills index, list, or search." }),
-      source: optionalString("Use the same source as the discovery call to read that exact skill."),
-      path: optionalString("Relative file within the skill to return instead of SKILL.md."),
-      sandbox_id: optionalString("Sync the skill's files into this sandbox instead of the default."),
+      source: optionalString("Source from the list/search call that found it."),
+      path: optionalString("Relative file to return instead of SKILL.md."),
+      sandbox_id: optionalString("Sandbox to sync into; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -121,10 +119,10 @@ function fileTools(kit: ToolKit) {
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a file from the workspace (scope, then global). Returns its contents.",
+    description: "Read a workspace or shared file.",
     parameters: Type.Object({
-      path: Type.String({ description: "Relative path within the workspace." }),
-      sandbox_id: sandboxSelector("Sandbox to read from; omit for the default. Shared files ignore it."),
+      path: Type.String({ description: "Workspace-relative path." }),
+      sandbox_id: sandboxSelector("Sandbox; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -164,8 +162,8 @@ function fileTools(kit: ToolKit) {
     name: "install_canvas",
     label: "install_canvas",
     description:
-      "Replace this person's always-on canvas with a copy of an always-on canvas someone shared with them as a Files record. Always asks them to approve first.",
-    parameters: Type.Object({ id: Type.String({ description: "Files ID of the shared canvas." }) }),
+      "Replace this person's always-on canvas with a shared one (a Files record); asks them to approve first.",
+    parameters: Type.Object({ id: Type.String({ description: "Files ID of the canvas." }) }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc?.installSharedCanvas) return text("[error] installing a shared canvas isn't available on this turn");
@@ -184,11 +182,11 @@ function fileTools(kit: ToolKit) {
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
+      "Write a workspace file. To share it, upload it with POST /v1/files/uploads, then share the returned ID.",
     parameters: Type.Object({
-      path: Type.String({ description: "Relative path within the workspace." }),
-      data: Type.String({ description: "File contents, including an empty string to empty the file." }),
-      sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
+      path: Type.String({ description: "Workspace-relative path." }),
+      data: Type.String({ description: "File contents." }),
+      sandbox_id: sandboxSelector("Sandbox; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -228,52 +226,31 @@ function publishTool(kit: ToolKit) {
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable web app " +
-      "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
-      "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
-      "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
-      "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. New apps are shared for read/use with their creation channel; DMs stay private. Republishing never changes access; " +
-      "grant access separately with apps action share. Share the full absolute URL " +
-      "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
-      "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
-      "Egress is open, " +
-      "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
-      "writes there survives restarts and redeploys; keep durable state there. For a database use " +
-      "SQLite at exactly $DATA_DIR/app.db — it gets the strongest durability the runtime offers " +
-      "(continuous replication where enabled, periodic snapshots otherwise; a crash can lose the " +
-      "most recent writes). The rest of the disk is reset from source on every relaunch. By default " +
-      "an app sleeps when idle and cold-starts on the next visit; set `alwaysOn: true` to keep it " +
-      "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
-      "`alwaysOn: false` to turn it back off. An app cannot be shown inside another site's page " +
-      "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
-      "a panel or extension, and `[]` to turn it back off.",
+      "Publish a workspace directory (verify it exists and has files) as a durable web app with a stable link. It must listen on PORT; pass `entrypoint` for a new app or code update. " +
+      "New apps are readable by their creation channel (DMs private); republishing never changes access — use share. Give the user the full absolute URL. " +
+      "Egress is open. When the runtime sets $DATA_DIR, only it survives restarts and redeploys; for a database use SQLite at exactly $DATA_DIR/app.db (a crash can lose the latest writes). " +
+      "Apps sleep when idle; set `alwaysOn` only when someone needs instant loads. Iframes need `embedAncestors`.",
     parameters: Type.Object({
       dir: optionalString(
-        "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
+        "Workspace-relative directory, e.g. `app` (default: whole tree); never absolute or `workspace/app`.",
       ),
-      entrypoint: optionalString(
-        'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
-      ),
-      name: optionalString("Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens."),
-      renameFrom: optionalString("Existing deployment name to rename to `name`; this is a name, not an ID."),
+      entrypoint: optionalString('Command run from the app root, e.g. "node server.js".'),
+      name: optionalString("Unique handle (lowercase letters/digits/hyphens) → /d/<name>/."),
+      renameFrom: optionalString("Existing deployment name to rename to `name`."),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
-          description:
-            "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
+          description: "Env vars for the version; omit to keep the previous ones, {} clears.",
         }),
       ),
-      rollbackTo: optionalInteger("Flip the deployment named `name` back to this version number."),
-      alwaysOn: optionalBoolean(
-        "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
-      ),
+      rollbackTo: optionalInteger("Version number to flip `name` back to."),
+      alwaysOn: optionalBoolean("true: never sleep when idle; false: default. Omit to keep."),
       embedAncestors: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
+            "https origins allowed to iframe the app (https://*.example.com works); list every intermediate frame. [] forbids. Omit to keep.",
         }),
       ),
-      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
+      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;

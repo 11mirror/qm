@@ -15,7 +15,7 @@ import {
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { isJobComputerScope, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
   BackendSandbox,
@@ -162,6 +162,7 @@ export function createProviderSandbox(
   }
 
   async function captureCheckpoint(scope: string, name: string): Promise<void> {
+    if (isJobComputerScope(scope)) return;
     const previous = (await store.get(scope))?.checkpointId;
     try {
       const checkpointId = await driver.checkpoints!.capture(name);

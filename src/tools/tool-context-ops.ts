@@ -29,7 +29,7 @@ import {
   type ToolContext,
 } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
-import type { sandboxAccess, callLedger, credentialStaging } from "./tool-context-env.ts";
+import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
 
 /** Runs a command on the routed computer with its credentials, policy and ledger record. */
 export function executeOp(
@@ -52,32 +52,27 @@ export function executeOp(
         timeoutSeconds?: number;
         sandboxId?: string;
         scratch?: boolean;
-        ownerAuth?: boolean;
         reachTarget?: string;
         signal?: AbortSignal;
         credentials?: string[];
       },
-    ): Promise<ExecResult & { reached?: ReachedProvenance }> {
+    ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }> {
       return once(async () => {
         const scratch = execOpts?.scratch === true;
-        const ownerAuth = execOpts?.ownerAuth === true;
         const requestedCredentials = execOpts?.credentials ?? [];
         if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
-          throw new Error("command credentials are available only on scoped, scratch, or owner computers");
+          throw new Error("command credentials are available only on scoped or scratch computers");
         }
-        const requested = await selectCredentials(requestedCredentials, ownerAuth);
+        const requested = await selectCredentials(requestedCredentials);
+        const scratchOnly = scratchOnlyHandles(requested);
         const reachTarget = execOpts?.reachTarget;
-        if (
-          [scratch, ownerAuth, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1
-        ) {
-          throw new Error("a command runs on one computer — choose scoped, scratch, owner, or a reached room");
+        if ([scratch, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1) {
+          throw new Error("a command runs on one computer — choose scoped, scratch, or a reached room");
         }
-        if (scratch && !deps.provisionScratch) {
+        if ((scratch || scratchOnly) && !deps.provisionScratch) {
           throw new Error('scratch execution is not available on this computer — run without scope:"scratch"');
         }
-        if (ownerAuth && !deps.provisionOwnerAuth) {
-          throw new Error('an owner-auth box is not available on this turn — use scope:"scoped"');
-        }
+        const scratchReroute = Boolean(scratchOnly) && !scratch;
         let reached: ReachedProvenance | undefined;
         if (reachTarget !== undefined) {
           if (!deps.reach) {
@@ -89,12 +84,16 @@ export function executeOp(
           if (target.kind === "error") throw new Error(target.message);
           reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
         }
-        const handle = await provisionForCommand(command, execOpts?.sandboxId, requestedCredentials.length > 0, () => {
-          if (reached) return deps.reach!.provisionFor(reached.scopeId);
-          if (scratch) return deps.provisionScratch!();
-          if (ownerAuth) return deps.provisionOwnerAuth!();
-          return deps.provision();
-        });
+        const handle = await provisionForCommand(
+          command,
+          scratchOnly ? undefined : execOpts?.sandboxId,
+          requestedCredentials.length > 0,
+          () => {
+            if (reached) return deps.reach!.provisionFor(reached.scopeId);
+            if (scratch || scratchOnly) return deps.provisionScratch!();
+            return deps.provision();
+          },
+        );
         const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
         const timeoutMs =
           resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -116,7 +115,7 @@ export function executeOp(
             scopeLabel: reached.scopeId,
           });
         }
-        return timed("exec", async () => {
+        const executed = timed("exec", async () => {
           execOpts?.signal?.throwIfAborted();
           const { commandEnv, secretValues, fileExecution } = await stageCredentials(
             requested,
@@ -126,14 +125,13 @@ export function executeOp(
           );
           const r = await withCleanup(
             async (): Promise<ExecResult> => {
-              const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
               const commandHandle = Object.keys(commandEnv).length
                 ? { ...handle, env: { ...handle.env, ...commandEnv } }
                 : handle;
               const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
               const mask = createExactSecretValueMasker(Object.values(secretEnv));
               try {
-                const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+                const result = await deps.sandbox.run(commandHandle, command, opts);
                 return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
               } catch (error) {
                 const message = errMessage(error);
@@ -146,8 +144,9 @@ export function executeOp(
               await fileExecution?.finish();
             },
           );
-          return reached ? { ...r, reached } : r;
+          return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
         });
+        return executed;
       });
     },
   } satisfies Partial<ToolContext>;

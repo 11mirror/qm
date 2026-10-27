@@ -13,9 +13,10 @@ import type {
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
 import { withCleanup } from "../util/errors.ts";
+import type { SandboxHandle } from "../sandbox/sandbox.ts";
 import { type ToolContext, CONTROL_UNAVAILABLE } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
-import type { sandboxAccess, callLedger, credentialStaging } from "./tool-context-env.ts";
+import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
 
 /** Background jobs: start, poll, stop, input, list and watch. */
 export function backgroundOps(
@@ -23,10 +24,11 @@ export function backgroundOps(
   {
     writableScopeId,
     provisionForCommand,
+    authorizeExecution,
     once,
     selectCredentials,
     stageCredentials,
-  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "provisionForCommand"> &
+  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "provisionForCommand" | "authorizeExecution"> &
     Pick<ReturnType<typeof callLedger>, "once"> &
     Pick<ReturnType<typeof credentialStaging>, "selectCredentials" | "stageCredentials">,
 ) {
@@ -34,15 +36,24 @@ export function backgroundOps(
     async backgroundStart(
       command: string,
       opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
-    ): Promise<BackgroundStartResult> {
+    ): Promise<BackgroundStartResult & { jobComputer?: boolean }> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const requestedCredentials = opts.credentials ?? [];
       if (requestedCredentials.length && !writableScopeId)
         throw new Error("command credentials are available only on scoped computers");
-      const requested = await selectCredentials(requestedCredentials, false);
-      const handle = await provisionForCommand(command, opts?.sandboxId, requestedCredentials.length > 0, () =>
-        deps.provision(),
-      );
+      const requested = await selectCredentials(requestedCredentials);
+      const scratchOnly = scratchOnlyHandles(requested);
+      if (scratchOnly && !deps.provisionJobComputer)
+        throw new Error(`background jobs here cannot use ${scratchOnly}; run the command in the foreground`);
+      let handle: SandboxHandle;
+      if (scratchOnly) {
+        authorizeExecution(command, undefined, deps.commandPolicy());
+        handle = await deps.provisionJobComputer!();
+      } else {
+        handle = await provisionForCommand(command, opts?.sandboxId, requestedCredentials.length > 0, () =>
+          deps.provision(),
+        );
+      }
       return once(
         async () => {
           const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
@@ -62,13 +73,14 @@ export function backgroundOps(
           } catch (error) {
             return withCleanup(() => Promise.reject(error), release);
           }
-          return deps.backgroundBroker!.start(
+          const started = await deps.backgroundBroker!.start(
             handle,
             command,
             opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
             credentials,
           );
+          return scratchOnly ? { ...started, jobComputer: true } : started;
         },
         () => true,
       );
@@ -100,6 +112,8 @@ export function backgroundOps(
     async backgroundWrite(processId: string, data: string): Promise<BackgroundWriteResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
+      if (handle.resourceId && (await deps.sandboxResources?.get(handle.resourceId))?.jobOnly)
+        throw new Error("a background job that uses private credentials does not accept input");
       return once(
         () => deps.backgroundBroker!.write(handle, processId, data),
         () => true,

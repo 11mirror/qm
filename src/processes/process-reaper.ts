@@ -51,6 +51,7 @@ export const PROCESS_REAPER_INTERVAL_MS = 30_000;
 export interface ProcessReaperOptions {
   kill?: (rec: ProcessRecord) => Promise<void>;
   onReaped?: (rec: ProcessRecord) => Promise<void>;
+  afterSweep?: () => Promise<void>;
 }
 
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
@@ -72,6 +73,7 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (opts.onReaped)
         await opts.onReaped(rec).catch(reportFailureAs("process-reaper: onReaped hook", undefined, rec.processId));
     }
+    await opts.afterSweep?.();
     return { reaped };
   }
 
