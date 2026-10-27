@@ -1,6 +1,7 @@
 import { LRUCache } from "lru-cache";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
-import { isVisionAttachment, MAX_LLM_REQUEST_BYTES, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
+import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
+import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
 import { downscaleVisionImage } from "../core/image-downscale.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallow } from "../util/errors.ts";

@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import type { TurnCtx } from "./turn-context.ts";
 import { ProjectRosterChanged } from "./admit.ts";
 import type { ScreenTrace } from "./inbound-screen.ts";
@@ -5,7 +6,6 @@ import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { buildTurnTools } from "./turn-tools.ts";
 import type { SecurityObserver } from "./security-screen.ts";
 import type { Session } from "../../types.ts";
-import { MAX_TURN_DOCUMENTS } from "../document-inputs.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import { documentText, historicalDocumentMetas, loadDocumentInputs } from "../document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment } from "../document-kinds.ts";
@@ -38,6 +38,7 @@ import {
   type OverheardEntryPayload,
 } from "../../harness/replay.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
+import { mapBounded } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
 import { completedSurfaceEnqueues } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
@@ -263,7 +264,6 @@ async function loadTurnDocuments(
   const remainingDocumentBytes =
     MAX_DOCUMENT_BYTES -
     documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
-  const remainingDocumentCount = MAX_TURN_DOCUMENTS - documentInputs.documents.length;
   const remainingDocumentTokens = documentBudget - documentInputs.tokens;
   return {
     history,
@@ -271,7 +271,7 @@ async function loadTurnDocuments(
     contextRecovered,
     observeDocuments,
     remainingDocumentBytes,
-    remainingDocumentCount,
+    remainingDocumentCount: Number.POSITIVE_INFINITY,
     remainingDocumentTokens,
   };
 }
@@ -285,25 +285,19 @@ function observeTurnDocuments(
   const { deps, actor, scopeId, input } = ctx;
   const { screenTrace, session, turnAbort, observeSecurityData } = turn;
   if (!(deps.securityScreener || deps.harness.models.screenSecurity)) return;
-  const documents = inputs.documents.slice();
-  void (async () => {
-    for (const document of documents) {
-      const extracted = await documentText(document, turnAbort.signal).catch(
-        swallowAs("document screen: extract", null),
-      );
-      if (turnAbort.signal.aborted) return;
-      if (!extracted) continue;
-      for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text))
-        void observeSecurityData(chunk, actor.id, scopeId, {
-          ...screenTrace,
-          sessionId: session.id,
-          hook: "tool_response",
-          request: requestText,
-          surface: "inbound_file",
-          origin: input.origin.kind,
-        });
-    }
-  })().catch(swallowAs("orchestrator: observed document screen", undefined));
+  void mapBounded(inputs.documents.slice(), availableParallelism(), async (document) => {
+    const extracted = await documentText(document, turnAbort.signal).catch(swallowAs("document screen: extract", null));
+    if (turnAbort.signal.aborted || !extracted) return;
+    for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted))
+      await observeSecurityData(chunk, actor.id, scopeId, {
+        ...screenTrace,
+        sessionId: session.id,
+        hook: "tool_response",
+        request: requestText,
+        surface: "inbound_file",
+        origin: input.origin.kind,
+      });
+  }).catch(swallowAs("orchestrator: observed document screen", undefined));
 }
 
 async function composeTurnEnvironment(
