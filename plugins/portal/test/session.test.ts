@@ -1,10 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { deriveKey, seal, open } from "../../chassis/src/signed-token.ts";
+import { openSession, type SessionClaims } from "../../chassis/src/portal-identity.ts";
 import {
-  deriveKey,
-  seal,
-  open,
-  openSession,
   openImpersonation,
   openTmp,
   setCookie,
@@ -13,7 +11,6 @@ import {
   readCookie,
   safeEqual,
   sanitizeReturnTo,
-  type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
 } from "../src/session.ts";
