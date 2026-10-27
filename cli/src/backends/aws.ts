@@ -57,22 +57,58 @@ import {
   RegisterTaskDefinitionCommand,
   RunTaskCommand,
   StopTaskCommand,
+  DescribeClustersCommand,
+  UpdateServiceCommand,
   type NetworkConfiguration,
   type RegisterTaskDefinitionCommandInput,
-  type Deployment,
   type Service,
   type ServiceDeploymentBrief,
+  type TaskDefinition,
 } from "@aws-sdk/client-ecs";
-import { DescribeImagesCommand, ECRClient, GetAuthorizationTokenCommand } from "@aws-sdk/client-ecr";
-import { DescribeSecretCommand, GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import {
+  BatchDeleteImageCommand,
+  BatchGetImageCommand,
+  DescribeImagesCommand,
+  DescribeRepositoriesCommand,
+  ECRClient,
+  GetAuthorizationTokenCommand,
+  PutImageCommand,
+} from "@aws-sdk/client-ecr";
+import { DescribeDBInstancesCommand, RDSClient, type DBInstance } from "@aws-sdk/client-rds";
+import {
+  DescribeSecretCommand,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+  SecretsManagerClient,
+} from "@aws-sdk/client-secrets-manager";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import {
+  DescribeTableCommand,
   DynamoDBClient,
   GetItemCommand,
   TransactWriteItemsCommand,
   type TransactWriteItem,
 } from "@aws-sdk/client-dynamodb";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CloudFrontClient, paginateListDistributions } from "@aws-sdk/client-cloudfront";
+import { CloudWatchLogsClient, paginateDescribeLogGroups } from "@aws-sdk/client-cloudwatch-logs";
+import { DescribeSecurityGroupsCommand, EC2Client } from "@aws-sdk/client-ec2";
+import { GetOpenIDConnectProviderCommand, GetRoleCommand, IAMClient } from "@aws-sdk/client-iam";
+import {
+  DescribeLoadBalancersCommand,
+  DescribeTargetHealthCommand,
+  ElasticLoadBalancingV2Client,
+  paginateDescribeListeners,
+  paginateDescribeRules,
+  paginateDescribeTargetGroups,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
+import { paginateListNamespaces, paginateListServices, ServiceDiscoveryClient } from "@aws-sdk/client-servicediscovery";
+import {
+  GetObjectCommand,
+  HeadBucketCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import {
   computedSecrets,
   validatedSecrets,
@@ -173,10 +209,10 @@ export async function awsCoreRequest(
   init: RequestInit,
   maxResponseBytes?: number,
 ): Promise<{ status: number; body: string }> {
-  const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+  const target = (await awsPublicFrontDoor(config)).dnsName.toLowerCase().replace(/\.$/, "");
   if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
   if (awsPublicOrigin(config).protocol === "http:") {
-    assertCloudFrontLayerTarget(config, url, target);
+    await assertCloudFrontLayerTarget(config, url, target);
     return fetchCore(url, init, maxResponseBytes);
   }
   return new Promise((resolve, reject) => {
@@ -304,6 +340,9 @@ function awsJson<T>(aws: AwsConfig, args: string[]): T {
 }
 
 const ecs = (aws: AwsConfig): ECSClient => awsClient(ECSClient, aws.region);
+const iam = (aws: AwsConfig): IAMClient => awsClient(IAMClient, aws.region);
+const elb = (aws: AwsConfig): ElasticLoadBalancingV2Client => awsClient(ElasticLoadBalancingV2Client, aws.region);
+const ecr = (aws: AwsConfig): ECRClient => awsClient(ECRClient, aws.region);
 const secretsManager = (aws: AwsConfig): SecretsManagerClient => awsClient(SecretsManagerClient, aws.region);
 const s3 = (config: QmConfig): S3Client => awsClient(S3Client, requireAws(config).region);
 
@@ -559,7 +598,7 @@ export function isPinnedWorkloadImage(config: QmConfig, workload: string, image:
 }
 
 async function dockerLogin(aws: AwsConfig): Promise<void> {
-  const { authorizationData } = await awsClient(ECRClient, aws.region).send(new GetAuthorizationTokenCommand({}));
+  const { authorizationData } = await ecr(aws).send(new GetAuthorizationTokenCommand({}));
   const token = Buffer.from(authorizationData?.[0]?.authorizationToken ?? "", "base64").toString("utf8");
   const password = token.slice(token.indexOf(":") + 1);
   const result = spawnSync("docker", ["login", "--username", "AWS", "--password-stdin", ecrHost(aws)], {
@@ -707,7 +746,7 @@ async function publishWorkloadImage(
     if (signal) await runInheritAsync("docker", imageTransferArgs(source, tagged), { signal });
     else runInherit("docker", imageTransferArgs(source, tagged));
   }
-  const response = await awsClient(ECRClient, aws.region).send(
+  const response = await ecr(aws).send(
     new DescribeImagesCommand({ repositoryName: spec.ecrRepository, imageIds: [{ imageTag: label }] }),
   );
   const digest = response.imageDetails?.[0]?.imageDigest;
@@ -795,7 +834,7 @@ export async function awsMigrateCandidate(config: QmConfig, configDir: string, c
   await withAwsLease(aws, async () => {
     if (aws.predeployDbSnapshot === false)
       note("pre-migration database restore point: disabled (aws.predeployDbSnapshot)");
-    else assertPredeployDbRestorePoint(config);
+    else await assertPredeployDbRestorePoint(config);
     await runAwsCandidateMigration(config, coreImage, candidate.label);
   });
 }
@@ -1054,14 +1093,22 @@ export function taskDefinitionDiff(desired: EcsTaskDefinition, live: Record<stri
 }
 
 type EcsServiceState = Service;
-type EcsDeploymentState = Deployment;
+
+async function describeTaskDefinition(aws: AwsConfig, taskDefinition: string): Promise<TaskDefinition | undefined> {
+  return (await ecs(aws).send(new DescribeTaskDefinitionCommand({ taskDefinition }))).taskDefinition;
+}
+
+/** Every item a paginated AWS listing returns, across pages. */
+async function all<P, T>(pages: AsyncIterable<P>, items: (page: P) => T[] | undefined): Promise<T[]> {
+  const out: T[] = [];
+  for await (const page of pages) out.push(...(items(page) ?? []));
+  return out;
+}
 
 /** Every RUNNING task ARN of an ECS service, across pages. */
-async function runningTaskArns(aws: AwsConfig, serviceName: string): Promise<string[]> {
-  const arns: string[] = [];
+function runningTaskArns(aws: AwsConfig, serviceName: string): Promise<string[]> {
   const input = { cluster: aws.cluster, serviceName, desiredStatus: "RUNNING" as const };
-  for await (const page of paginateListTasks({ client: ecs(aws) }, input)) arns.push(...(page.taskArns ?? []));
-  return arns;
+  return all(paginateListTasks({ client: ecs(aws) }, input), (page) => page.taskArns);
 }
 
 async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<void> {
@@ -1769,6 +1816,11 @@ function adoptMissingWorkloads(manifest: DeploymentManifest, snapshot: ServiceSn
   return true;
 }
 
+function updateService(aws: AwsConfig, workload: string, taskDefinition: string, desiredCount: number) {
+  const service = aws.services[workload]!.ecsService;
+  return ecs(aws).send(new UpdateServiceCommand({ cluster: aws.cluster, service, taskDefinition, desiredCount }));
+}
+
 async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
@@ -1789,20 +1841,8 @@ async function applyServiceTargets(
   const changed: string[] = [];
   try {
     for (const workload of workloads) {
-      const args = [
-        "ecs",
-        "update-service",
-        "--cluster",
-        aws.cluster,
-        "--service",
-        aws.services[workload]!.ecsService,
-        "--task-definition",
-        targets[workload]!,
-        "--desired-count",
-        String(expectedCounts[workload]),
-      ];
       changed.push(workload);
-      awsText(aws, args);
+      await updateService(aws, workload, targets[workload]!, expectedCounts[workload]!);
     }
     options.onSubmitted?.();
     await awaitServiceTargets(
@@ -1822,18 +1862,7 @@ async function applyServiceTargets(
     const restoreFailures: string[] = [];
     for (const workload of [...changed].reverse()) {
       try {
-        awsText(aws, [
-          "ecs",
-          "update-service",
-          "--cluster",
-          aws.cluster,
-          "--service",
-          aws.services[workload]!.ecsService,
-          "--task-definition",
-          before.tasks[workload]!,
-          "--desired-count",
-          String(before.counts[workload]),
-        ]);
+        await updateService(aws, workload, before.tasks[workload]!, before.counts[workload]!);
       } catch (restoreError) {
         restoreFailures.push(`${workload}: ${errMessage(restoreError)}`);
       }
@@ -1890,35 +1919,38 @@ async function reportTaskChanges(
   });
 }
 
-function promoteStagedImage(config: QmConfig, service: string, image: string, label: string): void {
+async function promoteStagedImage(config: QmConfig, service: string, image: string, label: string): Promise<void> {
   const aws = requireAws(config);
-  const repository = aws.services[service]!.ecrRepository;
+  const repositoryName = aws.services[service]!.ecrRepository;
   const digest = image.split("@")[1];
   if (!digest) throw new CliError(`staged image for ${service} is not digest-pinned`);
-  const staged = awsJson<{ images?: Array<{ imageManifest?: string; imageManifestMediaType?: string }> }>(aws, [
-    "ecr",
-    "batch-get-image",
-    "--repository-name",
-    repository,
-    "--image-ids",
-    `imageDigest=${digest}`,
-  ]).images?.[0];
+  const { images } = await ecr(aws).send(
+    new BatchGetImageCommand({ repositoryName, imageIds: [{ imageDigest: digest }] }),
+  );
+  const staged = images?.[0];
   if (!staged?.imageManifest) throw new CliError(`ECR did not return the staged manifest for ${service}@${digest}`);
   try {
-    awsText(aws, [
-      "ecr",
-      "put-image",
-      "--repository-name",
-      repository,
-      "--image-tag",
-      label,
-      "--image-manifest",
-      staged.imageManifest,
-      ...(staged.imageManifestMediaType ? ["--image-manifest-media-type", staged.imageManifestMediaType] : []),
-    ]);
+    await ecr(aws).send(
+      new PutImageCommand({
+        repositoryName,
+        imageTag: label,
+        imageManifest: staged.imageManifest,
+        imageManifestMediaType: staged.imageManifestMediaType,
+      }),
+    );
   } catch (error) {
     if (awsErrorCode(error) !== "ImageAlreadyExistsException") throw error;
   }
+}
+
+/** Milliseconds since the epoch for an SDK Date (or an ISO string); NaN when absent or invalid. */
+function timestamp(value: Date | string | undefined): number {
+  return value === undefined ? NaN : new Date(value).getTime();
+}
+
+async function describeDbInstance(aws: AwsConfig, database: string): Promise<DBInstance | undefined> {
+  const rds = awsClient(RDSClient, aws.region);
+  return (await rds.send(new DescribeDBInstancesCommand({ DBInstanceIdentifier: database }))).DBInstances?.[0];
 }
 
 function dbSnapshotRestoreHint(aws: AwsConfig, snapshot: string): string {
@@ -1936,12 +1968,10 @@ function manifestDbRestoreHint(aws: AwsConfig, manifest: DeploymentManifest): st
   return undefined;
 }
 
-function assertPredeployDbRestorePoint(config: QmConfig): string {
+async function assertPredeployDbRestorePoint(config: QmConfig): Promise<string> {
   const aws = requireAws(config);
   const database = rdsInstanceIdentifier(aws);
-  const instance = awsJson<{
-    DBInstances?: Array<{ DBInstanceStatus?: string; BackupRetentionPeriod?: number; LatestRestorableTime?: string }>;
-  }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", database]).DBInstances?.[0];
+  const instance = await describeDbInstance(aws, database);
   if (instance?.DBInstanceStatus !== "available" && instance?.DBInstanceStatus !== "storage-optimization") {
     throw new CliError(
       `database ${database} is ${instance?.DBInstanceStatus ?? "missing"}; refusing to deploy without an available source for the pre-deploy restore point`,
@@ -1954,7 +1984,7 @@ function assertPredeployDbRestorePoint(config: QmConfig): string {
       `database ${database} keeps ${retention} day(s) of automated backups, below the required ${minimumRetention}; raise its backup retention (db_backup_retention_days in the reference module) or lower aws.dbRetentionMinDays before deploying`,
     );
   }
-  const latestRestorable = Date.parse(instance.LatestRestorableTime ?? "");
+  const latestRestorable = timestamp(instance.LatestRestorableTime);
   if (!Number.isFinite(latestRestorable)) {
     throw new CliError(
       `database ${database} reports no LatestRestorableTime; point-in-time recovery is not active, refusing to deploy without a restore point`,
@@ -1964,7 +1994,7 @@ function assertPredeployDbRestorePoint(config: QmConfig): string {
   const maxLagMs = envNum("QM_AWS_DB_MAX_RESTORE_LAG_MS", 10 * 60_000);
   if (lagMs > maxLagMs) {
     throw new CliError(
-      `database ${database} is restorable only up to ${instance.LatestRestorableTime} (${Math.round(lagMs / 1000)}s ago, above the allowed ${Math.round(maxLagMs / 1000)}s); its continuous backup stream is behind, refusing to deploy without a fresh restore point`,
+      `database ${database} is restorable only up to ${new Date(latestRestorable).toISOString()} (${Math.round(lagMs / 1000)}s ago, above the allowed ${Math.round(maxLagMs / 1000)}s); its continuous backup stream is behind, refusing to deploy without a fresh restore point`,
     );
   }
   const restorePoint = new Date().toISOString();
@@ -1974,17 +2004,13 @@ function assertPredeployDbRestorePoint(config: QmConfig): string {
   return restorePoint;
 }
 
-function confirmDbRestorePointCovered(config: QmConfig, restorePoint: string): void {
+async function confirmDbRestorePointCovered(config: QmConfig, restorePoint: string): Promise<void> {
   const aws = requireAws(config);
   const database = rdsInstanceIdentifier(aws);
   let latestRestorable: string | undefined;
   try {
-    latestRestorable = awsJson<{ DBInstances?: Array<{ LatestRestorableTime?: string }> }>(aws, [
-      "rds",
-      "describe-db-instances",
-      "--db-instance-identifier",
-      database,
-    ]).DBInstances?.[0]?.LatestRestorableTime;
+    const latest = timestamp((await describeDbInstance(aws, database))?.LatestRestorableTime);
+    latestRestorable = Number.isFinite(latest) ? new Date(latest).toISOString() : undefined;
   } catch (error) {
     warn(`could not confirm the pre-deploy restore point ${restorePoint} is restorable yet: ${errMessage(error)}`);
     return;
@@ -2141,7 +2167,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!label) throw new CliError("aws.imageLabel is required");
   if (!opts.dryRun && !opts.yes) throw new CliError("AWS deploy requires --yes after reviewing `qm plan`");
   await assertAwsCallerAccount(aws);
-  assertAwsPublicFrontDoor(config);
+  await assertAwsPublicFrontDoor(config);
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   await assertAwsPublicApiUrl(config);
   await assertAwsDeployImage(config);
@@ -2246,7 +2272,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     }
     if (aws.predeployDbSnapshot === false)
       note("pre-deploy database restore point: disabled (aws.predeployDbSnapshot)");
-    else dbRestorePoint = assertPredeployDbRestorePoint(config);
+    else dbRestorePoint = await assertPredeployDbRestorePoint(config);
     if (current?.layer) {
       desiredLayer = current.layer;
     } else {
@@ -2409,10 +2435,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       });
     }
     if (aws.backgroundWorkControl && changedCore) clearBackgroundPreparation(aws);
-    if (recorded && dbRestorePoint) confirmDbRestorePointCovered(config, dbRestorePoint);
+    if (recorded && dbRestorePoint) await confirmDbRestorePointCovered(config, dbRestorePoint);
     for (const service of candidate ? [] : services) {
       try {
-        promoteStagedImage(config, service, images[service]!, label);
+        await promoteStagedImage(config, service, images[service]!, label);
         promotedServices.add(service);
       } catch (error) {
         warn(
@@ -2455,14 +2481,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     for (const service of staged) {
       if (releaseSucceeded && !promotedServices.has(service)) continue;
       try {
-        awsText(aws, [
-          "ecr",
-          "batch-delete-image",
-          "--repository-name",
-          aws.services[service]!.ecrRepository,
-          "--image-ids",
-          `imageTag=${stagingLabel}`,
-        ]);
+        await ecr(aws).send(
+          new BatchDeleteImageCommand({
+            repositoryName: aws.services[service]!.ecrRepository,
+            imageIds: [{ imageTag: stagingLabel }],
+          }),
+        );
       } catch (error) {
         if (awsErrorCode(error) !== "ImageNotFoundException")
           warn(`could not clean staging image ${service}:${stagingLabel}: ${errMessage(error)}`);
@@ -3212,8 +3236,8 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
   const { aws, workloads } = awsTopology(config, configDir);
   await assertAwsCallerAccount(aws);
   const values = envValues(configDir, envFile);
-  const staged: Array<{ name: string; id: string; dir: string; file: string }> = [];
-  try {
+  const staged: Array<{ name: string; id: string; value: string }> = [];
+  {
     for (const secret of computedSecrets(config).filter((item) => item.managedBy === "operator")) {
       const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
       if (!secret.required && !supplied) {
@@ -3226,10 +3250,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
           `${secret.name} must have a non-empty, non-placeholder value; signing keys must be at least 32 characters`,
         );
       }
-      const dir = mkdtempSync(join(tmpdir(), "qm-secret-"));
-      const file = join(dir, "value");
-      writeFileSync(file, value, { mode: 0o600 });
-      staged.push({ name: secret.name, id: `${aws.secretsPrefix}${secret.name}`, dir, file });
+      staged.push({ name: secret.name, id: `${aws.secretsPrefix}${secret.name}`, value });
     }
     await withAwsLease(aws, async () => {
       const baseline = await currentDeploymentManifest(aws);
@@ -3264,12 +3285,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       if (baseline && before) {
         for (const workload of affected) {
           if (aws.backgroundWorkControl && workload === "core") continue;
-          const live = awsJson<{ taskDefinition?: { runtimePlatform?: { cpuArchitecture?: string } } }>(aws, [
-            "ecs",
-            "describe-task-definition",
-            "--task-definition",
-            before.tasks[workload]!,
-          ]).taskDefinition;
+          const live = await describeTaskDefinition(aws, before.tasks[workload]!);
           const architecture = live?.runtimePlatform?.cpuArchitecture ?? "X86_64";
           const expected = workloadArchitecture(config, workload) === "arm64" ? "ARM64" : "X86_64";
           if (architecture !== expected)
@@ -3282,15 +3298,9 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         for (const secret of staged.filter((item) =>
           ["DEPLOYMENT_CONTROL_SECRET", "CORE_SIGNING_SECRET"].includes(item.name),
         )) {
-          const existing = awsText(aws, [
-            "secretsmanager",
-            "get-secret-value",
-            "--secret-id",
-            secret.id,
-            "--query",
-            "SecretString",
-          ]);
-          if (existing !== readFileSync(secret.file, "utf8"))
+          const { SecretString } = await secretsManager(aws).send(new GetSecretValueCommand({ SecretId: secret.id }));
+          const existing = (SecretString ?? "").trim();
+          if (existing !== secret.value)
             throw new CliError(
               `${secret.name} cannot be rotated while controlled task cohorts are deployed; coordinated control credential rotation is required`,
             );
@@ -3298,14 +3308,9 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       }
       for (const secret of staged) {
         try {
-          awsText(aws, [
-            "secretsmanager",
-            "put-secret-value",
-            "--secret-id",
-            secret.id,
-            "--secret-string",
-            `file://${secret.file}`,
-          ]);
+          await secretsManager(aws).send(
+            new PutSecretValueCommand({ SecretId: secret.id, SecretString: secret.value }),
+          );
         } catch (error) {
           if (awsErrorCode(error) === "ResourceNotFoundException") {
             throw new CliError(
@@ -3334,13 +3339,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       const targets = { ...before.tasks };
       const changed: Record<string, string> = {};
       for (const workload of affected) {
-        const live =
-          awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-            "ecs",
-            "describe-task-definition",
-            "--task-definition",
-            before.tasks[workload]!,
-          ]).taskDefinition ?? null;
+        const live = await describeTaskDefinition(aws, before.tasks[workload]!);
         const container = (live?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
           (item) => item.name === workload,
         );
@@ -3352,7 +3351,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
           throw new CliError(`cannot rotate secrets while ${workload} lacks a trusted digest-pinned image`);
         }
         const desired = renderTaskDefinition(config, workload, container.image, arns, baseline.backgroundDeploymentId);
-        if (!taskDefinitionChanges(desired, live).length) continue;
+        if (!taskDefinitionChanges(desired, (live as Record<string, unknown> | undefined) ?? null).length) continue;
         const dir = mkdtempSync(join(tmpdir(), "qm-task-"));
         try {
           const file = join(dir, `${workload}.json`);
@@ -3377,15 +3376,13 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         const unchanged = affected.filter((workload) => !changed[workload]);
         const forcedDeployments: Record<string, string> = {};
         for (const workload of unchanged) {
-          const service = awsJson<{ service?: { deployments?: EcsDeploymentState[] } }>(aws, [
-            "ecs",
-            "update-service",
-            "--cluster",
-            aws.cluster,
-            "--service",
-            aws.services[workload]!.ecsService,
-            "--force-new-deployment",
-          ]).service;
+          const { service } = await ecs(aws).send(
+            new UpdateServiceCommand({
+              cluster: aws.cluster,
+              service: aws.services[workload]!.ecsService,
+              forceNewDeployment: true,
+            }),
+          );
           const primary = (service?.deployments ?? []).filter((deployment) => deployment.status === "PRIMARY");
           if (primary.length !== 1 || !primary[0]?.id)
             throw new CliError(`AWS did not identify the replacement deployment for ${workload}`);
@@ -3431,8 +3428,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       }
       for (const workload of affected) step(`${workload}: restarted with rotated secrets`);
     });
-  } finally {
-    for (const secret of staged) rmSync(secret.dir, { recursive: true, force: true });
   }
   ok("operator secrets uploaded to AWS Secrets Manager");
 }
@@ -3621,16 +3616,13 @@ function awsServiceConnectConfiguration(
   );
 }
 
-export function assertAwsServiceDiscovery(
+export async function assertAwsServiceDiscovery(
   config: QmConfig,
   ecsServices: ReadonlyMap<string, AwsEcsRoutingService>,
-): void {
+): Promise<void> {
   const aws = requireAws(config);
-  const namespaces =
-    awsJson<{ Namespaces?: Array<{ Id?: string; Name?: string; Arn?: string }> }>(aws, [
-      "servicediscovery",
-      "list-namespaces",
-    ]).Namespaces ?? [];
+  const cloudMap = { client: awsClient(ServiceDiscoveryClient, aws.region) };
+  const namespaces = await all(paginateListNamespaces(cloudMap, {}), (page) => page.Namespaces);
   let namespaceId: string | undefined;
   let registrations: Array<{ Arn?: string; Name?: string }> = [];
   for (const name of Object.keys(aws.services)) {
@@ -3644,13 +3636,8 @@ export function assertAwsServiceDiscovery(
       throw new Error("ECS services must share their Service Connect namespace");
     if (!namespaceId) {
       namespaceId = namespace.Id;
-      registrations =
-        awsJson<{ Services?: Array<{ Arn?: string; Name?: string }> }>(aws, [
-          "servicediscovery",
-          "list-services",
-          "--filters",
-          `Name=NAMESPACE_ID,Values=${namespaceId},Condition=EQ`,
-        ]).Services ?? [];
+      const Filters = [{ Name: "NAMESPACE_ID" as const, Values: [namespaceId], Condition: "EQ" as const }];
+      registrations = await all(paginateListServices(cloudMap, { Filters }), (page) => page.Services);
     }
     const endpoints = connect.services?.filter((service) => service.portName === name) ?? [];
     if (endpoints.length !== 1)
@@ -3668,7 +3655,7 @@ export function assertAwsServiceDiscovery(
   }
 }
 
-function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRoutingService> {
+async function awsEcsRoutingServices(config: QmConfig): Promise<ReadonlyMap<string, AwsEcsRoutingService>> {
   const aws = requireAws(config);
   const entries = Object.keys(aws.services).map((name) => [name, aws.services[name]!] as const);
   const services: AwsEcsRoutingService[] = [];
@@ -3677,11 +3664,8 @@ function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRout
     entries.map(([, spec]) => spec.ecsService),
     ECS_SERVICE_BATCH_SIZE,
   )) {
-    const described = awsJson<{
-      services?: AwsEcsRoutingService[];
-      failures?: Array<{ arn?: string; reason?: string }>;
-    }>(aws, ["ecs", "describe-services", "--cluster", aws.cluster, "--services", ...batch]);
-    services.push(...(described.services ?? []));
+    const described = await ecs(aws).send(new DescribeServicesCommand({ cluster: aws.cluster, services: batch }));
+    services.push(...((described.services ?? []) as AwsEcsRoutingService[]));
     failures.push(...(described.failures ?? []));
   }
   if (failures.length) {
@@ -3698,23 +3682,20 @@ function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRout
   );
 }
 
-function awsPublicFrontDoor(config: QmConfig): AwsPublicFrontDoor {
+async function awsPublicFrontDoor(config: QmConfig): Promise<AwsPublicFrontDoor> {
   const aws = requireAws(config);
   const albName =
     aws.alb ?? `${aws.cluster.slice(0, 23)}-${createHash("sha1").update(aws.cluster).digest("hex").slice(0, 8)}`;
-  const loadBalancer = awsJson<{
-    LoadBalancers?: Array<{ LoadBalancerArn?: string; DNSName?: string; State?: { Code?: string } }>;
-  }>(aws, ["elbv2", "describe-load-balancers", "--names", albName]).LoadBalancers?.[0];
+  const loadBalancers = await elb(aws).send(new DescribeLoadBalancersCommand({ Names: [albName] }));
+  const loadBalancer = loadBalancers.LoadBalancers?.[0];
   if (!loadBalancer?.LoadBalancerArn || !loadBalancer.DNSName || loadBalancer.State?.Code !== "active") {
     throw new Error(`load balancer is ${loadBalancer?.State?.Code ?? "missing"}`);
   }
-  const listeners =
-    awsJson<{ Listeners?: AwsPublicListener[] }>(aws, [
-      "elbv2",
-      "describe-listeners",
-      "--load-balancer-arn",
-      loadBalancer.LoadBalancerArn,
-    ]).Listeners ?? [];
+  const LoadBalancerArn = loadBalancer.LoadBalancerArn;
+  const listeners = (await all(
+    paginateDescribeListeners({ client: elb(aws) }, { LoadBalancerArn }),
+    (page) => page.Listeners,
+  )) as AwsPublicListener[];
   const origin = awsPublicOrigin(config);
   const httpsFrontDoor = origin.protocol === "https:";
   const redirects = httpsFrontDoor ? listeners.filter(isHttpsRedirectListener) : [];
@@ -3736,7 +3717,7 @@ function awsPublicFrontDoor(config: QmConfig): AwsPublicFrontDoor {
   return { loadBalancerArn: loadBalancer.LoadBalancerArn, dnsName: loadBalancer.DNSName, listener };
 }
 
-function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string): void {
+async function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string): Promise<void> {
   interface Distribution {
     DomainName?: string;
     Status?: string;
@@ -3759,9 +3740,11 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
       }>;
     };
   }
-  const distributions =
-    awsJson<{ DistributionList?: { Items?: Distribution[] } }>(requireAws(config), ["cloudfront", "list-distributions"])
-      .DistributionList?.Items ?? [];
+  const cloudFront = { client: awsClient(CloudFrontClient, requireAws(config).region) };
+  const distributions: Distribution[] = await all(
+    paginateListDistributions(cloudFront, {}),
+    (page) => page.DistributionList?.Items,
+  );
   const matches = distributions.filter((distribution) => distribution.DomainName === url.hostname);
   const distribution = matches.length === 1 ? matches[0] : undefined;
   const behavior = distribution?.DefaultCacheBehavior;
@@ -3787,10 +3770,10 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
   }
 }
 
-export function assertAwsPublicRouting(
+export async function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
-): ReadonlyMap<string, string> {
+): Promise<ReadonlyMap<string, string>> {
   const aws = requireAws(config);
   const hash = (value: string, length: number): string =>
     createHash("sha1").update(value).digest("hex").slice(0, length);
@@ -3813,15 +3796,12 @@ export function assertAwsPublicRouting(
     ),
   );
   ingress.push(...publicPaths.keys());
-  const { loadBalancerArn, listener } = awsPublicFrontDoor(config);
-  const targetGroups =
-    awsJson<{ TargetGroups?: Array<{ TargetGroupArn?: string; TargetGroupName?: string }> }>(aws, [
-      "elbv2",
-      "describe-target-groups",
-      "--load-balancer-arn",
-      loadBalancerArn,
-    ]).TargetGroups ?? [];
-  const routingServices = ecsServices ?? awsEcsRoutingServices(config);
+  const { loadBalancerArn, listener } = await awsPublicFrontDoor(config);
+  const targetGroups = await all(
+    paginateDescribeTargetGroups({ client: elb(aws) }, { LoadBalancerArn: loadBalancerArn }),
+    (page) => page.TargetGroups,
+  );
+  const routingServices = ecsServices ?? (await awsEcsRoutingServices(config));
   const targets = new Map<string, string>();
   const alternateTargets = new Map<string, string>();
   const productionRules = new Map<string, string>();
@@ -3903,25 +3883,10 @@ export function assertAwsPublicRouting(
   ) {
     throw new Error("non-portal listener default must return a fixed 404 response");
   }
-  const rules =
-    awsJson<{
-      Rules?: Array<{
-        RuleArn?: string;
-        Priority?: string;
-        IsDefault?: boolean;
-        Actions?: Array<{
-          Type?: string;
-          TargetGroupArn?: string;
-          ForwardConfig?: { TargetGroups?: Array<{ TargetGroupArn?: string; Weight?: number }> };
-        }>;
-        Conditions?: Array<{
-          Field?: string;
-          Values?: string[];
-          PathPatternConfig?: { Values?: string[] };
-          HostHeaderConfig?: { Values?: string[] };
-        }>;
-      }>;
-    }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
+  const rules = await all(
+    paginateDescribeRules({ client: elb(aws) }, { ListenerArn: listener.ListenerArn! }),
+    (page) => page.Rules,
+  );
   let nonDefault = rules.filter((rule) => !rule.IsDefault);
   if (aws.sharedAlb) {
     const hostname = new URL(config.publicUrl).hostname.toLowerCase();
@@ -4100,9 +4065,9 @@ export function assertAwsPublicRouting(
   return targets;
 }
 
-function assertAwsPublicFrontDoor(config: QmConfig): void {
+async function assertAwsPublicFrontDoor(config: QmConfig): Promise<void> {
   try {
-    assertAwsPublicRouting(config);
+    await assertAwsPublicRouting(config);
   } catch (error) {
     throw new CliError(`AWS public front door is not ready for deployment: ${errMessage(error)}`);
   }
@@ -4110,7 +4075,7 @@ function assertAwsPublicFrontDoor(config: QmConfig): void {
 
 async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = false): Promise<void> {
   const originHostname = awsPublicOrigin(config).hostname.toLowerCase().replace(/\.$/, "");
-  const albHostname = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+  const albHostname = (await awsPublicFrontDoor(config)).dnsName.toLowerCase().replace(/\.$/, "");
   if (originHostname !== albHostname) {
     const failures: string[] = [];
     const noted =
@@ -4150,16 +4115,12 @@ async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = fal
   }
 }
 
-function assertAwsHealthyIngress(config: QmConfig, targets: ReadonlyMap<string, string>): void {
+async function assertAwsHealthyIngress(config: QmConfig, targets: ReadonlyMap<string, string>): Promise<void> {
   const aws = requireAws(config);
   for (const [name, targetGroupArn] of targets) {
     const health =
-      awsJson<{ TargetHealthDescriptions?: Array<{ TargetHealth?: { State?: string; Reason?: string } }> }>(aws, [
-        "elbv2",
-        "describe-target-health",
-        "--target-group-arn",
-        targetGroupArn,
-      ]).TargetHealthDescriptions ?? [];
+      (await elb(aws).send(new DescribeTargetHealthCommand({ TargetGroupArn: targetGroupArn })))
+        .TargetHealthDescriptions ?? [];
     if (!health.some((target) => target.TargetHealth?.State === "healthy")) {
       const states = health.map(
         (target) =>
@@ -4170,27 +4131,15 @@ function assertAwsHealthyIngress(config: QmConfig, targets: ReadonlyMap<string, 
   }
 }
 
-export function assertAwsDeploymentStorage(config: QmConfig): void {
+export async function assertAwsDeploymentStorage(config: QmConfig): Promise<void> {
   const aws = requireAws(config);
   const tableName = deployLocksTable(aws);
-  const table = awsJson<{ Table?: { TableStatus?: string } }>(aws, [
-    "dynamodb",
-    "describe-table",
-    "--table-name",
-    tableName,
-  ]).Table;
+  const { Table: table } = await dynamo(aws).send(new DescribeTableCommand({ TableName: tableName }));
   if (table?.TableStatus !== "ACTIVE")
     throw new Error(`deploy-lock table ${tableName} is ${table?.TableStatus ?? "missing"}`);
-  awsText(aws, [
-    "s3api",
-    "list-objects-v2",
-    "--bucket",
-    awsObjectStoreBucket(config),
-    "--prefix",
-    "deployment/",
-    "--max-keys",
-    "1",
-  ]);
+  await s3(config).send(
+    new ListObjectsV2Command({ Bucket: awsObjectStoreBucket(config), Prefix: "deployment/", MaxKeys: 1 }),
+  );
 }
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
@@ -4199,16 +4148,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   await assertAwsCallerAccount(aws);
   step("AWS caller account: ok");
   const failures: string[] = [];
-  const check = (label: string, fn: () => void): void => {
-    try {
-      fn();
-      step(`${label}: ok`);
-    } catch (error) {
-      failures.push(`${label}: ${(error as Error).message}`);
-      warn(`${label}: failed`);
-    }
-  };
-  const checkAsync = async (label: string, fn: () => Promise<void>): Promise<void> => {
+  const check = async (label: string, fn: () => unknown): Promise<void> => {
     try {
       await fn();
       step(`${label}: ok`);
@@ -4219,7 +4159,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   };
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (existsSync(tfvarsPath))
-    check("Terraform coordinates", () => {
+    await check("Terraform coordinates", async () => {
       const path = tfvarsPath;
       const existing = readFileSync(path, "utf8");
       const variablesPath = join(configDir, "infra", "variables.tf");
@@ -4229,89 +4169,60 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         throw new Error(`terraform.tfvars drift (${drift.join(", ")}); run \`qm infra render\` and commit the result`);
     });
   else step("Terraform coordinates: external infrastructure (no vendored infra/terraform.tfvars)");
-  check("ECS cluster", () => {
-    const cluster = awsJson<{ clusters?: Array<{ status?: string }> }>(aws, [
-      "ecs",
-      "describe-clusters",
-      "--clusters",
-      aws.cluster,
-    ]).clusters?.[0];
+  await check("ECS cluster", async () => {
+    const cluster = (await ecs(aws).send(new DescribeClustersCommand({ clusters: [aws.cluster] }))).clusters?.[0];
     if (cluster?.status !== "ACTIVE") throw new Error(`cluster is ${cluster?.status ?? "missing"}`);
   });
-  check("deployment state stores", () => assertAwsDeploymentStorage(config));
+  await check("deployment state stores", () => assertAwsDeploymentStorage(config));
   const snapshotBucket = config.env.core?.S3_BUCKET?.trim();
   if (snapshotBucket)
-    check(`core S3 bucket ${snapshotBucket}`, () => {
+    await check(`core S3 bucket ${snapshotBucket}`, async () => {
       try {
-        awsText(aws, ["s3api", "head-bucket", "--bucket", snapshotBucket]);
+        await s3(config).send(new HeadBucketCommand({ Bucket: snapshotBucket }));
       } catch (error) {
         throw new Error(`the env.core.S3_BUCKET override is missing or not readable: ${errMessage(error)}`, {
           cause: error,
         });
       }
     });
-  check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
-  check("deploy role", () => {
+  await check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
+  await check("deploy role", async () => {
     const expectedSubject = githubTrustSubject(configDir, aws.deployBranch, aws.deployEnvironment);
-    const role = awsJson<{ Role?: { Arn?: string; AssumeRolePolicyDocument?: { Statement?: unknown } } }>(aws, [
-      "iam",
-      "get-role",
-      "--role-name",
-      aws.deployRoleArn.split("/").pop()!,
-    ]);
-    if (role.Role?.Arn !== aws.deployRoleArn) throw new Error("role ARN differs from config");
-    assertGithubDeployTrust(role.Role.AssumeRolePolicyDocument?.Statement, aws.accountId, expectedSubject);
+    const { Role: role } = await iam(aws).send(new GetRoleCommand({ RoleName: aws.deployRoleArn.split("/").pop()! }));
+    if (role?.Arn !== aws.deployRoleArn) throw new Error("role ARN differs from config");
+    const trust = JSON.parse(decodeURIComponent(role.AssumeRolePolicyDocument ?? "{}")) as { Statement?: unknown };
+    assertGithubDeployTrust(trust.Statement, aws.accountId, expectedSubject);
     if (process.env.GITHUB_ACTIONS === "true") {
-      const caller = awsJson<{ Arn?: string }>(aws, ["sts", "get-caller-identity"]);
+      const caller = await awsClient(STSClient, aws.region).send(new GetCallerIdentityCommand({}));
       const roleName = aws.deployRoleArn.split("/").pop()!;
       if (!caller.Arn?.includes(`:assumed-role/${roleName}/`))
         throw new Error("workflow is not actually running as the configured deploy role");
     }
   });
-  check("GitHub OIDC provider", () => {
+  await check("GitHub OIDC provider", async () => {
     const arn = `arn:aws:iam::${aws.accountId}:oidc-provider/token.actions.githubusercontent.com`;
-    const provider = awsJson<{ Url?: string; ClientIDList?: string[] }>(aws, [
-      "iam",
-      "get-open-id-connect-provider",
-      "--open-id-connect-provider-arn",
-      arn,
-    ]);
+    const provider = await iam(aws).send(new GetOpenIDConnectProviderCommand({ OpenIDConnectProviderArn: arn }));
     if (provider.Url !== "token.actions.githubusercontent.com")
       throw new Error("GitHub OIDC provider URL is incorrect");
     if (!provider.ClientIDList?.includes("sts.amazonaws.com"))
       throw new Error("GitHub OIDC provider does not trust sts.amazonaws.com");
   });
-  check("RDS", () => {
-    const database = awsJson<{
-      DBInstances?: Array<{
-        DBInstanceStatus?: string;
-        Endpoint?: { Address?: string; Port?: number };
-        VpcSecurityGroups?: Array<{ VpcSecurityGroupId?: string }>;
-      }>;
-    }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", rdsInstanceIdentifier(aws)]).DBInstances?.[0];
+  await check("RDS", async () => {
+    const database = await describeDbInstance(aws, rdsInstanceIdentifier(aws));
     if (database?.DBInstanceStatus !== "available" && database?.DBInstanceStatus !== "storage-optimization")
       throw new Error(`database is ${database?.DBInstanceStatus || "missing"}`);
     const coreService = aws.services.core;
     if (!coreService) throw new Error("aws.services.core is missing");
-    const coreGroups =
-      awsJson<{ services?: Array<{ networkConfiguration?: { awsvpcConfiguration?: { securityGroups?: string[] } } }> }>(
-        aws,
-        ["ecs", "describe-services", "--cluster", aws.cluster, "--services", coreService.ecsService],
-      ).services?.[0]?.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? [];
+    const described = await ecs(aws).send(
+      new DescribeServicesCommand({ cluster: aws.cluster, services: [coreService.ecsService] }),
+    );
+    const coreGroups = described.services?.[0]?.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? [];
     const databaseGroups = (database.VpcSecurityGroups ?? []).flatMap((group) =>
       group.VpcSecurityGroupId ? [group.VpcSecurityGroupId] : [],
     );
+    const ec2 = awsClient(EC2Client, aws.region);
     const permissions = databaseGroups.length
-      ? (awsJson<{
-          SecurityGroups?: Array<{
-            IpPermissions?: Array<{
-              IpProtocol?: string;
-              FromPort?: number;
-              ToPort?: number;
-              UserIdGroupPairs?: Array<{ GroupId?: string }>;
-            }>;
-          }>;
-        }>(aws, ["ec2", "describe-security-groups", "--group-ids", ...databaseGroups]).SecurityGroups?.flatMap(
+      ? ((await ec2.send(new DescribeSecurityGroupsCommand({ GroupIds: databaseGroups }))).SecurityGroups?.flatMap(
           (group) => group.IpPermissions ?? [],
         ) ?? [])
       : [];
@@ -4323,39 +4234,26 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         (permission.UserIdGroupPairs ?? []).some((pair) => pair.GroupId && coreGroups.includes(pair.GroupId)),
     );
     if (!reachable) throw new Error("database security groups do not allow the core ECS service on port 5432");
-    const databaseUrl = awsText(aws, [
-      "secretsmanager",
-      "get-secret-value",
-      "--secret-id",
-      `${aws.secretsPrefix}DATABASE_URL`,
-      "--query",
-      "SecretString",
-    ]);
+    const databaseUrl = await awsSecretString(aws, "DATABASE_URL");
     if (!database.Endpoint?.Address || new URL(databaseUrl).hostname !== database.Endpoint.Address)
       throw new Error("DATABASE_URL does not point at the configured RDS endpoint");
   });
   const ecsServices = new Map<string, AwsEcsRoutingService>();
   for (const service of Object.keys(aws.services)) {
     const spec = aws.services[service]!;
-    check(`ECS service ${spec.ecsService}`, () => {
-      const found = awsJson<{ services?: AwsEcsRoutingService[] }>(aws, [
-        "ecs",
-        "describe-services",
-        "--cluster",
-        aws.cluster,
-        "--services",
-        spec.ecsService,
-      ]).services?.[0];
+    await check(`ECS service ${spec.ecsService}`, async () => {
+      const described = await ecs(aws).send(
+        new DescribeServicesCommand({ cluster: aws.cluster, services: [spec.ecsService] }),
+      );
+      const found = described.services?.[0] as AwsEcsRoutingService | undefined;
       if (found?.status !== "ACTIVE") throw new Error(`service is ${found?.status ?? "missing"}`);
       ecsServices.set(service, found);
     });
-    check(`ECR ${spec.ecrRepository}`, () => {
-      const repository = awsJson<{ repositories?: Array<{ repositoryArn?: string }> }>(aws, [
-        "ecr",
-        "describe-repositories",
-        "--repository-names",
-        spec.ecrRepository,
-      ]).repositories?.[0];
+    await check(`ECR ${spec.ecrRepository}`, async () => {
+      const { repositories } = await ecr(aws).send(
+        new DescribeRepositoriesCommand({ repositoryNames: [spec.ecrRepository] }),
+      );
+      const repository = repositories?.[0];
       if (!repository?.repositoryArn) throw new Error("repository is missing");
     });
   }
@@ -4365,14 +4263,9 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     logGroups.set(group, [...(logGroups.get(group) ?? []), name]);
   }
   for (const [group, names] of logGroups) {
-    check(`CloudWatch log group ${group}`, () => {
-      const found =
-        awsJson<{ logGroups?: Array<{ logGroupName?: string }> }>(aws, [
-          "logs",
-          "describe-log-groups",
-          "--log-group-name-prefix",
-          group,
-        ]).logGroups ?? [];
+    await check(`CloudWatch log group ${group}`, async () => {
+      const logs = { client: awsClient(CloudWatchLogsClient, aws.region) };
+      const found = await all(paginateDescribeLogGroups(logs, { logGroupNamePrefix: group }), (page) => page.logGroups);
       if (!found.some((item) => item.logGroupName === group)) {
         throw new Error(
           `log group is missing — the awslogs driver refuses to start ${names.join(", ")} without it; create it or fix aws.services.${names.join("/")}.logGroup`,
@@ -4380,25 +4273,24 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       }
     });
   }
-  check("Cloud Map routing", () => assertAwsServiceDiscovery(config, ecsServices));
-  check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
-  await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
+  await check("Cloud Map routing", () => assertAwsServiceDiscovery(config, ecsServices));
+  await check("ALB routing", async () => void (await assertAwsPublicRouting(config, ecsServices)));
+  await check("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
   const runtimeSecrets = new Map<string, string>();
   for (const secret of computedSecrets(config)) {
-    const inspect = (): void => {
-      const id = `${aws.secretsPrefix}${secret.name}`;
-      const value = awsText(aws, ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString"]);
+    const inspect = async (): Promise<void> => {
+      const value = await awsSecretString(aws, secret.name);
       if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
       runtimeSecrets.set(secret.name, value);
     };
     if (secret.required)
-      await checkAsync(`secret ${secret.name}`, async () => {
-        inspect();
+      await check(`secret ${secret.name}`, async () => {
+        await inspect();
         if (secret.name === "PUBLIC_API_URL") await assertAwsPublicApiUrl(config);
       });
     else {
       try {
-        inspect();
+        await inspect();
         step(`optional secret ${secret.name}: configured`);
       } catch (error) {
         const code = awsErrorCode(error);
@@ -4507,13 +4399,7 @@ async function checkLive(
     }
     if (state.taskDefinition !== expectedTask)
       failures.push(`${service}: service task does not match deployment manifest ${manifest.id}`);
-    const live =
-      awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        expectedTask,
-      ]).taskDefinition ?? null;
+    const live = ((await describeTaskDefinition(aws, expectedTask)) as Record<string, unknown> | undefined) ?? null;
     if (!live) {
       failures.push(`${service}: no live task definition`);
       continue;
@@ -4553,8 +4439,8 @@ async function checkLive(
     }
   }
   try {
-    const targets = assertAwsPublicRouting(config);
-    assertAwsHealthyIngress(config, targets);
+    const targets = await assertAwsPublicRouting(config);
+    await assertAwsHealthyIngress(config, targets);
   } catch (error) {
     failures.push(`public front-door drift: ${errMessage(error)}`);
   }
