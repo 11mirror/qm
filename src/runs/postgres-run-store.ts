@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../persistence/durable-map.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -7,7 +6,6 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run, RunDeliveryState, RunPriority, RunStop, RunStore } from "./run-store.ts";
 import { isTerminal } from "./run-store.ts";
-import { errMessage } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 /** The run rows; admission, cancellation and fencing come from the turn ledger (turns/turn-engine.ts). */
@@ -173,51 +171,6 @@ function runReads(
   };
 }
 
-function waitForRun(
-  events: EventEmitter,
-  getRun: (id: string) => Promise<Run | null>,
-  runId: string,
-  timeoutMs: number,
-): Promise<Run> {
-  return new Promise<Run>((resolve, reject) => {
-    let done = false;
-    const finish = (r: Run): void => {
-      if (done) return;
-      done = true;
-      clearInterval(poll);
-      clearTimeout(timer);
-      events.off(runId, onSettle);
-      resolve(r);
-    };
-    function onSettle(r: Run): void {
-      finish(r);
-    }
-    events.once(runId, onSettle);
-    const poll = setInterval(() => {
-      void getRun(runId)
-        .then((r) => {
-          if (r && isTerminal(r.status)) finish(r);
-        })
-        .catch((err: unknown) => {
-          console.error(
-            "%s",
-            `[postgres-run-store] waitFor poll for run ${runId} failed transiently:`,
-            errMessage(err),
-          );
-        });
-    }, 250);
-    poll.unref?.();
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      clearInterval(poll);
-      events.off(runId, onSettle);
-      reject(new Error(`run ${runId} did not finish within ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
-  });
-}
-
 function createToolLedger(q: Query): ToolLedger {
   return {
     async begin(runId, attempt, callIndex): Promise<LedgerBegin> {
@@ -238,9 +191,6 @@ function createToolLedger(q: Query): ToolLedger {
 }
 
 export function createPostgresRunStore(connectionString: string): PostgresRuntime {
-  const events = new EventEmitter();
-  events.setMaxListeners(0);
-
   const { query: q, close: closePool } = createPgPool(connectionString, RUN_STORE_MIGRATIONS);
 
   async function getRun(id: string): Promise<Run | null> {
@@ -250,12 +200,10 @@ export function createPostgresRunStore(connectionString: string): PostgresRuntim
   const terminalListeners: Array<(run: Run) => void> = [];
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
-    events.emit(run.id, run);
     for (const listener of terminalListeners) listener(run);
   }
   const runs: RunRows = {
     ...runReads(q),
-    waitFor: (runId, timeoutMs = 60_000) => waitForRun(events, getRun, runId, timeoutMs),
     async noteTurnUserSeq(runId: string, seq: number): Promise<boolean> {
       const { rowCount } = await q("UPDATE runs SET turn_user_seq=$2 WHERE id=$1 AND turn_user_seq IS NULL", [
         runId,

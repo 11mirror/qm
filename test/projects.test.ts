@@ -27,6 +27,7 @@ import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { settledRun } from "./support/turns.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -707,7 +708,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(queued.runId!, 5_000);
+    const finished = await settledRun(built.runs, queued.runId!, 5_000);
     assert.equal(finished.result?.status, "refused");
     assert.match(finished.result?.reason ?? "", /membership changed/);
     assert.equal(await built.sessions.getByThread("web:member:queued-before-removal"), null);

@@ -6,6 +6,7 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { settle } from "./support/settle.ts";
+import { settledRun } from "./support/turns.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
 mock.module("./support/mock-harness.ts", {
@@ -68,7 +69,7 @@ for (const scenario of [
       if (scenario.enabled) assert.equal(run?.firstBlock, "Building the website now.");
       assert.equal(run?.firstBlockClosed === true, scenario.enabled);
       release();
-      await built.runs.waitFor(queued.runId!, 5000);
+      await settledRun(built.runs, queued.runId!, 5000);
     } finally {
       release();
       await built.runtime.stop();
@@ -124,7 +125,7 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
         expected,
       );
       release();
-      await built.runs.waitFor(queued.runId!, 5000);
+      await settledRun(built.runs, queued.runId!, 5000);
     } finally {
       release();
       await built.runtime.stop();

@@ -1955,25 +1955,6 @@ test("pg run store: enqueue retries when a conflicting key is released before lo
   }
 });
 
-test("pg run store: waitFor survives a transient poll failure without an unhandled rejection", async () => {
-  const { runs, close } = testRunStore();
-  let unhandled: unknown;
-  const onUnhandledRejection = (err: unknown): void => {
-    unhandled = err;
-  };
-  process.once("unhandledRejection", onUnhandledRejection);
-  try {
-    const r = (await runs.enqueue({ sessionId: "sWaitFor", request: turn("x") })).run;
-    const pending = runs.waitFor(r.id, 800);
-    await new Promise((res) => setTimeout(res, 50));
-    await close();
-    await assert.rejects(pending, /did not finish within 800ms/, "still settles via its own timeout, not a crash");
-  } finally {
-    process.removeListener("unhandledRejection", onUnhandledRejection);
-  }
-  assert.equal(unhandled, undefined, "a transient poll failure must not escape as an unhandled rejection");
-});
-
 test("pg run store: the schema refuses a second running row for a conversation", async () => {
   const { runs, ledger, databaseUrl, close } = testRunStore();
   const pg = (await import("pg")).default;

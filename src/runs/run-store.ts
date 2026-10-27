@@ -126,8 +126,6 @@ export interface RunStore {
 
   list(opts?: { limit?: number; threadRef?: string }): Promise<Run[]>;
 
-  waitFor(runId: string, timeoutMs?: number): Promise<Run>;
-
   close?(): Promise<void>;
 }
 

@@ -7,6 +7,7 @@ import * as mockHarness from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settledRun } from "./support/turns.ts";
 
 const turns: HarnessTurnInput[] = [];
 let piOptions: Parameters<typeof piHarness.createPiHarness>[0];
@@ -47,7 +48,7 @@ for (const provider of ["anthropic", "openai"] as const) {
     await built.config.setPersonalModelAuth("U1", false);
     built.runtime.start();
     try {
-      const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+      const finished = await settledRun(built.runs, submitted.runId!, 5_000);
       assert.equal(finished.status, "done", JSON.stringify(finished.result));
       assert.equal(turns.length, 1);
       assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
@@ -76,7 +77,7 @@ test("disconnecting a queued personal account fails without invoking any main ha
   await built.config.setPersonalModelAuth("U1", false);
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    const finished = await settledRun(built.runs, submitted.runId!, 5_000);
     assert.equal(finished.status, "failed");
     assert.match(JSON.stringify(finished), /personal AI account is unavailable/);
     assert.equal(turns.length, 0);
@@ -109,7 +110,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
     assert.equal(queued?.request.model, model);
     built.runtime.start();
     try {
-      const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+      const finished = await settledRun(built.runs, submitted.runId!, 5_000);
       assert.equal(finished.status, "done", JSON.stringify(finished.result));
       assert.equal(turns.length, 1);
       assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
@@ -165,7 +166,7 @@ test("a queued web selection cannot fall back to another personal provider after
   await built.userModelCredentials.delete("U1", "openai");
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    const finished = await settledRun(built.runs, submitted.runId!, 5_000);
     assert.equal(finished.status, "failed");
     assert.match(JSON.stringify(finished), /cannot serve this model/);
     assert.equal(turns.length, 0);
@@ -196,7 +197,7 @@ test("web subscription selections use the namespaced model and personal OAuth on
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    const finished = await settledRun(built.runs, submitted.runId!, 5_000);
     assert.equal(finished.status, "done", JSON.stringify(finished.result));
     assert.equal(turns.length, 1);
     assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
@@ -229,7 +230,7 @@ test("a personal Claude subscription login runs on Pi with its OAuth token as th
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    const finished = await settledRun(built.runs, submitted.runId!, 5_000);
     assert.equal(finished.status, "done", JSON.stringify(finished.result));
     assert.equal(turns.length, 1);
     assert.deepEqual(turns[0]!.providerKeys, { anthropic: "sk-ant-oat01-personal" });
@@ -278,7 +279,7 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();
   try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    const finished = await settledRun(built.runs, submitted.runId!, 5_000);
     assert.equal(finished.status, "done", JSON.stringify(finished.result));
     assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
     assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-5.6-sol");

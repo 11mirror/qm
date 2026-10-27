@@ -298,7 +298,6 @@ import {
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import {
   createProcessReaper,
@@ -520,8 +519,6 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
   let inlineShutdown = new AbortController();
-  const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
-    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
   const connectorSecretKey = config.connectorSecretKey;
