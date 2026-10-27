@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { configurePgCaTrust, configurePgTenancy, createPgPool, pgCaOptions } from "./persistence/pg-pool.ts";
-import { errMessage } from "./util/errors.ts";
 import { importTenant, migrateWithBuild } from "./tenants/import.ts";
 import { tenantSecretsKey, upsertTenant } from "./tenants/registry.ts";
 
@@ -209,9 +208,4 @@ async function main(): Promise<void> {
   );
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`[qm:tenant-import] ${errMessage(error)}`);
-  process.exitCode = 1;
-}
+await main();

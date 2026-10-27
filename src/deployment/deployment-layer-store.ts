@@ -19,7 +19,7 @@ import {
 } from "../skills/skill-collision.ts";
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { hasLoneSurrogate } from "../util/text.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
@@ -485,8 +485,10 @@ export function createDeploymentLayerStore(opts: {
             try {
               appeared = await retrying(() => opts.backing.get(CURRENT));
             } catch (error) {
-              console.error(
-                `[deployment-layer] could not recheck the durable layer after seeding — serving the filesystem fallback until refresh: ${errMessage(error)}`,
+              reportFailure(
+                "deployment-layer: recheck after seeding",
+                error,
+                "serving the filesystem fallback until refresh",
               );
             }
             if (appeared) return applyForHydrate(appeared);

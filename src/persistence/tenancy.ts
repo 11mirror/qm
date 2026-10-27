@@ -153,6 +153,10 @@ $qm_tenantize$`,
 
 export async function applyTenancy(pool: Pool): Promise<void> {
   const client = await pool.connect();
+  let broken: Error | undefined;
+  const discardOnFailure = (e: unknown) => {
+    broken = e instanceof Error ? e : new Error(String(e));
+  };
   try {
     await client.query("SELECT pg_advisory_lock(hashtext('qm:tenantize'))");
     try {
@@ -161,12 +165,12 @@ export async function applyTenancy(pool: Pool): Promise<void> {
       await client.query("SELECT qm_tenantize()");
       await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await client.query("ROLLBACK").catch(discardOnFailure);
       throw error;
     } finally {
-      await client.query("SELECT pg_advisory_unlock(hashtext('qm:tenantize'))").catch(() => undefined);
+      await client.query("SELECT pg_advisory_unlock(hashtext('qm:tenantize'))").catch(discardOnFailure);
     }
   } finally {
-    client.release();
+    client.release(broken);
   }
 }

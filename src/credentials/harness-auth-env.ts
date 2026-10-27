@@ -1,5 +1,5 @@
 import type { Keychain } from "./keychain.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 
 /**
  * Resolve a keychain env credential (e.g. a CLAUDE_CODE_OAUTH_TOKEN saved by
@@ -28,7 +28,7 @@ export function keychainHarnessAuthEnv(
       }
       return env;
     } catch (e) {
-      console.error(`[keychain] credential ${credentialId} unreadable: ${errMessage(e)}`);
+      reportFailure("keychain: harness credential unreadable", e, credentialId);
       return {};
     }
   };

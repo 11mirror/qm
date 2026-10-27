@@ -223,7 +223,7 @@ test("connector token refresh failures are logged and never poison the stored to
     "the empty result was not stored, but the failed refresh is visible",
   );
   assert.equal(errors.length, 1);
-  assert.match(errors[0]!, /token refresh failed for api\.github\.com/);
+  assert.match(errors[0]!, /connector token refresh \(api\.github\.com\)/);
 
   const throwing = makeKeychain({
     creds,

@@ -7,7 +7,7 @@ import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } f
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
-import { errMessage, swallow } from "./util/errors.ts";
+import { swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
@@ -213,7 +213,7 @@ export function createRelayAuditSink(
         dropped = 0;
       }
     } catch (e) {
-      console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
+      swallow(`egress-authz: audit relay to ${url} (${buffer.length} buffered, retried next flush)`, e);
     } finally {
       flushing = false;
     }

@@ -49,7 +49,7 @@ export const ANNOTATE_JS = String.raw`
     annotationToggle.dataset.on = on ? "1" : "0";
     annotationToggle.setAttribute("aria-pressed", String(on));
     if (annotationReady) postAnnotationToggle(); else loadAnnotations();
-    if (on) { try { app.contentWindow.focus(); } catch {} }
+    if (on) { try { app.contentWindow.focus(); } catch { /* cross-origin app frame: focus stays on the shell */ } }
   };
   annotationToggle.addEventListener("click", () => setAnnotating(!annotating));
   const annotationShortcut = (e) => {
@@ -59,7 +59,7 @@ export const ANNOTATE_JS = String.raw`
   };
   window.addEventListener("keydown", annotationShortcut);
   const bindAnnotationShortcut = () => {
-    try { app.contentWindow.addEventListener("keydown", annotationShortcut); } catch {}
+    try { app.contentWindow.addEventListener("keydown", annotationShortcut); } catch { /* cross-origin app frame: the shell shortcut still works */ }
   };
   bindAnnotationShortcut();
   window.addEventListener("qm:chat-open", (event) => {

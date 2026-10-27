@@ -24,7 +24,7 @@ import {
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
 
 export interface DeployFile {
   path: string;
@@ -581,7 +581,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             maintained++;
           }
         } catch (e) {
-          console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
+          reportFailure("deploy: maintenance", e, d.name ?? d.id);
         }
       }
       return maintained;

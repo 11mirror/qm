@@ -16,7 +16,7 @@ import {
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 
 /** The longest instruction text a scope may hold. */
 export const MAX_INSTRUCTIONS_CHARS = 100_000;
@@ -359,7 +359,7 @@ export function createConfigStore(
       try {
         listener(id);
       } catch (e) {
-        console.error("[config] channel-header-pin listener failed:", errMessage(e));
+        reportFailure("config: channel-header-pin listener", e);
       }
     }
   };
@@ -369,7 +369,7 @@ export function createConfigStore(
       try {
         listener(id);
       } catch (e) {
-        console.error("[config] runtime-selection listener failed:", errMessage(e));
+        reportFailure("config: runtime-selection listener", e);
       }
     }
   };

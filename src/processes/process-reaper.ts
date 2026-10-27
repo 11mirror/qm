@@ -2,7 +2,7 @@ import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow } from "../util/errors.ts";
 
 export interface ReaperKillHookOptions {
   termGraceMs?: number;
@@ -35,13 +35,7 @@ export function createReaperKillHook(
       }
       await opts
         ?.onExit?.(handle, rec.processId)
-        .catch((e) =>
-          console.error(
-            "[process-reaper] credential writeback failed:",
-            errMessage(e),
-            ...(e instanceof AggregateError ? e.errors.map(errMessage) : []),
-          ),
-        );
+        .catch(reportFailureAs("process-reaper: credential writeback", undefined, rec.processId));
     } finally {
       await sandbox.teardown(handle, { keepWarm: true });
     }
@@ -76,9 +70,7 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (!flipped) continue;
       reaped++;
       if (opts.onReaped)
-        await opts
-          .onReaped(rec)
-          .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
+        await opts.onReaped(rec).catch(reportFailureAs("process-reaper: onReaped hook", undefined, rec.processId));
     }
     return { reaped };
   }

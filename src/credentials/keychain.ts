@@ -5,7 +5,7 @@ import { HOP_BY_HOP } from "../util/http-proxy.ts";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/thread-ref.ts";
 import { hashId } from "../util/crypto.ts";
@@ -677,8 +677,10 @@ export function createKeychain(deps: {
     try {
       return fn(rec);
     } catch (err) {
-      console.error(
-        `[keychain] credential ${rec.id} (${rec.service}, owner ${rec.ownerId}) does not decrypt under the current key — skipped: ${errMessage(err)}`,
+      reportFailure(
+        "keychain: credential does not decrypt under the current key",
+        err,
+        `${rec.id} (${rec.service}, owner ${rec.ownerId}) skipped`,
       );
       return null;
     }
@@ -915,14 +917,10 @@ export function createKeychain(deps: {
         return merged.accessToken;
       } catch (e) {
         const message = storedRefreshError(e);
-        console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
-        try {
-          await markConnectorRefreshFailure(rec, message);
-        } catch (writeErr) {
-          console.error(
-            `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
-          );
-        }
+        reportFailure("keychain: connector token refresh", e, host);
+        await markConnectorRefreshFailure(rec, message).catch(
+          reportFailureAs("keychain: connector token refresh failure metadata write", undefined, host),
+        );
         return null;
       }
     });
@@ -990,7 +988,7 @@ export function createKeychain(deps: {
         });
         if (changed) rewritten++;
       } catch (error) {
-        console.error(`[keychain] could not rewrite target/username credential ${rec.id}:`, errMessage(error));
+        reportFailure("keychain: target/username credential rewrite", error, rec.id);
       }
     }
     return rewritten;

@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   S3Client,
@@ -330,7 +330,7 @@ export function createDirectFileUploads(options: {
           else await service.abort(row.id);
         } catch (error) {
           if (error instanceof FileUploadError && error.status === 410) continue;
-          console.warn("[file uploads] cleanup failed", row.id, errMessage(error));
+          reportFailure("file uploads: expired upload cleanup", error, row.id);
         }
       }
       let keyMarker: string | undefined;
