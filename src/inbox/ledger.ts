@@ -5,14 +5,7 @@ import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThre
 import { isResolved } from "./view.ts";
 import { adapterForItem, conversationKeyOf, inboxMetadataKeys, sourceAdapters } from "./sources/index.ts";
 import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
-import {
-  cols,
-  mapToTableMigration,
-  tableCodec,
-  typedTable,
-  updateRow,
-  type TableSpec,
-} from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -291,8 +284,7 @@ function itemRows(databaseUrl: string) {
     table,
     get: table.get,
     forCrons,
-    update: async (id: string, fn: (item: InboxItem) => InboxItem): Promise<InboxItem | null> =>
-      updateRow(await pool(), CRON_ITEMS, id, fn),
+    update: table.update,
     summaries: async (cronIds: readonly string[]) =>
       summary.rows(
         await q(`SELECT ${summary.columns} FROM cron_items WHERE cron_id = ANY($1::text[]) ORDER BY id`, [
