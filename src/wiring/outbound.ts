@@ -6,7 +6,6 @@ import { createRecentDmPosts } from "../surfaces/recent-dm-posts.ts";
 import { createQueuedPosts } from "../surfaces/queued-posts.ts";
 import { createOutbound, createWebSurface } from "../surfaces/outbound.ts";
 import { scopeId } from "../types.ts";
-import { swallowAs } from "../util/errors.ts";
 import { createSlackSurface } from "../surfaces/slack-surface.ts";
 import { createSurfaceRegistry } from "../surfaces/registry.ts";
 import { createHttpChatSurface } from "../surfaces/http-chat.ts";
@@ -24,27 +23,25 @@ export function buildOutbound(deps: OutboundInputs) {
   const outbound = createOutbound({
     idempotency,
     retries: createQueuedPosts(databaseUrl),
-    afterSend: (post, receipt) => {
+    afterSend: async (post, receipt) => {
       const recipientId = post.destination.target;
       const threadRef = receipt.recipientThreadRef;
       if (post.destination.type !== "principal" || !threadRef) return;
-      void (async () => {
-        const session = await sessions.getOrCreateByThread(
-          threadRef,
-          "dm",
-          scopeId("personal", recipientId),
-          undefined,
-          "slack",
-        );
-        await sessions.addParticipant(session.id, recipientId);
-        await recentDmPosts.remember(threadRef, {
-          key: post.idempotencyKey,
-          text: post.text,
-          at: Date.now(),
-          ...(post.destination.onBehalfOf ? { onBehalfOf: post.destination.onBehalfOf } : {}),
-          ...(post.provenance?.trigger ? { trigger: post.provenance.trigger } : {}),
-        });
-      })().catch(swallowAs("outbound: remember DM post", undefined));
+      const session = await sessions.getOrCreateByThread(
+        threadRef,
+        "dm",
+        scopeId("personal", recipientId),
+        undefined,
+        "slack",
+      );
+      await sessions.addParticipant(session.id, recipientId);
+      await recentDmPosts.remember(threadRef, {
+        key: post.idempotencyKey,
+        text: post.text,
+        at: Date.now(),
+        ...(post.destination.onBehalfOf ? { onBehalfOf: post.destination.onBehalfOf } : {}),
+        ...(post.provenance?.trigger ? { trigger: post.provenance.trigger } : {}),
+      });
     },
   });
   const slackSurface = createSlackSurface();

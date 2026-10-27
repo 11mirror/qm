@@ -41,7 +41,7 @@ const DEFERRED = new Error("deferred to a live turn handler");
 export function createOutbound(opts: {
   idempotency?: Pick<IdempotencyStore, "once">;
   retries?: QueuedPosts;
-  afterSend?: (post: OutboundPost, receipt: PostReceipt) => void;
+  afterSend?: (post: OutboundPost, receipt: PostReceipt) => Promise<void>;
 }): Outbound {
   const senders = new Map<string, SurfaceSender[]>();
   const senderFor = (type: string): SurfaceSender | undefined => senders.get(type)?.at(-1);
@@ -80,7 +80,7 @@ export function createOutbound(opts: {
         if (error === DEFERRED) return { deferred: true };
         throw error;
       }
-      if (posted) opts.afterSend?.(post, receipt);
+      if (posted) await opts.afterSend?.(post, receipt);
       return receipt;
     },
     register(types, sender) {
@@ -104,17 +104,15 @@ export function createOutbound(opts: {
           continue;
         }
         const sender = senderFor(post.destination.type);
+        let receipt: PostReceipt;
         try {
           if (!sender) throw new Error(`no ${post.destination.type} connection is available to post this message`);
-          const receipt =
-            (await sender({ ...post, retry: true, createdAt: post.createdAt ?? queued.firstFailedAt })) ?? {};
+          receipt = (await sender({ ...post, retry: true, createdAt: post.createdAt ?? queued.firstFailedAt })) ?? {};
           if (receipt.deferred) continue;
           await opts.retries.delete(key);
           console.error(
             `[outbound] queued post ${key} went out ${Math.round((now - queued.firstFailedAt) / 1000)}s after it first failed (${queued.lastError})`,
           );
-          opts.afterSend?.(post, receipt);
-          sent += 1;
         } catch (error) {
           if (isPermanent(error)) {
             await opts.retries.delete(key);
@@ -122,7 +120,10 @@ export function createOutbound(opts: {
             continue;
           }
           await opts.retries.put(key, { ...queued, lastError: errMessage(error) });
+          continue;
         }
+        sent += 1;
+        await opts.afterSend?.(post, receipt);
       }
       return sent;
     },

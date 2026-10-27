@@ -108,7 +108,7 @@ export function buildWorkers(deps: WorkersInputs) {
   const composioReturns = createComposioReturns(databaseUrl);
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
-  const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
+  const { reapDeepIdle } = sandbox;
   if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
   every("Composio consent returns", 30 * 60_000, () => composioReturns.deleteExpired(Date.now()), {
     immediate: true,
