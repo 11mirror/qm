@@ -1,10 +1,8 @@
-import { createPostgresSwarmBoard } from "./swarms/swarm-board.ts";
 import { nonDeploymentCredential } from "./credentials/deployment-credentials.ts";
 import { type TeamStore } from "./teams/teams.ts";
 import { type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
@@ -16,19 +14,17 @@ import {
 } from "./runs/background-ownership.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
-import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
-import { createSessionSyscalls } from "./subagents/session-tools.ts";
 import { deliverSubagentMail } from "./subagents/mail.ts";
 import { sessionTreeWorking, stoppableAncestors } from "./subagents/tree.ts";
 import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
 import { type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
-import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
+import { type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
@@ -46,38 +42,20 @@ import { type SkillStore } from "./skills/skill-store.ts";
 import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
+import type { UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type {
-  CommandApprovalGrant,
-  Cron,
-  InboxItem,
-  Monitor,
-  PendingApprovalRecord,
-  Session,
-  SurfaceContextRequest,
-  TurnRequest,
-  Webhook,
-} from "./types.ts";
+import type { CommandApprovalGrant, Session, SurfaceContextRequest, TurnRequest } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
-import { createCronStore, type CronStore } from "./cron/cron-store.ts";
-import { LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
-import { createPostgresCronFireStore } from "./cron/fire-store.ts";
-import {
-  createInboxLedger,
-  inboxConversationKeyMigration,
-  INBOX_ITEM_SOURCE_MIGRATION,
-  type InboxEventSink,
-} from "./inbox/ledger.ts";
-import { type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
+import { type CronStore } from "./cron/cron-store.ts";
+import { type LedgerEventBus } from "./inbox/events.ts";
 import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
@@ -90,9 +68,8 @@ import { type EnvironmentStore } from "./environments/environment-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
-import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createCurrentScopeMembers, rosterAdmits } from "./resolution/scope-membership.ts";
+import { createCurrentScopeMembers } from "./resolution/scope-membership.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -130,9 +107,8 @@ import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts"
 import { type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { type ProviderKeys } from "./harness/pi-harness.ts";
-import { resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
 import type { Harness } from "./harness/harness.ts";
-import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
+import { type SecurityScreener } from "./security/security-screener.ts";
 import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { createControlService } from "./api/control-service.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
@@ -160,14 +136,13 @@ import {
   PROCESS_REAPER_INTERVAL_MS,
   type ProcessReaper,
 } from "./processes/process-reaper.ts";
-import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
+import { type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, MONITOR_POLL_MS, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createApp, type App } from "./api/app.ts";
-import { startSession } from "./api/start-session.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { type SurfaceRegistry } from "./chat-surface/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -221,6 +196,12 @@ import { buildMemory } from "./wiring/memory.ts";
 import { buildOutbound } from "./wiring/outbound.ts";
 
 import { buildDeploy } from "./wiring/deploy.ts";
+
+import { registerLegacyMigrations } from "./wiring/legacy-migrations.ts";
+
+import { buildCrons } from "./wiring/crons.ts";
+
+import { buildSessionSyscalls } from "./wiring/session-syscalls.ts";
 
 export interface Runtime {
   start(): void;
@@ -606,178 +587,38 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     managesArtifactHome,
     serviceCreds,
   });
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
-  const cronOwnerCache = new Map<string, string>();
-  const publishInboxEvent = (event: LedgerEvent): void => {
-    void (async () => {
-      let owner = cronOwnerCache.get(event.cronId);
-      if (owner === undefined) {
-        owner = (await crons.get(event.cronId))?.owner ?? "";
-        cronOwnerCache.set(event.cronId, owner);
-      }
-      if (owner) ledgerEventBus.emit({ ...event, owner });
-    })().catch(swallowAs("inbox: publish ledger event", undefined));
-  };
-  const inboxItems = createInboxLedger(
-    artifactMap<InboxItem>("cron_items", ["cronId", "conversationKey"]),
-    publishInboxEvent,
-  );
-  const recordInboxEvent: InboxEventSink = async (item, event) => {
-    if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
-  };
-  const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
-    staleRunningMs: RUN_MAX_AGE_MS,
-    fires: cronFires,
+  const { securityScreener, approvals, monitors, crons, webhooks, inboxItems, recordInboxEvent } = buildCrons({
+    artifactMap,
+    ledgerEventBus,
+    late,
+    databaseUrl,
+    config,
+    outbound,
+    chatSurfaces,
+    overrides,
   });
-  const crons: CronStore = {
-    ...cronsBase,
-    async create(input) {
-      const cron = await cronsBase.create(input);
-      scheduler.notifyChanged(cron.id);
-      return cron;
-    },
-    async update(id, patch) {
-      const cron = await cronsBase.update(id, patch);
-      scheduler.notifyChanged(id);
-      return cron;
-    },
-    async setEnabled(id, enabled) {
-      await cronsBase.setEnabled(id, enabled);
-      scheduler.notifyChanged(id);
-    },
-    async delete(id) {
-      await cronsBase.delete(id);
-      await inboxItems.deleteByCron(id);
-    },
-  };
-  pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
-  pgArtifactMap.pool.registerMigration(inboxConversationKeyMigration());
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/model_registry/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS model_registry",
-      "DELETE FROM durable_map_versions WHERE tbl = 'model_registry'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "runtime/0002-drop-harness-choice",
-    statements: [
-      "DROP TABLE IF EXISTS approved_harness_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'approved_harness_configs'",
-      `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = (CASE WHEN json ? 'harnessId' AND NOT json ? 'orgRevision' THEN json || '{"orgRevision":0}'::jsonb ELSE json END) - 'harnessId' #- '{cronRuntime,harnessId}' #- '{subagentRuntime,harnessId}' #- '{fallbackRuntime,harnessId}' WHERE json ? 'harnessId' OR (json -> 'cronRuntime') ? 'harnessId' OR (json -> 'subagentRuntime') ? 'harnessId' OR (json -> 'fallbackRuntime') ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('auto_flagger_configs') IS NOT NULL THEN UPDATE auto_flagger_configs SET json = json - 'harnessId' WHERE json ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('crons') IS NOT NULL THEN UPDATE crons SET json = json #- '{runtime,harnessId}' WHERE (json -> 'runtime') ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "runtime/0003-promote-legacy-base-models",
-    statements: [
-      `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = json || '{"orgRevision":0}'::jsonb WHERE json ? 'modelId' AND NOT json ? 'orgRevision'; END IF; END $$`,
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/swarms/0002-drop",
-    statements: [
-      `DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE runs SET status = 'failed', result = json_build_object('status', 'failed', 'sessionId', session_id, 'reason', 'swarms were removed')::text, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, finished_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint WHERE status IN ('pending', 'running') AND (session_id LIKE 'swarm:%' OR request LIKE '%"swarm":%'); END IF; END $$`,
-      "DROP TABLE IF EXISTS swarms",
-      "DELETE FROM durable_map_versions WHERE tbl = 'swarms'",
-      "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
-    ],
-  });
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
-  const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
-    surfaces: chatSurfaces,
-    webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
-  });
-  late.approvals = approvals;
-  let securityScreener = overrides.securityScreener;
-  if (!securityScreener && config.securityScreenProxy) {
-    securityScreener = createSecurityScreenProxy({
-      ...config.securityScreenProxy,
-      timeoutMs: config.securityScreenTimeoutMs,
-    });
-  }
-  const layerEnv = config.layerEnv ?? {};
-  const layerBrokerCache = new Map<string, AwsRoleBroker>();
-  const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
-    const override = overrides.credentialBrokers?.[tool.service];
-    if (override) return override;
-    const roleArn = layerEnv[tool.broker.roleArnEnv];
-    if (!roleArn) return undefined;
-    const region = (tool.broker.regionEnv ? layerEnv[tool.broker.regionEnv] : undefined) ?? tool.broker.region;
-    if (!region) return undefined;
-    const key = JSON.stringify([roleArn, region, tool.broker.sessionActions]);
-    let broker = layerBrokerCache.get(key);
-    if (!broker) {
-      broker = createAwsRoleBroker({ roleArn, region, sessionActions: tool.broker.sessionActions });
-      layerBrokerCache.set(key, broker);
-    }
-    return broker;
-  };
-  const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
-    const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
-    const ref = request.conversation.channelRef;
-    if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
-    const version = await projects.version(ref);
-    const audience = await currentScopeMembers(scope);
-    if (
-      !version ||
-      !audience ||
-      !rosterAdmits(
-        audience.map((p) => p.id),
-        request.actor.id,
-        scope,
-      )
-    )
-      throw new Error("session owner is no longer a member of this project");
-    return {
-      ...request,
-      scopeVersion: version,
-      sessionParticipantIds: audience.map((p) => p.id),
-      conversation: { ...request.conversation, audience, publishMembers: audience },
-    };
-  };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
-  const sessionSyscalls = createSessionSyscalls({
-    mailbox: sessionMailbox,
-    board: createPostgresSwarmBoard(databaseUrl),
-    enabled: async (actorId) =>
-      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
+  registerLegacyMigrations({ pgArtifactMap });
+  const { uiState, sessionSyscalls, layerBrokerFor, sessionMailbox, prepareSessionRequest } = buildSessionSyscalls({
+    config,
+    overrides,
+    resolution,
+    canWriteScope,
+    projects,
+    currentScopeMembers,
+    artifactMap,
+    databaseUrl,
+    featureFlags,
     sessions,
     runs,
-    signals: runSignals,
+    runSignals,
     maxAttempts,
     advisoryLock,
-    prepareRequest: prepareSessionRequest,
-    authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
-    conversations: {
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
-      list: (actorId) => app.listSessions(actorId),
-      start: (actorId, input) => startSession(app, sessions, actorId, input),
-    },
-    async validateRuntime(input, scope) {
-      await resolveRuntimeChoiceDurable(
-        configStore,
-        runtimeOrgScope,
-        scope,
-        fallback,
-        {
-          ...(input.model ? { modelId: input.model } : {}),
-          ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
-          ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
-        },
-        hydrateModelCatalog,
-        "subagent",
-      );
-    },
+    late,
+    configStore,
+    runtimeOrgScope,
+    fallback,
+    hydrateModelCatalog,
   });
-  const uiState = artifactMap<PersistedUiState>("web_ui_state");
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },
@@ -1253,6 +1094,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
     sweepAsks,
   });
+  late.scheduler = scheduler;
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,
