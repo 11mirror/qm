@@ -8,14 +8,11 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
-import { createSweeper } from "../util/sweeper.ts";
-import { errMessage, reportFailureAs, swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
 
-const TICK_LEASE_KEY = "monitor:poller:tick";
 const MAX_EVENT_CHARS = 16_000;
 const MAX_TAIL_CHARS = 4_096;
 const MAX_READ_BYTES = 64 * 1024;
@@ -24,9 +21,8 @@ export const MONITOR_POLL_MS = 10_000;
 const DEFAULT_MIN_FIRE_INTERVAL_MS = 60_000;
 
 export interface MonitorPoller {
+  /** Poll every live monitor once; run by the `monitor:poll` background job every MONITOR_POLL_MS. */
   tick(now?: number): Promise<void>;
-  start(intervalMs: number): void;
-  stop(): Promise<void>;
 }
 
 export interface MonitorPollerDeps {
@@ -44,7 +40,6 @@ export interface MonitorPollerDeps {
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
   maxFiresPerTick?: number;
-  leaderLease: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
@@ -126,14 +121,117 @@ function renderEvent(m: Monitor, output: string, ev: MonitorEvent): { input: str
   };
 }
 
+interface PollContext {
+  deps: MonitorPollerDeps;
+  heartbeatMs: number;
+  minFireIntervalMs: number;
+  fire(
+    m: Monitor,
+    fireKey: string,
+    event: { input: string; securityScreenData: string },
+    withErrorNotice?: boolean,
+  ): Promise<TriggerOutcome>;
+  reportLost(m: Monitor): Promise<void>;
+}
+
+/** Read one monitor's new output and fire the turn it calls for; true when it fired (or gave up on the process). */
+async function pollMonitor(
+  { deps, heartbeatMs, minFireIntervalMs, fire, reportLost }: PollContext,
+  sandbox: ProcessSandbox,
+  handle: SandboxHandle,
+  m: Monitor,
+  t: number,
+): Promise<boolean> {
+  const fresh = await deps.monitors.get(m.id);
+  if (!fresh?.enabled) return false;
+  let read;
+  try {
+    read = await sandbox.readProcess(handle, m.processId, {
+      sinceCursor: m.cursor,
+      maxBytes: MAX_READ_BYTES,
+      waitMs: 0,
+    });
+  } catch (e) {
+    if (e instanceof ProcessSessionGoneError) {
+      await reportLost(m);
+      return true;
+    }
+    await deps.monitors.recordError(m.id, errMessage(e));
+    return false;
+  }
+
+  const exited = read.status.state === "exited";
+  const expired = !exited && t >= m.expiresAt;
+  const raw = (m.tail ?? "") + read.chunks;
+  let events = raw;
+  let tail: string | undefined;
+  if (m.pattern) {
+    if (exited || expired) {
+      events = filterLines(raw, m.pattern);
+    } else {
+      const lastNl = raw.lastIndexOf("\n");
+      tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_TAIL_CHARS) || undefined;
+      events = lastNl === -1 ? "" : filterLines(raw.slice(0, lastNl + 1), m.pattern);
+    }
+  }
+
+  if (!events.trim() && !exited && !expired) {
+    const quietSince = m.lastFiredAt ?? m.createdAt;
+    if (heartbeatMs > 0 && t - quietSince >= heartbeatMs) {
+      const quietMins = Math.max(1, Math.round((t - quietSince) / 60_000));
+      const outcome = await fire(
+        m,
+        `monitor:${m.id}:quiet:${quietSince}`,
+        renderEvent(m, raw.slice(-MAX_TAIL_CHARS), { kind: "quiet", quietMins }),
+      );
+      if (outcome.authzFailed) {
+        await deps.monitors.setEnabled(m.id, false);
+        return true;
+      }
+      if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
+      await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
+      return true;
+    }
+    if (read.cursor !== m.cursor || tail !== m.tail) await deps.monitors.advance(m.id, { cursor: read.cursor, tail });
+    return false;
+  }
+
+  if (!exited && !expired && minFireIntervalMs > 0) {
+    const sinceFire = t - (m.lastFiredAt ?? 0);
+    if (m.lastFiredAt !== undefined && sinceFire < minFireIntervalMs) return false;
+  }
+
+  let ev: MonitorEvent = { kind: "output" };
+  let fireKey = `monitor:${m.id}:${m.cursor}`;
+  if (exited) {
+    ev = { kind: "exited", code: read.status.state === "exited" ? read.status.code : 0 };
+    fireKey = `monitor:${m.id}:exit`;
+  } else if (expired) {
+    ev = { kind: "expired" };
+    fireKey = `monitor:${m.id}:expired`;
+  }
+  const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
+  if (outcome.authzFailed) {
+    await deps.monitors.setEnabled(m.id, false);
+    return true;
+  }
+  if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
+  if (await deps.monitors.get(m.id)) {
+    await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
+    if (exited || expired) await deps.monitors.setEnabled(m.id, false);
+  }
+  if (exited) {
+    await deps.processes.markStatus(m.processId, "exited");
+    await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
+  }
+  return true;
+}
+
 export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
-  let stopped = false;
-  let epoch = 0;
   const now = deps.now ?? (() => Date.now());
   const maxFiresPerTick = deps.maxFiresPerTick ?? 20;
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
-  const leaderLease = deps.leaderLease;
 
   const triggerDeps: TriggerDeps = {
     outbound: deps.outbound,
@@ -176,97 +274,9 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     await deps.monitors.setEnabled(m.id, false);
   }
 
-  async function stillLive(m: Monitor): Promise<boolean> {
-    const fresh = await deps.monitors.get(m.id);
-    return fresh !== null && fresh.enabled;
-  }
+  const ctx: PollContext = { deps, heartbeatMs, minFireIntervalMs, fire, reportLost };
 
-  async function poll(sandbox: ProcessSandbox, handle: SandboxHandle, m: Monitor, t: number): Promise<boolean> {
-    if (!(await stillLive(m))) return false;
-    let read;
-    try {
-      read = await sandbox.readProcess(handle, m.processId, {
-        sinceCursor: m.cursor,
-        maxBytes: MAX_READ_BYTES,
-        waitMs: 0,
-      });
-    } catch (e) {
-      if (e instanceof ProcessSessionGoneError) {
-        await reportLost(m);
-        return true;
-      }
-      await deps.monitors.recordError(m.id, errMessage(e));
-      return false;
-    }
-
-    const exited = read.status.state === "exited";
-    const expired = !exited && t >= m.expiresAt;
-    const raw = (m.tail ?? "") + read.chunks;
-    let events = raw;
-    let tail: string | undefined;
-    if (m.pattern) {
-      if (exited || expired) {
-        events = filterLines(raw, m.pattern);
-      } else {
-        const lastNl = raw.lastIndexOf("\n");
-        tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_TAIL_CHARS) || undefined;
-        events = lastNl === -1 ? "" : filterLines(raw.slice(0, lastNl + 1), m.pattern);
-      }
-    }
-
-    if (!events.trim() && !exited && !expired) {
-      const quietSince = m.lastFiredAt ?? m.createdAt;
-      if (heartbeatMs > 0 && t - quietSince >= heartbeatMs) {
-        const quietMins = Math.max(1, Math.round((t - quietSince) / 60_000));
-        const outcome = await fire(
-          m,
-          `monitor:${m.id}:quiet:${quietSince}`,
-          renderEvent(m, raw.slice(-MAX_TAIL_CHARS), { kind: "quiet", quietMins }),
-        );
-        if (outcome.authzFailed) {
-          await deps.monitors.setEnabled(m.id, false);
-          return true;
-        }
-        if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
-        await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
-        return true;
-      }
-      if (read.cursor !== m.cursor || tail !== m.tail) await deps.monitors.advance(m.id, { cursor: read.cursor, tail });
-      return false;
-    }
-
-    if (!exited && !expired && minFireIntervalMs > 0) {
-      const sinceFire = t - (m.lastFiredAt ?? 0);
-      if (m.lastFiredAt !== undefined && sinceFire < minFireIntervalMs) return false;
-    }
-
-    let ev: MonitorEvent = { kind: "output" };
-    let fireKey = `monitor:${m.id}:${m.cursor}`;
-    if (exited) {
-      ev = { kind: "exited", code: read.status.state === "exited" ? read.status.code : 0 };
-      fireKey = `monitor:${m.id}:exit`;
-    } else if (expired) {
-      ev = { kind: "expired" };
-      fireKey = `monitor:${m.id}:expired`;
-    }
-    const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
-    if (outcome.authzFailed) {
-      await deps.monitors.setEnabled(m.id, false);
-      return true;
-    }
-    if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
-    if (await deps.monitors.get(m.id)) {
-      await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
-      if (exited || expired) await deps.monitors.setEnabled(m.id, false);
-    }
-    if (exited) {
-      await deps.processes.markStatus(m.processId, "exited");
-      await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
-    }
-    return true;
-  }
-
-  async function pollAll(t: number, observed: number): Promise<void> {
+  async function pollAll(t: number): Promise<void> {
     if (!supportsProcessSessions(deps.sandbox)) return;
     const sandbox = deps.sandbox;
     const enabled = (await deps.monitors.enabled()).sort((a, b) => a.createdAt - b.createdAt);
@@ -276,7 +286,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     let fires = 0;
     try {
       for (const m of enabled) {
-        if (stopped || observed !== epoch) break;
+        if (deps.admittedWork?.paused()) break;
         if (fires >= maxFiresPerTick) {
           console.warn(`[monitor] fan-out capped: fired ${fires}/${enabled.length} watched jobs this tick`);
           break;
@@ -301,7 +311,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           handles.set(targetKey, handle);
         }
         try {
-          if (await poll(sandbox, handle, m, t)) fires++;
+          if (await pollMonitor(ctx, sandbox, handle, m, t)) fires++;
         } catch (e) {
           await deps.monitors.recordError(m.id, errMessage(e));
           console.error("%s", `[monitor] poll failed for ${m.id}:`, errMessage(e));
@@ -318,25 +328,8 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
 
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
-    const observed = epoch;
-    const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
-    if (deps.admittedWork) await deps.admittedWork.run(work);
-    else await work();
+    if (deps.admittedWork) await deps.admittedWork.run(() => pollAll(t));
+    else await pollAll(t);
   };
-
-  const sweeper = createSweeper(() => tick().catch(reportFailureAs("monitor: tick", undefined)), 10_000, {
-    label: "monitor",
-  });
-  return {
-    tick,
-    start(intervalMs) {
-      stopped = false;
-      sweeper.start(intervalMs);
-    },
-    stop() {
-      stopped = true;
-      epoch++;
-      return sweeper.stop();
-    },
-  };
+  return { tick };
 }

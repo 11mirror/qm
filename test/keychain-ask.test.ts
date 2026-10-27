@@ -1172,16 +1172,16 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
-    await built.scheduler.tick(Date.now());
+    await built.sweepAsks(Date.now());
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
     assert.ok(!(resolved[0]!.text ?? "").includes(made.ask.id));
 
-    await built.scheduler.tick(Date.now());
+    await built.sweepAsks(Date.now());
     assert.equal(
       (await resumeTurns(session!.id, /did not answer the access request/)).length,
       1,
-      "a second tick refires nothing — notifiedAt + fireKey both hold",
+      "a second sweep refires nothing — notifiedAt + fireKey both hold",
     );
   });
 });

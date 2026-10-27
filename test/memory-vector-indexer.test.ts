@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
-import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
 
@@ -40,7 +39,6 @@ function fixture() {
   };
   const indexer = createMemoryVectorIndexer({
     resolve: async () => ({ store, embedder }),
-    leaderLease: createNoopLeaderLease(),
     now: () => now,
     onError: (error) => {
       failures.push(error);
@@ -129,30 +127,12 @@ test("indexer resets its cursor on model and same-model dimension changes, and w
   assert.equal(f.requests.at(-1)!.afterId, undefined);
 });
 
-test("indexer refuses malformed batches and never writes after losing its leader lease", async () => {
+test("indexer refuses malformed batches", async () => {
   const f = fixture();
   f.embedder.embed = async (texts) => (texts[0] === "bad" ? [[1, 0, 0]] : [[1, 0]]);
   await f.indexer.tick();
   assert.equal(f.writes.length, 0);
   assert.equal(f.failures.length, 1);
-  let lose!: () => void;
-  const lost = new Promise<void>((resolve) => {
-    lose = resolve;
-  });
-  f.embedder.embed = async (texts) => {
-    if (texts[0] === "bad") lose();
-    return texts.map(() => [1, 0]);
-  };
-  const indexer = createMemoryVectorIndexer({
-    resolve: async () => ({ store: f.store, embedder: f.embedder }),
-    leaderLease: { hold: async (_key, fn) => fn(lost) },
-    onError: (error) => {
-      f.failures.push(error);
-    },
-  });
-  await indexer.tick();
-  assert.equal(f.writes.length, 0);
-  assert.equal(f.failures.length, 2);
 });
 
 test("fact embeddings stay bounded and dimension probes are cached for ten minutes", async () => {

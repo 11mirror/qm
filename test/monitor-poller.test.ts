@@ -5,7 +5,6 @@ import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
@@ -98,7 +97,6 @@ function fakeSandbox() {
 async function harness(opts?: {
   reply?: string;
   result?: TurnResult;
-  leaderLease?: LeaderLease;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
   onRun?: () => Promise<void>;
@@ -123,7 +121,6 @@ async function harness(opts?: {
     idempotency: createIdempotencyStore(testMap()),
     identity,
     run,
-    ...(opts?.leaderLease ? { leaderLease: opts.leaderLease } : {}),
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
     ...(opts?.minFireIntervalMs !== undefined ? { minFireIntervalMs: opts.minFireIntervalMs } : {}),
   });
@@ -336,19 +333,6 @@ test("a wake whose turn didn't complete is reported to the destination, not sile
   assert.equal(after?.cursor, "line\n".length);
   assert.equal(after?.enabled, true);
   assert.match(after?.lastError ?? "", /rate limit/);
-});
-
-test("a non-leader instance does not poll", async () => {
-  const lease: LeaderLease = {
-    async hold() {
-      return null;
-    },
-  };
-  const h = await harness({ leaderLease: lease });
-  await h.arm();
-  h.append("p-1", "line\n");
-  await h.poller.tick();
-  assert.equal(h.calls.length, 0);
 });
 
 test("one sandbox handle per scope per tick, torn down keep-warm afterwards", async () => {
