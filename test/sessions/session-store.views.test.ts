@@ -12,11 +12,12 @@ import {
   type SessionStore,
   ITEM_STRING_BUDGET,
 } from "../../src/sessions/session-store.ts";
-import { scopeId, type TurnRequest } from "../../src/types.ts";
+import { scopeId } from "../../src/types.ts";
 import type { BuiltApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { listenLocal } from "../support/listen-local.ts";
+import { dmFor } from "../support/dm-turn.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-view-bounds-"));
@@ -24,15 +25,7 @@ function freshApp() {
 }
 
 const actor = { externalId: "U1" };
-function dm(text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
+const dm = dmFor(actor);
 
 test("a tailTurns view is bounded yet reports the same earlierItems as the full read", async () => {
   const { app, runtime } = freshApp();

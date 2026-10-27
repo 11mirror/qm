@@ -15,6 +15,7 @@ import { testConfig } from "../support/test-config.ts";
 import { recallText } from "../support/recall-text.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { dmFor } from "../support/dm-turn.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
@@ -26,16 +27,7 @@ function freshApp(overrides: Partial<Config> = {}) {
 }
 
 const actor = { externalId: "U1" };
-
-function dm(text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
+const dm = dmFor(actor);
 
 function channel(text: string): TurnRequest {
   return {

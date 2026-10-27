@@ -4,9 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import pg from "pg";
 import { importTenant, migrateWithBuild } from "../../src/tenants/import.ts";
 import { upsertTenant } from "../../src/tenants/registry.ts";
+import { withClient } from "../support/pg-client.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -14,16 +14,6 @@ function databaseNamed(suffix: string): string {
   const url = new URL(databaseUrl!);
   url.pathname = `${url.pathname}_${suffix}`;
   return url.toString();
-}
-
-async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>): Promise<T> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
 }
 
 async function createDatabase(url: string): Promise<void> {

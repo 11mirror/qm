@@ -15,6 +15,7 @@ import { countTokens } from "../../src/util/tokens.ts";
 import { stableCwd } from "../../src/harness/pi-turn-session.ts";
 import { createGoalRecord, type GoalRecord } from "../../src/harness/goal.ts";
 import { ProviderTurnError } from "../../src/core/turn-error.ts";
+import { sse, textReplyEvents } from "../support/anthropic-sse.ts";
 
 const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company-account" } }),
@@ -103,33 +104,6 @@ test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer 
   assert.equal(headers[index]!.get("x-api-key"), null);
   assert.match(headers[index]!.get("anthropic-beta") ?? "", /oauth-2025-04-20/);
 });
-
-function sse(events: Array<Record<string, unknown>>): Response {
-  const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
-  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
-function textReplyEvents(text: string): Array<Record<string, unknown>> {
-  return [
-    {
-      type: "message_start",
-      message: {
-        id: "msg_1",
-        type: "message",
-        role: "assistant",
-        content: [],
-        model: "claude-test",
-        stop_reason: null,
-        usage: { input_tokens: 5, output_tokens: 0 },
-      },
-    },
-    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
-    { type: "content_block_stop", index: 0 },
-    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
-    { type: "message_stop" },
-  ];
-}
 
 const scope = "personal:tester" as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";

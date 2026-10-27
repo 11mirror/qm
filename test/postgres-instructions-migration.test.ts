@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import pg from "pg";
+import { migrate } from "./support/migrations.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the instructions migration test";
-const exec = promisify(execFile);
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
   const parent = new pg.Pool({ connectionString: databaseUrl });
@@ -24,20 +22,6 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
     await parent.end();
   }
 }
-
-const migrate = (url: string) =>
-  exec(process.execPath, ["src/migrate-main.ts"], {
-    cwd: new URL("..", import.meta.url),
-    timeout: 120_000,
-    env: {
-      PATH: process.env.PATH,
-      NODE_ENV: "test",
-      DATABASE_URL: url,
-      SANDBOX_BACKEND: "local",
-      ORG_ID: "o",
-      CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
-    },
-  });
 
 const legacy = async (admin: pg.Pool, tenant: string | null) => {
   const tenantColumn = tenant ? "tenant_id UUID NOT NULL, " : "";

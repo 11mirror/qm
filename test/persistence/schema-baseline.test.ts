@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
 import { tenantFor, withTenant } from "../../src/tenant.ts";
 import { ensureTenantQueues } from "../../src/turns/absurd-schema.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
+import { withClient } from "../support/pg-client.ts";
 
 // An upgraded database must end up with exactly the schema a fresh one gets from the baseline plus later migrations.
 // The fixtures are pg_dump snapshots (schema, plus the ledger and tenant rows) of databases built and booted by real
@@ -102,16 +102,6 @@ function urlFor(name: string): string {
   const url = new URL(base);
   url.pathname = `/${name}`;
   return url.toString();
-}
-
-async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>): Promise<T> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
 }
 
 async function createDatabase(fixture?: string): Promise<string> {

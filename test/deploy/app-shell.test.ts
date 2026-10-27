@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../../src/api/app.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
@@ -21,6 +21,7 @@ import { createPostgresDirectoryStore } from "../../src/directory/postgres-direc
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap, testDeployBackings } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
+import { httpGet } from "../support/http-get.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -55,22 +56,6 @@ function appServingUpstream(upstreamPort: number) {
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };
-}
-
-function httpGet(
-  port: number,
-  path: string,
-  headers: Record<string, string>,
-): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
-  return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "localhost", port, path, method: "GET", headers }, (res) => {
-      let body = "";
-      res.on("data", (c) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
-    });
-    req.on("error", reject);
-    req.end();
-  });
 }
 
 async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServer>[1]) {

@@ -2,7 +2,6 @@ import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../../src/deploy/porter-deploy-provider.ts";
@@ -15,6 +14,7 @@ import { scopeId } from "../../src/types.ts";
 import { installFakePorter, type FakePorter } from "../support/fake-porter.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testMap } from "../support/test-database.ts";
+import { freePort } from "../support/free-port.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -32,15 +32,6 @@ let provider: DeployProvider;
 let appPort: number;
 let reported: { category: string; code: string; message: string; scopeLabel: string }[] = [];
 let reportedErrors: unknown[] = [];
-
-const freePort = (): Promise<number> =>
-  new Promise((resolve) => {
-    const s = createServer();
-    s.listen(0, () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
-  });
 
 const deployment = (id: string, name?: string): Deployment => ({
   id,

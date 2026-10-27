@@ -21,6 +21,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
+import { pushStatus } from "../support/deploy-git.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -306,21 +307,6 @@ const gitUrl = async (base: string, id: string, actor: string): Promise<string> 
   if (r.status !== 200) assert.fail(`git URL failed (${r.status}): ${await r.text()}`);
   return ((await r.json()) as { url: string }).url;
 };
-
-async function pushStatus(url: string): Promise<number> {
-  const parsed = new URL(url);
-  const authorization = `Basic ${Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString("base64")}`;
-  parsed.username = "";
-  parsed.password = "";
-  parsed.pathname += "/git-receive-pack";
-  return (
-    await fetch(parsed, {
-      method: "POST",
-      headers: { authorization, "content-type": "application/x-git-receive-pack-request" },
-      body: Buffer.alloc(0),
-    })
-  ).status;
-}
 
 async function createdinManageSetup() {
   const f = await fixture();

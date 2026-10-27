@@ -5,6 +5,7 @@ import { createGoalRecord, type GoalRecord } from "../../src/harness/goal.ts";
 import { createPiHarness } from "../../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../../src/harness/harness.ts";
 import { stepMessage, storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
+import { sse, textReplyEvents } from "../support/anthropic-sse.ts";
 
 function cancelTurn(
   sessionId: string,
@@ -126,33 +127,6 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
     globalThis.fetch = realFetch;
   }
 });
-
-function sse(events: Array<Record<string, unknown>>): Response {
-  const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
-  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
-function textReplyEvents(text: string): Array<Record<string, unknown>> {
-  return [
-    {
-      type: "message_start",
-      message: {
-        id: "msg_1",
-        type: "message",
-        role: "assistant",
-        content: [],
-        model: "claude-test",
-        stop_reason: null,
-        usage: { input_tokens: 5, output_tokens: 0 },
-      },
-    },
-    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
-    { type: "content_block_stop", index: 0 },
-    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
-    { type: "message_stop" },
-  ];
-}
 
 test("a cancel landing after the turn completed takes the normal exit, not the stopped hijack", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
