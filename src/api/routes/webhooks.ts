@@ -1,7 +1,7 @@
 import type { Webhook } from "../../types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
-import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
+import { canAdministerWebhook, editWebhookTask } from "../control-webhooks.ts";
 import { fail, readRawBody, refusal } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type BaseCtx, ok, reply, type Route, type RouteResult } from "./route.ts";

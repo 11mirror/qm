@@ -198,14 +198,7 @@ function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
   };
 }
 
-export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
-  const lease = deps.leaderLease;
-  const orgScope: ScopeId = tenant().orgScope;
-  const terminalWaiters = new Map<string, Set<() => void>>();
-  deps.runs.onTerminal((run) => {
-    for (const wake of terminalWaiters.get(run.id) ?? []) wake();
-  });
-
+function surfaceSettingsMethods(deps: SlackCoreClientDeps, lease: LeaderLease, orgScope: ScopeId) {
   return {
     decideDeploymentAccess: (value, actor, approve) =>
       decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
@@ -250,7 +243,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     onChannelHeaderPinChanged(listener) {
       deps.config.onChannelHeaderPinChanged((scope) => listener(scope));
     },
+  } satisfies Partial<SlackCoreClient>;
+}
 
+function surfaceDataMethods(deps: SlackCoreClientDeps) {
+  return {
     async stageBlob(source) {
       const info = await deps.blobTransfer.put(source, { maxBytes: MAX_BLOB_BYTES });
       return { blobId: info.blobId, sizeBytes: info.sizeBytes };
@@ -284,7 +281,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!events.length) return;
       await deps.app.ingestSurfaceEvents(events, "slack", self);
     },
+  } satisfies Partial<SlackCoreClient>;
+}
 
+function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<() => void>>) {
+  return {
     async privateContinuationSource(runId) {
       const run = await deps.runs.get(runId);
       if (
@@ -392,7 +393,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const found = await deps.runs.setDeliveryState(runId, null, { editRef });
       if (!found) throw new Error(`run ${runId} not found`);
     },
+  } satisfies Partial<SlackCoreClient>;
+}
 
+function directoryAndContextMethods(deps: SlackCoreClientDeps, lease: LeaderLease) {
+  return {
     async getApproval(requestId) {
       const record = await deps.app.getApproval(requestId);
       if (!record) return null;
@@ -490,5 +495,21 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           .catch(swallowAs("slack-core-client: fail context request", undefined));
       });
     },
+  } satisfies Partial<SlackCoreClient>;
+}
+
+export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
+  const lease = deps.leaderLease;
+  const orgScope: ScopeId = tenant().orgScope;
+  const terminalWaiters = new Map<string, Set<() => void>>();
+  deps.runs.onTerminal((run) => {
+    for (const wake of terminalWaiters.get(run.id) ?? []) wake();
+  });
+
+  return {
+    ...surfaceSettingsMethods(deps, lease, orgScope),
+    ...surfaceDataMethods(deps),
+    ...runMethods(deps, terminalWaiters),
+    ...directoryAndContextMethods(deps, lease),
   };
 }

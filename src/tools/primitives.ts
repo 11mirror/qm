@@ -25,9 +25,8 @@ import type {
   CronRunsResult,
   WebhookCreateRequest,
   WebhookCreateResult,
-  ControlOk,
-  ControlErr,
 } from "../api/control-service.ts";
+import type { ControlOk, ControlErr } from "../api/control-result.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../types.ts";
 import type { VisibleCron } from "../api/app.ts";

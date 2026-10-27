@@ -7,7 +7,8 @@ import {
   samePersonInDirectory,
   samePersonMatcher,
 } from "../../src/directory/person.ts";
-import { canAdministerCron, canAdministerWebhook } from "../../src/api/control-service.ts";
+import { canAdministerCron } from "../../src/api/control-service.ts";
+import { canAdministerWebhook } from "../../src/api/control-webhooks.ts";
 import type { Cron, Webhook } from "../../src/types.ts";
 import { scopeId } from "../../src/types.ts";
 import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";

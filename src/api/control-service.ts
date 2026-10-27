@@ -30,6 +30,8 @@ import {
 import { actsAsScope, parseScopeId, type Permission } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+import { fail, type ControlErr, type ControlOk, type ControlOp } from "./control-result.ts";
+import { webhookMethods } from "./control-webhooks.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -116,10 +118,6 @@ export const CRON_PATCH_NOTHING_TO_CHANGE =
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
-export type ControlOk<T> = { ok: true } & T;
-export type ControlErr<C extends string> = { ok: false; code: C; message: string };
-type ControlOp<T, C extends string = never> = Promise<ControlOk<T> | ControlErr<"not_found" | "forbidden" | C>>;
-
 export interface ControlService {
   createCron(req: CronCreateRequest, claims: CapabilityClaims): Promise<CronCreateResult>;
   listCrons(claims: CapabilityClaims): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
@@ -170,11 +168,6 @@ export interface ControlService {
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
 
-const fail = <C extends string>(code: C, message: string): ControlErr<C> => ({ ok: false, code, message });
-
-const unknownDestination = () =>
-  fail("unknown_destination", "destinationKey is not one of the destinations available for this conversation");
-
 async function ownsCron(
   app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
   cron: Cron,
@@ -198,32 +191,6 @@ export async function canAdministerCron(
   if (await ownsCron(app, cron, actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
-}
-
-export async function editWebhookTask(
-  app: App,
-  id: string,
-  action: string,
-  principalId: string,
-): ControlOp<{ webhook: Webhook }, "bad_request"> {
-  if (!action.trim()) return fail("bad_request", "task cannot be empty");
-  const webhook = await app.getWebhook(id);
-  if (!webhook) return fail("not_found", `no webhook ${id}`);
-  if (!(await canAdministerWebhook(app, webhook, principalId))) return fail("forbidden", "not your webhook");
-  const updated = await app.updateWebhook(id, { action });
-  return updated ? { ok: true, webhook: updated } : fail("not_found", `no webhook ${id}`);
-}
-
-export async function canAdministerWebhook(
-  app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  webhook: Pick<Webhook, "ownerScopeId" | "owner">,
-  actorId: string,
-  isActor?: (id: string) => Promise<boolean>,
-): Promise<boolean> {
-  if (await app.membershipControlsScope(webhook.ownerScopeId)) {
-    return app.managesScope(actorId, webhook.ownerScopeId);
-  }
-  return isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actorId);
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: { timezone?: unknown }): CronSchedule {
@@ -347,7 +314,7 @@ function reachFailureCode(
   return "bad_request";
 }
 
-export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
+function cronGuards(app: App, admin?: AdminService) {
   const notifyEdit = (cron: Cron, cap: CapabilityClaims, changeSummary: string[], detail?: CronEditDetail) =>
     notifyOwnerOfCronEdit(app, { cron, editorId: cap.actorId, changeSummary, ...(detail ? { detail } : {}) });
 
@@ -369,7 +336,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
     return refusal && fail("forbidden", refusal.message);
   };
+  return { notifyEdit, administeredCron, unattendedRefusal };
+}
 
+function cronCreateMethods(app: App, admin?: AdminService): Pick<ControlService, "createCron"> {
   return {
     async createCron(req, capability): Promise<CronCreateResult> {
       const invalidGrants = invalidUnattendedGrants(req.unattendedGrants);
@@ -456,7 +426,19 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return fail("cron_create_failed", errMessage(e));
       }
     },
+  };
+}
 
+function cronMethods(
+  app: App,
+  scheduler: Scheduler | undefined,
+  admin: AdminService | undefined,
+  { notifyEdit, administeredCron, unattendedRefusal }: ReturnType<typeof cronGuards>,
+): Pick<
+  ControlService,
+  "listCrons" | "getCron" | "getCronRuns" | "patchCron" | "noteCron" | "deleteCron" | "setCronEnabled" | "runCron"
+> {
+  return {
     async listCrons(capability) {
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
@@ -581,58 +563,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       return { ok: true, fireKey: result.fireKey };
     },
+  };
+}
 
-    async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
-      if (capability.triggered || !livePersonCapability(capability))
-        return fail("forbidden", "webhook registration requires a live turn started by its owner");
-      const resolved = resolveCapabilityDestination(capability, req.destinationKey);
-      if (!resolved.ok) return unknownDestination();
-      try {
-        const webhook = await app.createWebhook({
-          action: req.action,
-          verification: req.verification,
-          owner: capability.actorId,
-          createdBy: capability.actorId,
-          ownerScopeId: capability.scopeId,
-          ...(req.filters?.length ? { filters: req.filters } : {}),
-          ...(resolved.destination ? { destination: resolved.destination } : {}),
-        });
-        const incomingPath = `/v1/webhooks/incoming/${webhook.id}`;
-        const base = publicBase ?? "";
-        return {
-          ok: true,
-          webhook,
-          url: base ? `${base}${incomingPath}` : incomingPath,
-          ...(webhook.verification.secret ? { secret: webhook.verification.secret } : {}),
-        };
-      } catch (e) {
-        return fail("webhook_create_failed", errMessage(e));
-      }
-    },
-
-    async listWebhooks(capability) {
-      const all = await app.listWebhooks();
-      const isActor = await app.personMatcher(capability.actorId);
-      const allowed = await Promise.all(
-        all.map((webhook) => canAdministerWebhook(app, webhook, capability.actorId, isActor)),
-      );
-      return all.filter((_webhook, index) => allowed[index]);
-    },
-
-    async disableWebhook(id, capability) {
-      const webhook = await app.getWebhook(id);
-      if (!webhook) return fail("not_found", `no webhook ${id}`);
-      if (!(await canAdministerWebhook(app, webhook, capability.actorId))) return fail("forbidden", "not your webhook");
-      await app.setWebhookEnabled(id, false);
-      return { ok: true };
-    },
-
-    async updateWebhook(id, patch, capability) {
-      if (capability.triggered || !livePersonCapability(capability))
-        return fail("forbidden", "editing a webhook requires a live turn started by its owner");
-      return editWebhookTask(app, id, patch.action, capability.actorId);
-    },
-
+function instructionMethods(app: App): Pick<ControlService, "readInstructions" | "writeInstructions"> {
+  return {
     readInstructions(capability) {
       const { effectiveInstructions, instructions, instructionsVersion } = app.getInstructions(capability.scopeId);
       return { effectiveInstructions, instructions, instructionsVersion };
@@ -652,7 +587,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return fail("instructions_update_failed", errMessage(e));
       }
     },
+  };
+}
 
+function shareMethods(app: App): Pick<ControlService, "shareArtifact"> {
+  return {
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const home = await app.getArtifactHome(req.type, req.id);
@@ -762,5 +701,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return fail(e instanceof AdminError ? "forbidden" : "share_failed", errMessage(e));
       }
     },
+  };
+}
+
+export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
+  return {
+    ...cronCreateMethods(app, admin),
+    ...cronMethods(app, scheduler, admin, cronGuards(app, admin)),
+    ...webhookMethods(app),
+    ...instructionMethods(app),
+    ...shareMethods(app),
   };
 }

@@ -3,7 +3,7 @@ import { visibleSkillRows } from "../skills/skill-store.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { cronVisibility } from "./app-messaging.ts";
-import { canAdministerWebhook } from "./control-service.ts";
+import { canAdministerWebhook } from "./control-webhooks.ts";
 import {
   resourceHit,
   type ResourceCandidate,

@@ -128,3 +128,6 @@ export async function discoverScopes(
   }
   return labels;
 }
+
+export const orgOnly = (scope: string, label: string): { error: string } | null =>
+  parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
