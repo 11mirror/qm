@@ -6,7 +6,6 @@ import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from ".
 import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
-import { createSweeper } from "./util/sweeper.ts";
 import { swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
@@ -218,7 +217,8 @@ export function createRelayAuditSink(
       flushing = false;
     }
   }
-  const sweeper = createSweeper(flush, RELAY_FLUSH_MS, { label: "egress-audit-relay" });
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let flushed: Promise<void> = Promise.resolve();
   return {
     record(r) {
       if (buffer.length >= RELAY_MAX_BUFFER) {
@@ -229,8 +229,15 @@ export function createRelayAuditSink(
       buffer.push(rest);
     },
     flush,
-    start: () => sweeper.start(),
-    stop: () => sweeper.stop(),
+    start() {
+      timer ??= setInterval(() => void (flushed = flush()), RELAY_FLUSH_MS);
+      timer.unref();
+    },
+    async stop() {
+      clearInterval(timer);
+      timer = undefined;
+      await flushed;
+    },
   };
 }
 

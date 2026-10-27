@@ -28,7 +28,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   whether the fix belongs in the shared helper, the store interface, or the base
   module instead. Check for an existing helper before writing a new one-liner.
   The helper homes: `src/util/errors.ts` (errMessage/swallow), `src/util/async.ts`
-  (sleep, createKeyedQueue), `src/util/sweeper.ts` (periodic loops),
+  (sleep, createKeyedQueue), `src/jobs/job-worker.ts` `every` (periodic work),
   `src/sandbox/process-poll.ts` (process polling/liveness), `src/memory/notebook.ts`
   (memory line grammar). Plugins are separate packages and keep their own local
   copies rather than importing core code — the one exception is the shared

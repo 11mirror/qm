@@ -1,5 +1,5 @@
 import type { InstanceRegistry } from "./instance-registry.ts";
-import { createSweeper, type Sweeper } from "../util/sweeper.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 export interface DrainController {
   start(): void;
@@ -11,22 +11,30 @@ const DRAIN_SWEEP_MS = 10_000;
 
 export function createDrainController(opts: { registry: InstanceRegistry; sweepMs?: number }): DrainController {
   let superseded = false;
-  const sweeper: Sweeper = createSweeper(
-    async () => {
-      const wasSuperseded = superseded;
-      superseded = await opts.registry.beat();
-      if (superseded !== wasSuperseded) {
-        console.error(
-          `[drain] ${superseded ? "newer build is live — draining: no new run claims, finishing in-flight turns" : "newer build gone — resuming run claims"}`,
-        );
-      }
-    },
-    opts.sweepMs ?? DRAIN_SWEEP_MS,
-    { label: "deploy-drain", immediate: true },
-  );
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let beating: Promise<void> = Promise.resolve();
+  const beat = async () => {
+    const wasSuperseded = superseded;
+    superseded = await opts.registry.beat();
+    if (superseded !== wasSuperseded) {
+      console.error(
+        `[drain] ${superseded ? "newer build is live — draining: no new run claims, finishing in-flight turns" : "newer build gone — resuming run claims"}`,
+      );
+    }
+  };
+  const tick = () => void (beating = beat().catch(reportFailureAs("deploy-drain", undefined)));
   return {
-    start: () => sweeper.start(),
-    stop: () => sweeper.stop(),
+    start() {
+      if (timer) return;
+      timer = setInterval(tick, opts.sweepMs ?? DRAIN_SWEEP_MS);
+      timer.unref();
+      tick();
+    },
+    async stop() {
+      clearInterval(timer);
+      timer = undefined;
+      await beating;
+    },
     canClaim: () => !superseded,
   };
 }
