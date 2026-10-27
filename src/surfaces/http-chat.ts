@@ -108,6 +108,27 @@ function permanent(message: string): Error {
   return Object.assign(new Error(message), { permanent: true });
 }
 
+function surfaceUser(internalDomains: ReadonlySet<string>, u: z.output<typeof userSchema>): SurfaceUser {
+  const internal = u.guest !== true && internalDomains.has(u.email?.trim().toLowerCase().split("@")[1] ?? "");
+  return {
+    id: u.id,
+    ...(u.email ? { email: u.email } : {}),
+    ...(u.name ? { displayName: u.name } : {}),
+    ...(internal ? {} : { guest: true }),
+    ...(u.bot ? { bot: true } : {}),
+    ...(u.timezone ? { timezone: u.timezone } : {}),
+  };
+}
+
+function httpChatPrincipal(config: HttpChatConfig, u: SurfaceUser): ActorAssertion {
+  return {
+    externalId: u.email?.trim() || `${config.surface}:${config.account}:user:${u.id}`,
+    ...(u.guest ? { isExternalGuest: true } : {}),
+    ...(u.bot ? { isBot: true } : {}),
+    ...(u.displayName ? { displayName: u.displayName } : {}),
+  };
+}
+
 export function createHttpChatSurface(
   config: HttpChatConfig,
   opts: { fetch?: typeof fetch; now?: () => number; mirror?: (events: IngestEvent[]) => Promise<unknown> } = {},
@@ -124,28 +145,8 @@ export function createHttpChatSurface(
   };
 
   const internalDomains = new Set(config.internalEmailDomains);
-  const internal = (u: z.output<typeof userSchema>): boolean =>
-    u.guest !== true && internalDomains.has(u.email?.trim().toLowerCase().split("@")[1] ?? "");
-
-  function user(u: z.output<typeof userSchema>): SurfaceUser {
-    return {
-      id: u.id,
-      ...(u.email ? { email: u.email } : {}),
-      ...(u.name ? { displayName: u.name } : {}),
-      ...(internal(u) ? {} : { guest: true }),
-      ...(u.bot ? { bot: true } : {}),
-      ...(u.timezone ? { timezone: u.timezone } : {}),
-    };
-  }
-
-  function principalFor(u: SurfaceUser): ActorAssertion {
-    return {
-      externalId: u.email?.trim() || `${config.surface}:${config.account}:user:${u.id}`,
-      ...(u.guest ? { isExternalGuest: true } : {}),
-      ...(u.bot ? { isBot: true } : {}),
-      ...(u.displayName ? { displayName: u.displayName } : {}),
-    };
-  }
+  const user = (u: z.output<typeof userSchema>): SurfaceUser => surfaceUser(internalDomains, u);
+  const principalFor = (u: SurfaceUser): ActorAssertion => httpChatPrincipal(config, u);
 
   function normalizeEvent(event: z.output<typeof messageEventSchema>): InboundMessage {
     return {

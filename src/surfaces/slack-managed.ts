@@ -13,6 +13,34 @@ import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
 import { httpFailure, swallow, swallowAs } from "../util/errors.ts";
 
+interface ManagedInstallation {
+  installId: string;
+  installedAt: number;
+  appId: string;
+  teamId: string;
+  botToken: string;
+  teamName?: string;
+}
+
+function isInstallation(
+  input: Record<string, unknown>,
+  appId: string | undefined,
+): input is Record<string, unknown> & ManagedInstallation {
+  return (
+    typeof input.installedAt === "number" &&
+    Number.isSafeInteger(input.installedAt) &&
+    input.installedAt > 0 &&
+    typeof input.appId === "string" &&
+    /^A[A-Z0-9]+$/.test(input.appId) &&
+    !(!!appId && input.appId !== appId) &&
+    typeof input.teamId === "string" &&
+    /^T[A-Z0-9]+$/.test(input.teamId) &&
+    typeof input.botToken === "string" &&
+    input.botToken.startsWith("xoxb-") &&
+    (input.teamName === undefined || typeof input.teamName === "string")
+  );
+}
+
 export function createManagedSlack(opts: {
   serviceUrl: string;
   token: string;
@@ -95,21 +123,7 @@ export function createManagedSlack(opts: {
           void opts.reconcile?.().catch(swallowAs("slack-managed: reconcile installation", undefined));
           return sendJson(res, 200, { ok: true });
         }
-        if (
-          typeof input.installedAt !== "number" ||
-          !Number.isSafeInteger(input.installedAt) ||
-          input.installedAt <= 0 ||
-          typeof input.appId !== "string" ||
-          !/^A[A-Z0-9]+$/.test(input.appId) ||
-          (!!opts.appId && input.appId !== opts.appId) ||
-          typeof input.teamId !== "string" ||
-          !/^T[A-Z0-9]+$/.test(input.teamId) ||
-          typeof input.botToken !== "string" ||
-          !input.botToken.startsWith("xoxb-") ||
-          (input.teamName !== undefined && typeof input.teamName !== "string")
-        ) {
-          return sendJson(res, 400, { error: "invalid_installation" });
-        }
+        if (!isInstallation(input, opts.appId)) return sendJson(res, 400, { error: "invalid_installation" });
         const accepted = await opts.store.setManaged({
           botToken: input.botToken,
           appId: input.appId,
