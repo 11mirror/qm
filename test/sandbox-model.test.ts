@@ -203,6 +203,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `dm:U1:${thread}` },
+      origin: { kind: "direct" },
       text,
     });
   assert.equal((await turn("!run echo models", "run")).status, "ok");
@@ -230,6 +231,7 @@ test("deployments without a gateway leave the sandbox gateway variables unset", 
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "dm:U1:no-gateway" },
+    origin: { kind: "direct" },
     text: "!run echo none",
   });
   for (const name of ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_TOKEN"]) assert.equal(captured?.env?.[name], undefined, name);

@@ -22,7 +22,7 @@ test("a replayed request keeps every request field and drops run-only state", ()
   assert.deepEqual(replayed.clientTools, [{ name: "pick", description: "pick one", parameters: {} }]);
   assert.equal(replayed.desktopClientId, "desk-1");
   assert.deepEqual(replayed.unattendedGrants, ["admin.audit.read"]);
-  assert.equal(replayed.triggered, true);
+  assert.deepEqual(replayed.origin, { kind: "automation" });
   assert.equal(replayed.approval, undefined);
   assert.equal("runId" in replayed, false);
   assert.equal("runLeaseToken" in replayed, false);
