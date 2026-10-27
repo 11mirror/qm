@@ -1,9 +1,9 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
+import type { SandboxResourceStore } from "./sandbox-resource-store.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
 
 export interface SandboxResource {
@@ -91,8 +91,7 @@ export async function accessConversationSandbox(
 }
 
 export function createSandboxResources(opts: {
-  records: DurableMap<SandboxResource>;
-  defaults: DurableMap<SandboxDefault>;
+  store: SandboxResourceStore;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
@@ -115,7 +114,7 @@ export function createSandboxResources(opts: {
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
   const get = async (id: string): Promise<SandboxResource> => {
-    const record = await opts.records.get(id);
+    const record = await opts.store.get(id);
     if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
   };
@@ -148,25 +147,14 @@ export function createSandboxResources(opts: {
     get,
     use,
     async hold(id, runId) {
-      await opts.records.update(id, (current) =>
-        current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
-      );
+      await opts.store.addHolder(id, runId);
     },
     async release(id, runId, isLive) {
-      const record = runId
-        ? await opts.records.update(id, (current) => ({
-            ...current,
-            holders: (current.holders ?? []).filter((holder) => holder !== runId),
-          }))
-        : await opts.records.get(id);
+      const record = runId ? await opts.store.dropHolders(id, [runId]) : await opts.store.get(id);
       const others = record?.holders ?? [];
       const live = await Promise.all(others.map(isLive));
       const ended = others.filter((_, index) => !live[index]);
-      if (ended.length)
-        await opts.records.update(id, (current) => ({
-          ...current,
-          holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
-        }));
+      if (ended.length) await opts.store.dropHolders(id, ended);
       return live.includes(true);
     },
     async retire(actorId, id) {
@@ -176,19 +164,19 @@ export function createSandboxResources(opts: {
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
           const current = await get(id);
           if (current.state === "retired" && !current.cleanupPending && !current.error) return;
-          const selected = await opts.defaults.get(current.ownerScopeId);
+          const selected = await opts.store.defaultFor(current.ownerScopeId);
           if (selected?.sandboxId === id)
             throw new Error("unset or change this scope's default before retiring its computer");
           await opts.beforeRetire?.(current);
           const backend = opts.backends[current.backend];
           if (!backend?.destroyScope) throw new Error(`sandbox retirement unavailable: ${current.backend}`);
           const retiring = { ...current, state: "retired" as const, cleanupPending: true };
-          await opts.records.put(id, retiring);
+          await opts.store.put(retiring);
           try {
             await backend.destroyScope(current.backingScopeId);
-            await opts.records.put(id, { ...retiring, cleanupPending: false, error: undefined });
+            await opts.store.put({ ...retiring, cleanupPending: false, error: undefined });
           } catch (error) {
-            await opts.records.put(id, { ...retiring, error: String(error) });
+            await opts.store.put({ ...retiring, error: String(error) });
             throw error;
           }
         }),
@@ -215,14 +203,14 @@ export function createSandboxResources(opts: {
       await use(id, () => backend.restartComputer!(record.backingScopeId), true);
     },
     async resolve(scopeId) {
-      const route = await opts.defaults.get(scopeId);
+      const route = await opts.store.defaultFor(scopeId);
       return route?.sandboxId ? get(route.sandboxId) : null;
     },
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
-      const route = await opts.defaults.get(scopeId);
+      const route = await opts.store.defaultFor(scopeId);
       const sandboxes: SandboxResource[] = [];
-      const records = await opts.records.all();
+      const records = await opts.store.list();
       const allowed = new Set<string>();
       await Promise.all(
         [...new Set(records.map((record) => record.ownerScopeId))].map(async (owner) => {
@@ -262,14 +250,14 @@ export function createSandboxResources(opts: {
         state: "provisioning",
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
-        const existing = await opts.records.get(id);
+        const existing = await opts.store.get(id);
         if (existing) {
           if (existing.ownerScopeId !== scopeId || existing.createdBy !== actorId || existing.backend !== backend)
             throw new Error("sandbox reservation ownership mismatch");
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        await opts.records.put(id, record);
+        await opts.store.put(record);
         const sandbox = opts.backends[record.backend]!;
         try {
           const handle = await sandbox.provision(
@@ -282,10 +270,10 @@ export function createSandboxResources(opts: {
             machineId: handle.id,
             spec: sandbox.profile.spec,
           };
-          await opts.records.put(id, ready);
+          await opts.store.put(ready);
           return ready;
         } catch (error) {
-          await opts.records.put(id, {
+          await opts.store.put({
             ...record,
             state: "failed",
             error: error instanceof Error ? error.message : String(error),
@@ -307,7 +295,7 @@ export function createSandboxResources(opts: {
             );
         }
         await opts.beforeDefaultChange?.(scopeId);
-        await opts.defaults.put(scopeId, { sandboxId: id });
+        await opts.store.setDefault(scopeId, id);
       });
     },
   };

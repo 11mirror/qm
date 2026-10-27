@@ -1,5 +1,4 @@
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
 import {
   E2bCommandLostError,
@@ -17,6 +16,7 @@ import {
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
 import type { BackendSandbox } from "./sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 
 const HOME_DIR = "/home/user";
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -27,9 +27,11 @@ export interface StoredE2bSandbox extends StoredSandboxRecord {
   sandboxId?: string;
 }
 
+export const E2B_BODIES = sandboxBodiesMigration("e2b_sandbox_bodies", { sandboxId: { type: "text" } });
+
 export interface E2bSandboxOptions extends SandboxShared {
   client: E2bClient;
-  store: DurableMap<StoredE2bSandbox>;
+  store: SandboxBodies<StoredE2bSandbox>;
 }
 
 export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
@@ -71,7 +73,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
     const session = await launch(name, false, checkpointId);
     if (checkpointId) restoredFrom.set(name, checkpointId);
-    await store.merge(scope, { sandboxId: session.sandboxId });
+    await store.update(scope, { sandboxId: session.sandboxId });
     return session;
   }
 

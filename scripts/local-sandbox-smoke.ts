@@ -4,10 +4,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLocalSandbox, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
+import { createLocalSandbox, LOCAL_BODIES, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { scopeId } from "../src/types.ts";
 
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "local-smoke-ws-")));
   const sandbox = createLocalSandbox(ws, {
     advisoryLock: createNoopAdvisoryLock(),
-    store: createPostgresMapFactory(process.env.DATABASE_URL!).map(`smoke_local_sandbox_${Date.now()}`),
+    store: createSandboxBodies(process.env.DATABASE_URL!, LOCAL_BODIES),
   });
   const scope = scopeId("personal", `smoke-${Date.now()}`);
   const layers = [{ scopeId: scope, mountPath: "", mode: "rw" as const }];

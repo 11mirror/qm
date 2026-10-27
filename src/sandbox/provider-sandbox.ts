@@ -1,7 +1,6 @@
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -16,6 +15,7 @@ import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts"
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import type { SandboxBodies } from "./sandbox-bodies.ts";
 import type {
   AgentComputerProfile,
   BackendSandbox,
@@ -120,7 +120,7 @@ export function createProviderSandbox(
   workspace: WorkspaceStore,
   driver: SandboxDriver,
   shared: SandboxShared,
-  store: DurableMap<StoredSandboxRecord>,
+  store: SandboxBodies<StoredSandboxRecord>,
 ): ProviderSandbox {
   const { backend, homeDir } = driver;
   const prefix = shared.namePrefix ?? "qm";
@@ -156,16 +156,11 @@ export function createProviderSandbox(
     shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
   };
 
-  async function merge(scope: string, patch: Partial<StoredSandboxRecord>): Promise<void> {
-    await store.putIfAbsent(scope, {});
-    await store.merge(scope, patch);
-  }
-
   async function captureCheckpoint(scope: string, name: string): Promise<void> {
     const previous = (await store.get(scope))?.checkpointId;
     try {
       const checkpointId = await driver.checkpoints!.capture(name);
-      await merge(scope, {
+      await store.upsert(scope, {
         checkpointId,
         checkpointAtMs: Date.now(),
         lastSnapshotMs: Date.now(),
@@ -177,7 +172,7 @@ export function createProviderSandbox(
           ?.drop?.(name, previous)
           .catch(swallowAs(`${backend}-sandbox: drop checkpoint`, undefined));
     } catch (e) {
-      await merge(scope, { snapshotError: errMessage(e) });
+      await store.upsert(scope, { snapshotError: errMessage(e) });
       throw e;
     }
   }
@@ -211,7 +206,7 @@ export function createProviderSandbox(
       if (existing.state === "parked") await driver.resume(name);
       return false;
     }
-    await merge(scope, { initializationPending: true });
+    await store.upsert(scope, { initializationPending: true });
     onStatus?.("Preparing the sandbox…");
     let created = false;
     let booted = false;
@@ -230,7 +225,7 @@ export function createProviderSandbox(
           ? (await driver.checkpoints.restore(name, checkpointId), true)
           : false;
       const hydrated = restored || retained;
-      await merge(scope, {
+      await store.upsert(scope, {
         initializationPending: undefined,
         ...(hydrated ? { homeDirty: false } : {}),
         ...(created && machineBound ? { checkpointId: undefined, checkpointAtMs: undefined } : {}),
@@ -377,7 +372,7 @@ export function createProviderSandbox(
     if (!handle.scratch && opts?.destroy && driver.checkpoints?.machineBound) {
       const scope = await requireScope(handle.id);
       await base.provisionQueue(scope, () =>
-        lock(scope, () => merge(scope, { checkpointId: undefined, checkpointAtMs: undefined })),
+        lock(scope, () => store.upsert(scope, { checkpointId: undefined, checkpointAtMs: undefined })),
       );
     }
     if (!handle.scratch && !opts?.destroy) {
@@ -386,7 +381,7 @@ export function createProviderSandbox(
         lock(scope, async () => {
           const stored = await store.get(scope);
           if (stored?.initializationPending) return;
-          if (!opts?.homeUnchanged) await merge(scope, { homeDirty: true });
+          if (!opts?.homeUnchanged) await store.upsert(scope, { homeDirty: true });
           if (residents.has(handle.id)) return;
           if (driver.checkpoints && checkpointDue(stored, opts)) {
             await captureCheckpoint(scope, handle.id).catch((e) =>

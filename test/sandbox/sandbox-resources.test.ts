@@ -3,16 +3,13 @@ import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-} from "../../src/sandbox/sandbox-resources.ts";
+import { createSandboxResources } from "../../src/sandbox/sandbox-resources.ts";
+import { createSandboxResourceStore } from "../../src/sandbox/sandbox-resource-store.ts";
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
 import type { BackendSandbox, Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 const processStubs = {
   async startProcess() {
@@ -32,8 +29,7 @@ const processStubs = {
 };
 
 function fixture(configure?: (backend: Sandbox) => void) {
-  const records = testMap<SandboxResource>();
-  const defaults = testMap<SandboxDefault>();
+  const store = createSandboxResourceStore(testDatabaseUrl());
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const backend: BackendSandbox = {
@@ -76,8 +72,7 @@ function fixture(configure?: (backend: Sandbox) => void) {
   configure?.(backend);
   const lock = testAdvisoryLock();
   const options = {
-    records,
-    defaults,
+    store,
     backends: { local: backend },
     defaultBackend: "local",
     lock,
@@ -87,7 +82,7 @@ function fixture(configure?: (backend: Sandbox) => void) {
   const resources = createSandboxResources(options);
   const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
-  return { records, defaults, resources, router, provisioned, layers, backend, options };
+  return { store, resources, router, provisioned, layers, backend, options };
 }
 
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
@@ -146,10 +141,10 @@ test("an explicit sandbox id must name a real sandbox, and creating one leaves t
 });
 
 test("unset defaults remain unset durably while explicit execution remains usable", async () => {
-  const { resources, router, layers, defaults } = fixture();
+  const { resources, router, layers, store } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", null);
-  assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
+  assert.equal((await store.defaultFor("personal:alice"))?.sandboxId, null);
   await assert.rejects(
     router.provision(layers),
     /sandbox list, create, set_default, then retry before reporting blocked/,
@@ -317,7 +312,7 @@ test("every handle operation rejects retirement before reaching a backend that c
 
 for (const fail of [false, true])
   test(`retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`, async () => {
-    const { resources, records, backend } = fixture();
+    const { resources, store, backend } = fixture();
     const provision = backend.provision;
     let release!: () => void;
     let entered!: () => void;
@@ -345,17 +340,17 @@ for (const fail of [false, true])
       },
     );
     await started;
-    const record = (await records.all())[0]!;
+    const record = (await store.list())[0]!;
     let retired = false;
     const retiring = resources.retire("alice", record.id).then(() => {
       retired = true;
     });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(retired, false);
-    assert.equal((await records.get(record.id))?.state, "provisioning");
+    assert.equal((await store.get(record.id))?.state, "provisioning");
     release();
     await Promise.all([completed, retiring]);
-    assert.equal((await records.get(record.id))?.state, "retired");
+    assert.equal((await store.get(record.id))?.state, "retired");
     await assert.rejects(
       resources.use(record.id, async () => {}),
       /retired/,
@@ -363,27 +358,27 @@ for (const fail of [false, true])
   });
 
 test("unsupported retirement is hidden and refuses before inventory mutation", async () => {
-  const { resources, records } = fixture((backend) => {
+  const { resources, store } = fixture((backend) => {
     delete backend.destroyScope;
   });
   const record = await resources.create("alice", "personal:alice", "local");
-  const before = await records.get(record.id);
+  const before = await store.get(record.id);
   const list = await resources.list("alice", "personal:alice");
   assert.ok(!list.providers[0]!.actions.includes("retire"));
   assert.ok(!list.sandboxes.find((r) => r.id === record.id)!.availableActions!.includes("retire"));
   await assert.rejects(resources.retire("alice", record.id), /retirement unavailable/);
-  assert.deepEqual(await records.get(record.id), before);
+  assert.deepEqual(await store.get(record.id), before);
 });
 
 test("failed retirement stays unroutable and retries cleanup by backing scope after a core restart", async () => {
-  const { resources, backend, records, options } = fixture();
+  const { resources, backend, store, options } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   backend.destroyScope = async () => {
     throw new Error("provider unavailable");
   };
   await assert.rejects(resources.retire("alice", record.id), /provider unavailable/);
-  assert.equal((await records.get(record.id))?.cleanupPending, true);
-  assert.equal((await records.get(record.id))?.state, "retired");
+  assert.equal((await store.get(record.id))?.cleanupPending, true);
+  assert.equal((await store.get(record.id))?.state, "retired");
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
   assert.deepEqual(
     (await resources.list("alice", "personal:alice")).sandboxes.find((r) => r.id === record.id)?.availableActions,
@@ -399,25 +394,25 @@ test("failed retirement stays unroutable and retries cleanup by backing scope af
   const restarted = createSandboxResources(options);
   await restarted.retire("alice", record.id);
   assert.deepEqual(destroyed, [record.backingScopeId]);
-  assert.equal((await records.get(record.id))?.cleanupPending, false);
-  assert.equal((await records.get(record.id))?.error, undefined);
+  assert.equal((await store.get(record.id))?.cleanupPending, false);
+  assert.equal((await store.get(record.id))?.error, undefined);
 });
 
 test("a pending retirement without an error remains retryable after a crash", async () => {
-  const { resources, records, options, backend } = fixture();
+  const { resources, store, options, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
-  await records.put(record.id, { ...record, state: "retired", cleanupPending: true });
+  await store.put({ ...record, state: "retired", cleanupPending: true });
   let destroyed = false;
   backend.destroyScope = async () => {
     destroyed = true;
   };
   await createSandboxResources(options).retire("alice", record.id);
   assert.equal(destroyed, true);
-  assert.equal((await records.get(record.id))?.cleanupPending, false);
+  assert.equal((await store.get(record.id))?.cleanupPending, false);
 });
 
 test("retirement preserves core live-work and owning-scope guards before direct deletion", async () => {
-  const { resources, records, options, backend } = fixture();
+  const { resources, store, options, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   let destroyed = false;
   backend.destroyScope = async () => {
@@ -432,7 +427,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
   await assert.rejects(guarded.retire("mallory", record.id), /permission/);
   await assert.rejects(guarded.retire("alice", record.id), /live background work/);
   assert.equal(destroyed, false);
-  assert.equal((await records.get(record.id))?.state, "ready");
+  assert.equal((await store.get(record.id))?.state, "ready");
 });
 
 test("retirement waits for background startup to commit its live registry row", async () => {
