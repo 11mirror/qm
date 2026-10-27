@@ -29,7 +29,8 @@ import {
 } from "./timeline";
 import { formatBytes } from "./ui";
 import { icon } from "./icons";
-import { onSessionDragStart, endSessionDrag, sessionsState } from "./sessions";
+import { sessionsState } from "./sessions";
+import { onSessionDragStart, endSessionDrag } from "./session-rows";
 
 const GENERIC_DETAIL_KEYS =
   "command path query pattern glob url name action file filename database filter repository resource title".split(" ");
