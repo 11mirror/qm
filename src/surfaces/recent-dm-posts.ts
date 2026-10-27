@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
+import { mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify } from "../util/text.ts";
 
 export interface RecentDmPost {
@@ -22,10 +22,11 @@ const RECENT_DM_POSTS: TableSpec = {
 export const RECENT_DM_POSTS_MIGRATION = mapToTableMigration("surfaces/recent-dm-posts/0001-typed", RECENT_DM_POSTS);
 
 export function createRecentDmPosts(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [RECENT_DM_POSTS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [RECENT_DM_POSTS_MIGRATION]);
+  const table = typedTable<{ posts: RecentDmPost[] }>(pg, RECENT_DM_POSTS);
   return {
     async remember(threadRef: string, post: RecentDmPost): Promise<void> {
-      await q(
+      await pg.q(
         `INSERT INTO recent_dm_posts (id, posts) VALUES ($1, jsonb_build_array($2::jsonb))
          ON CONFLICT (${tenantCols("id")}) DO UPDATE SET posts = (
            SELECT jsonb_agg(p ORDER BY n) FROM (
@@ -35,10 +36,7 @@ export function createRecentDmPosts(databaseUrl: string) {
         [threadRef, jsonbStringify(post), post.key],
       );
     },
-    async posts(threadRef: string): Promise<RecentDmPost[]> {
-      const rows = await q(`SELECT posts FROM recent_dm_posts WHERE id = $1`, [threadRef]);
-      return (rows[0]?.posts as RecentDmPost[] | undefined) ?? [];
-    },
+    posts: async (threadRef: string) => (await table.get(threadRef))?.posts ?? [],
   };
 }
 

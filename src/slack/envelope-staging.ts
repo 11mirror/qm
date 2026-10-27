@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { AckGate } from "./deferred-ack.ts";
@@ -34,25 +34,17 @@ const STAGED_ENVELOPES: TableSpec = {
 
 export const STAGED_ENVELOPES_MIGRATION = mapToTableMigration("slack/staged-envelopes/0001-typed", STAGED_ENVELOPES);
 
-const codec = tableCodec<StagedEnvelope>(STAGED_ENVELOPES);
-
 export function createStagedEnvelopes(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [STAGED_ENVELOPES_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [STAGED_ENVELOPES_MIGRATION]);
+  const { insert, delete: remove, codec } = typedTable<StagedEnvelope>(pg, STAGED_ENVELOPES);
   return {
-    async stage(key: string, envelope: StagedEnvelope): Promise<void> {
-      await q(
-        `INSERT INTO slack_staged_envelopes (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
-        codec.values(key, envelope),
-      );
-    },
-    async delete(key: string): Promise<void> {
-      await q(`DELETE FROM slack_staged_envelopes WHERE id = $1`, [key]);
-    },
+    stage: insert,
+    delete: remove,
     async deleteReceivedBefore(at: number): Promise<void> {
-      await q(`DELETE FROM slack_staged_envelopes WHERE received_at < $1`, [at]);
+      await pg.q(`DELETE FROM slack_staged_envelopes WHERE received_at < $1`, [at]);
     },
     async replayable(opts: { account: string; receivedBefore: number; at: number; maxAttempts: number }) {
-      const rows = await q(
+      const rows = await pg.q(
         `SELECT ${codec.columns} FROM slack_staged_envelopes
          WHERE account = $1 AND received_at <= $2 AND coalesce(claimed_until, 0) <= $3 AND attempts < $4
          ORDER BY received_at, id`,
@@ -61,7 +53,7 @@ export function createStagedEnvelopes(databaseUrl: string) {
       return rows.map((r): [string, StagedEnvelope] => [String(r.id), codec.row(r)]);
     },
     async claim(key: string, at: number, claimedUntil: number): Promise<StagedEnvelope | null> {
-      const rows = await q(
+      const rows = await pg.q(
         `UPDATE slack_staged_envelopes SET attempts = attempts + 1, claimed_until = $3
          WHERE id = $1 AND coalesce(claimed_until, 0) <= $2 RETURNING ${codec.columns}`,
         [key, at, claimedUntil],

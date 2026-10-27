@@ -1,7 +1,7 @@
 import type { Readable } from "node:stream";
 import { collectBytes } from "../util/bytes.ts";
 import { errMessage } from "../util/errors.ts";
-import { uiStateId, UI_STATE_MAX_BYTES, type PersistedUiState, type UiStateStore } from "./ui-state.ts";
+import { uiStateId, UI_STATE_MAX_BYTES, type UiStateStore } from "./ui-state.ts";
 
 export interface UiCanvas {
   html: string;
@@ -75,13 +75,11 @@ export async function writeUiCanvas(
   patch: UiCanvasPatch | null,
 ): Promise<UiCanvas | null> {
   const id = uiStateId(principalId, uiCanvasKey(target));
-  let written: unknown = null;
-  const apply = (rec: PersistedUiState | null): PersistedUiState => {
-    written = nextCanvas(rec?.value ?? null, patch);
-    return { value: written, updatedAt: Date.now() };
-  };
-  await store.modify(id, apply);
-  return asCanvas(written);
+  const written = await store.modify(id, (rec) => ({
+    value: nextCanvas(rec?.value ?? null, patch),
+    updatedAt: Date.now(),
+  }));
+  return asCanvas(written?.value);
 }
 
 export async function installSharedCanvas(

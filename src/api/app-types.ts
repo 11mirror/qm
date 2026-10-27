@@ -462,7 +462,7 @@ export interface App {
   }): Promise<void>;
   createContextRequest(source: string, query: SurfaceContextQuery): Promise<SurfaceContextRequest>;
   getContextRequest(id: string): Promise<SurfaceContextRequest | null>;
-  deleteContextRequest(id: string): Promise<void>;
+  deleteContextRequest(id: string): Promise<unknown>;
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;

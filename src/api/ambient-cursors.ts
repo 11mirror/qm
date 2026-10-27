@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface AmbientCursor {
   lastJudgedTs: string;
@@ -14,22 +14,10 @@ const AMBIENT_CURSORS: TableSpec = {
 
 export const AMBIENT_CURSORS_MIGRATION = mapToTableMigration("api/ambient-cursors/0001-typed", AMBIENT_CURSORS);
 
-const codec = tableCodec<AmbientCursor>(AMBIENT_CURSORS);
-
 export function createAmbientCursors(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [AMBIENT_CURSORS_MIGRATION]);
-  return {
-    async get(key: string): Promise<AmbientCursor | null> {
-      return codec.rows(await q(`SELECT ${codec.columns} FROM ambient_cursors WHERE id = $1`, [key]))[0] ?? null;
-    },
-    async put(key: string, cursor: AmbientCursor): Promise<void> {
-      await q(
-        `INSERT INTO ambient_cursors (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(key, cursor),
-      );
-    },
-  };
+  const pg = createPgPool(databaseUrl, [AMBIENT_CURSORS_MIGRATION]);
+  const { get, put } = typedTable<AmbientCursor>(pg, AMBIENT_CURSORS);
+  return { get, put };
 }
 
 export type AmbientCursors = ReturnType<typeof createAmbientCursors>;
