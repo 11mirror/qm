@@ -4,6 +4,11 @@ export function isSubagentThreadRef(threadRef: string): boolean {
   return threadRef.startsWith(SUBAGENT_THREAD_PREFIX);
 }
 
+export function isWebInboxThreadRef(threadRef: string): boolean {
+  const [surface, ...rest] = threadRef.split(":");
+  return surface === "web" && rest.length >= 2 && rest.at(-1) === "inbox" && rest.slice(0, -1).join(":") !== "";
+}
+
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
 const ORIGINS: ReadonlySet<string> = new Set(["cron", "webhook", "monitor", "loop", "swarm"]);

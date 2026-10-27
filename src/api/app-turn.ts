@@ -29,6 +29,7 @@ import {
   warmRuntimeCatalog,
   withCurrentProjectRoster,
 } from "./app-turn-pipeline.ts";
+import { isWebInboxThreadRef } from "../sessions/thread-ref.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 
@@ -309,7 +310,7 @@ function signalMethods(deps: AppDeps, h: AppHelpers) {
       if (
         signal.kind === "steer" &&
         surfaceHas(run.request.surface, "sidebar") &&
-        /^web:.+:inbox$/.test(run.request.conversation.threadRef) &&
+        isWebInboxThreadRef(run.request.conversation.threadRef) &&
         !signal.request
       )
         return { accepted: false, reason: "conversation_mismatch" };
