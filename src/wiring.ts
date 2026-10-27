@@ -141,7 +141,6 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -293,7 +292,6 @@ import {
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
-import { createPeriodicJobs } from "./util/periodic-jobs.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import {
   createProcessReaper,
@@ -447,6 +445,8 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
+  /** Resolve expired keychain asks now (the `cron:asks` job runs it every few seconds). */
+  sweepAsks(now: number): Promise<void>;
   inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
   jobs: JobWorker;
@@ -746,8 +746,6 @@ export function buildApp(
     databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
-    leaderLease,
-    createSweeper,
   });
   const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
@@ -1419,7 +1417,6 @@ export function buildApp(
     deployDir: join(config.dataDir, "deployments"),
     auditLog,
     acl,
-    leaderLease,
     advisoryLock,
     canReadScope,
     canWriteScope,
@@ -1933,6 +1930,7 @@ export function buildApp(
     outbound,
     resume: (ask, grant) => askResolution(ask, grant),
   });
+  const slackHandledEvents = artifactMap<HandledEvent>("slack_handled_events");
   const slackCore = createSlackCoreClient({
     identity,
     memory,
@@ -1946,7 +1944,7 @@ export function buildApp(
     app,
     leaderLease,
     stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
-    handledEvents: artifactMap<HandledEvent>("slack_handled_events"),
+    handledEvents: slackHandledEvents,
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -2105,9 +2103,8 @@ export function buildApp(
     advisoryLock,
     crons,
     ...triggerDeps,
-    leaderLease,
-    jobQueue: cronJobQueue(jobs, config.cronFireConcurrency),
-    sweepAsks,
+    jobs,
+    fireConcurrency: config.cronFireConcurrency,
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
@@ -2157,7 +2154,6 @@ export function buildApp(
           processes,
           sandbox,
           ...triggerDeps,
-          leaderLease,
           onProcessExit: finishCredentials,
         })
       : null;
@@ -2165,7 +2161,6 @@ export function buildApp(
     packs: skillPacks,
     fetcher: skillFetcher,
     reconcile: (id) => app.syncSkillPack(id),
-    leaderLease,
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
@@ -2231,131 +2226,75 @@ export function buildApp(
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
-        intervalMs: PROCESS_REAPER_INTERVAL_MS,
         ...(supportsProcessSessions(sandbox)
           ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
           : {}),
-        leaderLease,
       })
     : null;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
-  const periodicJobs = createPeriodicJobs(
-    [
-      {
-        name: "monitor:retention:sweep",
-        everyMs: 24 * 60 * 60_000,
-        lock: "leader",
-        immediate: true,
-        run: () => monitors.deleteDefunct(Date.now()),
-      },
-      {
-        name: "memory:capture-sweep",
-        everyMs: 60_000,
-        lock: "leader",
-        run: () => memoryStrategy.sweep(),
-      },
-      {
-        name: "spend:refresh",
-        everyMs: 60_000,
-        lock: "leader",
-        immediate: true,
-        run: () => sessions.refreshSpendRollup(),
-      },
-      {
-        name: "llm-capture:retention",
-        everyMs: 5 * 60_000,
-        lock: "leader",
-        run: async (lost) => {
-          let leaseLost = false;
-          void lost.then(() => (leaseLost = true));
-          const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-            deadline: Date.now() + 30_000,
-            stop: () => leaseLost,
-          });
-          if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-        },
-      },
-      { name: "blob-transfer", everyMs: 30 * 60_000, lock: "none", run: () => blobTransfer.sweep(6 * 60 * 60_000) },
-      {
-        name: "Composio consent returns",
-        everyMs: 30 * 60_000,
-        lock: "none",
-        immediate: true,
-        run: async () => {
-          for (const [id, entry] of await composioReturns.entries())
-            if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-        },
-      },
-      { name: "deploy-maintenance", everyMs: 5 * 60_000, lock: "none", run: () => app.maintainDeployments() },
-      ...(reapDeepIdle
-        ? [
-            {
-              name: "sandbox:deep-idle-reaper",
-              everyMs: 5 * 60_000,
-              lock: "leader",
-              immediate: true,
-              run: () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs),
-            } as const,
-          ]
-        : []),
-      {
-        name: "orphaned-signals",
-        everyMs: config.reaperIntervalMs,
-        lock: "none",
-        run: async () => {
-          for (const runId of await runSignals.pendingRunIds()) {
-            const run = await runs.get(runId);
-            if (!run || isTerminal(run.status))
-              await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-          }
-        },
-      },
-      {
-        name: "run-signals:prune",
-        everyMs: 60 * 60_000,
-        lock: "none",
-        run: () => runSignals.prune(7 * 24 * 60 * 60_000),
-      },
-      { name: "session-return-sweep", everyMs: 1_000, lock: "advisory", immediate: true, run: sweepSessionReturns },
-      { name: "run-result-sweep", everyMs: 60_000, lock: "advisory", run: () => runResultRecovery.sweep() },
-      { name: "queued-post-retry", everyMs: 30_000, lock: "advisory", run: () => outbound.retryQueued() },
-      {
-        name: "approval-deliveries",
-        everyMs: 30_000,
-        lock: "advisory",
-        immediate: true,
-        run: () => approvals.deliverPending(),
-      },
-      ...(turnLedger
-        ? [
-            {
-              name: "turns:pointer-repair",
-              everyMs: 60_000,
-              lock: "leader",
-              run: () => repairStaleTurns({ ledger: turnLedger, sessions, errors }),
-            } as const,
-            { name: "turns:cleanup", everyMs: 60 * 60_000, lock: "leader", run: () => turnLedger.cleanup() } as const,
-          ]
-        : []),
-    ],
-    { createSweeper, leaderLease, advisoryLock },
-  );
+  const every = (name: string, everyMs: number, fn: () => unknown) =>
+    jobs.every(name, everyMs, () => admittedWork.run(fn));
+  every("cron:repair", 60_000, () => scheduler.repair());
+  every("cron:asks", 5_000, () => sweepAsks(Date.now()));
+  every("cron:stranded-fires", 10 * 60_000, async () => {
+    const swept = await crons.sweepStrandedFires(Date.now());
+    if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
+  });
+  every("cron:fire-gc", 6 * 60 * 60_000, async () => {
+    const pruned = await crons.pruneFires(Date.now());
+    if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
+  });
+  if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
+  if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
+  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep());
+  every("memory-vector-index", 30_000, () => semanticMemory.index());
+  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));
+  every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"));
+  every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
+  every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));
+  const handledEventCutoff = () => Date.now() - 24 * 60 * 60_000;
+  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBelow("at", handledEventCutoff()));
+  every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()));
+  every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
+  every("spend:refresh", 60_000, () => sessions.refreshSpendRollup());
+  every("llm-capture:retention", 5 * 60_000, async () => {
+    const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
+      deadline: Date.now() + 30_000,
+    });
+    if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
+  });
+  every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
+  every("Composio consent returns", 30 * 60_000, async () => {
+    for (const [id, entry] of await composioReturns.entries())
+      if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+  });
+  every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments());
+  if (reapDeepIdle)
+    every("sandbox:deep-idle-reaper", 5 * 60_000, () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs));
+  every("orphaned-signals", config.reaperIntervalMs, async () => {
+    for (const runId of await runSignals.pendingRunIds()) {
+      const run = await runs.get(runId);
+      if (!run || isTerminal(run.status))
+        await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+    }
+  });
+  every("run-signals:prune", 60 * 60_000, () => runSignals.prune(7 * 24 * 60 * 60_000));
+  every("session-return-sweep", 1_000, sweepSessionReturns);
+  every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
+  every("queued-post-retry", 30_000, () => outbound.retryQueued());
+  every("approval-deliveries", 30_000, () => approvals.deliverPending());
+  if (turnLedger) {
+    every("turns:pointer-repair", 60_000, () => repairStaleTurns({ ledger: turnLedger, sessions, errors }));
+    every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
+  }
   // Started together once background work is admitted, and stopped together.
-  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [
-    reaper,
-    ...(processReaper ? [processReaper] : []),
-    semanticMemory,
-    ...(fileUploads ? [fileUploads] : []),
-    wakeSweep,
-    periodicJobs,
-  ];
+  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [reaper, wakeSweep];
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
-  let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
   function startBackground(): void {
     if (backgroundRunning) return;
@@ -2376,13 +2315,10 @@ export function buildApp(
     turnRunner?.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      monitorPoller?.start(MONITOR_POLL_MS);
-      void monitorDrained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(MONITOR_POLL_MS);
-        })
-        .catch(swallowAs("wiring: monitor resume failed", undefined));
       for (const service of periodicServices) service.start();
+      void jobs
+        .start()
+        .catch(reportFailureAs("jobs: start (background jobs will not run from this process)", undefined));
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2393,16 +2329,16 @@ export function buildApp(
     backgroundRunning = false;
     const previous = backgroundStopping;
     backgroundGeneration++;
-    const monitorStopping = monitorPoller?.stop();
-    monitorDrained = monitorStopping ?? Promise.resolve();
+    void semanticMemory.stop();
     const stopping = [
       ...periodicServices.map((service) => service.stop()),
+      jobs.stopClaims(),
       preemptionSweeper.stop(),
       turnRunner?.stopClaims(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
+    const draining = Promise.all([previous, backgroundClaimsStopping])
       .then(() => {})
       .finally(() => {
         if (backgroundStopping === draining) backgroundStopping = null;
@@ -2446,7 +2382,7 @@ export function buildApp(
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([admittedWork.drained(), jobs.stop(), ...workers.map((worker) => worker.drained())]);
     },
     releaseInFlightRuns,
     async stop() {
@@ -2456,6 +2392,7 @@ export function buildApp(
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
+        withTimeout(() => jobs.stop(), config.shutdownDrainMs, "background job drain"),
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
@@ -2523,6 +2460,7 @@ export function buildApp(
     skillFetcher,
     auditLog,
     scheduler,
+    sweepAsks,
     inbox,
     webhookReceiver,
     jobs,

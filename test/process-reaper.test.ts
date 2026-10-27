@@ -2,14 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type ProcessRecord, createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook } from "../src/processes/process-reaper.ts";
-import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceLayer } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const ID = "00000000-0000-0000-0000-000000000abc";
 
@@ -61,8 +58,6 @@ test("reaper flips expired sessions and calls kill for each", async () => {
   });
   const killed: string[] = [];
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: async (r: ProcessRecord) => void killed.push(r.processId),
   });
 
@@ -85,8 +80,6 @@ test("reaper calls onReaped for each reaped record (so a reaped run's death can 
   });
   const seen: Array<{ kind: string; runId?: string }> = [];
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     onReaped: async (r: ProcessRecord) => void seen.push({ kind: r.kind, ...(r.runId ? { runId: r.runId } : {}) }),
   });
 
@@ -111,8 +104,6 @@ test("a row deleted mid-sweep (a run that finished between snapshot and mark) is
   });
   const notified: string[] = [];
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: async (r: ProcessRecord) => {
       await reg.delete(r.processId);
     },
@@ -134,8 +125,6 @@ test("an onReaped failure does not abort the sweep or un-reap the record", async
     runId: "run-7",
   });
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     onReaped: async () => {
       throw new Error("delivery store down");
     },
@@ -154,7 +143,7 @@ test("reaper leaves unexpired sessions alone", async () => {
     command: "make",
     ttlMs: 60_000,
   });
-  const reaper = createProcessReaper(reg, { ...singleProcessDeps(), intervalMs: 60_000 });
+  const reaper = createProcessReaper(reg, {});
   assert.equal((await reaper.sweep()).reaped, 0);
   assert.equal((await reg.liveByScope("s")).length, 1);
 });
@@ -179,8 +168,6 @@ test("a kill failure does not abort the sweep, leaves the record running, and is
   });
   let failFirst = true;
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: async (r: ProcessRecord) => {
       if (failFirst && r.processId === bgId(1)) throw new Error("boom");
     },
@@ -224,8 +211,6 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
 
   const { sandbox, provisions, signals, teardowns } = killSpySandbox();
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: createReaperKillHook(sandbox, FAST_GRACE),
   });
 
@@ -259,8 +244,6 @@ test("kill hook escalates TERM → KILL when the grace period passes without an 
   });
   const { sandbox, signals } = killSpySandbox({ diesOn: "KILL" });
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: createReaperKillHook(sandbox, FAST_GRACE),
   });
 
@@ -284,8 +267,6 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
   });
   const { sandbox, signals } = killSpySandbox({ diesOn: "never" });
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: createReaperKillHook(sandbox, FAST_GRACE),
   });
 
@@ -300,44 +281,6 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
   assert.equal(signals.length, 4);
 });
 
-test("only the leader instance's interval sweep reaps (one replica kills, not all of them)", async () => {
-  const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-  });
-
-  let leader = false;
-  const lease: LeaderLease = {
-    async hold<T>(_key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-      return leader ? fn(new Promise<void>(() => {})) : null;
-    },
-  };
-  const killed: string[] = [];
-  const reaper = createProcessReaper(reg, {
-    intervalMs: 5,
-    kill: async (r: ProcessRecord) => void killed.push(r.processId),
-    leaderLease: lease,
-  });
-  reaper.start();
-  try {
-    await sleep(40);
-    assert.equal((await reg.get(ID))!.status, "running", "a non-leader's interval does not reap");
-    assert.equal(killed.length, 0);
-
-    leader = true;
-    await sleep(40);
-    assert.equal((await reg.get(ID))!.status, "reaped", "the leader's interval reaps the expired process");
-    assert.ok(killed.length >= 1);
-  } finally {
-    reaper.stop();
-  }
-});
-
 test("a vanished process session counts as a confirmed kill", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
@@ -350,8 +293,6 @@ test("a vanished process session counts as a confirmed kill", async () => {
   });
   const { sandbox, teardowns } = killSpySandbox({ vanished: true });
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: createReaperKillHook(sandbox, FAST_GRACE),
   });
 
@@ -371,8 +312,6 @@ test("an expired job with no recorded computer is retired without touching the s
   } as unknown as Parameters<typeof reg.register>[0]);
   const { sandbox, provisions, signals } = killSpySandbox();
   const reaper = createProcessReaper(reg, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
     kill: createReaperKillHook(sandbox, FAST_GRACE),
   });
   assert.equal((await reaper.sweep()).reaped, 1);

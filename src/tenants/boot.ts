@@ -60,11 +60,8 @@ export async function bootTenant(
 
   warnAboutUnreachableFeatures(config);
 
-  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-    built.scheduler.start();
-  } else if (!config.backgroundDeploymentId) {
+  if (!config.backgroundWorkEnabled && !config.backgroundDeploymentId)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
-  }
 
   const slackRuntime = createSlackRuntimeReconciler({
     startPaused: Boolean(config.backgroundDeploymentId),
@@ -103,54 +100,9 @@ export async function bootTenant(
   );
   if (slackIngress) for (const runtime of slackAccountRuntimes) runtime.start();
 
-  let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
-  if (built.backgroundOwnership) {
-    let periodicStop: Promise<void> = Promise.resolve();
-    let activationEpoch = 0;
-    const stopPeriodic = () => {
-      activationEpoch++;
-      periodicStop = built.scheduler.stopClaims();
-      void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
-      void built.runtime
-        .stopBackgroundClaims()
-        .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
-      for (const runtime of [slackRuntime, ...slackAccountRuntimes])
-        void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
-    };
-    backgroundController = createBackgroundController({
-      store: built.backgroundOwnership.store,
-      deploymentId: built.backgroundOwnership.deploymentId,
-      async start(signal) {
-        const epoch = ++activationEpoch;
-        if (signal.aborted) return;
-        built.runtime.startBackground();
-        await periodicStop;
-        if (signal.aborted || epoch !== activationEpoch) return;
-        built.scheduler.start();
-        await built.scheduler.ready();
-        if (signal.aborted || epoch !== activationEpoch) return;
-        for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
-          if (signal.aborted) return;
-          runtime.start();
-          await runtime.reconcile();
-        }
-      },
-      fence: stopPeriodic,
-      async relinquish() {
-        await Promise.all([
-          built.runtime.stopBackgroundClaims(),
-          built.scheduler.stopClaims(),
-          ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
-        ]);
-      },
-      async drained() {
-        await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
-      },
-      onError: reportFailureAs("background ownership", undefined),
-    });
-    built.runtime.setBackgroundAdmission(backgroundController.canClaim, backgroundController.active);
-    backgroundController.start();
-  }
+  const backgroundController = built.backgroundOwnership
+    ? startBackgroundOwnership(built, built.backgroundOwnership, [slackRuntime, ...slackAccountRuntimes])
+    : undefined;
 
   return {
     config,
@@ -159,7 +111,6 @@ export async function bootTenant(
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
-      void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
     },
     async stop() {
@@ -196,4 +147,42 @@ function warnAboutUnreachableFeatures(config: Config): void {
         );
     });
   }
+}
+
+type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
+
+/** Run background work (and the Slack runtimes) only while this deployment owns it. */
+function startBackgroundOwnership(
+  built: ReturnType<typeof buildApp>,
+  ownership: NonNullable<ReturnType<typeof buildApp>["backgroundOwnership"]>,
+  slackRuntimes: SlackRuntime[],
+) {
+  const controller = createBackgroundController({
+    store: ownership.store,
+    deploymentId: ownership.deploymentId,
+    async start(signal) {
+      if (signal.aborted) return;
+      built.runtime.startBackground();
+      for (const runtime of slackRuntimes) {
+        if (signal.aborted) return;
+        runtime.start();
+        await runtime.reconcile();
+      }
+    },
+    fence() {
+      void built.runtime
+        .stopBackgroundClaims()
+        .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
+      for (const runtime of slackRuntimes)
+        void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
+    },
+    async relinquish() {
+      await Promise.all([built.runtime.stopBackgroundClaims(), ...slackRuntimes.map((runtime) => runtime.stop())]);
+    },
+    drained: () => built.runtime.backgroundDrained(),
+    onError: reportFailureAs("background ownership", undefined),
+  });
+  built.runtime.setBackgroundAdmission(controller.canClaim, controller.active);
+  controller.start();
+  return controller;
 }

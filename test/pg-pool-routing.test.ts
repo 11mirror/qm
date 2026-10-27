@@ -131,33 +131,35 @@ test("dynamic migration waits for its prerequisite schema on a fresh database", 
   }
 });
 
-test("cron queue shares the query pool and stopping it preserves other stores", { skip, timeout: 30_000 }, async () => {
-  const { cronJobQueue } = await import("../src/cron/job-queue.ts");
-  const { createJobWorker } = await import("../src/jobs/job-worker.ts");
-  const store = createPgPool(direct!);
-  const queue = cronJobQueue(createJobWorker(direct!), 1);
-  let fired = false;
-  const onFire = async () => {
-    fired = true;
-    return "done" as const;
-  };
-  try {
-    await store.q("SELECT 1");
-    await queue.start({ onFire });
-    await queue.enqueueFire({ cronId: "pool-test", scheduledAt: Date.now() });
-    const deadline = Date.now() + 10_000;
-    while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-    assert.ok(fired);
-    await queue.stop();
-    assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);
-    fired = false;
-    await queue.start({ onFire });
-    await queue.enqueueFire({ cronId: "pool-test-restart", scheduledAt: Date.now() });
-    const restartedDeadline = Date.now() + 10_000;
-    while (!fired && Date.now() < restartedDeadline) await new Promise((r) => setTimeout(r, 50));
-    assert.ok(fired);
-  } finally {
-    await queue.stop();
-    await store.close();
-  }
-});
+test(
+  "the job worker shares the query pool and stopping it preserves other stores",
+  { skip, timeout: 30_000 },
+  async () => {
+    const { createJobWorker } = await import("../src/jobs/job-worker.ts");
+    const store = createPgPool(direct!);
+    const queue = createJobWorker(direct!);
+    let fired = false;
+    queue.handle("pool-test", async () => {
+      fired = true;
+      return "done" as const;
+    });
+    const fireOnce = async (key: string) => {
+      fired = false;
+      await queue.start();
+      await queue.spawn("pool-test", null, key);
+      const deadline = Date.now() + 10_000;
+      while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      assert.ok(fired);
+    };
+    try {
+      await store.q("SELECT 1");
+      await fireOnce(`pool-test-${Date.now()}`);
+      await queue.stop();
+      assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);
+      await fireOnce(`pool-test-restart-${Date.now()}`);
+    } finally {
+      await queue.stop();
+      await store.close();
+    }
+  },
+);
