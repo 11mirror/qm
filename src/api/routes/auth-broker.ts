@@ -75,15 +75,13 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
       ? [{ id: ref.id, ownerScopeId: g.ownerScopeId }]
       : [];
   });
-  const allowedOwners = await Promise.all(
-    sharedDeployments.map(async (shared) => {
-      const d = await app.getDeployment(shared.id);
-      if (!d || d.id !== shared.id || d.ownerScopeId !== shared.ownerScopeId || d.status === "archived") return false;
-      return externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId);
-    }),
-  );
-  const appOnly = allowedOwners.some(Boolean);
-  return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
+  for (const shared of sharedDeployments) {
+    const d = await app.getDeployment(shared.id);
+    if (!d || d.id !== shared.id || d.ownerScopeId !== shared.ownerScopeId || d.status === "archived") continue;
+    if (await externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId))
+      return sendJson(res, 200, { allowed: true, appOnly: true });
+  }
+  return sendJson(res, 200, { allowed: false });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {

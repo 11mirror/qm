@@ -44,7 +44,7 @@ export async function settleTurnResult(
     turnUserSeq: number | undefined;
   },
 ): Promise<TurnResult> {
-  const { deps, input, withManagedRosterVersion, approvalOwner, scopeId } = ctx;
+  const { deps, input, withManagedRosterVersion, approvalOwner } = ctx;
   const {
     session,
     strictReadOnly,
@@ -76,23 +76,8 @@ export async function settleTurnResult(
       }
     > = [...(result.pendingApprovals ?? [])];
     const requests: ApprovalRequest[] = [];
-    for (const pa of turnApprovals) {
-      const command = pa.command;
-      const summary = pa.summary ?? (await summarizeApproval(deps, scopeId, command, pa.reason, pa.purpose));
-      requests.push({
-        requestId: commandApprovalId(session.id, command, pa.approvalKey),
-        command,
-        reason: pa.reason,
-        blocksInput: approvalBlocksInput(pa.kind, outcome),
-        ...(pa.grantModes ? { grantModes: pa.grantModes } : {}),
-        ...(pa.matched ? { matched: pa.matched } : {}),
-        ...(pa.purpose ? { purpose: pa.purpose } : {}),
-        ...(summary ? { summary } : {}),
-        ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
-        ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
-        ...(pa.kind ? { kind: pa.kind } : {}),
-      });
-    }
+    for (const pa of turnApprovals)
+      requests.push(await approvalRequest(ctx, session.id, pa, approvalBlocksInput(pa.kind, outcome)));
     const approvals = await withManagedRosterVersion(() => parkApprovals(pending, approvalOwner(session.id), requests));
     finalResult = turnCompleted
       ? {
@@ -123,6 +108,23 @@ export async function settleTurnResult(
   return finalResult;
 }
 
+type ApprovalAsk = Omit<ApprovalRequest, "requestId" | "blocksInput">;
+
+async function approvalRequest(
+  ctx: TurnCtx,
+  sessionId: string,
+  ask: ApprovalAsk,
+  blocksInput: boolean,
+): Promise<ApprovalRequest> {
+  const summary = ask.summary ?? (await summarizeApproval(ctx.deps, ctx.scopeId, ask.command, ask.reason, ask.purpose));
+  return {
+    ...ask,
+    requestId: commandApprovalId(sessionId, ask.command, ask.approvalKey),
+    blocksInput,
+    ...(summary ? { summary } : {}),
+  };
+}
+
 export async function mapTurnFailure(
   ctx: TurnCtx,
   turn: { session: Session; lease: Lease; failureUserItem: NewItem<"UserMessage"> | undefined },
@@ -135,22 +137,22 @@ export async function mapTurnFailure(
     return rosterChangedRefusal(session.id);
   }
   if (err instanceof NeedsApproval) {
-    const summary = await summarizeApproval(deps, scopeId, err.command, err.approvalReason);
+    const request = await approvalRequest(
+      ctx,
+      session.id,
+      {
+        command: err.command,
+        reason: err.approvalReason,
+        grantModes: { session: err.grantModes?.session ?? true, always: err.grantModes?.always ?? true },
+        ...(err.matched ? { matched: err.matched } : {}),
+        ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
+        ...(err.kind ? { kind: err.kind } : {}),
+      },
+      true,
+    );
     try {
       const pendingApprovals = await withManagedRosterVersion(() =>
-        parkApprovals(pending, approvalOwner(session.id), [
-          {
-            requestId: commandApprovalId(session.id, err.command),
-            command: err.command,
-            reason: err.approvalReason,
-            blocksInput: true,
-            grantModes: { session: err.grantModes?.session ?? true, always: err.grantModes?.always ?? true },
-            ...(err.matched ? { matched: err.matched } : {}),
-            ...(summary ? { summary } : {}),
-            ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
-            ...(err.kind ? { kind: err.kind } : {}),
-          },
-        ]),
+        parkApprovals(pending, approvalOwner(session.id), [request]),
       );
       return { status: "pending_approval", sessionId: session.id, pendingApprovals };
     } catch (writeErr) {
