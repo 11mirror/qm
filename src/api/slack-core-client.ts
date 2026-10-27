@@ -78,6 +78,11 @@ interface DirectoryPush {
   groupsSyncedAt?: number;
 }
 
+/** Periodic upkeep for one Slack app attached in this process; `slack:*` background jobs run each kind. */
+export type SlackUpkeep = { reconcileStatus(): Promise<unknown> } & Partial<
+  Record<"replayEnvelopes" | "publishEmojiCatalog" | "reconcileTaskAcks", () => Promise<unknown>>
+>;
+
 export interface SlackCoreClient {
   privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
@@ -106,7 +111,12 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   slack: SlackNative;
-  holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
+  upkeep: {
+    /** The returned detach waits out this app's in-flight upkeep. */
+    attach(upkeep: SlackUpkeep): () => Promise<void>;
+    /** Run one kind of upkeep for every Slack app attached in this process. */
+    run(kind: keyof SlackUpkeep): Promise<void>;
+  };
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   handledEvents?: DurableMap<HandledEvent>;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
@@ -167,6 +177,27 @@ export interface SlackCoreClientDeps {
 
 const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
+
+function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
+  const upkeeps = new Map<SlackUpkeep, Set<Promise<unknown>>>();
+  return {
+    attach(upkeep) {
+      const running = new Set<Promise<unknown>>();
+      upkeeps.set(upkeep, running);
+      return async () => {
+        upkeeps.delete(upkeep);
+        await Promise.allSettled(running);
+      };
+    },
+    async run(kind) {
+      for (const [upkeep, running] of upkeeps) {
+        const run = upkeep[kind]?.() ?? Promise.resolve();
+        running.add(run);
+        await run.finally(() => running.delete(run));
+      }
+    },
+  };
+}
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
@@ -406,7 +437,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     slack: deps.slack,
     holdDirectorySync: (fn) => lease.hold("slack:directory-sync", fn),
-    holdEnvelopeReplay: (account, fn) => lease.hold(`slack:envelope-replay:${account}`, fn),
+    upkeep: slackUpkeepRegistry(),
     stagedEnvelopes: deps.stagedEnvelopes,
     handledEvents: deps.handledEvents,
 

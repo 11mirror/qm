@@ -7,7 +7,6 @@ import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
 import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
-import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { createDeduper, createThreadTracker } from "./message-gating.ts";
@@ -35,10 +34,9 @@ import { createSlackSender } from "./sender.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
-import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
+import type { SlackCoreClient, SlackUpkeep, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
 const { App } = bolt;
-const HANDLED_EVENT_TTL_MS = 24 * 60 * 60_000;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
@@ -138,24 +136,13 @@ function createSlackApp(
       if (!ids.ownTeamId || teamId !== ids.ownTeamId) return;
       await next();
     });
-  const replaySweeper = staging
-    ? createSweeper(
-        () =>
-          core.holdEnvelopeReplay(stagingAccount, () =>
-            staging.sweep((body, ackGate) =>
-              app.processEvent({
-                body,
-                ack: async () => {},
-                retryNum: 99,
-                customProperties: { ackGate },
-              }),
-            ),
-          ),
-        60_000,
-        { label: "slack envelope replay" },
-      )
+  const replayEnvelopes = staging
+    ? () =>
+        staging.sweep((body, ackGate) =>
+          app.processEvent({ body, ack: async () => {}, retryNum: 99, customProperties: { ackGate } }),
+        )
     : undefined;
-  return { app, replaySweeper };
+  return { app, replayEnvelopes };
 }
 
 function slackHistory(cfg: SlackPluginConfig, core: SlackCoreClient, conn: SlackConnection, ids: BotIdentity) {
@@ -248,7 +235,6 @@ function sessionStatusSync(core: SlackCoreClient, conn: SlackConnection, ids: Bo
       });
     return statusSync;
   };
-  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
   const statusHooks = {
     onEngaged: (runId: string, channel: string, threadTs?: string) => {
       void core.sessionStatus
@@ -262,7 +248,7 @@ function sessionStatusSync(core: SlackCoreClient, conn: SlackConnection, ids: Bo
       void reconcileStatus();
     },
   };
-  return { statusHooks, statusSweep };
+  return { statusHooks, reconcileStatus: async () => reconcileStatus() };
 }
 
 function inboxForwarder(core: SlackCoreClient, directory: SlackDirectory) {
@@ -322,9 +308,10 @@ async function connectAccount(
   return auth;
 }
 
-function backgroundSweeps(core: SlackCoreClient, app: SlackApp, CORE_SINGLETON: boolean) {
-  const emojiCatalogSweep = createSweeper(
-    () =>
+/** Upkeep only the core-singleton app runs: the custom emoji catalog and task acknowledgements. */
+function singletonUpkeep(core: SlackCoreClient, app: SlackApp): Partial<SlackUpkeep> {
+  return {
+    publishEmojiCatalog: () =>
       Promise.resolve(app.client.emoji.list())
         .then((res: { emoji?: Record<string, string> }) =>
           core.publishEmojiCatalog(
@@ -334,20 +321,9 @@ function backgroundSweeps(core: SlackCoreClient, app: SlackApp, CORE_SINGLETON: 
           ),
         )
         .catch(swallowAs("slack: emoji catalog publish", undefined)),
-    6 * 60 * 60_000,
-    { label: "slack emoji catalog", immediate: true },
-  );
-  if (CORE_SINGLETON) emojiCatalogSweep.start();
-
-  const taskAckSweep = createSweeper(
-    () =>
+    reconcileTaskAcks: async () =>
       core.taskAcknowledgements?.reconcile(app.client).catch(swallowAs("slack: task ack reconciliation", undefined)),
-    60_000,
-    { label: "slack task ack reconciliation" },
-  );
-  if (CORE_SINGLETON) taskAckSweep.start();
-
-  return { emojiCatalogSweep, taskAckSweep };
+  };
 }
 
 async function startAccount(
@@ -411,15 +387,6 @@ function slackSender(
   });
 }
 
-function handledEventPrune(core: SlackCoreClient) {
-  const handled = core.handledEvents;
-  return handled
-    ? createSweeper(() => handled.deleteBelow("at", Date.now() - HANDLED_EVENT_TTL_MS), 60 * 60_000, {
-        label: "slack handled events",
-      })
-    : undefined;
-}
-
 function serveContextRequests(
   core: SlackCoreClient,
   app: SlackApp,
@@ -462,7 +429,7 @@ function assembleSlackPlugin(cfg: SlackPluginConfig, core: SlackCoreClient) {
   };
   const { ackEmojiOverride, externalParticipantsEnabled } = settingsCaches(cfg, core);
   const stagingAccount = cfg.installationId ? `${ACCOUNT_LABEL}:${cfg.installationId}` : ACCOUNT_LABEL;
-  const { app, replaySweeper } = createSlackApp(cfg, core, conn, ids, stagingAccount);
+  const { app, replayEnvelopes } = createSlackApp(cfg, core, conn, ids, stagingAccount);
   if (CORE_SINGLETON) setDefaultBotIdentity(cfg.botIdentity);
   const devIntrospection = installDevIntrospection(
     app,
@@ -470,7 +437,6 @@ function assembleSlackPlugin(cfg: SlackPluginConfig, core: SlackCoreClient) {
   );
 
   const deduper = createDeduper(1000, core.handledEvents);
-  const handledPrune = handledEventPrune(core);
   const threads = createThreadTracker();
 
   const flow = createTurnFlow(core);
@@ -496,7 +462,7 @@ function assembleSlackPlugin(cfg: SlackPluginConfig, core: SlackCoreClient) {
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   registerDeployAccessActions(app, { core, directory });
   const ensureHeader = channelHeaders(cfg, core, ids, app);
-  const { statusHooks, statusSweep } = sessionStatusSync(core, conn, ids);
+  const { statusHooks, reconcileStatus } = sessionStatusSync(core, conn, ids);
   const continuePrivate = (runId: string, task: string) =>
     continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id));
   const handler = createTurnHandler({
@@ -543,12 +509,11 @@ function assembleSlackPlugin(cfg: SlackPluginConfig, core: SlackCoreClient) {
     ids,
     directory,
     flow,
-    replaySweeper,
-    handledPrune,
+    replayEnvelopes,
     devIntrospection,
     ackEmoji,
     ackEmojiOverride,
-    statusSweep,
+    reconcileStatus,
     sendToSlack,
     ACCOUNT_LABEL,
     CORE_SINGLETON,
@@ -597,8 +562,6 @@ export async function startSlackPlugin(
         plugin.ACCOUNT_LABEL,
       );
       await plugin.app.start();
-      plugin.replaySweeper?.start();
-      plugin.handledPrune?.start();
       plugin.devIntrospection?.ready({
         connectedAs: auth.user ?? "",
         botUserId: plugin.ids.botUserId,
@@ -612,8 +575,14 @@ export async function startSlackPlugin(
 
   plugin.ackEmoji.refreshAckEmoji(plugin.app.client);
   plugin.ackEmojiOverride();
-  const { emojiCatalogSweep, taskAckSweep } = backgroundSweeps(core, plugin.app, plugin.CORE_SINGLETON);
-  plugin.statusSweep.start();
+  const upkeep: SlackUpkeep = {
+    reconcileStatus: plugin.reconcileStatus,
+    ...(plugin.replayEnvelopes ? { replayEnvelopes: plugin.replayEnvelopes } : {}),
+    ...(plugin.CORE_SINGLETON ? singletonUpkeep(core, plugin.app) : {}),
+  };
+  void upkeep.reconcileStatus();
+  void upkeep.publishEmojiCatalog?.();
+  const detachUpkeep = core.upkeep.attach(upkeep);
   const unregisterSender = core.slack.attach(plugin.sendToSlack);
   const unsubscribeContextRequests = plugin.CORE_SINGLETON
     ? serveContextRequests(core, plugin.app, plugin.contextDeps, () => stopped)
@@ -621,18 +590,12 @@ export async function startSlackPlugin(
   return {
     async stop(): Promise<void> {
       if (stopped) {
-        await plugin.replaySweeper?.stop();
-        await plugin.handledPrune?.stop();
         await plugin.app.stop();
         return;
       }
       stopped = true;
       releaseAccount();
-      await plugin.statusSweep.stop();
-      await plugin.replaySweeper?.stop();
-      await emojiCatalogSweep.stop();
-      await taskAckSweep.stop();
-      await plugin.handledPrune?.stop();
+      await detachUpkeep();
       unregisterSender();
       unsubscribeContextRequests();
       try {
