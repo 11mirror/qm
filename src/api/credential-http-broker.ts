@@ -2,12 +2,12 @@ import { Readable } from "node:stream";
 import type { BrokeredConnector, CapabilityClaims } from "../auth/capability-token.ts";
 import { isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
 import {
-  brokerMethodAllowed,
   brokerSinks,
   brokerPathAllowed,
-  brokerRequestHeaders,
   grantedCredential,
   recordBrokerOutcome,
+  serviceCallDenial,
+  serviceRequestHeaders,
   upstreamFailureCode,
   upstreamUnreachable,
 } from "./credential-broker.ts";
@@ -185,16 +185,20 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
     const grant = await grantedCredential(claims, ref, ctx.deps.serviceCreds, tenant().orgScope);
     if (!grant.rec) return deny(grant.status, grant.code, grant.message, ref, grant.host);
     const { rec } = grant;
-    if (!brokerMethodAllowed(rec, method))
-      return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, ref, rec.host);
+    const upstream = new URL(`https://${rec.host}${upstreamPath}`);
+    const denial = await serviceCallDenial(rec, claims, {
+      slug: ref,
+      method,
+      pathname: upstream.pathname,
+      usage: sinks.usage,
+    });
+    if (denial) return deny(denial.status, denial.code, denial.message, ref, rec.host);
     target = {
       slug: ref,
       host: rec.host,
-      upstream: new URL(`https://${rec.host}${upstreamPath}`),
-      headers: brokerRequestHeaders(rec, callerHeaders(ctx, false)),
+      upstream,
+      headers: serviceRequestHeaders(rec, claims, callerHeaders(ctx, false)),
     };
-    if (!brokerPathAllowed(target.upstream.pathname, rec.allowedPathPrefixes))
-      return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", ref, rec.host);
   }
   target.upstream.search = ctx.url.search;
   if (isComposioHost(target.upstream.hostname))
