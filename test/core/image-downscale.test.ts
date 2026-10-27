@@ -156,6 +156,25 @@ test("downscaleVisionImage falls back to original bytes when no converter is ava
   assert.match(warnings[0]!, /no image converter was found on PATH/);
 });
 
+test("downscaleVisionImage reports each converter's exit code and stderr when conversion fails", async () => {
+  const original = png(3000, 2000);
+  const warnings: string[] = [];
+  const failing = (child: FakeChild) => {
+    child.stderr.write("unsupported colorspace");
+    setImmediate(() => child.emit("close", 1));
+  };
+  const missing = (child: FakeChild) => {
+    const err = new Error("missing") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
+    child.emit("error", err);
+  };
+  const deps = depsFromHandlers([failing, missing, missing], warnings, []);
+  const result = await downscaleVisionImage(original, "image/png", deps);
+  assert.equal(result, original);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /magick exited with code 1: unsupported colorspace/);
+});
+
 test("sniffing a large image with many segments takes linear time", () => {
   const segments = Buffer.alloc(1024 * 1024, Buffer.from([0xff, 0xfe, 0x00, 0x02]));
   const crafted = Buffer.concat([Buffer.from([0xff, 0xd8]), segments]);

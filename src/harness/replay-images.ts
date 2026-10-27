@@ -32,7 +32,6 @@ export function artifactImageLoader(
       !artifact.sha256
     )
       return null;
-    if (artifact.sizeBytes > MAX_VISION_IMAGE_BYTES) return "over-budget";
     const key = `${artifact.id}:${artifact.sha256}`;
     const cached = visionBytes.get(key);
     if (cached !== undefined) return { data: cached };
@@ -44,7 +43,9 @@ export function artifactImageLoader(
     }
     const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
     if (bytes.sha256 !== artifact.sha256) return null;
-    const data = Buffer.from(await downscaleVisionImage(bytes.data, artifact.mimetype)).toString("base64");
+    const scaled = await downscaleVisionImage(bytes.data, artifact.mimetype);
+    if (scaled.length > MAX_VISION_IMAGE_BYTES) return "over-budget";
+    const data = Buffer.from(scaled).toString("base64");
     visionBytes.set(key, data);
     return { data };
   };

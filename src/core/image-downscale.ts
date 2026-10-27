@@ -149,34 +149,43 @@ function ffmpegArgs(format: ImageDimensions["format"]): string[] {
   ];
 }
 
+type ConverterResult = { missing: true } | { missing: false; output: Uint8Array } | { missing: false; failure: string };
+
 async function runConverter(
   bytes: Uint8Array,
   command: string,
   args: string[],
   deps: ImageDownscaleDeps,
-): Promise<{ missing: boolean; output?: Uint8Array }> {
+): Promise<ConverterResult> {
   return await new Promise((resolve) => {
     let settled = false;
-    const finish = (result: { missing: boolean; output?: Uint8Array }) => {
+    const finish = (result: ConverterResult) => {
       if (settled) return;
       settled = true;
       resolve(result);
     };
+    const failed = (err: NodeJS.ErrnoException) =>
+      finish(err.code === "ENOENT" ? { missing: true } : { missing: false, failure: `${command}: ${err.message}` });
     let child: ChildProcessWithoutNullStreams;
     try {
       child = deps.spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     } catch (err) {
-      finish({ missing: (err as NodeJS.ErrnoException).code === "ENOENT" });
+      failed(err as NodeJS.ErrnoException);
       return;
     }
     const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.resume();
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.stdin.on("error", () => {});
-    child.on("error", (err: NodeJS.ErrnoException) => finish({ missing: err.code === "ENOENT" }));
+    child.on("error", failed);
     child.on("close", (code) => {
       if (code === 0) finish({ missing: false, output: Buffer.concat(stdout) });
-      else finish({ missing: false });
+      else
+        finish({
+          missing: false,
+          failure: `${command} exited with code ${code}: ${Buffer.concat(stderr).toString("utf8").trim()}`,
+        });
     });
     child.stdin.end(Buffer.from(bytes));
   });
@@ -205,15 +214,17 @@ export async function downscaleVisionImage(
     ["convert", imageMagickArgs(expectedFormat)],
     ["ffmpeg", ffmpegArgs(expectedFormat)],
   ];
-  let sawConverter = false;
+  const failures: string[] = [];
   for (const [command, args] of attempts) {
     const result = await runConverter(bytes, command, args, deps);
-    if (!result.missing) sawConverter = true;
-    if (result.output && outputIsUsable(result.output)) return result.output;
+    if (result.missing) continue;
+    if ("failure" in result) failures.push(result.failure);
+    else if (outputIsUsable(result.output)) return result.output;
+    else failures.push(`${command} produced an image that is still oversized or unreadable`);
   }
   deps.warn(
-    sawConverter
-      ? "attachments: oversized image was not downscaled because image conversion failed"
+    failures.length
+      ? `attachments: oversized image was not downscaled because image conversion failed: ${failures.join("; ")}`
       : "attachments: oversized image was not downscaled because no image converter was found on PATH",
   );
   return bytes;
