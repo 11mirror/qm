@@ -249,3 +249,5 @@ export function buildSandbox(
   });
   return { sandbox, sandboxResources };
 }
+
+export type SandboxModule = ReturnType<typeof buildSandbox>;

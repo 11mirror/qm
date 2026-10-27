@@ -7,7 +7,6 @@ import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
-import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -16,25 +15,17 @@ import {
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
-import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
-import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
+import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createSessionSyscalls } from "./subagents/session-tools.ts";
 import { deliverSubagentMail } from "./subagents/mail.ts";
-import {
-  sessionTreeRoot,
-  sessionTreeRunCount,
-  sessionTreeWorking,
-  stoppableAncestors,
-  SUBAGENT_TREE_RUN_CAP,
-} from "./subagents/tree.ts";
+import { sessionTreeWorking, stoppableAncestors } from "./subagents/tree.ts";
 import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
-import { createSemanticMemory } from "./memory/semantic-memory.ts";
-import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
+import { type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
@@ -46,7 +37,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import { actorAssertionActive, type IdentityService } from "./identity/identity-service.ts";
+import { type IdentityService } from "./identity/identity-service.ts";
 import { type PrincipalLinkService } from "./identity/principal-links.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -74,7 +65,7 @@ import type {
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
@@ -87,7 +78,7 @@ import {
   INBOX_ITEM_SOURCE_MIGRATION,
   type InboxEventSink,
 } from "./inbox/ledger.ts";
-import { createPostgresLedgerEventBus, type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
+import { type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
 import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
@@ -117,7 +108,6 @@ import { createCurrentScopeMembers, rosterAdmits } from "./resolution/scope-memb
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
-import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { type McpToolService } from "./mcp/mcp-tool-service.ts";
 import { type BlobTransferStore } from "./persistence/blob-transfer.ts";
@@ -143,9 +133,7 @@ import { type OAuthClientResolver } from "./connectors/oauth.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { type BrowserSessionStore } from "./connectors/browser-session-store.ts";
 import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
-import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
-import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { type ConsentLinkStore } from "./connectors/consent-link.ts";
 import { type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
 import { type ModelGateway } from "./model/model-gateway.ts";
@@ -163,14 +151,12 @@ import { createPerTurnStrategy, type PendingCapture } from "./memory/strategies/
 import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { mintCapabilityToken, CREDENTIAL_BROKER_AUD, DEPLOYMENT_CREDENTIAL_TTL_MS } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
-import { createMemoryRunStore } from "./runs/memory-run-store.ts";
-import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
+import { TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
-import { repairStaleTurns, routeTurns } from "./turns/turn-engine.ts";
+import { repairStaleTurns } from "./turns/turn-engine.ts";
 import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
 import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./harness/agent-tools.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "./connectors/background-exec-broker.ts";
@@ -183,7 +169,7 @@ import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPeriodicJobs } from "./util/periodic-jobs.ts";
-import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
+import { type ProcessRegistry } from "./processes/process-registry.ts";
 import {
   createProcessReaper,
   createReaperKillHook,
@@ -195,11 +181,7 @@ import { createMonitorPoller, MONITOR_POLL_MS, type MonitorPoller } from "./moni
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
-import { createTurnStream } from "./runs/turn-stream.ts";
-import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
-import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
-import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
-import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
+import { type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
@@ -220,13 +202,12 @@ import { auxiliaryModelForProvider } from "./model/pi-models.ts";
 import { type AdminService } from "./admin/admin-service.ts";
 import { type ProjectStore } from "./projects/project-store.ts";
 import { type ErrorLog } from "./admin/error-log.ts";
-import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
+import { type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import { type BrokeredLayerTool, type DeploymentLayerRuntime } from "./deployment/load-layer.ts";
 import { type DeploymentLayerStore } from "./deployment/deployment-layer-store.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { type SlackInstallationStore } from "./surfaces/slack-installation.ts";
-import type { ContextRequestEvent } from "./api/app-types.ts";
 
 import { buildStores } from "./wiring/stores.ts";
 import type { Late } from "./wiring/late.ts";
@@ -246,6 +227,14 @@ import { buildCredentials } from "./wiring/credentials.ts";
 import { buildModelKeys } from "./wiring/model-keys.ts";
 
 import { buildHarness } from "./wiring/harness.ts";
+
+import { buildStartup } from "./wiring/startup.ts";
+
+import { buildMemory } from "./wiring/memory.ts";
+
+import { buildRuns } from "./wiring/runs.ts";
+
+import { buildRunStreams } from "./wiring/run-streams.ts";
 
 export interface Runtime {
   start(): void;
@@ -471,42 +460,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   } = buildFiles({ databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap });
   const { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerRefresh } =
     buildDeploymentLayer({ config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock });
-  let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
-  // Startup I/O: hydrate stores, load the deployment layer, seed skill catalogs. Runs once, on the first call.
-  const startOnce = () => {
-    if (started) return started;
-    const layerReady = deploymentLayerStore.hydrate();
-    const layerSettled = layerReady.then(
-      () => undefined,
-      (e: unknown) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
-    const skillsReady = config.seedSkills
-      ? Promise.all([
-          installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-          layerSettled,
-        ]).then(() => undefined)
-      : layerSettled;
-    if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
-    const identityReady = identity.hydrate();
-    const configReady = configStore.hydrate?.();
-    identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
-    configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
-    const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
-    ready.catch(() => {}); // each part reports its own failure; start() callers still see the rejection
-    started = { ready, skillsReady };
-    return started;
-  };
-  const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
-  const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
-  const semanticMemory = createSemanticMemory({
-    notebook: notebookMemory,
-    databaseUrl,
-    embeddingModel: () => configStore.getEmbeddingModelDurable(),
-    resolveEmbedder: (id) => resolveMemoryEmbedder(id),
-    leaderLease,
-    createSweeper,
-  });
-  const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
   const { sandboxBackends, e2bBodies, modalBodies, sandboxOnError, e2bClient } = buildSandboxBackends({
     errors,
     config,
@@ -594,131 +547,46 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     refreshModels,
     modelCredentials,
   });
-
-  const leaseTtlMs = config.leaseTtlMs;
-  const maxAttempts = config.maxAttempts;
-  const runStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunStore(databaseUrl, { maxClaims: RUN_MAX_CLAIMS })
-      : createMemoryRunStore({ maxClaims: RUN_MAX_CLAIMS });
-  const turnLedger =
-    runStoreKind === "postgres"
-      ? createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
-      : undefined;
-  const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
-
-  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
-    if (!sessionIds.length) return new Set();
-    const wanted = new Set(sessionIds);
-    return new Set(
-      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
-        .filter(
-          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        )
-        .map((r) => r.sessionId),
-    );
-  };
-  const workingAncestors = async (session: Session) => {
-    const candidates = await stoppableAncestors(sessions, session);
-    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
-    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
-    return Promise.all(
-      ancestors.map(async (ancestor) => ({
-        session: ancestor,
-        participants: await sessions.participantsOf(ancestor.id),
-      })),
-    );
-  };
-  const runs: RunStore = {
-    ...runStore.runs,
-    cancelTurn: turnRouting.cancelTurn,
-    cancelTree: turnRouting.cancelTree,
-    withdraw: turnRouting.withdraw,
-    leaseHeld: turnRouting.leaseHeld,
-    async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
-        const participants = known ? await sessions.participantsOf(known.id) : [];
-        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = (await turnRouting.admit(input)) ?? (await runStore.runs.enqueue(input));
-        if (result.deduped) return result;
-        sessionStateBus.emit({
-          threadRef: input.sessionId,
-          ...(known ? { sessionId: known.id } : {}),
-          state: "working",
-          at: result.run.createdAt,
-          participants: participants.length ? participants : [input.request.actor.id],
-        });
-        for (const ancestor of ancestors)
-          sessionStateBus.emit({
-            threadRef: ancestor.session.threadRef,
-            sessionId: ancestor.session.id,
-            state: "working",
-            at: result.run.createdAt,
-            participants: ancestor.participants,
-          });
-        return result;
-      };
-      return advisoryLock.withLock("session-run-admission", enqueue);
-    },
-  };
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
-  runs.onTerminal((run) => void productAnalytics.responseFinished(run));
-  const ledger = runStore.ledger;
-
-  const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
-  late.processes = processes;
-
-  const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
-  const brokerSessions = createPostgresBrokerSessions(databaseUrl);
-  const replayDedupe = createPostgresReplayDedupe(databaseUrl);
-  const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
-  const egressAudit = createPostgresEgressAuditSink(databaseUrl);
-  const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
-  const contextRequestEvents = createPostgresNotifyBus<ContextRequestEvent>(
+  const { skillsReady, startOnce } = buildStartup({
+    deploymentLayerStore,
+    config,
+    installCatalogs,
+    warnShadowedBrokerCredentials,
+    identity,
+    configStore,
+  });
+  const { baseMemory, semanticMemory } = buildMemory({
     databaseUrl,
-    "context_request_events",
-    "context requests",
-  );
-  const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
-  const turnStream = createTurnStream({
-    onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
-    onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
-    onChange: refreshRunStream,
+    configStore,
+    resolveMemoryEmbedder,
+    leaderLease,
+    createSweeper,
+    late,
   });
-  const stopStreamSync = runStreamEvents.subscribe((event) => {
-    if (event.kind !== "sync") return;
-    const text = turnStream.snapshot(event.runId);
-    const startOffset = turnStream.startOffset(event.runId);
-    const offset = Math.max(event.offset, startOffset);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
-    for (const block of turnStream.reasoning(event.runId)) {
-      const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
-      if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
-    }
-  });
-  runs.onTerminal((run) => refreshRunStream(run.id));
-  const sessionStateBus: SessionStateBus = config.databaseUrl
-    ? createPostgresSessionStateBus(config.databaseUrl)
-    : createMemorySessionStateBus();
-  const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
-  const activityStore: RunActivityStore =
-    runStoreKind === "postgres" ? createPostgresRunActivityStore(databaseUrl) : createMemoryRunActivityStore();
-  const runActivity: RunActivityStore = {
-    ...activityStore,
-    async append(runId, entry) {
-      await activityStore.append(runId, entry);
-      refreshRunStream(runId);
-    },
-  };
+  const {
+    runs,
+    sessionStateBus,
+    productAnalytics,
+    ledgerEventBus,
+    maxAttempts,
+    ledger,
+    leaseTtlMs,
+    blockingApprovalSessions,
+    turnLedger,
+  } = buildRuns({ config, databaseUrl, runStoreKind, featureFlags, late, identity, sessions, advisoryLock });
+  const {
+    turnStream,
+    runActivity,
+    credentialUsage,
+    processes,
+    runStreamEvents,
+    contextRequestEvents,
+    stopStreamSync,
+    egressAudit,
+    replayDedupe,
+    brokerSessions,
+    appPageViews,
+  } = buildRunStreams({ sandbox, databaseUrl, late, config, runs, runStoreKind });
   const deployStore = createDeployStore({
     deployments: artifactMap<Deployment>("deployments"),
     pg: pgArtifactMap.pool,
@@ -962,6 +830,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     surfaces: chatSurfaces,
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
   });
+  late.approvals = approvals;
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -1507,6 +1376,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  late.memoryTidy = memoryTidy;
   const jobs = createJobWorker(databaseUrl);
   const scheduler = createScheduler({
     admittedWork,
