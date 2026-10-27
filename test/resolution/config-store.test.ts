@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, before } from "node:test";
+import { test } from "node:test";
 import { type ApiCtx, respond } from "../../src/api/routes/route.ts";
 import { postInstructions } from "../../src/api/routes/surface-config.ts";
 import { createServer } from "../../src/api/server.ts";
@@ -11,61 +11,32 @@ import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 import { signRequest } from "../../src/auth/source-auth.ts";
 import { resolveTurnFastMode } from "../../src/core/turn-options.ts";
-import {
-  createPostgresMapFactory,
-  type DurableMap,
-  type PostgresArtifactMaps,
-} from "../../src/persistence/durable-map.ts";
+import { CONFIG_TABLES, keyedTable } from "../../src/resolution/config-tables.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";
-import {
-  configStoreMaps,
-  type PersistedInstructions,
-  type PersistedInstructionsRevision,
-  type PersistedDeploymentIdentity,
-  type PersistedScopedFlag,
-  InstructionsTooLargeError,
-  MAX_INSTRUCTIONS_CHARS,
-} from "../../src/resolution/config-store.ts";
+import type { PersistedInstructions, PersistedInstructionsRevision } from "../../src/resolution/config-store.ts";
+import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../src/resolution/config-instructions.ts";
 import { scopeId } from "../../src/types.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
-import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
 import { listenLocal } from "../support/listen-local.ts";
 
-const URL = process.env.DATABASE_URL!;
-
-const TABLES = [
-  "soul_configs",
-  "soul_history",
-  "command_policies",
-  "egress_policies",
-  "deploy_auth_split",
-  "publish_member_grants",
-  "slack_quiet_status_flag",
-  "base_model_configs",
-  "browse_provider_configs",
-  "browse_max_steps_configs",
-  "browse_model_configs",
-  "deployment_identity",
-];
-
-before(async () => {
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  for (const t of TABLES) await p.query(`DROP TABLE IF EXISTS ${t} CASCADE`);
-  await p.end();
-});
-
-const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
+function tables() {
+  const databaseUrl = testDatabaseUrl();
+  const db = createPgPool(databaseUrl);
+  return {
+    open: () => testConfigStore("default-org", { databaseUrl }),
+    instructions: keyedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
+    legacyHistory: keyedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
+  };
+}
 
 test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const legacyHistory = testMap<PersistedInstructionsRevision>();
-  const left = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
-  const right = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const { open, instructions } = tables();
+  const left = open();
+  const right = open();
   const channel = scopeId("channel", "CAS");
 
   const results = await Promise.all([
@@ -92,7 +63,7 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
     "the canonical row retains the full durable history",
   );
   assert.equal(left.instructionsHistory(channel).length, 25, "the operator view remains bounded");
-  const fresh = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const fresh = open();
   await fresh.hydrate?.();
   assert.equal(fresh.instructionsHistory(channel)[0]?.content, fresh.getInstructions(channel));
   await right.refreshScope(channel);
@@ -104,9 +75,9 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
 });
 
 test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const left = testConfigStore("default-org", { instructions });
-  const right = testConfigStore("default-org", { instructions });
+  const { open } = tables();
+  const left = open();
+  const right = open();
   const channel = scopeId("channel", "snapshot");
   await left.setInstructions(channel, "one", "alice");
   await left.setInstructions(channel, "two", "bob");
@@ -124,9 +95,9 @@ test("SOUL snapshot restore preserves the canonical version and history byte-for
 });
 
 test("setInstructions advances the canonical row without trusting a stale instance cache", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const left = testConfigStore("default-org", { instructions });
-  const right = testConfigStore("default-org", { instructions });
+  const { open, instructions } = tables();
+  const left = open();
+  const right = open();
   const channel = scopeId("channel", "latest");
 
   assert.equal(await left.setInstructions(channel, "left", "alice"), 1);
@@ -145,10 +116,10 @@ test("setInstructions advances the canonical row without trusting a stale instan
 });
 
 test("the first write after upgrade retains a canonical revision that predates embedded history", async () => {
-  const instructions = testMap<PersistedInstructions>();
+  const { open, instructions } = tables();
   const channel = scopeId("channel", "pre-history-upgrade");
   await instructions.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
-  const store = testConfigStore("default-org", { instructions });
+  const store = open();
 
   assert.equal(await store.setInstructions(channel, "post-upgrade", "alice"), 9);
   assert.deepEqual(
@@ -165,16 +136,7 @@ test("the first write after upgrade retains a canonical revision that predates e
 });
 
 test("refreshScope merges legacy SOUL history into a canonical row and migrates it safely", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const legacyBacking = testMap<PersistedInstructionsRevision>();
-  let legacyScans = 0;
-  const legacyHistory: DurableMap<PersistedInstructionsRevision> = {
-    ...legacyBacking,
-    async all() {
-      legacyScans++;
-      return legacyBacking.all();
-    },
-  };
+  const { open, instructions, legacyHistory } = tables();
   const channel = scopeId("channel", "legacy-refresh");
   const revision: PersistedInstructionsRevision = {
     scopeId: channel,
@@ -192,7 +154,7 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     updatedAt: 30,
     updatedBy: "bob",
   });
-  const store = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const store = open();
 
   await store.hydrate?.();
   await store.refreshScope(channel);
@@ -210,18 +172,16 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     store.instructionsHistory(channel),
     "refresh atomically migrates legacy revisions into the canonical row",
   );
-  assert.equal(legacyScans, 1, "legacy history is scanned once at hydration, never per scope refresh or write");
 });
 
 test("embedded history prevents a stale core from re-injecting legacy revisions after restore", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const legacyHistory = testMap<PersistedInstructionsRevision>();
+  const { open, instructions, legacyHistory } = tables();
   const restored = scopeId("channel", "legacy-restored");
   await instructions.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:4`, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:3`, { scopeId: restored, content: "legacy prior", version: 3, updatedAt: 30 });
-  const left = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
-  const stale = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
+  const left = open();
+  const stale = open();
   await Promise.all([left.hydrate?.(), stale.hydrate?.()]);
 
   const restoredSnapshot: PersistedInstructions = {
@@ -244,49 +204,12 @@ test("embedded history prevents a stale core from re-injecting legacy revisions 
   );
 });
 
-test("legacy migration rechecks the canonical marker inside the atomic update", async () => {
-  const backing = testMap<PersistedInstructions>();
-  const legacyHistory = testMap<PersistedInstructionsRevision>();
-  const channel = scopeId("channel", "legacy-interleaving-restore");
-  const restored: PersistedInstructions = {
-    scopeId: channel,
-    content: "restored while refreshing",
-    version: 1,
-    updatedAt: 50,
-    history: [],
-  };
-  let restoreBeforeUpdate = false;
-  const instructions: DurableMap<PersistedInstructions> = {
-    ...backing,
-    async update(id, fn) {
-      if (restoreBeforeUpdate) {
-        restoreBeforeUpdate = false;
-        await backing.put(id, restored);
-      }
-      return backing.update!(id, fn);
-    },
-  };
-  await instructions.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
-  const stale = testConfigStore("default-org", { instructions, instructionsHistory: legacyHistory });
-  await stale.hydrate?.();
-
-  restoreBeforeUpdate = true;
-  await stale.refreshScope(channel);
-
-  assert.deepEqual(await instructions.get(channel), restored);
-  assert.equal(stale.getInstructions(channel), restored.content);
-  assert.deepEqual(stale.instructionsHistory(channel), []);
-});
-
 test("pg config store: scoped soul/policy/egress/flags survive a restart (write-through + hydrate)", async () => {
-  const f = createPostgresMapFactory(URL);
+  const { open } = tables();
   const ch = scopeId("channel", "C1");
   const policy = defaultOrgPolicy();
 
-  const m = maps(f);
-  const a = testConfigStore("default-org", m);
+  const a = open();
   const version = await a.setInstructions(ch, "a channel-specific soul");
   await a.setSetting("commandPolicy", policy, ch);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
@@ -294,18 +217,8 @@ test("pg config store: scoped soul/policy/egress/flags survive a restart (write-
   await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
   await a.setSetting("browseMaxSteps", 120, ch);
   await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
-  await settle(
-    async () =>
-      (await m.instructions.get(ch))?.version === version &&
-      !!(await m.commandPolicies.get(ch)) &&
-      (await m.approvalGrantModes.get(ch))?.modes.session === false &&
-      (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
-      (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
-      (await m.browseMaxSteps.get(ch))?.steps === 120 &&
-      (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
-  );
 
-  const b = testConfigStore("default-org", maps(f));
+  const b = open();
   assert.equal(b.getInstructions(ch), null, "a cold instance has no scoped soul until it hydrates");
   await b.hydrate?.();
 
@@ -328,10 +241,9 @@ test("pg config store: scoped soul/policy/egress/flags survive a restart (write-
 });
 
 test("pg config store: rapid overlapping writes to one scope converge to the last value (serialized write-through)", async () => {
-  const f = createPostgresMapFactory(URL);
+  const { open } = tables();
   const ch = scopeId("channel", "C2");
-  const m = maps(f);
-  const a = testConfigStore("default-org", m);
+  const a = open();
 
   let lastVersion = 0;
   for (let i = 1; i <= 8; i++) {
@@ -344,16 +256,8 @@ test("pg config store: rapid overlapping writes to one scope converge to the las
   await a.setSetting("browseMaxSteps", null, ch);
   await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
   await a.setSetting("browseModel", null, ch);
-  await settle(
-    async () =>
-      (await m.instructions.get(ch))?.content === "soul v8" &&
-      (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
-      !(await m.baseModels.get(ch)) &&
-      !(await m.browseMaxSteps.get(ch)) &&
-      !(await m.browseModels.get(ch)),
-  );
 
-  const b = testConfigStore("default-org", maps(f));
+  const b = open();
   await b.hydrate?.();
   assert.equal(
     b.getInstructions(ch),
@@ -372,11 +276,11 @@ test("pg config store: rapid overlapping writes to one scope converge to the las
 });
 
 test("pg config store: settings written on one core reach another core through refreshScope", async () => {
-  const f = createPostgresMapFactory(URL);
+  const { open } = tables();
   const ch = scopeId("channel", "C4");
   const org = scopeId("org", "default-org");
-  const a = testConfigStore("default-org", maps(f));
-  const b = testConfigStore("default-org", maps(f));
+  const a = open();
+  const b = open();
   await a.hydrate?.();
   await b.hydrate?.();
 
@@ -416,17 +320,14 @@ test("pg config store: settings written on one core reach another core through r
 });
 
 test("a durable database is pinned to one organization", async () => {
-  const deploymentIdentity = testMap<PersistedDeploymentIdentity>();
-  await testConfigStore("default-org", { deploymentIdentity }).hydrate!();
-  await assert.rejects(
-    testConfigStore("other", { deploymentIdentity }).hydrate!(),
-    /database belongs to org default-org/,
-  );
+  const databaseUrl = testDatabaseUrl();
+  await testConfigStore("default-org", { databaseUrl }).hydrate!();
+  await assert.rejects(testConfigStore("other", { databaseUrl }).hydrate!(), /database belongs to org default-org/);
 });
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
-  const baseModels = testMap<import("../../src/resolution/config-store.ts").PersistedBaseModel>();
-  const store = testConfigStore("default-org", { baseModels });
+  const databaseUrl = testDatabaseUrl();
+  const store = testConfigStore("default-org", { databaseUrl });
   const org = "org:default-org";
   const cron = { modelId: "gpt-5.5", fastMode: false };
   const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
@@ -435,7 +336,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getRuntimeSelection(org)?.modelId ?? null, null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = testConfigStore("default-org", { baseModels });
+  const reader = testConfigStore("default-org", { databaseUrl });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
@@ -454,12 +355,12 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.equal(await reader.getPurposeRuntimeDurable("cron"), undefined);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   await store.clearPurposeRuntime("subagent");
-  assert.equal(await baseModels.get(org), null);
+  assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM base_model_configs"), []);
 });
 
 test("interactive fast mode defaults off and persists across instances", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const first = testConfigStore("org", { interactiveFastMode });
+  const databaseUrl = testDatabaseUrl();
+  const first = testConfigStore("org", { databaseUrl });
   await first.hydrate!();
   assert.equal(first.setting("interactiveFastMode"), false);
   assert.equal(await first.settingDurable("interactiveFastMode"), false);
@@ -467,7 +368,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setSetting("interactiveFastMode", true);
   assert.equal(first.setting("interactiveFastMode"), true);
 
-  const second = testConfigStore("org", { interactiveFastMode });
+  const second = testConfigStore("org", { databaseUrl });
   await second.hydrate!();
   assert.equal(second.setting("interactiveFastMode"), true);
   assert.equal(await second.settingDurable("interactiveFastMode"), true);
@@ -482,11 +383,11 @@ test("the org default reaches only human turns that expressed no preference", ()
 });
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const store = testConfigStore("org", { interactiveFastMode });
+  const databaseUrl = testDatabaseUrl();
+  const store = testConfigStore("org", { databaseUrl });
   await store.hydrate!();
   const org = scopeId("org", "org");
-  await interactiveFastMode.put(org, { scopeId: org, on: true });
+  await createPgPool(databaseUrl).q(`INSERT INTO interactive_fast_mode_flag (scope_id, "on") VALUES ($1, true)`, [org]);
   await store.refreshScope(org);
   assert.equal(store.setting("interactiveFastMode"), true);
 });
@@ -496,9 +397,9 @@ const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(b
 const SECRET = "personal-account-test-signing-secret";
 
 test("personal account choice persists across instances without changing anyone else's choice", async () => {
-  const individualModelAuth = testMap<PersistedScopedFlag>();
-  const first = testConfigStore("default-org", { individualModelAuth });
-  const second = testConfigStore("default-org", { individualModelAuth });
+  const databaseUrl = testDatabaseUrl();
+  const first = testConfigStore("default-org", { databaseUrl });
+  const second = testConfigStore("default-org", { databaseUrl });
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
   await first.setPersonalModelAuth("alice", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);

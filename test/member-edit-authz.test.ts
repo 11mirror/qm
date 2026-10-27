@@ -9,13 +9,19 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { type PersistedInstructions, type ScopedConfigStore } from "../src/resolution/config-store.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import {
+  failTableWrites,
+  testAdvisoryLock,
+  testConfigStore,
+  testDatabaseUrl,
+  testMap,
+} from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
@@ -84,40 +90,6 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
 
 function makeApp(): App {
   return createApp(makeDeps() as unknown as AppDeps);
-}
-
-function failingPutMap<T>(control: { fail: boolean }): DurableMap<T> {
-  const backing = testMap<T>();
-  return {
-    ...backing,
-    async put(id, value) {
-      if (control.fail) throw new Error("forced durable put failure");
-      await backing.put(id, value);
-    },
-    async update(id, fn) {
-      if (control.fail) throw new Error("forced durable put failure");
-      return backing.update!(id, fn);
-    },
-  };
-}
-
-function putThenFailReadsMap<T>(backing: DurableMap<T>): DurableMap<T> {
-  let failReads = false;
-  return {
-    ...backing,
-    async get(id) {
-      if (failReads) throw new Error("forced durable read failure");
-      return backing.get(id);
-    },
-    async put() {
-      failReads = true;
-      throw new Error("forced durable put failure");
-    },
-    async update() {
-      failReads = true;
-      throw new Error("forced durable put failure");
-    },
-  };
 }
 
 test("managesScope: private-channel + group-DM members manage; public-channel + non-members do not", async () => {
@@ -247,38 +219,40 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
-  const instructions = testMap<PersistedInstructions>();
+  const databaseUrl = testDatabaseUrl();
   const lock = testAdvisoryLock();
-  const leftConfig = testConfigStore(ORG, { instructions });
-  const rightConfig = testConfigStore(ORG, { instructions });
+  const leftConfig = testConfigStore(ORG, { databaseUrl });
+  const rightConfig = testConfigStore(ORG, { databaseUrl });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
   assert.equal(await left.updateInstructions(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
   assert.equal(rightConfig.instructionsVersion(privScope), 0, "the second core starts with a stale cache");
   assert.equal(await right.updateInstructions(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
-  assert.equal((await instructions.get(privScope))?.version, 2);
-  assert.equal((await instructions.get(privScope))?.content, "right");
+  assert.deepEqual(
+    await createPgPool(databaseUrl).q("SELECT version, content FROM soul_configs WHERE scope_id = $1", [privScope]),
+    [{ version: "2", content: "right" }],
+  );
 });
 
 test("SOUL: a durable write failure rejects and restores the live cache", async () => {
-  const control = { fail: false };
-  const instructions = failingPutMap<PersistedInstructions>(control);
-  const config = testConfigStore(ORG, { instructions });
+  const databaseUrl = testDatabaseUrl();
+  const config = testConfigStore(ORG, { databaseUrl });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateInstructions(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
-  control.fail = true;
+  await failTableWrites(databaseUrl, "soul_configs");
   await assert.rejects(
     () => app.updateInstructions(privScope, "cache only", PRIV_MEMBER, { allowSharedScope: true }),
-    /forced durable put failure/,
+    /forced durable write failure/,
   );
   assert.equal(config.getInstructions(privScope), "durable");
   assert.equal(config.instructionsVersion(privScope), 1);
 });
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
-  const control = { fail: true };
-  const config = testConfigStore(ORG, { instructions: failingPutMap<PersistedInstructions>(control) });
+  const databaseUrl = testDatabaseUrl();
+  await failTableWrites(databaseUrl, "soul_configs");
+  const config = testConfigStore(ORG, { databaseUrl });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -321,8 +295,8 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
   assert.equal(out.body?.error, "instructions_update_denied");
 });
 
-test("SOUL: failed persistence restores the pre-write cache even when compensating reads fail", async () => {
-  const backing = testMap<PersistedInstructions>();
+test("SOUL: failed persistence keeps the pre-write cache", async () => {
+  const databaseUrl = testDatabaseUrl();
   const prior: PersistedInstructions = {
     scopeId: privScope,
     content: "durable prior",
@@ -331,8 +305,9 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     updatedBy: OWNER,
     history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
-  await backing.put(privScope, prior);
-  const config = testConfigStore(ORG, { instructions: putThenFailReadsMap(backing) });
+  const config = testConfigStore(ORG, { databaseUrl });
+  await config.restoreInstructionsSnapshot(privScope, prior);
+  await failTableWrites(databaseUrl, "soul_configs");
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {

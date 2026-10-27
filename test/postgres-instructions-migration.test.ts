@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrate } from "./support/migrations.ts";
+import { tableCodec } from "../src/persistence/typed-table.ts";
+import type { PersistedInstructions } from "../src/resolution/config-store.ts";
+import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the instructions migration test";
@@ -76,13 +79,11 @@ const legacy = async (admin: pg.Pool, tenant: string | null) => {
   await insert("channel_state", "org_id, container, kind, updated_at", ["o", "C1", "channel", 1]);
 };
 
+const soul = tableCodec<PersistedInstructions>(CONFIG_TABLES.instructions);
 const instructions = async (admin: pg.Pool) =>
   Object.fromEntries(
-    (await admin.query("SELECT id, json FROM soul_configs")).rows.map((r) => [r.id, r.json]),
-  ) as Record<
-    string,
-    { content: string; version: number; updatedBy?: string; history: Array<{ content: string; version: number }> }
-  >;
+    soul.rows((await admin.query(`SELECT ${soul.columns} FROM soul_configs`)).rows).map((r) => [r.scopeId, r]),
+  );
 
 for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
   test(`channel guidance moves into the channel's instructions${tenant ? " per tenant" : ""}`, { skip }, async () => {
@@ -92,7 +93,7 @@ for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
       // the retired 0002, as on a database that ran it; boot must not trip over it.
       await migrate(url);
       await admin.query(
-        "DELETE FROM qm_schema_migrations WHERE id = 'surface-cache/channel-policy/0003-orders-into-instructions'",
+        "DELETE FROM qm_schema_migrations WHERE id IN ('surface-cache/channel-policy/0003-orders-into-instructions', 'typed/config/soul_configs/0001')",
       );
       await admin.query(
         "INSERT INTO qm_schema_migrations (id, checksum) VALUES ('surface-cache/channel-policy/0002-orders-into-instructions', 'retired') ON CONFLICT DO NOTHING",
@@ -105,7 +106,7 @@ for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
       assert.equal(rows["channel:C1"]!.version, 3);
       assert.equal(rows["channel:C1"]!.updatedBy, "U2");
       assert.deepEqual(
-        rows["channel:C1"]!.history.map((r) => [r.version, r.content]),
+        rows["channel:C1"]!.history!.map((r) => [r.version, r.content]),
         [
           [3, "Be terse.\n\n---\n\nFlag launch slips."],
           [2, "Be terse."],

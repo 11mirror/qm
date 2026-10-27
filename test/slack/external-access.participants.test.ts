@@ -4,10 +4,9 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../support/build-app.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
-import { type PersistedScopedFlag } from "../../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testConfigStore, testMap } from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -37,9 +36,9 @@ test("external-slack-participants: default off; the org flip is what turns it on
 });
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
-  const store = testMap<PersistedScopedFlag>();
-  const a = testConfigStore("default-org", { externalSlackParticipants: store });
-  const b = testConfigStore("default-org", { externalSlackParticipants: store });
+  const databaseUrl = testDatabaseUrl();
+  const a = testConfigStore("default-org", { databaseUrl });
+  const b = testConfigStore("default-org", { databaseUrl });
 
   await a.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
