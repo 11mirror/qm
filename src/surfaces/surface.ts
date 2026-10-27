@@ -1,3 +1,4 @@
+import { parseSlackThreadRef } from "../slack/message-gating.ts";
 import type { IncomingHttpHeaders } from "node:http";
 import type { Tenant } from "../tenant.ts";
 import type { ActorAssertion, ConversationKind } from "../types.ts";
@@ -83,6 +84,7 @@ const NO_TRAITS: SurfaceTraits = {
 interface SurfaceProfile {
   label?: string;
   promptFlavor?: "web" | "slack";
+  dmContainer?: (threadRef: string) => string | null;
   toolHint?: string;
   traits: SurfaceTraits;
 }
@@ -95,6 +97,8 @@ const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
   slack: {
     label: "Slack",
     promptFlavor: "slack",
+    dmContainer: (threadRef) =>
+      threadRef.startsWith("dm:") ? (parseSlackThreadRef(threadRef)?.container ?? null) : null,
     toolHint:
       " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping.",
     traits: {

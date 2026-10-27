@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../surfaces/surface.ts";
 import { externalSlackAdmitted } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody, userRuntimeConfigBody } from "./runtime-config.ts";
 import { type Run, isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
@@ -124,7 +125,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       projectName = project.name;
       projectVersion = String(project.updatedAt);
       sessionParticipantIds = [...activeMemberIds];
-    } else if (req.surface === "web" && req.conversation.kind !== "dm") {
+    } else if (surfaceTraits(req.surface).memberGate && req.conversation.kind !== "dm") {
       if (!conversationRef || !(await h.mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
         return { status: "refused", reason: "you're not a member of that context" };
       }
@@ -233,7 +234,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       );
       if (error) return { status: "refused", reason: error };
     }
-    if (req.surface === "web") {
+    if (surfaceTraits(req.surface).transcript) {
       const threadRef = req.conversation.threadRef;
       const existing = await deps.sessions.getByThread(threadRef);
       if (existing) {
@@ -371,7 +372,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
       ...(req.attachments?.length ? { attachments: req.attachments } : {}),
       ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-      ...((!individualAuth || req.surface === "web") && req.model ? { model: req.model } : {}),
+      ...((!individualAuth || surfaceTraits(req.surface).pickModel) && req.model ? { model: req.model } : {}),
       ...turnModelOptions(req),
       ...(req.readOnly ? { readOnly: true } : {}),
       ...(privateRequest
@@ -466,7 +467,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
     const { actor } = adm;
 
     if (
-      req.surface !== "web" &&
+      !surfaceTraits(req.surface).transcript &&
       deps.signals &&
       (origin.kind === "human" || origin.kind === "ambient") &&
       !req.approval &&
@@ -757,7 +758,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
         status: run.status,
         attempt: run.attempts,
         result: run.result ? await h.withAdminLink(run.result) : run.result,
-        ...(run.request.surface === "web" &&
+        ...(surfaceTraits(run.request.surface).editableTurns &&
         !run.request.approval &&
         !run.request.envelopeWrapped &&
         !(run.request.proactiveOpener && !run.request.text.trim()) &&
@@ -844,7 +845,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       if (!run || (viewer && (!samePerson(run.request.actor.id, viewer) || !(await h.viewerMayUseRun(run, viewer)))))
         return { edited: false, reason: "not_found" };
       if (
-        run.request.surface !== "web" ||
+        !surfaceTraits(run.request.surface).editableTurns ||
         run.request.envelopeWrapped ||
         !isPersonAuthored(resolveTurnOrigin(run.request).kind)
       )
@@ -869,7 +870,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       if (viewer && !(await h.viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
       if (
         signal.kind === "steer" &&
-        run.request.surface === "web" &&
+        surfaceTraits(run.request.surface).sidebar &&
         /^web:.+:inbox$/.test(run.request.conversation.threadRef) &&
         !signal.request
       )

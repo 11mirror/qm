@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../surfaces/surface.ts";
 import {
   type ScopeId,
   parseScopeId,
@@ -211,7 +212,7 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${tenant().orgId}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events.map((event) => ({ ...event, surface })));
-      if (surface === "slack" && hasRevisionEvents(events)) {
+      if (surfaceTraits(surface).revisions && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, events).catch(
           reportFailureAs("revisions: surface revision record", undefined),
         );
@@ -236,9 +237,11 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       };
       await contextRequests.put(request.id, {
         ...request,
-        ...(viewerToken && source !== "web" ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) } : {}),
+        ...(viewerToken && !surfaceTraits(source).transcript
+          ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) }
+          : {}),
       });
-      if (source === "web") {
+      if (surfaceTraits(source).transcript) {
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
           query,
