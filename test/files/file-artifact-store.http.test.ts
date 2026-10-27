@@ -4,21 +4,21 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, after, before, describe, it } from "node:test";
 import { createAclStore } from "../../src/acl/acl-store.ts";
+import { fileArtifactId, type FileArtifactStore } from "../../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { createApp, type AppDeps } from "../../src/api/app.ts";
 import { contentTypeWithUtf8Charset } from "../../src/api/http.ts";
 import { createServer } from "../../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
-import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { fileArtifactId, type FileArtifactStore } from "../../src/files/file-artifact-store.ts";
-import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
-import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { scopeId } from "../../src/types.ts";
 import type { BuiltApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testDatabaseUrl, testMap } from "../support/test-database.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -28,7 +28,7 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as AppDeps);
 }
 

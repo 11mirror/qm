@@ -7,7 +7,7 @@ import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
-import { testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import type { JobHandler, JobWorker } from "../../src/jobs/job-worker.ts";
 import type { TriggerDeps } from "../../src/triggers/run-trigger.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
@@ -60,7 +60,7 @@ function harness(
 ) {
   const webhooks = tracked(createWebhookStore(testDatabaseUrl()));
   const outbound = recordingOutbound();
-  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
+  const identity = tracked(createIdentityService(testDatabaseUrl()));
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);

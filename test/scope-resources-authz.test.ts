@@ -9,7 +9,7 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
@@ -43,7 +43,7 @@ function makeDeps() {
     listByParticipant: async (_p: string) => [],
     participantScopes: async (_p: string) => [],
   };
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };

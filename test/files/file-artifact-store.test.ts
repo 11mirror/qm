@@ -27,7 +27,7 @@ import { createToolContext } from "../../src/tools/tool-context.ts";
 import { scopeId, type Principal } from "../../src/types.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { assertDocumentListing, assertSharedRecordIdentity } from "../support/file-document-listing.ts";
-import { testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");
@@ -502,7 +502,7 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as AppDeps);
 }
 

@@ -30,7 +30,7 @@ import { buildApp as buildWiredApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "../support/participant-scopes.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -597,7 +597,7 @@ test("session approvals are read by session id, never by scanning every approval
   const app = createApp({
     sessions,
     approvals,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");

@@ -10,7 +10,7 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import type { MemoryFact } from "../../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { idleJobs } from "../support/cron-slots.ts";
 
@@ -42,7 +42,7 @@ function fixture() {
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {

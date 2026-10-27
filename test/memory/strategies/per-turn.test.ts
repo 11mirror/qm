@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import type { HarnessModelUtilities } from "../../../src/harness/harness.ts";
-import { createPostgresMemoryService } from "../../../src/memory/postgres-memory-service.ts";
 import {
   createPerTurnStrategy,
   MEMORY_EXTRACTION_PROMPT,
   parseFacts,
-  type PendingCapture,
 } from "../../../src/memory/strategies/per-turn.ts";
-import { scopeId } from "../../../src/types.ts";
+import { createPgPool } from "../../../src/persistence/pg-pool.ts";
 import { createMockHarness } from "../../support/mock-harness.ts";
-import { testDatabaseUrl, testMap } from "../../support/test-database.ts";
+import { scopeId } from "../../../src/types.ts";
+import { createPostgresMemoryService } from "../../../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
+import { test } from "node:test";
+import type { HarnessModelUtilities } from "../../../src/harness/harness.ts";
 
 const SCOPE = "user:U1";
 
@@ -131,7 +131,7 @@ test("debounced: an autonomous turn is skipped and never joins the live actor's 
     memory,
     captureQuietMs: 30,
     captureMaxTurns: 10,
-    pending: testMap<PendingCapture>(),
+    databaseUrl: testDatabaseUrl(),
   });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
@@ -230,7 +230,7 @@ test("burst debounce: turns within the quiet window flush as one extraction afte
     harness: createMockHarness().models,
     memory,
     captureQuietMs: 30,
-    pending: testMap<PendingCapture>(),
+    databaseUrl: testDatabaseUrl(),
   });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
@@ -247,7 +247,7 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
     harness: createMockHarness().models,
     memory,
     captureQuietMs: 60_000,
-    pending: testMap<PendingCapture>(),
+    databaseUrl: testDatabaseUrl(),
     captureMaxTurns: 2,
   });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
@@ -264,7 +264,7 @@ test("burst debounce: different speakers in one channel keep separate bursts in 
     harness: createMockHarness().models,
     memory,
     captureQuietMs: 30,
-    pending: testMap<PendingCapture>(),
+    databaseUrl: testDatabaseUrl(),
   });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
@@ -310,7 +310,7 @@ test("an autonomous (triggered) channel turn captures nothing, even for a human 
 
 test("burst debounce: turns appended through two instances flush once, as one extraction", async () => {
   const { memory } = freshMemory();
-  const pending = testMap<PendingCapture>();
+  const databaseUrl = testDatabaseUrl();
   const prompts: string[] = [];
   const harness = {
     oneShot: async (_system: string, prompt: string) => {
@@ -318,8 +318,8 @@ test("burst debounce: turns appended through two instances flush once, as one ex
       return "SENSITIVITY: ordinary\n- Combined fact";
     },
   };
-  const one = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, pending });
-  const two = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, pending });
+  const one = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, databaseUrl });
+  const two = createPerTurnStrategy({ harness, memory, captureQuietMs: 30, databaseUrl });
   await one.onTurnEnd!({ scopeId: DM, input: "first", reply: REPLY, actorId: ACTOR });
   await two.onTurnEnd!({ scopeId: DM, input: "second", reply: REPLY, actorId: ACTOR });
   await flushed(() => memory.read(DM), [/Combined fact/]);
@@ -330,17 +330,20 @@ test("burst debounce: turns appended through two instances flush once, as one ex
 
 test("burst debounce: the sweep finishes a burst whose instance went away", async () => {
   const { memory } = freshMemory();
-  const pending = testMap<PendingCapture>();
-  await pending.put("orphan", {
-    scopeId: DM,
-    conversationScopeId: DM,
-    actorId: ACTOR,
-    turns: [{ input: "remember that fact one is alpha", reply: REPLY }],
-    token: "left-behind",
-    at: Date.now() - 10 * 60_000,
+  const databaseUrl = testDatabaseUrl();
+  const strategy = createPerTurnStrategy({
+    harness: createMockHarness().models,
+    memory,
+    captureQuietMs: 30,
+    databaseUrl,
   });
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, captureQuietMs: 30, pending });
+  const { q } = createPgPool(databaseUrl);
+  await q(
+    `INSERT INTO memory_capture_pending (id, scope_id, conversation_scope_id, actor_id, turns, token, at)
+     VALUES ('orphan', $1, $1, $2, $3, 'left-behind', $4)`,
+    [DM, ACTOR, JSON.stringify([{ input: "remember that fact one is alpha", reply: REPLY }]), Date.now() - 10 * 60_000],
+  );
   await strategy.sweep();
   assert.match(await memory.read(DM), /fact one is alpha/);
-  assert.deepEqual(await pending.all(), []);
+  assert.deepEqual(await q(`SELECT id FROM memory_capture_pending`), []);
 });

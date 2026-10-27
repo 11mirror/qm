@@ -21,13 +21,13 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "../files/postgres-file-artifact-store.ts";
 import { createDirectFileUploads } from "../files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "../files/file-upload-store.ts";
-import { createMcpServerStore, type McpServer } from "../mcp/mcp-server-store.ts";
+import { createMcpServerStore } from "../mcp/mcp-server-store.ts";
 import { withErrorReporting } from "../admin/error-log.ts";
 import { createPostgresErrorLog } from "../admin/postgres-error-log.ts";
 import type { StoresModule } from "./stores.ts";
 
 export function buildFiles(w: Head & StoresModule) {
-  const { databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap } = w;
+  const { databaseUrl, managesArtifactHome, config, configStore, pgArtifactMap } = w;
 
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
@@ -71,7 +71,7 @@ export function buildFiles(w: Head & StoresModule) {
         files,
       })
     : undefined;
-  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
+  const mcpServers = createMcpServerStore(databaseUrl);
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,

@@ -15,13 +15,10 @@ import { createOutbound, type OutboundPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { loadConfig } from "../src/config.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
-const maps = createPostgresMapFactory(databaseUrl);
-const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");
@@ -108,9 +105,7 @@ const poller = createMonitorPoller({
   sandbox: sb,
   outbound,
   idempotency: createIdempotencyStore(databaseUrl),
-  identity: createIdentityService(smokeMap("deactivated_principals"), {
-    externalMembers: smokeMap("external_members"),
-  }),
+  identity: createIdentityService(databaseUrl),
   run: async (req: TurnRequest): Promise<TurnResult> => {
     wakes.push(req);
     console.log(

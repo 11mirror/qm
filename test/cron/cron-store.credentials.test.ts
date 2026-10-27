@@ -6,11 +6,11 @@ import { createCronStore } from "../../src/cron/cron-store.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
-import { fireAskResolution, type AskResolutionDeps, createAskExpirySweep } from "../../src/triggers/keychain-ask.ts";
+import { type AskResolutionDeps, createAskExpirySweep, fireAskResolution } from "../../src/triggers/keychain-ask.ts";
 import type { Cron, Destination, TurnRequest, TurnResult } from "../../src/types.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
-import { testDatabaseUrl, testMap, testAdvisoryLock } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 
 const recipient: Destination = {
@@ -35,7 +35,7 @@ async function fixture() {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);
@@ -196,7 +196,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run,
   };

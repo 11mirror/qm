@@ -20,7 +20,7 @@ import { createCanReadScope, createCanWriteScope } from "../../src/resolution/sc
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -31,7 +31,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   );
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },
@@ -260,7 +260,7 @@ async function fixture() {
     acl,
     directory,
     sessions,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),

@@ -31,7 +31,7 @@ import { createIdentityService } from "../../../src/identity/identity-service.ts
 import { createPostgresSessionStore } from "../../../src/sessions/postgres-session-store.ts";
 import { scopeId, personalScope } from "../../../src/types.ts";
 import { singleProcessDeps } from "../../support/single-process.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "../../support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "../../support/test-database.ts";
 
 const SECRET = "agent-deployment-fetch-secret".repeat(2);
 
@@ -358,7 +358,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const app = createApp({
     deploy,
     acl,

@@ -4,7 +4,7 @@ import { createPostgresMemoryService } from "../memory/postgres-memory-service.t
 import { createSemanticMemory } from "../memory/semantic-memory.ts";
 import { withMemoryTidy } from "../memory/tidy.ts";
 import { classifiedMemory } from "../memory/classification.ts";
-import { createPerTurnStrategy, type PendingCapture } from "../memory/strategies/per-turn.ts";
+import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { errMessage } from "../util/errors.ts";
 import type { StoresModule } from "./stores.ts";
 import type { ModelKeysModule } from "./model-keys.ts";
@@ -12,7 +12,7 @@ import type { HarnessModule } from "./harness.ts";
 import type { FilesModule } from "./files.ts";
 
 export function buildMemory(w: Head & StoresModule & ModelKeysModule & HarnessModule & FilesModule) {
-  const { databaseUrl, configStore, resolveMemoryEmbedder, late, harness, config, artifactMap, errors } = w;
+  const { databaseUrl, configStore, resolveMemoryEmbedder, late, harness, config, errors } = w;
 
   const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
@@ -27,7 +27,7 @@ export function buildMemory(w: Head & StoresModule & ModelKeysModule & HarnessMo
     harness: harness.models,
     memory,
     captureQuietMs: config.memoryCaptureQuietMs,
-    pending: artifactMap<PendingCapture>("memory_capture_pending"),
+    databaseUrl,
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });

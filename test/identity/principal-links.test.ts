@@ -30,7 +30,8 @@ import { mintSignedPayload } from "../../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 
 const EMAIL = "jordan@acme.test";
@@ -40,7 +41,7 @@ const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified director
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     assert.equal(row.canonicalId, EMAIL);
     assert.equal(links.canonical(OIDC), EMAIL);
@@ -54,7 +55,7 @@ describe("principal link service: one person, several sign-ins", () => {
   });
 
   it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {
       await assert.rejects(links.link(input), (e: unknown) => {
         assert.ok(e instanceof PrincipalLinkError);
@@ -96,17 +97,15 @@ describe("principal link service: one person, several sign-ins", () => {
   });
 
   it("reads links written by another process on refresh", async () => {
-    const backing = testMap<PrincipalLink>();
-    const links = createPrincipalLinkService(backing, testAdvisoryLock());
+    const databaseUrl = testDatabaseUrl();
+    const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), undefined);
-    await backing.put(OIDC, {
-      principalId: OIDC,
-      canonicalId: EMAIL,
-      evidence: EVIDENCE,
-      linkedBy: "ops",
-      createdAt: 1,
-    });
+    await createPgPool(databaseUrl).q(
+      `INSERT INTO principal_links (id, principal_id, canonical_id, evidence, linked_by, created_at)
+       VALUES ($1, $1, $2, $3, 'ops', 1)`,
+      [OIDC, EMAIL, EVIDENCE],
+    );
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), EMAIL);
   });
@@ -116,7 +115,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   afterEach(() => installPrincipalLinks(null));
 
   async function installed() {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     return links;
@@ -137,10 +136,10 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
-    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    const identity = createIdentityService(testDatabaseUrl(), { principalLinks: links });
     await identity.refresh(true);
     assert.equal(identity.classify(OIDC).id, EMAIL);
     assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
@@ -153,8 +152,8 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
-    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+    const identity = createIdentityService(testDatabaseUrl(), { principalLinks: links });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
       email: "guest@partner.test",
@@ -414,7 +413,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
 describe("link mutation serialization", () => {
   it("rejects concurrent chains", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const results = await Promise.allSettled([
       links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
       links.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" }),
@@ -423,27 +422,25 @@ describe("link mutation serialization", () => {
     assert.equal((await links.list()).length, 1);
   });
   it("does not reuse a snapshot begun before the mutation lock", async () => {
-    const backing = testMap<PrincipalLink>();
+    const databaseUrl = testDatabaseUrl();
     const lock = testAdvisoryLock();
     const delayed = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
+    const a = createPrincipalLinkService(databaseUrl, lock);
+    const b = createPrincipalLinkService(databaseUrl, lock);
+    await b.list();
+    const pool = await createPgPool(databaseUrl).pool();
+    const query = pool.query.bind(pool);
     let delay = true;
-    const a = createPrincipalLinkService(
-      {
-        ...backing,
-        async all() {
-          const rows = await backing.all();
-          if (delay) {
-            delay = false;
-            started.resolve();
-            await delayed.promise;
-          }
-          return rows;
-        },
-      },
-      lock,
-    );
-    const b = createPrincipalLinkService(backing, lock);
+    pool.query = (async (text: string, params?: unknown[]) => {
+      const result = query(text, params);
+      if (delay && text.includes("FROM principal_links")) {
+        delay = false;
+        started.resolve();
+        await delayed.promise;
+      }
+      return result;
+    }) as typeof pool.query;
     const pending = a.refresh(true);
     await started.promise;
     await b.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" });
@@ -454,18 +451,21 @@ describe("link mutation serialization", () => {
   });
   it("manual blocks win over directory records during hydration and refresh in either order", async () => {
     for (const reverse of [false, true]) {
-      const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+      const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {
-        const store = testMap<import("../../src/identity/identity-service.ts").DeactivationRecord>();
-        const rows: import("../../src/identity/identity-service.ts").DeactivationRecord[] = [
+        const databaseUrl = testDatabaseUrl();
+        const rows = [
           { principalId: "A", source: reverse ? "directory-sync" : "manual", at: 1 },
           { principalId: "B", source: reverse ? "manual" : "directory-sync", at: 2 },
         ];
-        for (const row of reverse ? rows.reverse() : rows) await store.put(row.principalId, row);
-        const identity = createIdentityService(store, {
-          externalMembers: testMap(),
+        for (const [i, row] of (reverse ? rows.reverse() : rows).entries())
+          await createPgPool(databaseUrl).q(
+            `INSERT INTO deactivated_principals (id, principal_id, source, at) VALUES ($1, $2, $3, $4)`,
+            [`r${i}`, row.principalId, row.source, row.at],
+          );
+        const identity = createIdentityService(databaseUrl, {
           principalLinks: links,
           directorySyncProtected: ["B"],
         });

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { SkillFile } from "./skill-store.ts";
 
 export interface SkillBundle {
@@ -25,14 +26,36 @@ export interface SkillBundleStore {
   list(): Promise<SkillBundle[]>;
 }
 
-export function createSkillBundleStore(opts: { backing: DurableMap<SkillBundle> }): SkillBundleStore {
-  const bundles = opts.backing;
+const SKILL_BUNDLES: TableSpec = {
+  table: "skill_bundles",
+  key: "packId",
+  keyIsField: true,
+  columns: {
+    commit: { type: "text", required: true },
+    files: { type: "jsonb", required: true },
+    hash: { type: "text", required: true },
+  },
+};
+
+export const SKILL_BUNDLES_MIGRATION = mapToTableMigration("skills/bundles/0001-typed", SKILL_BUNDLES);
+
+const codec = tableCodec<SkillBundle>(SKILL_BUNDLES);
+
+export function createSkillBundleStore(databaseUrl: string): SkillBundleStore {
+  const { q } = createPgPool(databaseUrl, [SKILL_BUNDLES_MIGRATION]);
   return {
-    get: (packId) => bundles.get(packId),
+    get: async (packId) =>
+      codec.rows(await q(`SELECT ${codec.columns} FROM skill_bundles WHERE pack_id = $1`, [packId]))[0] ?? null,
     async put(bundle) {
-      await bundles.put(bundle.packId, bundle);
+      await q(
+        `INSERT INTO skill_bundles (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("pack_id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(bundle.packId, bundle),
+      );
     },
-    delete: (packId) => bundles.delete(packId),
-    list: () => bundles.all(),
+    async delete(packId) {
+      await q(`DELETE FROM skill_bundles WHERE pack_id = $1`, [packId]);
+    },
+    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM skill_bundles ORDER BY pack_id`)),
   };
 }

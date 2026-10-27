@@ -34,13 +34,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testMap,
-  testDeployBackings,
-  testAdvisoryLock,
-} from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
@@ -150,7 +144,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,

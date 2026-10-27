@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { DEPLOYMENTS_MIGRATION } from "../../src/deploy/deploy-store.ts";
+import { createDeployStore, DEPLOYMENTS_MIGRATION } from "../../src/deploy/deploy-store.ts";
 import { mkdtempSync } from "node:fs";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,16 +12,15 @@ import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts"
 import { createApp } from "../../src/api/app.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
-import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { type AppPageView, type AppPageViewLog, createPostgresAppPageViewLog } from "../../src/deploy/page-views.ts";
 import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
 import type { FeatureFlagStore } from "../../src/feature-flags.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -80,7 +79,7 @@ async function harness(log: AppPageViewLog) {
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
