@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -126,7 +126,7 @@ export async function serviceCallDenial(
     if (!call.usage) throw new Error("no usage ledger");
     admitted = await call.usage.admitDailyCall(call.slug, rec.maxRequestsPerDay);
   } catch (err) {
-    console.error(`[credential-broker] daily cap check failed for ${call.slug}:`, errMessage(err));
+    reportFailure("credential-broker: daily cap check", err, call.slug);
     return {
       status: 503,
       code: "daily_cap_unavailable",

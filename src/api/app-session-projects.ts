@@ -1,3 +1,4 @@
+import { swallowAs } from "../util/errors.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -66,7 +67,7 @@ export function projectMethods(k: SessionKit) {
         };
         let match = await findChannel();
         if (!match) {
-          await h.refreshSurfaceDirectory().catch(() => undefined);
+          await h.refreshSurfaceDirectory().catch(swallowAs("api: directory refresh", undefined));
           match = await findChannel();
         }
         if (!match) return { status: "invalid_channel" };

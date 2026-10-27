@@ -105,6 +105,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const surfaceContext = createSurfaceContextPuller(app);
   const directoryRefresher = createSurfaceContextPuller(app, { waitMs: 4_000 });
+  const channelPrivacy = async (ref: string): Promise<boolean | undefined> =>
+    deps.directory.channelPrivacy?.(ref).catch(reportFailureAs("api: channel privacy", undefined, ref));
 
   async function refreshSurfaceDirectory(): Promise<void> {
     await directoryRefresher.pull("slack", { syncDirectory: true, count: 1 });
@@ -318,7 +320,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       return run.request.scopeVersion === (await deps.projects?.version(conversation.channelRef));
     }
     if (conversation.kind !== "channel") return false;
-    const isPublic = (await deps.directory.channelPrivacy?.(conversation.channelRef).catch(() => undefined)) === false;
+    const isPublic = (await channelPrivacy(conversation.channelRef)) === false;
     const active = deps.identity.isInternal(deps.identity.classify(viewer));
     return isPublic && active && principalCanReadScope(viewer, scope);
   }
@@ -520,14 +522,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind !== "channel") return false;
     if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
-    if ((await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) !== false) return false;
+    if ((await channelPrivacy(ref)) !== false) return false;
     return principalCanReadScope(principalId, targetScope);
   }
 
   async function principalCanUseWriteGrant(principalId: string, targetScope: ScopeId): Promise<boolean> {
     const { kind, ref } = parseScopeId(targetScope);
-    const publicChannel =
-      kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === false;
+    const publicChannel = kind === "channel" && (await channelPrivacy(ref)) === false;
     return publicChannel
       ? principalCanAccessCurrentScope(principalId, targetScope)
       : principalCanWriteScope(principalId, targetScope);
@@ -543,10 +544,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
-    const privateChannel =
-      kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
+    const privateChannel = kind === "channel" && (await channelPrivacy(ref)) === true;
     const capabilityMembership = privateChannel
-      ? await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined)
+      ? await deps.directory.channelMembership(ref, claims.actorId).catch(reportFailureAs("api: membership", undefined))
       : undefined;
     const attestedBot =
       privateChannel &&
@@ -660,10 +660,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function syncProjectChannelRoster(project: Project, actorId: string): Promise<void> {
     const link = project.slackChannel;
     if (!link || !deps.projects) return;
-    const roster = await deps.directory.channelMemberIds(link.channelId).catch(() => undefined);
+    const roster = await deps.directory
+      .channelMemberIds(link.channelId)
+      .catch(reportFailureAs("api: roster", undefined));
     if (roster === undefined) return;
     const derived = roster.filter((m) => deps.identity.isInternal(deps.identity.classify(m)));
-    const channel = (await deps.directory.listChannels().catch(() => [])).find((c) => c.channelId === link.channelId);
+    const channels = await deps.directory.listChannels().catch(reportFailureAs("api: project channel list", []));
+    const channel = channels.find((c) => c.channelId === link.channelId);
     const prev = project.channelMemberIds ?? [];
     const manual = new Set([project.ownerId, ...project.memberIds]);
     const prevSet = new Set(prev);
