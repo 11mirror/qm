@@ -22,9 +22,7 @@ function memoryBodies(): SandboxBodies<StoredSandboxRecord> {
   };
   return {
     get: async (scope) => rows.get(scope) ?? null,
-    delete: async (scope) => {
-      rows.delete(scope);
-    },
+    delete: async (scope) => rows.delete(scope),
     entries: async () => [...rows.entries()],
     update: merge,
     upsert: merge,
