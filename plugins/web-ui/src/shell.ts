@@ -81,7 +81,7 @@ import {
   startNewChatInLastScope,
   startNewChat,
 } from "./sessions";
-import { closeOpenSessionMenu, sessionSelectionBar, menuOption } from "./session-actions";
+import { sessionSelectionBar, menuOption } from "./session-actions";
 import { renderChatsPage } from "./session-rows";
 import { openCronById, renderCronsPage, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, routeWebhooksHistory } from "./webhooks";
