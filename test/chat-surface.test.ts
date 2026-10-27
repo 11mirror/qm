@@ -305,6 +305,16 @@ test("an approval on a non-Slack surface is posted to the conversation as text w
   );
 });
 
+test("http-chat post failures carry the start of the upstream response", async () => {
+  const adapter = createHttpChatSurface(config(), {
+    fetch: async () => new Response("thread 500 is locked", { status: 400 }),
+  });
+  await assert.rejects(
+    adapter.deliver({ destination: { type: "forum", target: "42:500" }, text: "hi", idempotencyKey: "run:2" }),
+    /refused the post: HTTP 400: thread 500 is locked/,
+  );
+});
+
 test("http-chat refuses an inbound message it could not record, so the sender retries", async () => {
   const adapter = createHttpChatSurface(config(), {
     now: () => 1_700_000_000_000,

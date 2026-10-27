@@ -104,6 +104,8 @@ function header(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
+const FAILURE_BODY_CHARS = 300;
+
 function permanent(message: string): Error {
   return Object.assign(new Error(message), { permanent: true });
 }
@@ -249,9 +251,13 @@ export function createHttpChatSurface(
         }),
         signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       });
-      if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)
-        throw permanent(`${config.surface} refused the post: HTTP ${response.status}`);
-      if (!response.ok) throw new Error(`${config.surface} post failed: HTTP ${response.status}`);
+      if (!response.ok) {
+        const body = (await response.text()).trim().slice(0, FAILURE_BODY_CHARS);
+        const status = `HTTP ${response.status}${body ? `: ${body}` : ""}`;
+        if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)
+          throw permanent(`${config.surface} refused the post: ${status}`);
+        throw new Error(`${config.surface} post failed: ${status}`);
+      }
       await mirror({
         container: conversationKey(target.container),
         ts: mirrorTs(now()),
