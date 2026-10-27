@@ -134,7 +134,8 @@ export default tseslint.config(
     },
   },
   {
-    files: ["plugins/web-ui/src/**/*.{ts,js}", "plugins/web-ui/server/**/*.ts", "plugins/portal/**/*.ts"],
+    files: ["**/*.{ts,tsx,js,mjs,cjs}"],
+    ignores: ["test/**", "**/test/**", "**/*.test.*", "**/vendor/**", "docs/**", "adrs/**", "scripts/code-ratchets.ts"],
     rules: {
       "max-lines": ["error", 800],
       "max-lines-per-function": ["error", 150],
