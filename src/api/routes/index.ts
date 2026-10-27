@@ -15,7 +15,7 @@ import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
 import { credentialRoutes } from "./credentials.ts";
-import { brokerCredentialHttp, CREDENTIAL_HTTP_BROKER_PREFIXES } from "../credential-http-broker.ts";
+import { brokerCredentialHttp, CREDENTIAL_HTTP_BROKER_PREFIX } from "../credential-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
 import { adminRoutes } from "./admin.ts";
@@ -75,7 +75,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...chatSurfaceRawRoutes,
   { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   {
-    match: (_m, p) => CREDENTIAL_HTTP_BROKER_PREFIXES.some((prefix) => p.startsWith(prefix)),
+    match: (_m, p) => p.startsWith(CREDENTIAL_HTTP_BROKER_PREFIX),
     auth: { aud: "credential-broker" },
     handle: brokerCredentialHttp,
   },

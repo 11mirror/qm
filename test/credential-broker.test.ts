@@ -298,19 +298,31 @@ test("a custom injection header + scheme is honored", async () => {
   assert.equal(cap.calls[0]!.headers["Authorization"], undefined);
 });
 
-test("an upstream fetch error is reported generically (never leaks the URL/headers) + recorded", async () => {
+test("an upstream fetch error reports its failure code to the caller and the audit, never the URL or headers", async () => {
   const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
+  const audits: Array<{ action: string; detail?: string }> = [];
   const r = await brokerCredentialCall(
     base({
       usage,
+      audit: { record: (e: { action: string; detail?: string }) => void audits.push(e) },
       fetchImpl: async () => {
-        throw new Error("ECONNREFUSED https://api.x.com with Bearer super-secret-bearer");
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect ECONNREFUSED https://api.x.com with Bearer super-secret-bearer"), {
+            code: "ECONNREFUSED",
+          }),
+        });
       },
     }),
   );
   assert.equal(r.status, 502);
-  assert.match(JSON.stringify(r.json), /upstream_unreachable/);
-  assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
+  assert.deepEqual(r.json, {
+    error: "upstream_unreachable",
+    message: "the credential's host could not be reached (ECONNREFUSED)",
+  });
+  assert.deepEqual(
+    audits.map((e) => [e.action, e.detail]),
+    [["credential.broker.error", "ECONNREFUSED"]],
+  );
   assert.equal((await usage.list({ slug: "x-firehose" }))[0]!.status, "error");
 });
 
@@ -423,7 +435,7 @@ test("actor attestation rejects alternate ports before sending credentials", asy
 test("a deployment token is refused when the credential is switched off for published apps, and audited with the app id when it is on", async () => {
   const cap = captureFetch();
   const audits: Array<{ action: string; detail?: string }> = [];
-  const audit = (e: { action: string; detail?: string }) => audits.push(e);
+  const audit = { record: (e: { action: string; detail?: string }) => void audits.push(e) };
   const asApp = { ...claims(["x-firehose"]), actorId: "publisher", deployment: "dpl-1" };
   const off = await brokerCredentialCall(
     base({

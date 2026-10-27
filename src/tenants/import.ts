@@ -3,10 +3,9 @@ import pg from "pg";
 import { pgCaOptions } from "../persistence/pg-pool.ts";
 import { TENANCY_EXCLUDED_TABLES } from "../persistence/tenancy.ts";
 import { swallowAs } from "../util/errors.ts";
-import { copyRows, insertableColumns, primaryKey, qualified, quoteIdent, type TableRef } from "./row-copy.ts";
-import { assertEmptyDatabase, cloneDatabase, STAGED_SCHEMAS } from "./schema-clone.ts";
+import { copyRows, insertableColumns, primaryKey, qualified, type TableRef } from "./row-copy.ts";
 
-export type CopyMethod = "sql" | "pg-dump";
+const STAGED_SCHEMAS = ["public", "absurd", "pgboss"];
 
 export interface TenantImportOptions {
   sourceUrl: string;
@@ -21,7 +20,6 @@ export interface TenantImportOptions {
   allowExtraColumns: boolean;
   createStaging: boolean;
   maintenanceUrl?: string;
-  copyMethod: CopyMethod;
   batchSize: number;
   migrate: (stagingUrl: string) => Promise<void>;
   writeTenant: (tenantId: string) => Promise<void>;
@@ -78,10 +76,10 @@ async function createDatabase(options: TenantImportOptions): Promise<void> {
     const { rowCount } = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);
     if (rowCount && !options.replace) return;
     if (rowCount) {
-      await client.query(`DROP DATABASE ${quoteIdent(name)} WITH (FORCE)`);
+      await client.query(`DROP DATABASE ${pg.escapeIdentifier(name)} WITH (FORCE)`);
       options.log(`dropped staging database ${name}`);
     }
-    await client.query(`CREATE DATABASE ${quoteIdent(name)}`);
+    await client.query(`CREATE DATABASE ${pg.escapeIdentifier(name)}`);
     options.log(`created staging database ${name}`);
   });
 }
@@ -103,6 +101,16 @@ async function unstagedSchemas(client: pg.Client): Promise<string[]> {
     [STAGED_SCHEMAS],
   );
   return rows.map((row) => row.nspname);
+}
+
+async function assertEmptyDatabase(client: pg.Client): Promise<void> {
+  const { rows } = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S')
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')`,
+  );
+  if ((rows[0]?.count ?? 0) > 0) throw new Error("the staging database must be empty");
 }
 
 function pipeCommands(sourceUrl: string, stagingUrl: string, excluded: readonly string[]): Promise<void> {
@@ -256,7 +264,7 @@ async function bumpSequences(client: pg.Client): Promise<number> {
   let bumped = 0;
   for (const { sequence, table, column } of rows) {
     const { rows: updated } = await client.query<{ bumped: boolean }>(
-      `WITH highest AS (SELECT max(${quoteIdent(column)})::bigint AS value FROM ${table}),
+      `WITH highest AS (SELECT max(${pg.escapeIdentifier(column)})::bigint AS value FROM ${table}),
             current AS (SELECT last_value FROM ${sequence})
        SELECT setval($1::regclass, highest.value, true) IS NOT NULL AS bumped
          FROM highest, current WHERE highest.value IS NOT NULL AND highest.value > current.last_value`,
@@ -274,14 +282,9 @@ async function stage(options: TenantImportOptions): Promise<string | undefined> 
     async (source) => {
       const sourceTenant = await tenantSingleton(source);
       await withClient(options.stagingUrl, async (staging) => {
-        if (options.copyMethod === "pg-dump") {
-          await assertEmptyDatabase(staging);
-          options.log(`copying ${describeDatabase(options.sourceUrl)} to staging with pg_dump`);
-          await pipeCommands(options.sourceUrl, options.stagingUrl, await unstagedSchemas(source));
-        } else {
-          options.log(`copying ${describeDatabase(options.sourceUrl)} to staging with SQL`);
-          await cloneDatabase(source, staging, { batchSize: options.batchSize, log: options.log });
-        }
+        await assertEmptyDatabase(staging);
+        options.log(`copying ${describeDatabase(options.sourceUrl)} to staging with pg_dump`);
+        await pipeCommands(options.sourceUrl, options.stagingUrl, await unstagedSchemas(source));
       });
       return sourceTenant;
     },

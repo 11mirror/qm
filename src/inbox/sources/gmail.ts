@@ -138,6 +138,7 @@ export const gmailAdapter: SourceAdapter = {
     };
     return entry;
   },
+  conversationKeyPath: ["gmail", "threadId"],
   matchesEvent(item, conversationRef) {
     return metaOf(item)?.threadId === conversationRef;
   },

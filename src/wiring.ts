@@ -121,7 +121,12 @@ import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
 import { LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
-import { createInboxLedger, INBOX_ITEM_SOURCE_MIGRATION, type InboxEventSink } from "./inbox/ledger.ts";
+import {
+  createInboxLedger,
+  inboxConversationKeyMigration,
+  INBOX_ITEM_SOURCE_MIGRATION,
+  type InboxEventSink,
+} from "./inbox/ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEvent, type LedgerEventBus } from "./inbox/events.ts";
 import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
@@ -1507,7 +1512,10 @@ export function buildApp(
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(swallowAs("inbox: publish ledger event", undefined));
   };
-  const inboxItems = createInboxLedger(artifactMap<InboxItem>("cron_items", ["cronId"]), publishInboxEvent);
+  const inboxItems = createInboxLedger(
+    artifactMap<InboxItem>("cron_items", ["cronId", "conversationKey"]),
+    publishInboxEvent,
+  );
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
   };
@@ -1539,6 +1547,7 @@ export function buildApp(
   };
   pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
+  pgArtifactMap.pool.registerMigration(inboxConversationKeyMigration());
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/model_registry/0002-drop",
     statements: [

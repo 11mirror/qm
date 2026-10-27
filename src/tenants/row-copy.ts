@@ -6,10 +6,8 @@ export interface TableRef {
   name: string;
 }
 
-export const quoteIdent = (value: string): string => pg.escapeIdentifier(value);
-
 export function qualified(table: TableRef): string {
-  return `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`;
+  return `${pg.escapeIdentifier(table.schema)}.${pg.escapeIdentifier(table.name)}`;
 }
 
 export async function insertableColumns(client: Client, table: TableRef): Promise<string[]> {
@@ -50,11 +48,11 @@ export async function copyRows(
 ): Promise<number> {
   const columns = options.columns ?? (await insertableColumns(target, table));
   const name = qualified(table);
-  const cursor = quoteIdent(`qm_copy_${table.schema}_${table.name}`.slice(0, 60));
+  const cursor = pg.escapeIdentifier(`qm_copy_${table.schema}_${table.name}`.slice(0, 60));
   const selected = columns.map((column) =>
-    options.tenantId !== undefined && column === "tenant_id" ? "$2::uuid" : `r.${quoteIdent(column)}`,
+    options.tenantId !== undefined && column === "tenant_id" ? "$2::uuid" : `r.${pg.escapeIdentifier(column)}`,
   );
-  const insert = `INSERT INTO ${name} (${columns.map(quoteIdent).join(", ")}) OVERRIDING SYSTEM VALUE
+  const insert = `INSERT INTO ${name} (${columns.map((column) => pg.escapeIdentifier(column)).join(", ")}) OVERRIDING SYSTEM VALUE
     SELECT ${selected.join(", ")} FROM jsonb_populate_recordset(NULL::${name}, $1::jsonb) AS r${conflictClause(columns, options.replaceOn)}`;
   await source.query(`DECLARE ${cursor} NO SCROLL CURSOR FOR SELECT to_jsonb(t)::text AS payload FROM ${name} t`);
   let copied = 0;
@@ -76,8 +74,8 @@ export async function copyRows(
 function conflictClause(columns: readonly string[], key: PrimaryKey | undefined): string {
   if (!key) return "";
   const assignable = columns.filter((column) => !key.columns.includes(column) && !key.fixed.includes(column));
-  if (!assignable.length) return ` ON CONFLICT ON CONSTRAINT ${quoteIdent(key.constraint)} DO NOTHING`;
-  return ` ON CONFLICT ON CONSTRAINT ${quoteIdent(key.constraint)} DO UPDATE SET ${assignable
-    .map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`)
+  if (!assignable.length) return ` ON CONFLICT ON CONSTRAINT ${pg.escapeIdentifier(key.constraint)} DO NOTHING`;
+  return ` ON CONFLICT ON CONSTRAINT ${pg.escapeIdentifier(key.constraint)} DO UPDATE SET ${assignable
+    .map((column) => `${pg.escapeIdentifier(column)} = EXCLUDED.${pg.escapeIdentifier(column)}`)
     .join(", ")}`;
 }

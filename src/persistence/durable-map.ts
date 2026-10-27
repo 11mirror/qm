@@ -28,6 +28,7 @@ export interface DurableMap<T> {
   /** Delete every row whose numeric `field` is below `value`; returns how many went. */
   deleteBelow(field: Extract<keyof T, string>, value: number): Promise<number>;
   delete(id: string): Promise<void>;
+  deleteMany(ids: readonly string[]): Promise<number>;
   take(id: string): Promise<T | null>;
 }
 
@@ -318,6 +319,11 @@ export function createPostgresMap<T>(
     },
     async delete(id) {
       await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
+    },
+    async deleteMany(ids) {
+      if (!ids.length) return 0;
+      const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = ANY($1::text[])`, [ids]));
+      return res.rowCount ?? 0;
     },
     async take(id) {
       const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));

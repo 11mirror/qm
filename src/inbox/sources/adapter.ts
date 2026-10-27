@@ -26,7 +26,7 @@ export type SourceActionResult =
 
 export interface ConversationEvent {
   source: string;
-
+  conversationKey: string;
   conversationRef: string;
 
   at: number;
@@ -46,7 +46,7 @@ export interface SourceAdapter {
   id: string;
   actions: readonly string[];
   parse(raw: Record<string, unknown>): ParsedEntry | { error: string };
-
+  conversationKeyPath: readonly string[];
   matchesEvent(item: InboxItem, conversationRef: string): boolean;
   parseProposal(raw: unknown): InboxPayload | null;
   inboxMetadataKeys: readonly string[];

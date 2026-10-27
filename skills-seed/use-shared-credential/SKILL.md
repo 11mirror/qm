@@ -59,7 +59,7 @@ intended account is unclear before a write, ask. For personal access, see the Gi
 skill and use an authorized login that supports Git transport.
 
 ```bash
-git remote add broker "$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git"
+git remote add broker "$AGENT_API_URL/v1/credentials/http/<slug>/<repo-path>.git"
 git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
   push broker HEAD:refs/heads/codex/small-change
 ```

@@ -1,5 +1,5 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
-import { CREDENTIAL_HTTP_BROKER_PREFIXES } from "./credential-http-broker.ts";
+import { CREDENTIAL_HTTP_BROKER_PREFIX } from "./credential-http-broker.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
@@ -111,7 +111,7 @@ async function verifyCapability(
     !(
       capability.aud === "credential-broker" &&
       ((method === "POST" && pathname === "/v1/credentials/broker") ||
-        CREDENTIAL_HTTP_BROKER_PREFIXES.some((prefix) => pathname.startsWith(prefix)))
+        pathname.startsWith(CREDENTIAL_HTTP_BROKER_PREFIX))
     )
   )
     return refuse(res, 403, "This operation requires a private conversation.");

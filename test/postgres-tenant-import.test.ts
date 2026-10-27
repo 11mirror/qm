@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { importTenant, migrateWithBuild, type CopyMethod } from "../src/tenants/import.ts";
+import { importTenant, migrateWithBuild } from "../src/tenants/import.ts";
 import { upsertTenant } from "../src/tenants/registry.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -92,12 +92,7 @@ test(
       ) as Record<keyof typeof sources, string>;
 
       const lines: string[] = [];
-      const run = (
-        name: keyof typeof sources,
-        staging: string,
-        copyMethod: CopyMethod,
-        extra: { replace?: boolean; dryRun?: boolean } = {},
-      ) =>
+      const run = (name: keyof typeof sources, staging: string, extra: { replace?: boolean; dryRun?: boolean } = {}) =>
         importTenant({
           sourceUrl: sources[name],
           stagingUrl: staging,
@@ -109,7 +104,6 @@ test(
           replace: extra.replace ?? false,
           allowExtraColumns: false,
           createStaging: true,
-          copyMethod,
           batchSize: 100,
           migrate,
           writeTenant: async (id) => {
@@ -135,10 +129,10 @@ test(
           log: (line) => lines.push(line),
         });
 
-      const dry = await run("alpha", databaseNamed("stage_dry"), "sql", { dryRun: true });
+      const dry = await run("alpha", databaseNamed("stage_dry"), { dryRun: true });
       assert.equal(dry.committed, false);
-      const alpha = await run("alpha", databaseNamed("stage_alpha"), "sql");
-      const beta = await run("beta", databaseNamed("stage_beta"), "pg-dump");
+      const alpha = await run("alpha", databaseNamed("stage_alpha"));
+      const beta = await run("beta", databaseNamed("stage_beta"));
       assert.ok(lines.some((line) => /only in the target.*runtime_store/.test(line)));
       assert.ok(lines.some((line) => /empty tables only in staging \(skipped\): retired_store/.test(line)));
       assert.equal(alpha.tenantId, sourceTenants.alpha);
@@ -180,8 +174,8 @@ test(
         await client.query("RESET ROLE");
       });
 
-      await assert.rejects(run("alpha", databaseNamed("stage_again"), "sql"), /already has rows for tenant/);
-      const replaced = await run("alpha", databaseNamed("stage_replace"), "sql", { replace: true });
+      await assert.rejects(run("alpha", databaseNamed("stage_again")), /already has rows for tenant/);
+      const replaced = await run("alpha", databaseNamed("stage_replace"), { replace: true });
       assert.equal(replaced.tables.find((count) => count.table === "audit_log")?.target, 1200);
       await withClient(target, async (client) => {
         await client.query("SELECT set_config('qm.tenant_bypass', 'on', false)");

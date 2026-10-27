@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { configurePgCaTrust, configurePgTenancy, createPgPool, pgCaOptions } from "./persistence/pg-pool.ts";
 import { errMessage } from "./util/errors.ts";
-import { importTenant, migrateWithBuild, type CopyMethod } from "./tenants/import.ts";
+import { importTenant, migrateWithBuild } from "./tenants/import.ts";
 import { tenantSecretsKey, upsertTenant } from "./tenants/registry.ts";
 
 const USAGE = `usage: node src/tenant-import-main.ts [source] [staging] [target] [tenant] [options]
@@ -12,7 +11,7 @@ const USAGE = `usage: node src/tenant-import-main.ts [source] [staging] [target]
   target:   --target-url <url> | --target-url-env <NAME> (default DATABASE_URL)
   tenant:   --spec-env <NAME> (JSON {slug, orgId, hosts, env, secretEnv})
             | --slug <slug> --org-id <id> [--hosts a,b] [--env-file <json>] [--secret-env-file <json>]
-  options:  [--tenant-id <uuid>] [--create-staging] [--copy-method sql|pg-dump] [--batch-size <n>]
+  options:  [--tenant-id <uuid>] [--create-staging] [--batch-size <n>]
             [--replace] [--allow-extra-columns] [--dry-run]`;
 
 type ServiceEnv = Record<string, Record<string, string>>;
@@ -105,11 +104,6 @@ function describeEnv(env: ServiceEnv): string {
   return services.length ? services.join(" ") : "none";
 }
 
-function defaultCopyMethod(): CopyMethod {
-  const available = (command: string) => spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
-  return available("pg_dump") && available("pg_restore") ? "pg-dump" : "sql";
-}
-
 const { values } = parseArgs({
   options: {
     "source-url": { type: "string" },
@@ -127,7 +121,6 @@ const { values } = parseArgs({
     "secret-env-file": { type: "string" },
     "tenant-id": { type: "string" },
     "create-staging": { type: "boolean", default: false },
-    "copy-method": { type: "string" },
     "batch-size": { type: "string", default: "500" },
     replace: { type: "boolean", default: false },
     "allow-extra-columns": { type: "boolean", default: false },
@@ -176,8 +169,6 @@ async function main(): Promise<void> {
   if (new Set([sourceUrl, stagingUrl, targetUrl]).size !== 3) {
     usageError("the source, staging and target databases must be three different databases");
   }
-  const copyMethod = values["copy-method"] ?? defaultCopyMethod();
-  if (copyMethod !== "sql" && copyMethod !== "pg-dump") usageError("--copy-method must be sql or pg-dump");
   const batchSize = Number(values["batch-size"]);
   if (!Number.isInteger(batchSize) || batchSize < 1) usageError("--batch-size must be a positive integer");
 
@@ -199,7 +190,6 @@ async function main(): Promise<void> {
     allowExtraColumns: values["allow-extra-columns"],
     createStaging: values["create-staging"],
     ...(adminUrl ? { maintenanceUrl: adminUrl } : {}),
-    copyMethod,
     batchSize,
     migrate: migrateWithBuild(process.env, { tenantize: true, orgId: spec.orgId }),
     writeTenant: async (id) => {

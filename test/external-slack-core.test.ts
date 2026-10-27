@@ -345,7 +345,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       body: JSON.stringify({ credential: "safe", url: "https://public.example/data", method: "GET" }),
     });
   const git = (token: string) =>
-    fetch(`${base}/v1/credentials/git/safe/repo.git/info/refs`, { headers: { "x-agent-capability": token } });
+    fetch(`${base}/v1/credentials/http/safe/repo.git/info/refs`, { headers: { "x-agent-capability": token } });
   assert.equal((await call(control)).status, 403);
   assert.equal((await git(control)).status, 403);
   const success = await call(broker);

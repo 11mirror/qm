@@ -1,19 +1,22 @@
 import { Readable } from "node:stream";
 import type { BrokeredConnector, CapabilityClaims } from "../auth/capability-token.ts";
 import { isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
-import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
+import {
+  brokerMethodAllowed,
+  brokerSinks,
+  brokerPathAllowed,
+  brokerRequestHeaders,
+  grantedCredential,
+  recordBrokerOutcome,
+  upstreamFailureCode,
+  upstreamUnreachable,
+} from "./credential-broker.ts";
 import { pipeToResponse, sendJson } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { HOP_BY_HOP, proxyHeaders } from "../util/http-proxy.ts";
 import { tenant } from "../tenant.ts";
 
-/**
- * Streaming credential broker: `/v1/credentials/http/<credential>/<path>` (and the older
- * `/v1/credentials/git/<slug>/<path>` remotes) forward one request to the credential's host with
- * auth injected server-side. `<credential>` is a shared org credential slug, a connected-app handle,
- * or a connected-app host named by the capability's connectors.
- */
-export const CREDENTIAL_HTTP_BROKER_PREFIXES = ["/v1/credentials/http/", "/v1/credentials/git/"] as const;
+export const CREDENTIAL_HTTP_BROKER_PREFIX = "/v1/credentials/http/";
 
 const SHARED_CREDENTIAL_HEADERS = new Set(["accept", "content-length", "content-type", "git-protocol", "user-agent"]);
 
@@ -62,10 +65,9 @@ const realCredentialHttpFetch: CredentialHttpFetch = async (url, init) => {
   };
 };
 
-function parseBrokerPath(pathname: string): { prefix: string; ref: string; upstreamPath: string } | null {
-  const prefix = CREDENTIAL_HTTP_BROKER_PREFIXES.find((candidate) => pathname.startsWith(candidate));
-  if (!prefix) return null;
-  const rest = pathname.slice(prefix.length);
+function parseBrokerPath(pathname: string): { ref: string; upstreamPath: string } | null {
+  if (!pathname.startsWith(CREDENTIAL_HTTP_BROKER_PREFIX)) return null;
+  const rest = pathname.slice(CREDENTIAL_HTTP_BROKER_PREFIX.length);
   const slash = rest.indexOf("/");
   if (slash <= 0) return null;
   let ref: string;
@@ -76,7 +78,7 @@ function parseBrokerPath(pathname: string): { prefix: string; ref: string; upstr
   }
   const upstreamPath = `/${rest.slice(slash + 1)}`;
   if (upstreamPath === "/" || upstreamPath.includes("\0")) return null;
-  return { prefix, ref, upstreamPath };
+  return { ref, upstreamPath };
 }
 
 type ConnectorMatch = { connector: BrokeredConnector } | { ambiguous: true } | null;
@@ -116,35 +118,17 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
   const parsed = parseBrokerPath(ctx.pathname);
   if (!parsed) return sendJson(ctx.res, 404, { error: "not_found" });
   const { ref, upstreamPath } = parsed;
-  const action = parsed.prefix.endsWith("/git/") ? "credential.git" : "credential.http";
   const method = ctx.method.toUpperCase();
   const claims = ctx.capability;
   if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
 
+  const sinks = brokerSinks(ctx.deps);
   const record = (
     status: "ok" | "denied" | "error",
     slug: string,
     host: string,
     extra: { detail?: string; upstreamStatus?: number } = {},
-  ): void => {
-    ctx.deps.credentialUsage?.record({
-      slug,
-      host,
-      status,
-      ...(extra.upstreamStatus !== undefined ? { upstreamStatus: extra.upstreamStatus } : {}),
-      scopeLabel: claims.scopeId,
-      principalId: claims.actorId,
-    });
-    ctx.deps.auditLog?.record({
-      at: Date.now(),
-      principalId: claims.actorId,
-      action: `${action}.${status === "ok" ? "use" : status}`,
-      resource: slug || "(none)",
-      scopeLabel: claims.scopeId,
-      status,
-      ...(extra.detail ? { detail: extra.detail } : {}),
-    });
-  };
+  ): void => recordBrokerOutcome(sinks, claims, "http", { slug, host, status, ...extra });
   const deny = (status: number, code: string, message: string, slug: string, host: string): void => {
     record("denied", slug, host, { detail: code });
     sendJson(ctx.res, status, { error: code, message });
@@ -201,10 +185,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
     const grant = await grantedCredential(claims, ref, ctx.deps.serviceCreds, tenant().orgScope);
     if (!grant.rec) return deny(grant.status, grant.code, grant.message, ref, grant.host);
     const { rec } = grant;
-    const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
-      m.toUpperCase(),
-    );
-    if (!methods.includes(method))
+    if (!brokerMethodAllowed(rec, method))
       return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, ref, rec.host);
     target = {
       slug: ref,
@@ -228,12 +209,10 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
       headers: target.headers,
       ...(method !== "GET" && method !== "HEAD" ? { body: ctx.req } : {}),
     });
-  } catch {
-    record("error", target.slug, target.host);
-    return sendJson(ctx.res, 502, {
-      error: "upstream_unreachable",
-      message: "the credential's host could not be reached",
-    });
+  } catch (error) {
+    const detail = upstreamFailureCode(error);
+    record("error", target.slug, target.host, { detail });
+    return sendJson(ctx.res, 502, upstreamUnreachable(detail));
   }
 
   record("ok", target.slug, target.host, { upstreamStatus: upstreamResp.status });
