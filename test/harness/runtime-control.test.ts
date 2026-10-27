@@ -18,6 +18,7 @@ import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.t
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createAgentTools, type AgentToolsOptions } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
@@ -292,7 +293,7 @@ test("cron inherit cannot select a saved model removed from policy", async () =>
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
-  ref: Parameters<typeof createAgentTools>[0];
+  ref: TurnToolStateInit;
   runtime?: RuntimeControl;
   requestedRuntime?: Partial<RuntimeChoice>;
   options: AgentToolsOptions;
@@ -349,7 +350,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           return turn.emit(entry);
         },
         observeToolResult: turn.observeToolResult,
-        pendingApprovals: [],
       };
       const options: AgentToolsOptions = {
         ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
@@ -360,7 +360,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         surfaceName: turn.surfaceName,
         ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       };
-      const tools = createAgentTools(ref, options);
+      const tools = createAgentTools(createTurnToolState(ref), options);
       const record: Turn = {
         ref,
         runtime: turn.runtimeControl,
@@ -501,7 +501,7 @@ for (const [surface, flags] of [
     assert.equal(child.requestedRuntime?.fastMode, undefined);
     const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
     assert.deepEqual(
-      createAgentTools(child.ref, asParent)
+      createAgentTools(createTurnToolState(child.ref), asParent)
         .map((t) => t.name)
         .sort(),
       parent.tools,
