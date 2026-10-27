@@ -3,12 +3,12 @@ import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createKeychain,
   credentialHandle,
   renderKeychainManifest,
   fileCredentialEnvironment,
   KeychainError,
 } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { deriveConnectorKey, encryptSecret } from "../../src/connectors/connector-client-store.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";

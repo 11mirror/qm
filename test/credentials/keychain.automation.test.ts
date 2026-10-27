@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test, before, after, beforeEach } from "node:test";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
-import { credentialHandle, createKeychain, KeychainError, ASK_TTL_MS } from "../../src/credentials/keychain.ts";
+import { credentialHandle, KeychainError, ASK_TTL_MS } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createCronStore } from "../../src/cron/cron-store.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";

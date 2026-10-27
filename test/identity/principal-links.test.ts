@@ -20,7 +20,7 @@ import {
   samePerson,
 } from "../../src/directory/person.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { adminStatusFromGrants } from "../../src/admin/admin-service.ts";

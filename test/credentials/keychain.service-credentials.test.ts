@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../../src/types.ts";
-import { createKeychain, isValidCredentialSlug } from "../../src/credentials/keychain.ts";
+import { isValidCredentialSlug } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";

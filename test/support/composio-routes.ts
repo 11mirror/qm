@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../../src/api/routes/composio.ts";
 import { type ApiCtx, respond } from "../../src/api/routes/route.ts";
 import type { ServerDeps } from "../../src/api/deps.ts";
-import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../../src/acl/acl-store.ts";
 import { scopeId } from "../../src/types.ts";

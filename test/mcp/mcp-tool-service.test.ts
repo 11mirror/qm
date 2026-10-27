@@ -12,7 +12,7 @@ import {
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../../src/connectors/oauth.ts";
-import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createMcpClient, mcpResultText } from "../../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../../src/mcp/mcp-server-store.ts";
 import { createMcpToolService, mcpPublicOAuthClients } from "../../src/mcp/mcp-tool-service.ts";

@@ -1,6 +1,6 @@
 import { createServer } from "../../src/api/server.ts";
 import { buildApp } from "./build-app.ts";
-import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../src/auth/capability-token.ts";

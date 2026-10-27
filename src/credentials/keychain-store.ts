@@ -111,14 +111,6 @@ function grantTable(pg: PgPool) {
            AND (expires_at IS NULL OR expires_at >= $2) ORDER BY id`,
         [scopeId, at],
       ),
-    async standing(credentialId: string, scopeId: string): Promise<KeychainGrant | null> {
-      const found = await grants.select(
-        `WHERE credential_id = $1 AND audience_scope_id = $2 AND mode = 'standing' AND status = 'active'
-         ORDER BY id LIMIT 1`,
-        [credentialId, scopeId],
-      );
-      return found[0] ?? null;
-    },
     revoke: (id: string, at: number) => revokeWhere(`id = $1`, [id, at]),
     revokeForCredential: (credentialId: string, at: number) => revokeWhere(`credential_id = $1`, [credentialId, at]),
   };

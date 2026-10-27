@@ -2,12 +2,8 @@ import "../support/auto-fake-sprites.ts";
 
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createKeychain,
-  renderKeychainManifest,
-  KeychainError,
-  type Keychain,
-} from "../../src/credentials/keychain.ts";
+import { renderKeychainManifest, KeychainError, type Keychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { scopeId } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
@@ -416,45 +412,5 @@ test("standing grants are reusable, revocable, and die with the credential", asy
     (await k.listGrants({ ownerId: "U1" })).find((g) => g.id === grant2.id)?.status,
     "revoked",
     "deleting a credential revokes its grants",
-  );
-});
-
-test("grantConnectorToScope opens a connector to a channel, is idempotent, and no-ops with no connector", async () => {
-  const k = kc();
-  assert.equal(
-    await k.grantConnectorToScope({
-      host: "gmail.googleapis.com",
-      principalId: "alex@x",
-      audienceScopeId: "channel:C1",
-      purpose: "shared link",
-    }),
-    null,
-    "no connector → null",
-  );
-
-  await k.setConnectorToken("gmail.googleapis.com", "alex@x", {
-    accessToken: "ya29.alex",
-    expiresAt: Date.now() + 3_600_000,
-  });
-  const g1 = await k.grantConnectorToScope({
-    host: "gmail.googleapis.com",
-    principalId: "alex@x",
-    audienceScopeId: "channel:C1",
-    purpose: "shared link",
-  });
-  assert.ok(g1 && g1.mode === "standing" && g1.ownerId === "alex@x");
-  assert.equal((await k.grantsForScope("channel:C1")).length, 1, "the channel can now use Alex's gmail");
-
-  const g2 = await k.grantConnectorToScope({
-    host: "gmail.googleapis.com",
-    principalId: "alex@x",
-    audienceScopeId: "channel:C1",
-    purpose: "shared link",
-  });
-  assert.equal(g2?.id, g1.id, "re-connecting returns the existing grant, not a duplicate");
-  assert.equal(
-    (await k.listGrants({ ownerId: "alex@x" })).filter((g) => g.status === "active").length,
-    1,
-    "no duplicate grant rows",
   );
 });
