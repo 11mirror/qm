@@ -1,0 +1,152 @@
+import { swallowAs } from "../util/errors.ts";
+import { type Session, scopeId } from "../types.ts";
+import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
+import type { Run } from "../runs/run-store.ts";
+import { deliverSubagentMail } from "../subagents/mail.ts";
+import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
+import { type WakeSweep, createWakeSweep } from "../wake/sweep.ts";
+import { createSurfaceContextPuller } from "../api/surface-context-puller.ts";
+import type { RunsModule } from "./runs.ts";
+import type { AppServicesModule } from "./app-services.ts";
+import type { ApiAppModule } from "./api-app.ts";
+import type { StoresModule } from "./stores.ts";
+import type { SessionSyscallsModule } from "./session-syscalls.ts";
+import type { OutboundModule } from "./outbound.ts";
+import type { HarnessModule } from "./harness.ts";
+import type { Config } from "../config.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
+import type { CredentialsModule } from "./credentials.ts";
+
+export function buildSessionReturns(
+  w: Pick<RunsModule, "runs" | "sessionStateBus" | "blockingApprovalSessions" | "maxAttempts"> &
+    Pick<AppServicesModule, "engaged" | "pokeReaper"> &
+    Pick<ApiAppModule, "app"> &
+    Pick<StoresModule, "sessions" | "advisoryLock" | "featureFlags" | "leaderLease"> &
+    Pick<SessionSyscallsModule, "sessionMailbox" | "prepareSessionRequest"> &
+    Pick<OutboundModule, "outbound"> &
+    Pick<HarnessModule, "runSignals"> &
+    Pick<OrchestratorModule, "orchestratorDeps"> &
+    Pick<CredentialsModule, "keychain"> & { config: Config },
+) {
+  const {
+    runs,
+    engaged,
+    app,
+    sessions,
+    sessionStateBus,
+    blockingApprovalSessions,
+    advisoryLock,
+    maxAttempts,
+    sessionMailbox,
+    prepareSessionRequest,
+    featureFlags,
+    outbound,
+    runSignals,
+    pokeReaper,
+    config,
+    leaderLease,
+    orchestratorDeps,
+    keychain,
+  } = w;
+
+  runs.onTerminal((run) => {
+    void runs
+      .activeForThread(run.sessionId)
+      .then((live) => {
+        if (!live) engaged.settle(run.sessionId);
+      })
+      .catch(swallowAs("wake: settle on terminal", undefined));
+  });
+  runs.onTerminal((run) => {
+    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
+  });
+  runs.onTerminal((run) => {
+    void (async () => {
+      const session = await sessions.getByThread(run.sessionId);
+      const at = run.finishedAt ?? Date.now();
+      if (!session) {
+        if (!(await runs.activeForThread(run.sessionId)))
+          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
+        return;
+      }
+      const settle = async (target: Session): Promise<boolean> => {
+        if (await runs.activeForThread(target.threadRef)) return false;
+        const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
+        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        const participants = await sessions.participantsOf(target.id);
+        sessionStateBus.emit({
+          threadRef: target.threadRef,
+          sessionId: target.id,
+          state: waiting ? "awaiting_approval" : "idle",
+          at,
+          ...(participants.length ? { participants } : {}),
+        });
+        return true;
+      };
+      if (!(await settle(session))) return;
+      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+    })().catch(swallowAs("session-state: terminal emit", undefined));
+  });
+  const returnSessionRun = (run: Run) =>
+    advisoryLock
+      .withLock("session-tree-admission", async () => {
+        const settled = await deliverSubagentMail(
+          {
+            sessions,
+            runs,
+            maxAttempts,
+            mailbox: sessionMailbox,
+            prepareRequest: prepareSessionRequest,
+            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+            outbound,
+            signals: runSignals,
+          },
+          run,
+        );
+        if (settled) await runs.markReturned(run.id);
+      })
+      .catch(async (error: unknown) => {
+        await runs.deferReturn(run.id, 60_000);
+        throw error;
+      });
+  runs.onTerminal((run) => {
+    if (isSubagentThreadRef(run.sessionId)) void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+  });
+  const sweepSessionReturns = async () => {
+    let afterId: string | undefined;
+    for (;;) {
+      const batch = await runs.pendingReturns(100, afterId);
+      if (!batch.length) return;
+      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      afterId = batch.at(-1)!.id;
+    }
+  };
+  const wakeSweep: WakeSweep = createWakeSweep(
+    {
+      async engagedSessions() {
+        return engaged.list();
+      },
+      async sweepSession(threadRef) {
+        const live = await runs.activeForThread(threadRef);
+        if (!live) {
+          pokeReaper();
+          engaged.settle(threadRef);
+          return 1;
+        }
+        return 0;
+      },
+    },
+    { intervalMs: config.reaperIntervalMs, leaderLease },
+  );
+  orchestratorDeps.surfaceContext = createSurfaceContextPuller(app, {
+    searchToken: async (source, viewer) =>
+      source === "slack" && viewer
+        ? ((await keychain.connectorAccessToken("slack.com", viewer, "personal")) ??
+          (await keychain.connectorAccessToken("slack.com", viewer)) ??
+          keychain.connectorAccessToken("slack.com", viewer, "company"))
+        : null,
+  });
+  return { sweepSessionReturns, wakeSweep };
+}
+
+export type SessionReturnsModule = ReturnType<typeof buildSessionReturns>;

@@ -228,3 +228,5 @@ function appDepsTail(w: BuildApiAppInputs) {
     runWaitMs: config.runWaitMs,
   } satisfies Partial<Parameters<typeof createApp>[0]>;
 }
+
+export type ApiAppModule = ReturnType<typeof buildApiApp>;
