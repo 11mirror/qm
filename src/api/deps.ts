@@ -85,6 +85,7 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
+  deliveryWebhookEnabled?: boolean;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: ModelGatewayTransportConfig;

@@ -95,3 +95,25 @@ test("pg delivery store: undelivered rows expire after the TTL instead of cloggi
 test("pg delivery store: once-ever keys revive after a TTL drop instead of deadlocking", { skip }, async () => {
   await exerciseDeliveryExpiryRevive((opts) => createPostgresDeliveryStore(URL!, opts));
 });
+
+test("pg delivery store: rejection stays terminal and FIFO survives separate workers", { skip }, async () => {
+  const writer = createPostgresDeliveryStore(URL!);
+  const reader = createPostgresDeliveryStore(URL!);
+  const destination = { type: "webhook", target: "web:alice:ordered", webhook: { binding: "binding" } };
+  const first = await writer.enqueue({ destination, text: "first", idempotencyKey: "ordered-first" });
+  assert.deepEqual(
+    (await writer.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+    [first.id],
+  );
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = await reader.enqueue({ destination, text: "second", idempotencyKey: "ordered-second" });
+  assert.deepEqual(await reader.claimPending("webhook", 30_000, 16), []);
+  await writer.reject(first.id);
+  assert.deepEqual(
+    (await reader.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+    [second.id],
+  );
+  await reader.enqueue({ destination, text: "first again", idempotencyKey: first.idempotencyKey });
+  assert.ok((await writer.get(first.id))?.rejectedAt);
+  assert.equal((await writer.get(first.id))?.deliveredAt, null);
+});
