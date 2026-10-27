@@ -49,7 +49,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
   await withDatabase(async (url, admin) => {
     await migrate(url);
     await admin.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'durable-map/swarms/0002-drop')",
+      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop')",
     );
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);

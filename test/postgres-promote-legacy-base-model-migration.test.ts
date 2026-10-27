@@ -46,7 +46,9 @@ const rows = async (pool: pg.Pool, table: string) =>
 
 test("legacy base models become runtime selections with the same model", { skip }, async () => {
   await withDatabase(async (url, admin) => {
-    await admin.query("CREATE TABLE base_model_configs (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await migrate(url);
+    await admin.query("DELETE FROM qm_schema_migrations WHERE id = 'runtime/0003-promote-legacy-base-models'");
+    await admin.query("CREATE TABLE IF NOT EXISTS base_model_configs (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     const insert = (id: string, json: unknown) =>
       admin.query("INSERT INTO base_model_configs (id, json) VALUES ($1, $2)", [id, JSON.stringify(json)]);
     await insert("org:o", { scopeId: "org:o", modelId: "claude-opus-5", cronRuntime: { modelId: "gpt-5.5" } });
