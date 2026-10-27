@@ -1,7 +1,8 @@
 import type { AttachmentMeta } from "../types.ts";
 
-export const MAX_DOCUMENT_BYTES = 8_000_000;
-export const MAX_DOCUMENT_TEXT_CHARS = 200_000;
+export const MAX_LLM_REQUEST_BYTES = 18_000_000;
+const BASE64_BYTES_PER_RAW_BYTE = 4 / 3;
+export const MAX_DOCUMENT_BYTES = Math.floor(MAX_LLM_REQUEST_BYTES / BASE64_BYTES_PER_RAW_BYTE);
 const TEXT_EXTENSIONS = new Set(
   "asm bat c cc conf cpp css cxx def dic eml h hh htm html ics ifb in js json ksh list log markdown md mht mhtml mime mjs nws pl py rst s sql srt text txt vcf vtt xml ts tsx jsx sh bash zsh yml yaml toml rs go java rb php swift kt scala lua r jl perl tex cs graphql ndjson json5 dockerfile".split(
     " ",
@@ -59,8 +60,7 @@ export function estimateDocumentTokens(file: {
   sizeBytes: number;
 }): number {
   const bytes = Number.isFinite(file.sizeBytes) && file.sizeBytes > 0 ? file.sizeBytes : 0;
-  const expanded = isTextDocument(file) ? Math.min(bytes, MAX_DOCUMENT_TEXT_CHARS) : bytes;
-  return Math.ceil(expanded / DOCUMENT_BYTES_PER_TOKEN);
+  return Math.ceil(bytes / DOCUMENT_BYTES_PER_TOKEN);
 }
 
 export function replayableDocumentMetas(payload: unknown): AttachmentMeta[] {
