@@ -284,6 +284,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps,
             decision: input.approval,
             sessionId: session.id,
+            ...(input.runId ? { runId: input.runId } : {}),
             lease,
             actorId: actor.id,
             scopeId,

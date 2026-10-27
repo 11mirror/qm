@@ -613,10 +613,12 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
     assert.ok(replay);
     const decision = decisions[0]!;
+    const { approvalKey, ...body } = decision.body;
     assert.deepEqual(
-      { elicitId: decision.elicitId, approved: decision.approved, turnId: decision.turnId, body: decision.body },
+      { elicitId: decision.elicitId, approved: decision.approved, turnId: decision.turnId, body },
       { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
     );
+    assert.equal(typeof approvalKey, approved ? "string" : "undefined");
     const live = await app.getRun(replay.id);
     const liveDecisions = activityItems(live?.activity).filter((item) => item.kind === "ElicitationResponse");
     assert.equal(liveDecisions.length, 1);
