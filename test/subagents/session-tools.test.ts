@@ -291,6 +291,18 @@ test("read shows whole entries, honours the caller's limit and maxChars, and say
   assert.match(window.rendered, /^…\[\d+ earlier chars not shown; raise maxChars or lower limit to see them\]\n/);
   assert.match(window.rendered, /line 249$/);
   assert.ok(window.rendered.length <= 400 + 120);
+  const loaded: number[] = [];
+  const visibleItems = r.sessions.visibleItems.bind(r.sessions);
+  r.sessions.visibleItems = async (sessionId, principals, opts) => {
+    const items = await visibleItems(sessionId, principals, opts);
+    loaded.push(items.length);
+    return items;
+  };
+  const small = await api.read({ target: child.id, limit: 300, maxChars: 400 });
+  assert.ok(small.ok && small.mode === "transcript" && small.rendered === window.rendered);
+  const total = loaded.reduce((n, count) => n + count, 0);
+  assert.ok(total < 100, `only the newest entries that can fill 400 chars are loaded, not all 300 (loaded ${total})`);
+  r.sessions.visibleItems = visibleItems;
 });
 
 test("explicit source title changes reach fresh child tasks without copying history", async () => {

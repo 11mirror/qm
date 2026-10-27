@@ -21,7 +21,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
     forTurn(binding) {
       const ctx = createTurnContext(deps, binding, { lock, cap, admissionKey });
       const syscalls: SessionSyscalls = {
-        receive: (timeoutMs) => receiveMessages(ctx, timeoutMs),
+        receive: (timeoutMs, signal) => receiveMessages(ctx, timeoutMs, signal),
         acknowledge: (ids) => acknowledgeMessages(ctx, ids),
         open: (input) => openSubagent(ctx, input),
         write: (input) => writeSession(ctx, input),
