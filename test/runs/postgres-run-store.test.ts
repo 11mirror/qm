@@ -58,7 +58,6 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
           request: { ...inbound, text: `edit ${unsafe}` },
           dedupeKey: `${thread}-queued`,
         },
-        signals,
       ),
       true,
     );

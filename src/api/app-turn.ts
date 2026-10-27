@@ -386,7 +386,7 @@ function signalMethods(deps: AppDeps, h: AppHelpers) {
         };
       }
       if (signal.queuedRunId) {
-        if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
+        if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound))) {
           if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };
           const queued = await deps.runs.get(signal.queuedRunId);
           return { accepted: false, reason: queued && isUnstarted(queued) ? "queued_changed" : "queued_started" };

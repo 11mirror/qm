@@ -765,8 +765,8 @@ test("queued steering transfers files once or leaves the original queue intact",
       },
     };
     const moved = await Promise.all([
-      runs.steerQueued(queued.id, target.id, signal, signals),
-      runs.steerQueued(queued.id, target.id, signal, signals),
+      runs.steerQueued(queued.id, target.id, signal),
+      runs.steerQueued(queued.id, target.id, signal),
     ]);
     assert.equal(moved.filter(Boolean).length, 1);
     assert.equal(await runs.get(queued.id), null);
@@ -775,13 +775,13 @@ test("queued steering transfers files once or leaves the original queue intact",
     assert.deepEqual(pending[0]?.request?.attachments, attachments);
     const { run: edited } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
     assert.equal(await runs.editPendingText(edited.id, "new caption", ""), true);
-    assert.equal(await runs.steerQueued(edited.id, target.id, { ...signal, dedupeKey: randomUUID() }, signals), false);
+    assert.equal(await runs.steerQueued(edited.id, target.id, { ...signal, dedupeKey: randomUUID() }), false);
     assert.equal((await runs.get(edited.id))?.request.text, "new caption");
     assert.equal((await signals.pending(target.id)).length, 0);
     await runs.withdraw(edited.id);
     await completeTurn(ledger, target.id, { status: "ok", reply: "done" });
     const { run: late } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
-    assert.equal(await runs.steerQueued(late.id, target.id, { ...signal, dedupeKey: randomUUID() }, signals), false);
+    assert.equal(await runs.steerQueued(late.id, target.id, { ...signal, dedupeKey: randomUUID() }), false);
     assert.deepEqual((await runs.get(late.id))?.request.attachments, attachments);
     await runs.withdraw(late.id);
   } finally {

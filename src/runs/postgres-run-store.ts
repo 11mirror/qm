@@ -7,7 +7,6 @@ import type { Run, RunDeliveryState, RunPriority, RunStop, RunStore } from "./ru
 import { isTerminal } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
-/** The run rows; admission, cancellation and fencing come from the turn ledger (turns/turn-engine.ts). */
 export type RunRows = Omit<RunStore, "enqueue" | "withdraw" | "cancelTurn" | "cancelTree" | "leaseHeld">;
 
 export interface PostgresRuntime {
@@ -88,6 +87,16 @@ const RUN_STORE_MIGRATIONS = [
     id: "runs/store/0015-settle-unclaimed-in-flight",
     statements: [
       `UPDATE runs SET status = 'failed', result = json_build_object('status', 'failed', 'sessionId', session_id, 'reason', 'This turn stopped unexpectedly and could not be resumed.')::text, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, finished_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint WHERE engine = 'legacy' AND status IN ('pending', 'running')`,
+    ],
+  },
+  {
+    id: "runs/store/0016-signal-payloads",
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `DO $$ BEGIN IF to_regclass('run_signals') IS NOT NULL THEN
+        UPDATE run_signals SET payload = jsonb_strip_nulls(jsonb_build_object('kind', kind, 'text', text)) WHERE payload IS NULL;
+        ALTER TABLE run_signals ALTER COLUMN payload SET NOT NULL;
+      END IF; END $$`,
     ],
   },
 ];
@@ -280,24 +289,22 @@ export function createPostgresRunStore(connectionString: string): PostgresRuntim
       return (rowCount ?? 0) > 0;
     },
 
-    async steerQueued(queuedRunId, targetRunId, signal, signals) {
-      await signals.hasDedupeKey(signal.dedupeKey!);
+    async steerQueued(queuedRunId, targetRunId, signal) {
       const { rows } = await q(
         `WITH target AS (
            SELECT id FROM runs WHERE id=$2 AND status IN ('queued','pending','running') FOR UPDATE
          ), moved AS (
            DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='queued'
-           AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
+           AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $4::jsonb->'request'->>'text'
            AND EXISTS (SELECT 1 FROM target) RETURNING id
          ), sent AS (
-           INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key)
-           SELECT $2,$3,$4,$5,$6,$7 FROM moved RETURNING id
+           INSERT INTO run_signals(run_id,kind,payload,created_at,dedupe_key)
+           SELECT $2,$3,$4,$5,$6 FROM moved RETURNING id
          ) SELECT pg_notify('run_signals',$2) FROM sent`,
         [
           queuedRunId,
           targetRunId,
           signal.kind,
-          signal.text === undefined ? null : pgTextSafe(signal.text),
           jsonbStringify(signal),
           Date.now(),
           signal.dedupeKey ?? null,
