@@ -191,6 +191,7 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
     { aud: ["other", client.id], azp: "other" },
     { azp: "other" },
     { iss: "https://evil.example" },
+    { iss: ["https://accounts.google.com"] },
     { exp: Math.floor(Date.now() / 1000) - 3600 },
     { exp: undefined },
   ]) {

@@ -183,7 +183,8 @@ function googleIdTokenIsOurs(claims: Record<string, unknown>, clientId: string, 
   return (
     audiences.includes(clientId) &&
     (claims.azp === undefined ? audiences.length === 1 : claims.azp === clientId) &&
-    GOOGLE_ID_TOKEN_ISSUERS.includes(String(claims.iss)) &&
+    typeof claims.iss === "string" &&
+    GOOGLE_ID_TOKEN_ISSUERS.includes(claims.iss) &&
     typeof claims.exp === "number" &&
     claims.exp * 1000 + ID_TOKEN_CLOCK_SKEW_MS > now
   );
