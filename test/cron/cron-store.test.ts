@@ -155,8 +155,9 @@ test("an archived cron is disabled and never due until re-enabled", async () => 
 test("update patches action + schedule in place, preserving identity", async () => {
   const store = createCronStore(testDatabaseUrl());
   const cron = await store.create({ ...base, title: " Inbox digest ", schedule: { everyMs: 60_000 } });
+  const longTitle = `Daily inbox digest ${"covering every mailbox ".repeat(8)}`.trim();
   const updated = await store.update(cron.id, {
-    title: "Daily inbox digest",
+    title: longTitle,
     action: "y",
     schedule: { everyMs: 120_000, firstFireAt: 9_999 },
   });
@@ -166,7 +167,7 @@ test("update patches action + schedule in place, preserving identity", async () 
   assert.equal(updated?.ownerScopeId, base.ownerScopeId);
   assert.equal(updated?.createdAt, cron.createdAt);
   assert.equal(cron.title, "Inbox digest");
-  assert.equal(updated?.title, "Daily inbox digest");
+  assert.equal(updated?.title, longTitle);
   assert.equal(updated?.action, "y");
   assert.equal(updated?.schedule.everyMs, 120_000);
   assert.equal(updated?.schedule.firstFireAt, 9_999);
