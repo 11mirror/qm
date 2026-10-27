@@ -6,17 +6,24 @@
  * JSON stdout is the response; a non-zero exit becomes an error named after "An error occurred (Code)".
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // [package, client export, AWS CLI service]
 const services = [
+  ["@aws-sdk/client-cloudfront", "CloudFrontClient", "cloudfront"],
   ["@aws-sdk/client-dynamodb", "DynamoDBClient", "dynamodb"],
+  ["@aws-sdk/client-ec2", "EC2Client", "ec2"],
+  ["@aws-sdk/client-ecr", "ECRClient", "ecr"],
   ["@aws-sdk/client-ecs", "ECSClient", "ecs"],
+  ["@aws-sdk/client-elastic-load-balancing-v2", "ElasticLoadBalancingV2Client", "elbv2"],
+  ["@aws-sdk/client-iam", "IAMClient", "iam"],
   ["@aws-sdk/client-lambda-microvms", "LambdaMicrovmsClient", "lambda-microvms"],
+  ["@aws-sdk/client-rds", "RDSClient", "rds"],
   ["@aws-sdk/client-s3", "S3Client", "s3api"],
+  ["@aws-sdk/client-secrets-manager", "SecretsManagerClient", "secretsmanager"],
   ["@aws-sdk/client-sts", "STSClient", "sts"],
 ] as const;
 
@@ -26,16 +33,19 @@ const kebab = (name: string): string =>
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .toLowerCase();
 
+function bodyFile(body: string | Uint8Array): string {
+  const file = join(mkdtempSync(join(tmpdir(), "qm-aws-body-")), "body");
+  writeFileSync(file, body);
+  return file;
+}
+
 function cliArgs(input: Record<string, unknown>): string[] {
   const args: string[] = [];
   for (const [key, value] of Object.entries(input)) {
     const flag = `--${kebab(key)}`;
     if (value === undefined) continue;
-    if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
-      const file = join(mkdtempSync(join(tmpdir(), "qm-aws-body-")), "body");
-      writeFileSync(file, value);
-      args.push(flag, file);
-    } else if (typeof value === "boolean") args.push(value ? flag : `--no-${kebab(key)}`);
+    if (key === "Body") args.push(flag, bodyFile(value as string | Uint8Array));
+    else if (typeof value === "boolean") args.push(value ? flag : `--no-${kebab(key)}`);
     else if (typeof value === "string" || typeof value === "number") args.push(flag, String(value));
     else if (Array.isArray(value) && value.every((item) => typeof item === "string")) args.push(flag, ...value);
     else args.push(flag, JSON.stringify(value));
@@ -47,7 +57,18 @@ function run(service: string, command: { constructor: { name: string }; input: o
   const bin = process.env.AWS_BIN;
   if (!bin) throw new Error("AWS SDK call in a test without a fake AWS_BIN");
   const operation = kebab(command.constructor.name.replace(/Command$/, ""));
-  const result = spawnSync(bin, [service, operation, ...cliArgs(command.input as Record<string, unknown>)], {
+  // get-object writes the body to an outfile operand, as the CLI does.
+  const outfile =
+    operation === "get-object" ? join(mkdtempSync(join(tmpdir(), "qm-aws-object-")), "object") : undefined;
+  // register-task-definition takes its definition document as --cli-input-json and its tags as
+  // --tags, the way the CLI used to be invoked.
+  const { tags, ...definition } = command.input as { tags?: unknown };
+  const input =
+    operation === "register-task-definition"
+      ? ["--cli-input-json", `file://${bodyFile(JSON.stringify(definition))}`, "--tags", JSON.stringify(tags)]
+      : cliArgs(command.input as Record<string, unknown>);
+  const argv = [service, operation, ...input, ...(outfile ? [outfile] : [])];
+  const result = spawnSync(bin, argv, {
     encoding: "utf8",
     env: process.env,
   });
@@ -55,6 +76,10 @@ function run(service: string, command: { constructor: { name: string }; input: o
     const stderr = result.stderr.trim() || `${service} ${operation} exited ${result.status}`;
     const code = /An error occurred \((\w+)\)/.exec(stderr)?.[1];
     throw Object.assign(new Error(stderr), { ...(code ? { name: code } : {}), $metadata: { httpStatusCode: 400 } });
+  }
+  if (outfile) {
+    const body = readFileSync(outfile, "utf8");
+    return { Body: { transformToString: async () => body } };
   }
   const out = result.stdout.trim();
   return out ? JSON.parse(out) : {};
