@@ -369,7 +369,6 @@ test("a signed DM event round-trips through core and its reply is posted to the 
   const server = createServer(b.app, serverDeps(cfg, b));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
