@@ -19,6 +19,7 @@ import { tenant, tenantSettings, withTenant, type Tenant } from "./tenant.ts";
 import {
   activeTenants,
   createTenantDirectory,
+  homeTenantHosts,
   isHomeTenant,
   useTenantDirectory,
   watchActiveTenants,
@@ -44,7 +45,7 @@ export async function bootApp(
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl) await mergeTenantQueues(config.databaseUrl);
-  const publishEdge = config.multitenant ? edgeTenantFeed(config, env) : undefined;
+  const publishEdge = config.multitenant ? edgeTenantFeed(env) : undefined;
   if (publishEdge) {
     await useRegistryTenants(config, env, async () => {
       await built.start();
@@ -137,16 +138,16 @@ function warnAboutUnreachableFeatures(config: Config): void {
 
 type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
 
-function configHosts(config: Config): string[] {
-  return [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
-    .map(hostOfUrl)
-    .filter((host): host is string => Boolean(host));
-}
-
-export function edgeTenantFeed(config: Config, env: NodeJS.ProcessEnv): (active: Tenant[]) => void {
+export function edgeTenantFeed(env: NodeJS.ProcessEnv): (active: Tenant[]) => void {
   const home = homeTenantSettings(env, tenant());
-  const homeEdge = { ...home, hosts: [...new Set([...home.hosts, ...configHosts(config)])] };
-  return (active) => setEdgeTenants(active.map((t) => (isHomeTenant(t) ? homeEdge : tenantSettings(t))));
+  return (active) =>
+    setEdgeTenants(
+      active.map((t) => {
+        if (!isHomeTenant(t)) return tenantSettings(t);
+        const { hosts, appsDomain } = homeTenantHosts();
+        return { ...home, hosts: [...hosts], appsDomain };
+      }),
+    );
 }
 
 async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepare: () => Promise<void>): Promise<void> {
@@ -164,7 +165,10 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
       pool,
       secretsKey,
       home: tenant(),
-      homeHosts: configHosts(config).concat(homeHosts(env)),
+      homeHosts: [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
+        .map(hostOfUrl)
+        .filter((host): host is string => Boolean(host))
+        .concat(homeHosts(env)),
       ...(config.deployAppsDomain ? { homeAppsDomain: config.deployAppsDomain } : {}),
       homeSandboxPrefix: config.sandbox.namePrefix ?? "qm",
       prepare,
