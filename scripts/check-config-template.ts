@@ -10,7 +10,11 @@ function configEnvNames(source: string): Set<string> {
   return names;
 }
 
-const read = configEnvNames(readFileSync(new URL("../src/config.ts", import.meta.url), "utf8"));
+const read = configEnvNames(
+  ["../src/config.ts", "../src/config-env.ts"]
+    .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
+    .join("\n"),
+);
 const template = new Set(CORE_ENV_NAMES);
 const missing = [...read].filter((name) => !template.has(name)).sort();
 const stale = [...template].filter((name) => !read.has(name)).sort();

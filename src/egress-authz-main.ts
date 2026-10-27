@@ -8,7 +8,7 @@ import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sin
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
-import { numEnv } from "./config.ts";
+import { numEnv } from "./config-env.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isPrivateNetworkIp } from "../plugins/chassis/src/network.ts";
 
