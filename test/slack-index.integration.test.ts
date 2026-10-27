@@ -3,7 +3,7 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 import type { SurfaceSender } from "../src/surfaces/outbound.ts";
-import type { SlackNative } from "../src/chat-surface/slack.ts";
+import type { SlackNative } from "../src/surfaces/slack-surface.ts";
 import { settle } from "./support/settle.ts";
 import { collectBytes, type ByteSource } from "../src/util/bytes.ts";
 

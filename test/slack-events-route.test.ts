@@ -9,7 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
-import type { SlackEventsHandler } from "../src/chat-surface/slack.ts";
+import type { SlackEventsHandler } from "../src/surfaces/slack-surface.ts";
 
 const SOURCE_SECRET = "source-auth-secret-for-slack-events-tests-01";
 const SLACK_SECRET = "slack-signing-secret-for-events-tests-0001";

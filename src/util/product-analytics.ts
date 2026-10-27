@@ -1,3 +1,4 @@
+import { isNamedSurface } from "../surfaces/surface.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
 import { swallow } from "./errors.ts";
@@ -70,7 +71,7 @@ export function createProductAnalytics(
       else if (status === "ok" || status === "silent" || status === "react") event = "response_completed";
       if (!event) return;
       await capture(event, run.request.actor.id, `${companyId}:${run.id}:${event}`, {
-        surface: run.request.surface === "web" || run.request.surface === "slack" ? run.request.surface : "core",
+        surface: isNamedSurface(run.request.surface) ? run.request.surface : "core",
         completion_boundary: "run",
         result_status: status ?? "failed",
       });

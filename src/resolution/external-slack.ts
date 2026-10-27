@@ -4,6 +4,8 @@ import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
 import { type TurnRequest, turnSource } from "../types.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 
 export type ExternalSlackPolicies = Readonly<Record<string, ExternalSlackAccess>>;
 
@@ -31,7 +33,8 @@ export function externalSlackRequestAllowed(
     );
   }
   if (ref.includes("external-slack:")) return false;
-  const source = request.surface === "slack" ? turnSource(request) : undefined;
+  const native = surfaceHas(request.surface, "externalParticipants");
+  const source = native ? turnSource(request) : undefined;
   if (source) {
     const policy = policies[source.account];
     return (
@@ -42,7 +45,18 @@ export function externalSlackRequestAllowed(
   }
   if (ref.startsWith("slack-account:")) return false;
   if (request.conversation.kind === "dm") return true;
-  return !(Object.keys(policies).length && (request.surface === "slack" || historicalSlack));
+  return !(Object.keys(policies).length && (native || historicalSlack));
+}
+
+export async function externalSlackAdmitted(
+  request: Parameters<typeof externalSlackRequestAllowed>[0],
+  policies: ExternalSlackPolicies | undefined,
+  sessions: Pick<SessionStore, "getByThread">,
+): Promise<boolean> {
+  const historicalSlack =
+    Object.keys(policies ?? {}).length > 0 &&
+    surfaceHas((await sessions.getByThread(request.conversation.threadRef))?.surface, "externalParticipants");
+  return externalSlackRequestAllowed(request, policies, historicalSlack);
 }
 
 export async function currentExternalSlackRun(

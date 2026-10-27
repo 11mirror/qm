@@ -1,3 +1,4 @@
+import { surfaceHas } from "../../surfaces/surface.ts";
 import { recoveredRuntime } from "../../harness/runtime-recovery.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "../turn-options.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -59,7 +60,7 @@ export async function selectTurnRuntime(
       const routing = resolveIndividualAuthRouting(
         anthCred ?? null,
         oaiCred ?? null,
-        account === "personal" || input.surface === "web"
+        account === "personal" || surfaceHas(input.surface, "pickModel")
           ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
           : (runtime.modelId ?? purposeDefault?.modelId),
       );
@@ -97,7 +98,7 @@ export async function selectTurnRuntime(
   const requestedModel = input.model ?? purposeDefault?.modelId;
   const { userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth({});
   if (
-    (input.surface === "web" || purposeDefault) &&
+    (surfaceHas(input.surface, "pickModel") || purposeDefault) &&
     personalAuth &&
     requestedModel &&
     !servesModel(requestedModel, userModelOverride, userProviderKeys)

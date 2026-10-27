@@ -1,3 +1,4 @@
+import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { ScreenTrace } from "./inbound-screen.ts";
 import type { frameTurnPrompt } from "./turn-prompt.ts";
@@ -287,7 +288,7 @@ function createPrepareSteer(
   return async (text, request) => {
     const author = request ? deps.identity.resolve(request.actor).id : actor.id;
     const refreshedInbox =
-      input.surface === "web" &&
+      surfaceHas(input.surface, "sidebar") &&
       conversation.kind === "dm" &&
       /^web:.+:inbox$/.test(conversation.threadRef) &&
       request?.conversation.threadRef === conversation.threadRef

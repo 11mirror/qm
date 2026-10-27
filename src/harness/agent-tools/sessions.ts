@@ -1,5 +1,6 @@
 // The sessions, subagents and swarm tools: other conversations and delegated work.
 
+import { surfaceHas } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { SWARM_ACTIONS, type SwarmInput } from "../../swarms/swarm.ts";
@@ -16,7 +17,7 @@ export function conversationTools(kit: ToolKit) {
 /** The subagents tool: open, brief, message and read background workers. */
 function subagentToolFor(kit: ToolKit) {
   const { opts, delegateWork } = kit;
-  const sidebarSessions = opts?.surfaceName === "web";
+  const sidebarSessions = surfaceHas(opts?.surfaceName, "sidebar");
   const subagentTool = defineTool({
     name: "subagents",
     label: "subagents",

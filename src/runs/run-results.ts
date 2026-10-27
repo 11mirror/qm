@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { type Destination, sourceDestination, turnSource } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
@@ -28,12 +29,14 @@ export function runResultPost(run: Run, adminUrlFor?: AdminUrlFor): OutboundPost
   const origin = run.request.origin;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  if (surface === "web") {
+  if (surfaceHas(surface, "transcript")) {
     const unrecordedReply =
       run.result?.status === "ok" && Boolean(run.result.reply) && run.result.sourceAssistantEntrySeq === undefined;
     if (!unrecordedReply) return null;
   }
-  const webTranscript: Destination["webTranscript"] | undefined = surface === "web" ? { kind: "reply" } : undefined;
+  const webTranscript: Destination["webTranscript"] | undefined = surfaceHas(surface, "transcript")
+    ? { kind: "reply" }
+    : undefined;
   const destination: Destination = {
     type: surface,
     target,
@@ -56,7 +59,7 @@ export function runResultPost(run: Run, adminUrlFor?: AdminUrlFor): OutboundPost
       : {}),
   });
   if (
-    surface === "slack" &&
+    surfaceHas(surface, "quarantineNotice") &&
     run.result?.status === "refused" &&
     (run.result.refusalKind === "security_quarantine" || run.result.refusalKind === "model_budget") &&
     run.request.addressed
@@ -171,7 +174,7 @@ export function wireRunResultPosts(
     if (!owed(run)) return;
     void (async () => {
       const surface = run.request.surface;
-      if (surface !== "web" && !(surface && opts.postsImmediately?.(surface)))
+      if (!surfaceHas(surface, "transcript") && !(surface && opts.postsImmediately?.(surface)))
         await new Promise((resolve) => setTimeout(resolve, graceMs).unref?.());
       const latest = (await runs.get(run.id)) ?? run;
       const post = owed(latest);

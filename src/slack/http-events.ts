@@ -3,7 +3,7 @@ import bolt from "@slack/bolt";
 import type { Receiver, App as BoltApp } from "@slack/bolt";
 import { processEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
-import type { SlackEventsHandler } from "../chat-surface/slack.ts";
+import type { SlackEventsHandler } from "../surfaces/slack-surface.ts";
 import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
 const { isValidSlackRequest } = bolt;

@@ -1,3 +1,4 @@
+import { surfaceProfile } from "../surfaces/surface.ts";
 import { swallowAs } from "../util/errors.ts";
 import { workingSessionThreadRefs } from "../subagents/tree.ts";
 import { type GetItemsOptions, windowedTranscript } from "../sessions/session-store.ts";
@@ -11,7 +12,6 @@ import { projectIdFromGroupRef, type Project, type ProjectStore } from "../proje
 import { type AppDeps, type SessionPinView, type TranscriptWindow } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { tenant } from "../tenant.ts";
-import { parseSlackThreadRef } from "../slack/message-gating.ts";
 
 export interface SessionKit {
   deps: AppDeps;
@@ -103,10 +103,8 @@ export const entryAt = async (k: SessionKit, sessionId: string, seq: number, pri
   );
 };
 
-const slackDmChannel = (session: { surface?: string; threadRef: string }): string | null => {
-  if (session.surface !== "slack" || !session.threadRef.startsWith("dm:")) return null;
-  return parseSlackThreadRef(session.threadRef)?.container ?? null;
-};
+const slackDmChannel = (session: { surface?: string; threadRef: string }): string | null =>
+  surfaceProfile(session.surface).dmContainer?.(session.threadRef) ?? null;
 
 export const mirrorNativePin = async (
   k: SessionKit,

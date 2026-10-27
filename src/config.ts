@@ -1,4 +1,4 @@
-import { httpChatConfigsFromEnv, type HttpChatConfig } from "./chat-surface/http-chat.ts";
+import { httpChatConfigsFromEnv, type HttpChatConfig } from "./surfaces/http-chat.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,

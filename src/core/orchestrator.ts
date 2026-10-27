@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { type ScopeId, type TurnResult } from "../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
@@ -325,7 +326,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
+          if ((surfaceHas(input.surface, "earlyAck") || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));

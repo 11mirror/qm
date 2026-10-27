@@ -31,197 +31,210 @@ export function reactionTallies(raw: unknown): ReactionTally[] {
 
 export type ConversationSerializer = ReturnType<typeof createConversationSerializer>;
 
-export function createConversationSerializer(deps: {
+type Tail<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;
+
+type SerializerDeps = {
   ids: BotIdentity;
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;
   readHistory: SlackHistoryReader;
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
-}) {
-  const { ids, directory, externalParticipantsEnabled } = deps;
+};
 
-  function isConversationMessage(m: SlackHistoryMessage): m is SlackHistoryMessage & { ts: string } {
-    return Boolean(m.ts && !(m.subtype && !RECENT_KEEP_SUBTYPES.has(m.subtype)));
+function isConversationMessage(m: SlackHistoryMessage): m is SlackHistoryMessage & { ts: string } {
+  return Boolean(m.ts && !(m.subtype && !RECENT_KEEP_SUBTYPES.has(m.subtype)));
+}
+
+function isSelfMessage(deps: SerializerDeps, m: SlackHistoryMessage): boolean {
+  const { ids } = deps;
+  return Boolean((m.user && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId));
+}
+
+function messageAuthorName(
+  m: SlackHistoryMessage,
+  nameById: Map<string, string>,
+  botNameById: Map<string, string>,
+): string {
+  if (m.bot_profile?.name) return String(m.bot_profile.name);
+  if (m.username) return String(m.username);
+  if (m.user) return nameById.get(m.user) ?? m.user;
+  if (m.bot_id) return botNameById.get(m.bot_id) ?? "someone";
+  return "someone";
+}
+
+async function resolveMissingAuthorNames(
+  deps: SerializerDeps,
+  client: any,
+  messages: SlackHistoryMessage[],
+  nameById: Map<string, string>,
+  botNameById: Map<string, string>,
+): Promise<void> {
+  const { ids, directory } = deps;
+  const needUsers = new Set<string>();
+  const needBots = new Set<string>();
+  for (const m of messages) {
+    if (m.bot_profile?.name || m.username) continue;
+    if (m.user && m.user !== ids.botUserId && !nameById.has(m.user)) needUsers.add(m.user);
+    else if (!m.user && m.bot_id && m.bot_id !== ids.ownBotId && !botNameById.has(m.bot_id)) needBots.add(m.bot_id);
   }
+  await Promise.all([
+    ...[...needUsers].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
+      const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
+      if (dn) nameById.set(id, dn);
+    }),
+    ...[...needBots].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
+      try {
+        const name = (await client.bots.info({ bot: id })).bot?.name;
+        if (name) botNameById.set(id, String(name));
+      } catch (e) {
+        swallow("slack: bots.info", e);
+      }
+    }),
+  ]);
+}
 
-  function isSelfMessage(m: SlackHistoryMessage): boolean {
-    return Boolean((m.user && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId));
-  }
-
-  function messageAuthorName(
-    m: SlackHistoryMessage,
-    nameById: Map<string, string>,
-    botNameById: Map<string, string>,
-  ): string {
-    if (m.bot_profile?.name) return String(m.bot_profile.name);
-    if (m.username) return String(m.username);
-    if (m.user) return nameById.get(m.user) ?? m.user;
-    if (m.bot_id) return botNameById.get(m.bot_id) ?? "someone";
-    return "someone";
-  }
-
-  async function resolveMissingAuthorNames(
-    client: any,
-    messages: SlackHistoryMessage[],
-    nameById: Map<string, string>,
-    botNameById: Map<string, string>,
-  ): Promise<void> {
-    const needUsers = new Set<string>();
-    const needBots = new Set<string>();
-    for (const m of messages) {
-      if (m.bot_profile?.name || m.username) continue;
-      if (m.user && m.user !== ids.botUserId && !nameById.has(m.user)) needUsers.add(m.user);
-      else if (!m.user && m.bot_id && m.bot_id !== ids.ownBotId && !botNameById.has(m.bot_id)) needBots.add(m.bot_id);
-    }
-    await Promise.all([
-      ...[...needUsers].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
-        const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
-        if (dn) nameById.set(id, dn);
-      }),
-      ...[...needBots].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
-        try {
-          const name = (await client.bots.info({ bot: id })).bot?.name;
-          if (name) botNameById.set(id, String(name));
-        } catch (e) {
-          swallow("slack: bots.info", e);
-        }
-      }),
-    ]);
-  }
-
-  async function shapeRecentMessages(
-    client: any,
-    raw: SlackHistoryMessage[],
-    triggerTs: string,
-    nameById: Map<string, string>,
-  ): Promise<RecentMessage[]> {
-    const kept = raw.filter(isConversationMessage).sort(compareSlackTimestamps);
-    const botNameById = new Map<string, string>();
-    await resolveMissingAuthorNames(client, kept, nameById, botNameById);
-    return kept.map((m) => {
-      const content = messageWithForwardedContent(m);
-      const reactions = reactionTallies(m.reactions);
-      return {
-        ts: m.ts,
-        name: messageAuthorName(m, nameById, botNameById),
-        ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
-        text: decodeSlackEntities(content.text.trim()),
-        ...(m.ts === triggerTs ? { isTrigger: true } : {}),
-        ...(m.bot_id ? { isBot: true } : {}),
-        ...(isSelfMessage(m) ? { isSelf: true } : {}),
-        ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
-        ...(reactions.length ? { reactions } : {}),
-        ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
-      };
-    });
-  }
-
-  async function serializeSlackConversation(
-    client: any,
-    inc: {
-      kind: "dm" | "channel";
-      channel: string;
-      threadTs?: string;
-      ts: string;
-      files: SlackFile[];
-      rawText?: string;
-      userId?: string;
-    },
-    ctx: {
-      audience: ActorAssertion[];
-      channelName?: string;
-      isPrivate?: boolean;
-      kind?: SlackConversationKind;
-      slackIdsByPrincipal?: ReadonlyMap<string, string>;
-    },
-  ): Promise<{ view: ConversationView }> {
-    const empty: ConversationView = {
-      channel: { kind: ctx.kind ?? inc.kind },
-      members: [],
-      messages: [],
-      here: inc.threadTs ? { kind: "thread", youOpenedIt: false } : { kind: "top-level" },
-      files: [],
-      omittedFiles: [],
+async function shapeRecentMessages(
+  deps: SerializerDeps,
+  client: any,
+  raw: SlackHistoryMessage[],
+  triggerTs: string,
+  nameById: Map<string, string>,
+): Promise<RecentMessage[]> {
+  const kept = raw.filter(isConversationMessage).sort(compareSlackTimestamps);
+  const botNameById = new Map<string, string>();
+  await resolveMissingAuthorNames(deps, client, kept, nameById, botNameById);
+  return kept.map((m) => {
+    const content = messageWithForwardedContent(m);
+    const reactions = reactionTallies(m.reactions);
+    return {
+      ts: m.ts,
+      name: messageAuthorName(m, nameById, botNameById),
+      ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
+      text: decodeSlackEntities(content.text.trim()),
+      ...(m.ts === triggerTs ? { isTrigger: true } : {}),
+      ...(m.bot_id ? { isBot: true } : {}),
+      ...(isSelfMessage(deps, m) ? { isSelf: true } : {}),
+      ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
+      ...(reactions.length ? { reactions } : {}),
+      ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
     };
-    if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
+  });
+}
 
-    const nameById = new Map<string, string>();
-    for (const a of ctx.audience) {
-      if (!a.displayName) continue;
-      nameById.set(a.externalId, a.displayName);
-      const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
-      if (slackId) nameById.set(slackId, a.displayName);
-    }
-    const page = await deps.readHistory(client, inc.channel, inc.threadTs, undefined, true).catch((error) => {
-      swallow("slack: conversation context", error);
-      return {
-        raw: [] as SlackHistoryMessage[],
-        hasMore: true,
-        note:
-          slackHistoryRateLimitMessage(error, deps.historyRateLimitOptions) ??
-          "Slack context could not be read; earlier messages may be missing.",
-      };
-    });
-    const raw = page.raw;
-    if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
-      raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), MAX_RECENT_MESSAGES);
+async function serializeSlackConversation(
+  deps: SerializerDeps,
+  client: any,
+  inc: {
+    kind: "dm" | "channel";
+    channel: string;
+    threadTs?: string;
+    ts: string;
+    files: SlackFile[];
+    rawText?: string;
+    userId?: string;
+  },
+  ctx: {
+    audience: ActorAssertion[];
+    channelName?: string;
+    isPrivate?: boolean;
+    kind?: SlackConversationKind;
+    slackIdsByPrincipal?: ReadonlyMap<string, string>;
+  },
+): Promise<{ view: ConversationView }> {
+  const { ids, externalParticipantsEnabled } = deps;
+  const empty: ConversationView = {
+    channel: { kind: ctx.kind ?? inc.kind },
+    members: [],
+    messages: [],
+    here: inc.threadTs ? { kind: "thread", youOpenedIt: false } : { kind: "top-level" },
+    files: [],
+    omittedFiles: [],
+  };
+  if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
-    const slackIdOf = (a: ActorAssertion): string => ctx.slackIdsByPrincipal?.get(a.externalId) ?? a.externalId;
-    const authors = new Set(messages.map((m) => m.authorId));
-    const prominent = (a: ActorAssertion): boolean => slackIdOf(a) === ids.botUserId || authors.has(slackIdOf(a));
-    const shown =
-      ctx.audience.length <= MEMBERS_SHOW_MAX
-        ? ctx.audience
-        : [...ctx.audience.filter(prominent), ...ctx.audience.filter((a) => !prominent(a))].slice(0, MEMBERS_SHOW_MAX);
-    const membersOmitted = ctx.audience.length - shown.length;
-    const members = shown
-      .filter((a) => a.displayName)
-      .map((a) => ({
-        id: a.externalId,
-        name: a.displayName as string,
-        ...(ctx.slackIdsByPrincipal?.get(a.externalId) ? { mentionId: ctx.slackIdsByPrincipal.get(a.externalId) } : {}),
-        ...(a.externalId === ids.botUserId ? { isYou: true } : {}),
-        ...(a.isBot ? { isBot: true } : {}),
-      }));
-
-    let here: ConversationView["here"];
-    if (inc.threadTs) {
-      const root = raw.find((m) => m.ts === inc.threadTs);
-      const youOpenedIt = Boolean(root && isSelfMessage(root));
-      const starterName = root && !youOpenedIt ? messageAuthorName(root, nameById, new Map()) : undefined;
-      here = {
-        kind: "thread",
-        youOpenedIt,
-        ...(starterName ? { starterName } : {}),
-        ...(youOpenedIt && root?.text ? { openerText: decodeSlackEntities(String(root.text).trim()) } : {}),
-      };
-    } else {
-      here = { kind: "top-level" };
-    }
-
-    const files = inc.files.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
-    const omittedFiles = inc.files
-      .filter((f) => isOversize(f))
-      .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
-
-    const view: ConversationView = {
-      channel: {
-        ...(ctx.channelName ? { name: ctx.channelName } : {}),
-        kind: ctx.kind ?? inc.kind,
-        ...(ctx.isPrivate !== undefined ? { isPrivate: ctx.isPrivate } : {}),
-      },
-      members,
-      ...(membersOmitted > 0 ? { membersOmitted } : {}),
-      messages,
-      here,
-      files,
-      omittedFiles,
-      nameById,
-      ...("note" in page && page.note ? { contextNote: page.note } : {}),
+  const nameById = new Map<string, string>();
+  for (const a of ctx.audience) {
+    if (!a.displayName) continue;
+    nameById.set(a.externalId, a.displayName);
+    const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
+    if (slackId) nameById.set(slackId, a.displayName);
+  }
+  const page = await deps.readHistory(client, inc.channel, inc.threadTs, undefined, true).catch((error) => {
+    swallow("slack: conversation context", error);
+    return {
+      raw: [] as SlackHistoryMessage[],
+      hasMore: true,
+      note:
+        slackHistoryRateLimitMessage(error, deps.historyRateLimitOptions) ??
+        "Slack context could not be read; earlier messages may be missing.",
     };
-    return { view };
+  });
+  const raw = page.raw;
+  if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
+    raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
+  const messages = recentWindow(await shapeRecentMessages(deps, client, raw, inc.ts, nameById), MAX_RECENT_MESSAGES);
+
+  const slackIdOf = (a: ActorAssertion): string => ctx.slackIdsByPrincipal?.get(a.externalId) ?? a.externalId;
+  const authors = new Set(messages.map((m) => m.authorId));
+  const prominent = (a: ActorAssertion): boolean => slackIdOf(a) === ids.botUserId || authors.has(slackIdOf(a));
+  const shown =
+    ctx.audience.length <= MEMBERS_SHOW_MAX
+      ? ctx.audience
+      : [...ctx.audience.filter(prominent), ...ctx.audience.filter((a) => !prominent(a))].slice(0, MEMBERS_SHOW_MAX);
+  const membersOmitted = ctx.audience.length - shown.length;
+  const members = shown
+    .filter((a) => a.displayName)
+    .map((a) => ({
+      id: a.externalId,
+      name: a.displayName as string,
+      ...(ctx.slackIdsByPrincipal?.get(a.externalId) ? { mentionId: ctx.slackIdsByPrincipal.get(a.externalId) } : {}),
+      ...(a.externalId === ids.botUserId ? { isYou: true } : {}),
+      ...(a.isBot ? { isBot: true } : {}),
+    }));
+
+  let here: ConversationView["here"];
+  if (inc.threadTs) {
+    const root = raw.find((m) => m.ts === inc.threadTs);
+    const youOpenedIt = Boolean(root && isSelfMessage(deps, root));
+    const starterName = root && !youOpenedIt ? messageAuthorName(root, nameById, new Map()) : undefined;
+    here = {
+      kind: "thread",
+      youOpenedIt,
+      ...(starterName ? { starterName } : {}),
+      ...(youOpenedIt && root?.text ? { openerText: decodeSlackEntities(String(root.text).trim()) } : {}),
+    };
+  } else {
+    here = { kind: "top-level" };
   }
 
-  return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: MAX_RECENT_MESSAGES };
+  const files = inc.files.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
+  const omittedFiles = inc.files
+    .filter((f) => isOversize(f))
+    .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
+
+  const view: ConversationView = {
+    channel: {
+      ...(ctx.channelName ? { name: ctx.channelName } : {}),
+      kind: ctx.kind ?? inc.kind,
+      ...(ctx.isPrivate !== undefined ? { isPrivate: ctx.isPrivate } : {}),
+    },
+    members,
+    ...(membersOmitted > 0 ? { membersOmitted } : {}),
+    messages,
+    here,
+    files,
+    omittedFiles,
+    nameById,
+    ...("note" in page && page.note ? { contextNote: page.note } : {}),
+  };
+  return { view };
+}
+
+export function createConversationSerializer(deps: SerializerDeps) {
+  return {
+    shapeRecentMessages: (...args: Tail<Parameters<typeof shapeRecentMessages>>) => shapeRecentMessages(deps, ...args),
+    serializeSlackConversation: (...args: Tail<Parameters<typeof serializeSlackConversation>>) =>
+      serializeSlackConversation(deps, ...args),
+    recentMessageWindow: MAX_RECENT_MESSAGES,
+  };
 }

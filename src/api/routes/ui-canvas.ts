@@ -1,3 +1,4 @@
+import { surfaceHas } from "../../surfaces/surface.ts";
 import { randomUUID } from "node:crypto";
 import { isTerminal } from "../../runs/run-store.ts";
 import { waitForClientResult } from "../../runs/run-signal-store.ts";
@@ -43,7 +44,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
       error: "feature_disabled",
       message: "The ui_canvas feature flag is off for this person. An org admin can enable it under feature flags.",
     });
-  if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor)
+  if (!surfaceHas(cap.surface, "editableTurns") || !cap.liveActor || cap.triggered || cap.botActor)
     throw refuse(403, {
       error: "not_live_web_turn",
       message: "Only available during a turn the person started from the web UI.",
