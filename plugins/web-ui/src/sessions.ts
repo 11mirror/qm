@@ -40,7 +40,8 @@ import { contextsState, ensureContexts, personalScopeId } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
 import { quietly } from "./shell-state";
-import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
+import { appState, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
+import { closeSidebarOnNarrowView } from "./shell-sidebar";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {

@@ -48,7 +48,7 @@ import { seedRuntimeConfig } from "./runtime-config-store";
 import { swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { icon } from "./icons";
-import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
+import { trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
@@ -89,7 +89,7 @@ import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
-import { attachTooltip, hideTooltip, tip } from "./tooltip";
+import { hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
@@ -101,10 +101,34 @@ import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, can, canView, isView, quietly, type Me, type View } from "./shell-state";
-import { trapDialogFocus } from "./dialog-focus";
+import { appState, can, canView, isView, type Me, type View } from "./shell-state";
 import { UI_OUTDATED_EVENT } from "../../chassis/src/ui-release.ts";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
+import {
+  AuthGate,
+  clearPortalAttempt,
+  deniedGate,
+  gateFor,
+  impersonationBanner,
+  outdatedBanner,
+  portalGate,
+  showConversationError,
+  unreachableGate,
+} from "./shell-gates";
+import {
+  appEl,
+  applySavedSidebarWidth,
+  closeSidebarOnNarrowView,
+  onSidebarKeydown,
+  resetSidebarWidth,
+  root,
+  sidebarOpen,
+  sidebarToggleLabel,
+  startSidebarResize,
+  syncSidebarAccessibility,
+  toggleSidebar,
+  updateSidebarToggleLabels,
+} from "./shell-sidebar";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let userMenuOpen = false;
@@ -160,58 +184,7 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
-
-const appEl = document.getElementById("app");
-if (!appEl) throw new Error("missing #app");
-const root: HTMLElement = appEl;
-
-const narrowViewport = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
-let sidebarOpen = !narrowViewport.matches;
 trackVisualViewport();
-
-const SIDEBAR_MIN_W = 200;
-const SIDEBAR_MAX_W = 520;
-const SIDEBAR_W_KEY = "webui:sidebar-w";
-
-function applySavedSidebarWidth(): void {
-  const saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
-  if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_W && saved <= SIDEBAR_MAX_W) {
-    document.documentElement.style.setProperty("--sidebar-w", `${saved}px`);
-  }
-}
-
-function startSidebarResize(e: PointerEvent): void {
-  e.preventDefault();
-  const handle = e.currentTarget as HTMLElement;
-  const startX = e.clientX;
-  const sidebar = root.querySelector<HTMLElement>(".sidebar");
-  if (!sidebar) return;
-  const startW = sidebar.getBoundingClientRect().width;
-  handle.setPointerCapture(e.pointerId);
-  document.body.classList.add("resizing-sidebar");
-  let w = startW;
-  const drag = new AbortController();
-  const onUp = () => {
-    drag.abort();
-    document.body.classList.remove("resizing-sidebar");
-    localStorage.setItem(SIDEBAR_W_KEY, String(Math.round(w)));
-  };
-  handle.addEventListener(
-    "pointermove",
-    (ev) => {
-      w = Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, startW + (ev.clientX - startX)));
-      document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
-    },
-    { signal: drag.signal },
-  );
-  handle.addEventListener("pointerup", onUp, { signal: drag.signal });
-  handle.addEventListener("lostpointercapture", onUp, { signal: drag.signal });
-}
-
-function resetSidebarWidth(): void {
-  document.documentElement.style.removeProperty("--sidebar-w");
-  localStorage.removeItem(SIDEBAR_W_KEY);
-}
 
 const ICON = {
   newChat: Plus,
@@ -264,121 +237,12 @@ export async function signOut(): Promise<void> {
   location.href = redirectTo;
 }
 
-let impersonationExitFailed = false;
-
-export async function exitImpersonation(): Promise<void> {
-  const stopped = await fetch("/auth/impersonate/stop", { method: "POST", headers: { accept: "application/json" } })
-    .then((r) => r.ok)
-    .catch(swallowAs("web-ui: exit impersonation", false));
-  if (!stopped) {
-    impersonationExitFailed = true;
-    mountShell();
-    return;
-  }
-  window.location.href = ADMIN_HOME_URL;
-}
-
-function impersonationBanner(by: string) {
-  return html`
-    <div class="top-banner" role="status">
-      <span
-        >${
-          impersonationExitFailed
-            ? "Couldn't exit impersonation. Try again."
-            : html`Viewing the assistant as <b>${appState.me?.user ?? ""}</b>. You are <b>${by}</b>`
-        }</span
-      >
-      <button class="top-banner-action" type="button" @click=${exitImpersonation}>Exit impersonation</button>
-    </div>
-  `;
-}
-
-function outdatedBanner() {
-  return html`<div class="top-banner" role="alert">
-    <span>This page is out of date. Reload to continue.</span>
-    <button class="top-banner-action" type="button" @click=${() => location.reload()}>Reload</button>
-  </div>`;
-}
-
-function gateShell(body: unknown) {
-  return html`
-    <div class="signin">
-      <div class="signin-panel">
-        <div class="signin-brand">${brandMark()}<span>${brandName()}</span></div>
-        ${body}
-      </div>
-    </div>
-  `;
-}
-
-const PORTAL_ATTEMPT_KEY = "qm.portal.signin.attempt";
-const PORTAL_ATTEMPT_WINDOW_MS = 20_000;
-
-function portalAttemptedRecently(): boolean {
-  const at = Number(quietly(() => sessionStorage.getItem(PORTAL_ATTEMPT_KEY), null) ?? "");
-  return Number.isFinite(at) && Date.now() - at < PORTAL_ATTEMPT_WINDOW_MS;
-}
-
-function signInWithPortal(): void {
-  quietly(() => sessionStorage.setItem(PORTAL_ATTEMPT_KEY, String(Date.now())), undefined);
-  const returnTo = `${location.pathname}${location.search}`;
-  location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
-}
-
-function clearPortalAttempt(): void {
-  quietly(() => sessionStorage.removeItem(PORTAL_ATTEMPT_KEY), undefined);
-}
-
-function portalGate() {
-  if (portalAttemptedRecently())
-    return gateShell(html`
-      <h1>Sign in through the portal</h1>
-      <p class="signin-body">
-        This surface is reached through the portal, and signing in there didn't produce a session for it. Open the
-        portal address directly rather than this one.
-      </p>
-      <div class="hint">
-        If you opened this surface's own address, that's the cause — it can't authenticate anyone on its own.
-      </div>
-    `);
-  return gateShell(html`
-    <h1>Your session ended</h1>
-    <p class="signin-body">You've been signed out. Sign in again and you'll come back to this page.</p>
-    <button class="btn primary" type="button" @click=${signInWithPortal}>Sign in</button>
-  `);
-}
-
-function deniedGate() {
-  return gateShell(html`
-    <h1>You don't have access</h1>
-    <p class="signin-body">
-      Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
-    </p>
-    <button class="btn" type="button" @click=${signOut}>Sign out</button>
-  `);
-}
-
-function unreachableGate() {
-  return gateShell(html`
-    <h1>We couldn't reach the assistant</h1>
-    <p class="signin-body">The service didn't respond. This is usually temporary.</p>
-    <button class="btn primary" type="button" @click=${() => void bootSafely()}>Try again</button>
-    <div class="hint">If this keeps happening, the core service may be down.</div>
-  `);
-}
-
-export type AuthGate = { kind: "portal" } | { kind: "denied" } | { kind: "unreachable" };
-
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
   stopBrowserErrors();
   shellMounted = false;
   const gates = { portal: portalGate, denied: deniedGate, unreachable: unreachableGate };
   render(gates[gate.kind](), root);
-}
-
-function gateFor(reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
-  return reason === "not_allowed" ? { kind: "denied" } : { kind: "portal" };
 }
 
 export function mountShell(): void {
@@ -654,134 +518,6 @@ export function showMainEmpty(text: string): void {
     );
 }
 
-function showConversationError(unavailable: boolean): void {
-  showMainEmpty("");
-  if (!appState.mainEl) return;
-  render(
-    html`
-      <section class="conversation-error" aria-labelledby="conversation-error-title">
-        <span class="conversation-error-code">${unavailable ? "Connection problem" : "404"}</span>
-        <h1 id="conversation-error-title" tabindex="-1">
-          ${unavailable ? "Couldn't load conversation" : "Conversation not found"}
-        </h1>
-        <p>
-          ${unavailable ? "Something went wrong loading this conversation. Please try again." : "This conversation may have been deleted, or you may be signed into an account that doesn’t have access."}
-        </p>
-        <div class="conversation-error-actions">
-          <a class="btn" href=${withBase("/")}>Back to chats</a>
-          ${unavailable ? html`<button class="btn" @click=${() => location.reload()}>Try again</button>` : nothing}
-        </div>
-      </section>
-    `,
-    appState.mainEl,
-  );
-  appState.mainEl.querySelector<HTMLElement>("h1")?.focus();
-  renderList();
-  document.title = `${unavailable ? "Couldn't load conversation" : "Conversation not found"} · ${brandName()}`;
-}
-
-function toggleSidebar(): void {
-  setSidebarOpen(!sidebarOpen);
-}
-
-export function closeSidebarOnNarrowView(): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
-  setSidebarOpen(false, false);
-  requestAnimationFrame(() => appState.mainEl?.focus({ preventScroll: true }));
-}
-
-const EDGE_PX = 28;
-const SWIPE_PX = 56;
-let swipe: { x: number; y: number; fromEdge: boolean; onDrawer: boolean } | null = null;
-appEl.addEventListener(
-  "touchstart",
-  (e) => {
-    if (!narrowViewport.matches || e.touches.length !== 1) return;
-    const t = e.touches[0]!;
-    const target = e.target as Element | null;
-    const onDrawer = Boolean(target?.closest(".sidebar, .sidebar-scrim"));
-    const fromEdge = !sidebarOpen && t.clientX <= EDGE_PX;
-    if (!fromEdge && !(sidebarOpen && onDrawer)) return;
-    swipe = { x: t.clientX, y: t.clientY, fromEdge, onDrawer };
-  },
-  { passive: true },
-);
-appEl.addEventListener(
-  "touchend",
-  (e) => {
-    if (!swipe) return;
-    const t = e.changedTouches[0];
-    const s = swipe;
-    swipe = null;
-    if (!t) return;
-    const dx = t.clientX - s.x;
-    const dy = Math.abs(t.clientY - s.y);
-    if (Math.abs(dx) < SWIPE_PX || dy > Math.abs(dx) * 0.8) return;
-    if (s.fromEdge && dx > 0 && !sidebarOpen) setSidebarOpen(true);
-    else if (s.onDrawer && dx < 0 && sidebarOpen) setSidebarOpen(false, false);
-  },
-  { passive: true },
-);
-appEl.addEventListener("touchcancel", () => (swipe = null), { passive: true });
-
-narrowViewport.addEventListener("change", (event) => {
-  if (event.matches && sidebarOpen) setSidebarOpen(false, false);
-  else syncSidebarAccessibility(false);
-});
-
-function setSidebarOpen(open: boolean, moveFocus = true): void {
-  if (open && narrowViewport.matches) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
-  sidebarOpen = open;
-  root.querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
-  root.querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
-  updateSidebarToggleLabels();
-  renderSidebarTop();
-  syncSidebarAccessibility(moveFocus);
-}
-
-function syncSidebarAccessibility(moveFocus: boolean): void {
-  const sidebar = root.querySelector<HTMLElement>(".sidebar");
-  const main = root.querySelector<HTMLElement>(".main");
-  const scrim = root.querySelector<HTMLButtonElement>(".sidebar-scrim");
-  const modal = narrowViewport.matches && sidebarOpen;
-  if (!sidebar || !main || !scrim) return;
-  main.inert = modal;
-  sidebar.setAttribute("role", modal ? "dialog" : "navigation");
-  if (modal) sidebar.setAttribute("aria-modal", "true");
-  else sidebar.removeAttribute("aria-modal");
-  scrim.hidden = !modal;
-  if (!moveFocus || !narrowViewport.matches) return;
-
-  const next = sidebarOpen
-    ? sidebar.querySelector<HTMLElement>(".sidebar-collapse-toggle")
-    : root.querySelector<HTMLElement>(".mobile-menu-btn");
-  requestAnimationFrame(() => next?.focus());
-}
-
-function onSidebarKeydown(event: KeyboardEvent): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
-  if (event.key === "Escape" && event.defaultPrevented) return;
-  if (event.key === "Escape" && closeOpenSessionMenu()) {
-    event.preventDefault();
-    event.stopPropagation();
-    return;
-  }
-  trapDialogFocus(event, () => setSidebarOpen(false));
-}
-
-function sidebarToggleLabel(): string {
-  return sidebarOpen ? "Hide sidebar" : "Show sidebar";
-}
-
-function updateSidebarToggleLabels(): void {
-  const collapseLabel = sidebarToggleLabel();
-  root.querySelectorAll<HTMLButtonElement>(".sidebar-toggle").forEach((btn) => {
-    btn.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
-    btn.setAttribute("aria-label", collapseLabel);
-    attachTooltip(btn, collapseLabel);
-  });
-}
-
 export function replacePanePreservingFocus(host: HTMLElement): void {
   if (!appState.mainEl) return;
   replaceChildrenPreservingFocus(appState.mainEl, host);
@@ -884,6 +620,21 @@ document.addEventListener("click", (e) => {
     else location.assign(anchor.href);
   })();
 });
+
+async function openWantedView(wanted: View, wantedItem: string | null, params: URLSearchParams): Promise<void> {
+  if (wanted === "keychain") {
+    const provider = params.get("connector");
+    const status = params.get("status");
+    if (provider && status) noteConnectorResult(provider, status);
+  }
+  if (["contexts", "files", "deploys", "crons", "webhooks", "skills"].includes(wanted)) {
+    const scope = params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
+    if (scope) contextsState.selected = scope;
+  }
+  if (wantedItem) OPEN_BY_ID[wanted]?.(wantedItem);
+  switchView(wanted);
+  if (wanted === "inbox") routeInboxHistory(wantedItem);
+}
 
 export async function boot(): Promise<void> {
   const params = new URLSearchParams(location.search);
@@ -991,22 +742,7 @@ export async function boot(): Promise<void> {
     return;
   }
 
-  if (viewIntent) {
-    if (wanted === "keychain") {
-      const provider = params.get("connector");
-      const status = params.get("status");
-      if (provider && status) noteConnectorResult(provider, status);
-    }
-    if (["contexts", "files", "deploys", "crons", "webhooks", "skills"].includes(wanted)) {
-      const scope =
-        params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
-      if (scope) contextsState.selected = scope;
-    }
-    if (wantedItem) OPEN_BY_ID[wanted as View]?.(wantedItem);
-    switchView(wanted as View);
-    if (wanted === "inbox") routeInboxHistory(wantedItem);
-    return;
-  }
+  if (viewIntent) return openWantedView(wanted as View, wantedItem, params);
 
   await sessions;
 
