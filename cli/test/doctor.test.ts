@@ -356,10 +356,13 @@ test("Slack doctor validates the bot through its configured API while Socket Mod
 
 test("Slack doctor does not require a Socket Mode token for HTTP events", async () => {
   const dir = manifestDir();
-  const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
+  const secrets = new Map([
+    ["SLACK_BOT_TOKEN", "xoxb-test"],
+    ["SLACK_SIGNING_SECRET", "signing"],
+  ]);
   try {
     await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
-      doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
+      doctorCommon(slackConfig(), secrets, { configDir: dir }),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

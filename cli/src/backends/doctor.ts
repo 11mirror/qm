@@ -154,7 +154,8 @@ export async function doctorCommon(
   if (config.services.includes("slack")) {
     const bot = deploymentSecretValue("SLACK_BOT_TOKEN", secrets.get("SLACK_BOT_TOKEN"));
     const app = deploymentSecretValue("SLACK_APP_TOKEN", secrets.get("SLACK_APP_TOKEN"));
-    const httpEvents = config.env?.slack?.SLACK_EVENTS_MODE?.trim() === "http";
+    const httpEvents =
+      !app && Boolean(deploymentSecretValue("SLACK_SIGNING_SECRET", secrets.get("SLACK_SIGNING_SECRET")));
     if (!httpEvents && Boolean(bot) !== Boolean(app)) {
       throw new CliError(
         "Slack setup needs both SLACK_BOT_TOKEN and SLACK_APP_TOKEN, or neither when setup is deferred",

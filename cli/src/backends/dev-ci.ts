@@ -32,9 +32,8 @@ function requireEnv(): void {
   const bot = process.env.SLACK_BOT_TOKEN ?? "";
   const app = process.env.SLACK_APP_TOKEN ?? "";
   if (!bot.startsWith("xoxb-")) die("SLACK_BOT_TOKEN (xoxb-…) required");
-  if (process.env.SLACK_EVENTS_MODE === "http") {
-    if (!process.env.SLACK_SIGNING_SECRET) die("SLACK_SIGNING_SECRET required in http events mode");
-  } else if (!app.startsWith("xapp-")) die("SLACK_APP_TOKEN (xapp-…) required");
+  if (!app.startsWith("xapp-") && !process.env.SLACK_SIGNING_SECRET)
+    die("SLACK_APP_TOKEN (xapp-…) or SLACK_SIGNING_SECRET required");
   if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY) {
     die(
       "a model provider key required (ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY — live turns are the point of this instance)",

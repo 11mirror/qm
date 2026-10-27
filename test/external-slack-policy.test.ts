@@ -53,7 +53,6 @@ test("external access is opt-in per workspace and rejects malformed allowlists",
       {
         id: "http",
         botToken: base.SLACK_BOT_TOKEN,
-        eventsMode: "http",
         signingSecret: "synthetic",
         externalAccess: policy,
       },

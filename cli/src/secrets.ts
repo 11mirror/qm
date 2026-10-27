@@ -235,8 +235,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "SLACK_SIGNING_SECRET",
     service: "slack",
-    required: { when: { kind: "env-equals", service: "slack", name: "SLACK_EVENTS_MODE", value: "http" } },
-    description: "Slack request-signing secret (from the Slack app's Basic Information page); HTTP events mode only.",
+    required: false,
+    description:
+      "Slack request-signing secret (from the Slack app's Basic Information page); used for HTTP events when SLACK_APP_TOKEN is unset.",
   },
   {
     name: "CORE_SIGNING_SECRET",

@@ -49,12 +49,9 @@ export async function startSlackPlugin(
   core: SlackCoreClient,
 ): Promise<{ stop(): Promise<void> }> {
   const slackAccountClients = core.slack.accounts;
-  const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
-  if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
-    throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && !cfg.signingSecret)
-    throw new Error("Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) in http events mode");
+  if (!cfg.receiverFactory && !cfg.appToken && !cfg.signingSecret)
+    throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) or signingSecret (SLACK_SIGNING_SECRET)");
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -118,7 +115,7 @@ export async function startSlackPlugin(
     : undefined;
   const receiver = () => {
     if (cfg.receiverFactory) return cfg.receiverFactory(staging);
-    return EVENTS_MODE === "http"
+    return !APP_TOKEN
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
           staging,

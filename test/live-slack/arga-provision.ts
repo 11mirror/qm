@@ -69,8 +69,8 @@ export async function provisionTwinEnvironment(defaultTtl = 60): Promise<Record<
     return {
       SLACK_API_URL: session.baseUrl,
       SLACK_BOT_TOKEN: session.botToken,
+      SLACK_APP_TOKEN: "",
       SLACK_SIGNING_SECRET: session.signingSecret,
-      SLACK_EVENTS_MODE: "http",
       SLACK_IDENTITY_EMAIL: "0",
       SLACK_QA_USER_TOKEN: qa.token,
       LIVE_E2E_ACTOR_TOKENS: JSON.stringify(actorTokens),
