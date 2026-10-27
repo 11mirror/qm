@@ -208,3 +208,25 @@ test(
     }
   },
 );
+
+test(
+  "job worker: an immediate every job also runs once per worker start, outside its cadence",
+  { skip, timeout: 60_000 },
+  async () => {
+    const name = `immediate-${Date.now()}`;
+    let runs = 0;
+    const worker = createJobWorker(URL!);
+    worker.every(name, 60 * 60_000, () => void runs++, { immediate: true });
+    try {
+      await worker.start();
+      await until(() => runs >= 1, 15_000);
+      await worker.stopClaims();
+      await worker.start();
+      await until(() => runs >= 2, 15_000);
+      await new Promise((r) => setTimeout(r, 1_500));
+      assert.equal(runs, 2, "one run for the first spawn, one for the restart; the hourly cadence waits");
+    } finally {
+      await worker.stop();
+    }
+  },
+);
