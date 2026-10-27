@@ -273,7 +273,7 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
         query: "budget",
         callId: "safe",
         retrySafe: true,
-        rerun: { tool: "history", input: { query: "budget" } },
+        rerun: { tool: "history", input: {}, recorded: ["query"] },
       },
       { tool: "history", seq: 3, callId: "unsafe", retrySafe: false },
       { tool: "history", seq: 3, callId: "unmarked" },
@@ -640,12 +640,8 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
     `example_delete {"auth":{"apiKey":"[redacted]"},"id":4,"note":"${"y".repeat(1000)}"}`,
   );
   const cards = state.halt.approvals().length;
-  assert.match(textOut(await call(del, { id: 3, note: "x".repeat(20_000) })), /too long to show on an approval card/);
-  assert.equal(
-    state.halt.approvals().length,
-    cards,
-    "an argument set the card cannot show is never offered for approval",
-  );
+  assert.match(textOut(await call(del, { id: 3, note: "x".repeat(20_000) })), /blocked: needs human approval/);
+  assert.equal(state.halt.approvals().length, cards + 1, "long arguments are offered for approval in full");
 });
 
 function catalogTools(state: TurnToolState, name = "records") {

@@ -3,6 +3,7 @@ import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connecto
 import { handbackStop } from "../../runs/run-store.ts";
 import { toolResultProvenance, type ToolResultProvenance } from "../../security/security-screen.ts";
 import { cutUnparkedToolOutput, parkIfOverCap } from "../../sessions/tool-output.ts";
+import { packRerun } from "../../sessions/rerun-record.ts";
 import type { ScopeId } from "../../types.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import { reportFailureAs } from "../../util/errors.ts";
@@ -138,7 +139,7 @@ function kitRecorders(ref: ToolRuntime, { log }: Pick<ReturnType<typeof kitLog>,
     return log("ToolCall", {
       ...payload,
       callId,
-      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: packRerun(payload, mark.rerun) } : {}) } : {}),
     });
   };
 

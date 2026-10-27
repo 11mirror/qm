@@ -1,3 +1,4 @@
+import { recordedRerun } from "../sessions/rerun-record.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type {
   AssistantMessage,
@@ -279,9 +280,9 @@ function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
 }
 
 export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
-  const { rerun, result: _r, wire: _w, ...recorded } = call.body;
-  const input = (rerun as { input?: unknown } | undefined)?.input;
-  if (isObj(input)) return { ...input, retrySafe: true };
+  const { rerun: _rerun, result: _r, wire: _w, ...recorded } = call.body;
+  const rerun = recordedRerun(call.body);
+  if (rerun) return { ...rerun.input, retrySafe: true };
   if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
   if (recorded.action !== "post" && recorded.action !== "reach" && recorded.action !== "edit") return recorded;
   const { bytes: _b, files: recordedFiles, ...rest } = recorded;
