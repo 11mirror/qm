@@ -1,13 +1,15 @@
 import type { CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { compileSafeRegex } from "../util/safe-regex.ts";
-import { basename, isShell, parseShellCommand, skipOptions, wrapperChain, type Invocation } from "./shell-parse.ts";
+import { basename, isShell, skipOptions } from "./shell-launchers.ts";
+import { parseShellCommand, type Invocation } from "./shell-parse.ts";
 
 type Unit =
   | { kind: "invocation"; invocation: Invocation }
   | { kind: "code"; text: string; sql: boolean }
   | { kind: "pipeline"; stages: string[][] }
   | { kind: "function"; name: string }
+  | { kind: "source"; text: string }
   | { kind: "unparsed"; text: string };
 
 interface BuiltinRule extends CommandRule {
@@ -39,8 +41,12 @@ function shortFlag(arg: string, letter: string): boolean {
   return !arg.startsWith("--") && cluster.toLowerCase().includes(letter);
 }
 
+function levels(invocation: Invocation): string[][] {
+  return invocation.inner === invocation.argv ? [invocation.argv] : [invocation.argv, invocation.inner];
+}
+
 function recursiveDelete(invocation: Invocation): string | undefined {
-  return invocation.chain
+  return levels(invocation)
     .find((argv) => {
       if (basename(argv[0] ?? "") !== "rm") return false;
       return flagsBeforeTerminator(argv.slice(1)).some((arg) => arg === "--recursive" || shortFlag(arg, "r"));
@@ -49,13 +55,12 @@ function recursiveDelete(invocation: Invocation): string | undefined {
 }
 
 function forcePush(invocation: Invocation): string | undefined {
-  return invocation.chain
+  return levels(invocation)
     .find((argv) => {
       if (basename(argv[0] ?? "") !== "git") return false;
-      const args = argv.slice(1);
-      const subcommand = skipOptions(args, GIT_VALUE_OPTIONS);
-      if (args[subcommand] !== "push") return false;
-      return flagsBeforeTerminator(args.slice(subcommand + 1)).some(
+      const subcommand = skipOptions(argv, 1, GIT_VALUE_OPTIONS);
+      if (argv[subcommand] !== "push") return false;
+      return flagsBeforeTerminator(argv.slice(subcommand + 1)).some(
         (arg) => arg.startsWith("--force") || shortFlag(arg, "f"),
       );
     })
@@ -69,15 +74,16 @@ function destructiveSql(code: string): string | undefined {
 }
 
 function mkfs(invocation: Invocation): string | undefined {
-  return invocation.chain.map((argv) => basename(argv[0] ?? "")).find((name) => /^mkfs(\.|$)/.test(name));
+  return levels(invocation)
+    .map((argv) => basename(argv[0] ?? ""))
+    .find((name) => /^mkfs(\.|$)/.test(name));
 }
 
 function pipeToShell(stages: string[][]): string | undefined {
-  const inner = stages.map((stage) => wrapperChain(stage).at(-1) ?? []);
-  const producer = inner.findIndex((argv) => basename(argv[0] ?? "") === "curl");
+  const producer = stages.findIndex((argv) => basename(argv[0] ?? "") === "curl");
   if (producer < 0) return undefined;
-  const shell = inner.slice(producer + 1).find(isShell);
-  return shell ? `${inner[producer]!.join(" ")} | ${shell.join(" ")}` : undefined;
+  const shell = stages.slice(producer + 1).find(isShell);
+  return shell ? `${stages[producer]!.join(" ")} | ${shell.join(" ")}` : undefined;
 }
 
 const BUILTIN_RULES: BuiltinRule[] = [
@@ -170,15 +176,14 @@ export function parseCommandPolicy(input: unknown): { policy: CommandPolicy } | 
 
 function unitText(unit: Unit): string | undefined {
   if (unit.kind === "invocation") return unit.invocation.text;
-  return unit.kind === "code" || unit.kind === "unparsed" ? unit.text : undefined;
+  return unit.kind === "code" || unit.kind === "source" || unit.kind === "unparsed" ? unit.text : undefined;
 }
 
 function compileRules(rules: readonly CommandRule[], origin: string): { compiled: CompiledRule[]; faults: string[] } {
   const compiled: CompiledRule[] = [];
   const faults: string[] = [];
   rules.forEach((rule, i) => {
-    const builtin = BUILTIN_BY_PATTERN.get(rule.pattern);
-    if (builtin) return compiled.push({ rule, matches: builtin.matches });
+    if (BUILTIN_BY_PATTERN.has(rule.pattern)) return;
     try {
       const re = compileSafeRegex(rule.pattern, "i");
       compiled.push({
@@ -195,15 +200,16 @@ function compileRules(rules: readonly CommandRule[], origin: string): { compiled
   return { compiled, faults };
 }
 
-function unitsOf(command: string): Unit[] {
+function unitsOf(command: string): { units: Unit[]; exhausted: boolean } {
   const parsed = parseShellCommand(command);
-  return [
-    ...parsed.invocations.map((invocation): Unit => ({ kind: "invocation", invocation })),
-    ...parsed.code.map((payload): Unit => ({ kind: "code", ...payload })),
-    ...parsed.pipelines.map((stages): Unit => ({ kind: "pipeline", stages })),
-    ...parsed.functions.map((name): Unit => ({ kind: "function", name })),
-    ...parsed.unparsed.map((text): Unit => ({ kind: "unparsed", text })),
-  ];
+  const units: Unit[] = [];
+  for (const invocation of parsed.invocations) units.push({ kind: "invocation", invocation });
+  for (const payload of parsed.code) units.push({ kind: "code", ...payload });
+  for (const stages of parsed.pipelines) units.push({ kind: "pipeline", stages });
+  for (const name of parsed.functions) units.push({ kind: "function", name });
+  for (const text of parsed.sources) units.push({ kind: "source", text });
+  for (const text of parsed.unparsed) units.push({ kind: "unparsed", text });
+  return { units, exhausted: parsed.exhausted };
 }
 
 function firstHit(rules: readonly CompiledRule[], unit: Unit): CommandEvaluation | undefined {
@@ -235,6 +241,16 @@ function decideUnit(
   return firstHit(layer, unit);
 }
 
+function combined(result: CommandEvaluation, decisions: CommandEvaluation[]): CommandEvaluation {
+  const keys = new Set<string>();
+  for (const decision of decisions) {
+    if (decision.decision !== result.decision || decision.approvalKey === undefined) continue;
+    keys.add(decision.approvalKey);
+  }
+  if (keys.size < 2) return result;
+  return { ...result, approvalKey: [...keys].sort().join(" + ") };
+}
+
 export function evaluateCommandWithLayer(
   command: string,
   policy: CommandPolicy,
@@ -242,13 +258,20 @@ export function evaluateCommandWithLayer(
 ): CommandEvaluation {
   const scope = compileRules(policy.rules, "command policy");
   const layer = compileRules(layerRules, "deployment command");
+  const rules = [...BUILTIN_RULES.map((rule): CompiledRule => ({ rule, matches: rule.matches })), ...scope.compiled];
+  const { units, exhausted } = unitsOf(command);
   let result: CommandEvaluation = { decision: "allow" };
-  for (const unit of unitsOf(command)) {
-    const decided = decideUnit(unit, policy, scope.compiled, layer.compiled);
-    if (decided && RANK[decided.decision] > RANK[result.decision]) result = decided;
+  const decisions: CommandEvaluation[] = [];
+  for (const unit of units) {
+    const decided = decideUnit(unit, policy, rules, layer.compiled);
+    if (!decided) continue;
+    decisions.push(decided);
+    if (RANK[decided.decision] > RANK[result.decision]) result = decided;
   }
+  if (result.decision !== "allow") return combined(result, decisions);
+  if (exhausted) return { decision: "require_approval", reason: "command is too deeply nested to inspect fully" };
   const faults = [...scope.faults, ...layer.faults];
-  if (result.decision === "allow" && faults.length) {
+  if (faults.length) {
     return { decision: "require_approval", reason: `${faults.join("; ")}; re-save the policy to fix it` };
   }
   return result;

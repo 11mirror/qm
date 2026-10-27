@@ -1,80 +1,33 @@
 import { createRequire } from "node:module";
 import { Language, Parser, type Node } from "web-tree-sitter";
+import {
+  bareWord,
+  decodeAnsiC,
+  findExecCommands,
+  inlineCodePayloads,
+  launcherScripts,
+  producerOutput,
+  readsScriptFiles,
+  scannedCommands,
+  sqlClientPayloads,
+  stdinReader,
+  unwrap,
+} from "./shell-launchers.ts";
 
 const require = createRequire(import.meta.url);
 await Parser.init();
 const parser = new Parser();
 parser.setLanguage(await Language.load(require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")));
 
-const SHELLS = new Set(["bash", "sh", "dash", "zsh", "ksh"]);
-const SHELL_VALUE_OPTIONS = ["-O", "-o", "--rcfile", "--init-file"];
-const SCRIPT_INTERPRETERS = new Set(["node", "perl", "ruby"]);
-const INLINE_CODE_OPTIONS: Record<string, string[]> = {
-  python: ["-c"],
-  node: ["-e", "--eval", "-p", "--print"],
-  perl: ["-e", "-E"],
-  ruby: ["-e"],
-};
-const STDIN_SCRIPTS = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
-const WRAPPER_OPTIONS: Record<string, string[]> = {
-  sudo: [
-    "-u",
-    "--user",
-    "-g",
-    "--group",
-    "-h",
-    "--host",
-    "-p",
-    "--prompt",
-    "-C",
-    "--chdir",
-    "-T",
-    "--command-timeout",
-    "-R",
-    "--chroot",
-    "-t",
-    "--type",
-  ],
-  exec: ["-a"],
-  nice: ["-n", "--adjustment"],
-  time: ["-o", "--output", "-f", "--format"],
-  nohup: [],
-  stdbuf: ["-i", "--input", "-o", "--output", "-e", "--error"],
-  coproc: [],
-  xargs: [
-    "-a",
-    "--arg-file",
-    "-d",
-    "--delimiter",
-    "-E",
-    "--eof",
-    "-I",
-    "--replace",
-    "-L",
-    "--max-lines",
-    "-n",
-    "--max-args",
-    "-P",
-    "--max-procs",
-    "-s",
-    "--max-chars",
-  ],
-};
-const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?: number }> = {
-  psql: { options: ["-c", "--command"] },
-  pgcli: { options: ["-c", "--command"] },
-  mysql: { options: ["-e", "--execute"] },
-  mariadb: { options: ["-e", "--execute"] },
-  mycli: { options: ["-e", "--execute"] },
-  sqlite3: { options: ["-cmd"], sqlPositionalsAfter: 1 },
-  sqlcmd: { options: ["-Q", "-q"] },
-  duckdb: { options: ["-c", "-s", "--command"], sqlPositionalsAfter: 1 },
-  "clickhouse-client": { options: ["-q", "--query"] },
-};
+const OPAQUE_TYPES = ["raw_string", "string", "ansi_c_string", "heredoc_body", "comment"];
+const DEFAULTING_EXPANSIONS = new Set(["-", ":-", "=", ":=", "+", ":+"]);
+const BUDGET_FACTOR = 8;
+const BUDGET_FLOOR = 8192;
 
 export interface Invocation {
   text: string;
-  chain: string[][];
+  argv: string[];
+  inner: string[];
 }
 
 interface CodePayload {
@@ -87,78 +40,142 @@ export interface ParsedCommand {
   pipelines: string[][][];
   code: CodePayload[];
   functions: string[];
+  sources: string[];
   unparsed: string[];
+  exhausted: boolean;
 }
 
 interface Collected extends ParsedCommand {
   scripts: string[];
 }
 
+interface Budget {
+  left: number;
+  exhausted: boolean;
+}
+
+interface Script {
+  source: string;
+  outputs: Map<number, string | undefined>;
+  tails: Map<number, Node[]>;
+}
+
+function newScript(source: string): Script {
+  return { source, outputs: new Map(), tails: new Map() };
+}
+
 export function parseShellCommand(command: string): ParsedCommand {
-  const parsed: ParsedCommand = { invocations: [], pipelines: [], code: [], functions: [], unparsed: [] };
+  const parsed: ParsedCommand = {
+    invocations: [],
+    pipelines: [],
+    code: [],
+    functions: [],
+    sources: [],
+    unparsed: [],
+    exhausted: false,
+  };
+  const budget: Budget = { left: command.length * BUDGET_FACTOR + BUDGET_FLOOR, exhausted: false };
   const seen = new Set<string>();
   const pending = [command];
-  for (let script = pending.shift(); script !== undefined; script = pending.shift()) {
+  for (let next = 0; next < pending.length && !budget.exhausted; next++) {
+    const script = pending[next]!;
     if (seen.has(script)) continue;
     seen.add(script);
-    const collected = collect(script);
-    parsed.invocations.push(...collected.invocations);
-    parsed.pipelines.push(...collected.pipelines);
-    parsed.code.push(...collected.code);
-    parsed.functions.push(...collected.functions);
-    parsed.unparsed.push(...collected.unparsed);
+    const collected = collect(script, budget);
+    if (!collected) break;
+    for (const key of ["invocations", "pipelines", "code", "functions", "sources", "unparsed"] as const) {
+      for (const item of collected[key]) (parsed[key] as unknown[]).push(item);
+    }
+    for (const item of collected.scripts) pending.push(item);
     const opaque = [...collected.code.map((payload) => payload.text), ...collected.unparsed];
-    pending.push(...collected.scripts, ...opaque.flatMap(quotedLiterals));
+    for (const literal of quotedLiterals(opaque, budget)) pending.push(literal);
   }
+  parsed.exhausted = budget.exhausted;
   return parsed;
 }
 
-function quotedLiterals(code: string): string[] {
+function quotedLiterals(texts: string[], budget: Budget): string[] {
   const literals: string[] = [];
-  for (let i = 0; i < code.length; i++) {
-    const quote = code.charAt(i);
-    if (!"\"'`".includes(quote)) continue;
-    let literal = "";
-    let j = i + 1;
-    for (; j < code.length && code.charAt(j) !== quote; j++) {
-      if (code.charAt(j) === "\\" && quote !== "'") literal += decodeAnsiC(code.slice(j, j + 2));
-      else literal += code.charAt(j);
-      if (code.charAt(j) === "\\" && quote !== "'") j++;
+  const queue = [...texts];
+  for (let next = 0; next < queue.length; next++) {
+    const code = queue[next]!;
+    for (let i = 0; i < code.length; i++) {
+      const quote = code.charAt(i);
+      if (!"\"'`".includes(quote)) continue;
+      let literal = "";
+      let j = i + 1;
+      for (; j < code.length && code.charAt(j) !== quote; j++) {
+        if (code.charAt(j) === "\\" && quote !== "'") literal += decodeAnsiC(code.slice(j, ++j + 1));
+        else literal += code.charAt(j);
+      }
+      if (j >= code.length) break;
+      budget.left -= literal.length;
+      if (budget.left < 0) {
+        budget.exhausted = true;
+        return literals;
+      }
+      literals.push(literal);
+      queue.push(literal);
+      i = j;
     }
-    if (j >= code.length) break;
-    literals.push(literal, ...quotedLiterals(literal));
-    i = j;
   }
   return literals;
 }
 
-export function basename(word: string): string {
-  return word.split("/").pop() ?? word;
-}
-
-function innermost(chain: string[][]): string[] {
-  return chain.at(-1) ?? [];
-}
-
-function parse(command: string) {
-  const tree = parser.parse(command);
+function parse(text: string, budget: Budget) {
+  if (text.length > budget.left) {
+    budget.exhausted = true;
+    return undefined;
+  }
+  budget.left -= text.length;
+  const tree = parser.parse(text);
   if (!tree) throw new Error("tree-sitter-bash produced no syntax tree");
   return tree;
 }
 
-function collect(command: string): Collected {
-  const tree = parse(command);
+function collect(script: string, budget: Budget): Collected | undefined {
+  const tree = parse(script, budget);
+  if (!tree) return undefined;
   try {
-    const collected = walk(tree.rootNode);
-    if (tree.rootNode.hasError) collected.unparsed.push(command);
+    const context = newScript(script);
+    const substitutions = tree.rootNode.descendantsOfType(["command_substitution", "process_substitution"]);
+    substitutions.sort((a, b) => a.endIndex - a.startIndex - (b.endIndex - b.startIndex));
+    for (const node of substitutions) substitutionOutput(node, context);
+    const collected = walk(tree.rootNode, context, budget);
+    collected.sources.push(sourceText(script, tree.rootNode));
+    if (tree.rootNode.hasError) collected.unparsed.push(script);
     return collected;
   } finally {
     tree.delete();
   }
 }
 
-function bareWord(value: string): string | undefined {
-  return /^[\w@%+=:,./-]*$/.test(value) ? value : undefined;
+function sourceText(script: string, root: Node): string {
+  let out = "";
+  let at = 0;
+  for (const node of root.descendantsOfType(OPAQUE_TYPES)) {
+    if (node.startIndex < at) continue;
+    const replacement = opaqueRendering(node, newScript(script));
+    if (replacement === undefined) continue;
+    out += script.slice(at, node.startIndex) + replacement;
+    at = node.endIndex;
+  }
+  return (out + script.slice(at)).replaceAll("\\\n", "");
+}
+
+function opaqueRendering(node: Node, script: Script): string | undefined {
+  switch (node.type) {
+    case "raw_string":
+      return bareWord(node.text.slice(1, -1)) ?? "''";
+    case "ansi_c_string":
+      return bareWord(decodeAnsiC(node.text.slice(2, -1))) ?? "''";
+    case "string":
+      return node.namedChildren.some((child) => child?.type !== "string_content")
+        ? undefined
+        : (bareWord(literal(node, script)) ?? '""');
+    default:
+      return "";
+  }
 }
 
 function unescapeDoubleQuoted(text: string): string {
@@ -174,49 +191,56 @@ function unescapeDoubleQuoted(text: string): string {
 
 function unescape(text: string): string {
   let out = "";
-  for (let i = 0; i < text.length; i++) out += text.charAt(text.charAt(i) === "\\" ? ++i : i);
+  for (let i = 0; i < text.length; i++) {
+    if (text.charAt(i) !== "\\") out += text.charAt(i);
+    else if (text.charAt(i + 1) !== "\n") out += text.charAt(++i);
+    else i++;
+  }
   return out;
 }
 
-function sourceBetween(node: Node, from: number, to: number): string {
-  return node.text.slice(from - node.startIndex, to - node.startIndex).replaceAll("\\\n", "");
+function substitutionOutput(node: Node, script: Script): string | undefined {
+  if (script.outputs.has(node.startIndex)) return script.outputs.get(node.startIndex);
+  const [only, ...rest] = node.namedChildren;
+  const command = only && !rest.length && only.type === "command" ? only : undefined;
+  const output = command ? producerOutput(unwrap(argvOf(command, script), () => []).inner)?.output : undefined;
+  script.outputs.set(node.startIndex, output);
+  return output;
 }
 
-function substitutions(node: Node): Node[] {
-  return node.namedChildren.filter(
-    (child): child is Node => child?.type === "command_substitution" || child?.type === "process_substitution",
-  );
-}
-
-function render(node: Node): string {
+function render(node: Node, script: Script): string {
   switch (node.type) {
+    case "word":
+      return unescape(node.text);
     case "raw_string":
       return bareWord(node.text.slice(1, -1)) ?? "''";
     case "ansi_c_string":
       return bareWord(decodeAnsiC(node.text.slice(2, -1))) ?? "''";
-    case "string": {
-      const subs = substitutions(node);
-      if (subs.length) return subs.map(render).join(" ");
-      return bareWord(literal(node)) ?? '""';
-    }
-    case "word":
-      return unescape(node.text);
-    case "comment":
-      return "";
-    case "heredoc_body":
-      return substitutions(node).map(render).join(" ");
+    case "string":
+      return bareWord(literal(node, script)) ?? '""';
+    case "concatenation":
+      return node.children.map((child) => (child ? render(child, script) : "")).join("");
+    case "command_substitution":
+      return substitutionOutput(node, script) ?? "$(...)";
+    case "process_substitution":
+      return "<(...)";
   }
-  let out = "";
-  let at = node.startIndex;
-  for (const child of node.children) {
-    if (!child) continue;
-    out += sourceBetween(node, at, child.startIndex) + render(child);
-    at = child.endIndex;
-  }
-  return out + sourceBetween(node, at, node.endIndex);
+  return node.text;
 }
 
-function literal(node: Node): string {
+function stringLiteral(node: Node, script: Script): string {
+  let out = "";
+  let at = node.startIndex + 1;
+  for (const child of node.children.slice(1, -1)) {
+    if (!child) continue;
+    out += unescapeDoubleQuoted(script.source.slice(at, child.startIndex));
+    out += child.type === "string_content" ? unescapeDoubleQuoted(child.text) : literal(child, script);
+    at = child.endIndex;
+  }
+  return out + unescapeDoubleQuoted(script.source.slice(at, node.endIndex - 1));
+}
+
+function literal(node: Node, script: Script): string {
   switch (node.type) {
     case "word":
       return unescape(node.text);
@@ -225,12 +249,19 @@ function literal(node: Node): string {
     case "ansi_c_string":
       return decodeAnsiC(node.text.slice(2, -1));
     case "string":
-      return node.children
-        .slice(1, -1)
-        .map((child) => (child?.type === "string_content" ? unescapeDoubleQuoted(child.text) : (child?.text ?? "")))
-        .join("");
+      return stringLiteral(node, script);
     case "concatenation":
-      return node.children.map((child) => (child ? literal(child) : "")).join("");
+      return node.children.map((child) => (child ? literal(child, script) : "")).join("");
+    case "command_substitution":
+      return substitutionOutput(node, script) ?? "$(...)";
+    case "process_substitution":
+      return "<(...)";
+    case "expansion": {
+      const operator = node.children.find((child) => child && DEFAULTING_EXPANSIONS.has(child.type));
+      const fallback =
+        operator && node.children.find((child) => child && child.startIndex >= operator.endIndex && child.type !== "}");
+      return fallback ? literal(fallback, script) : node.text;
+    }
   }
   return node.text;
 }
@@ -243,155 +274,38 @@ function variableName(node: Node): string | undefined {
   return expansion && only.type === "variable_name" ? only.text : undefined;
 }
 
-function commandWords(command: Node): Node[][] {
+function recordRedirectTail(statement: Node, script: Script): void {
+  let body = statement.childForFieldName("body");
+  while (body && (body.type === "pipeline" || body.type === "list")) body = body.lastNamedChild;
+  if (body?.type !== "command") return;
+  const tail: Node[] = [];
+  for (const redirect of statement.childrenForFieldName("redirect")) {
+    if (redirect?.type !== "file_redirect") continue;
+    const operands = redirect.namedChildren.filter(
+      (child): child is Node => !!child && child.type !== "file_descriptor",
+    );
+    tail.push(...operands.slice(1));
+  }
+  if (tail.length) script.tails.set(body.startIndex, tail);
+}
+
+function commandWords(command: Node, script: Script): Node[][] {
   const name = command.childForFieldName("name");
   if (!name) return [];
   const words: Node[][] = [];
-  for (const word of [name.firstNamedChild ?? name, ...command.childrenForFieldName("argument")]) {
+  const tail = script.tails.get(command.startIndex) ?? [];
+  for (const word of [name.firstNamedChild ?? name, ...command.childrenForFieldName("argument"), ...tail]) {
     if (!word) continue;
     const group = words.at(-1);
-    if (group && sourceBetween(command, group.at(-1)!.endIndex, word.startIndex) === "") group.push(word);
+    const gap = group ? script.source.slice(group.at(-1)!.endIndex, word.startIndex) : undefined;
+    if (group && gap?.replaceAll("\\\n", "") === "") group.push(word);
     else words.push([word]);
   }
   return words;
 }
 
-function argvOf(command: Node): string[] {
-  return commandWords(command).map((group) => group.map(literal).join(""));
-}
-
-function invocationOf(command: Node): Invocation {
-  const text = commandWords(command)
-    .map((group) => group.map(render).join(""))
-    .join(" ");
-  return { text, chain: wrapperChain(argvOf(command)) };
-}
-
-export function skipOptions(args: string[], valueOptions: readonly string[]): number {
-  let i = 0;
-  for (; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--") return i + 1;
-    if (!arg.startsWith("-") || arg === "-") return i;
-    if (valueOptions.includes(arg) && !arg.includes("=")) i++;
-  }
-  return i;
-}
-
-function envSplitPayload(argv: string[]): string | undefined {
-  if (basename(argv[0] ?? "") !== "env") return undefined;
-  const args = argv.slice(1);
-  const split = args.findIndex((arg) => arg.startsWith("-S") || arg.startsWith("--split-string"));
-  if (split < 0) return undefined;
-  const arg = args[split]!;
-  if (arg.includes("=")) return [arg.slice(arg.indexOf("=") + 1), ...args.slice(split + 1)].join(" ");
-  if (arg.startsWith("-S") && arg.length > 2) return [arg.slice(2), ...args.slice(split + 1)].join(" ");
-  return args.slice(split + 1).join(" ");
-}
-
-function wrappedCommand(argv: string[]): string[] | undefined {
-  const executable = basename(argv[0] ?? "");
-  const args = argv.slice(1);
-  if (executable === "env") {
-    const split = envSplitPayload(argv);
-    if (split !== undefined) return parsedWords(split);
-    let next = skipOptions(args, ["-u", "--unset", "-C", "--chdir"]);
-    while (next < args.length && /^[A-Za-z_]\w*=/.test(args[next]!)) next++;
-    return args.slice(next);
-  }
-  if (executable === "command" || executable === "builtin") {
-    const next = skipOptions(args, []);
-    return args.slice(0, next).some((arg) => arg === "-v" || arg === "-V") ? undefined : args.slice(next);
-  }
-  if (executable === "timeout") return args.slice(skipOptions(args, ["-s", "--signal", "-k", "--kill-after"]) + 1);
-  const options = WRAPPER_OPTIONS[executable];
-  return options ? args.slice(skipOptions(args, options)) : undefined;
-}
-
-export function wrapperChain(argv: string[]): string[][] {
-  const chain = [argv];
-  const seen = new Set([JSON.stringify(argv)]);
-  for (let inner = wrappedCommand(argv); inner?.length; inner = wrappedCommand(inner)) {
-    const key = JSON.stringify(inner);
-    if (seen.has(key)) break;
-    seen.add(key);
-    chain.push(inner);
-  }
-  return chain;
-}
-
-function parsedWords(text: string): string[] {
-  const tree = parse(text);
-  try {
-    const command = tree.rootNode.descendantsOfType("command")[0];
-    return command ? argvOf(command) : [];
-  } finally {
-    tree.delete();
-  }
-}
-
-function shellInvocation(inner: string[]): { script?: string; readsStdin: boolean } | undefined {
-  if (!SHELLS.has(basename(inner[0] ?? ""))) return undefined;
-  const args = inner.slice(1);
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "-s") return { readsStdin: true };
-    if (arg === "--") return { readsStdin: args[i + 1] === undefined || STDIN_SCRIPTS.has(args[i + 1]!) };
-    if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
-    else if (!arg.startsWith("-") || arg === "-") return { readsStdin: STDIN_SCRIPTS.has(arg) };
-    else if (!arg.startsWith("--") && arg.includes("c")) return { script: args[i + 1], readsStdin: false };
-  }
-  return { readsStdin: true };
-}
-
-export function isShell(argv: string[]): boolean {
-  return SHELLS.has(basename(argv[0] ?? ""));
-}
-
-function stdinReader(argv: string[]): "shell" | "sql" | "code" | undefined {
-  const inner = innermost(wrapperChain(argv));
-  const executable = basename(inner[0] ?? "");
-  if (shellInvocation(inner)?.readsStdin) return "shell";
-  if (sqlClientSpec(inner)) return "sql";
-  if (SCRIPT_INTERPRETERS.has(executable) || executable.startsWith("python")) return "code";
-  return undefined;
-}
-
-function shellPayloads(chain: string[][]): string[] {
-  const inner = innermost(chain);
-  const splits = chain.map(envSplitPayload).filter((split) => split !== undefined);
-  const executable = basename(inner[0] ?? "");
-  if (executable === "eval") return [...splits, ...(inner.length > 1 ? [inner.slice(1).join(" ")] : [])];
-  const script = shellInvocation(inner)?.script;
-  return [...splits, ...(script === undefined ? [] : [script])];
-}
-
-function literalProducerPayload(argv: string[]): string | undefined {
-  const inner = innermost(wrapperChain(argv));
-  const executable = basename(inner[0] ?? "");
-  let args = inner.slice(1);
-  if (args[0] === "--") args = args.slice(1);
-  if (executable === "echo") {
-    let decodeEscapes = false;
-    while (/^-[neE]+$/.test(args[0] ?? "")) {
-      for (const option of args[0]!.slice(1)) {
-        if (option === "e") decodeEscapes = true;
-        if (option === "E") decodeEscapes = false;
-      }
-      args = args.slice(1);
-    }
-    const payload = args.join(" ");
-    return decodeEscapes ? decodeAnsiC(payload) : payload;
-  }
-  if (executable !== "printf" || args.length === 0) return undefined;
-  const [format, ...values] = args;
-  let valueIndex = 0;
-  const rendered = decodeAnsiC(format!).replace(/%([%sb])/g, (_match, conversion: string) => {
-    if (conversion === "%") return "%";
-    const value = values[valueIndex++] ?? "";
-    return conversion === "b" ? decodeAnsiC(value) : value;
-  });
-  return [rendered, ...values.slice(valueIndex), args.join(" ")].join("\n");
+function argvOf(command: Node, script: Script): string[] {
+  return commandWords(command, script).map((group) => group.map((word) => literal(word, script)).join(""));
 }
 
 function commandOf(node: Node | null): Node | undefined {
@@ -399,140 +313,131 @@ function commandOf(node: Node | null): Node | undefined {
   return node?.type === "redirected_statement" ? commandOf(node.childForFieldName("body")) : undefined;
 }
 
-function heredocReceivers(statement: Node, redirect: Node): string[][] {
+function redirectReceivers(statement: Node, redirect: Node): Node[] {
   const continuation = redirect.namedChildren.filter((child) => child?.type !== "heredoc_body");
   return [
     statement.childForFieldName("body"),
     ...continuation.flatMap((child) => child?.descendantsOfType("command") ?? []),
   ]
     .map(commandOf)
-    .filter((command) => command !== undefined)
-    .map(argvOf);
+    .filter((command) => command !== undefined);
 }
 
-function pipelineStages(pipeline: Node): string[][] {
+function pipelineStages(pipeline: Node, argv: (command: Node) => string[]): string[][] {
   return pipeline.namedChildren.flatMap((stage) => {
     if (!stage) return [];
     const command = commandOf(stage);
-    return command ? [argvOf(command)] : stage.descendantsOfType("command").map(argvOf);
+    return [
+      ...(command ? [command] : []),
+      ...stage.descendantsOfType("command").filter((node) => node.id !== command?.id),
+    ].map(argv);
   });
 }
 
-function walk(root: Node): Collected {
-  const collected: Collected = { invocations: [], pipelines: [], code: [], functions: [], unparsed: [], scripts: [] };
-  const variables = new Map<string, string>();
-  const feed = (text: string, readers: string[][]) => {
-    const kinds = readers.map(stdinReader);
-    if (kinds.includes("shell")) collected.scripts.push(text);
-    else if (kinds.includes("sql")) collected.code.push({ text, sql: true });
-    else if (kinds.includes("code")) collected.code.push({ text, sql: false });
+function walk(root: Node, script: Script, budget: Budget): Collected {
+  const collected: Collected = {
+    invocations: [],
+    pipelines: [],
+    code: [],
+    functions: [],
+    sources: [],
+    unparsed: [],
+    scripts: [],
+    exhausted: false,
   };
-  const visit = (node: Node) => {
+  const variables = new Map<string, string>();
+  const parseWords = (text: string) => parsedWords(text, budget);
+  const resolve = (group: Node[]): string | undefined => {
+    const name = group.length === 1 ? variableName(group[0]!) : undefined;
+    return name === undefined ? undefined : variables.get(name);
+  };
+  const argvOfWords = (words: Node[][]) =>
+    words.map((group) => resolve(group) ?? group.map((word) => literal(word, script)).join(""));
+  const argv = (command: Node) => argvOfWords(commandWords(command, script));
+  const textOfWords = (words: Node[][]) =>
+    words.map((group) => resolve(group) ?? group.map((word) => render(word, script)).join("")).join(" ");
+  const invoke = (words: string[], unitText: string) => {
+    const unwrapped = unwrap(words, parseWords);
+    collected.invocations.push({ text: unitText, argv: words, inner: unwrapped.inner });
+    for (const split of unwrapped.splits) collected.scripts.push(split);
+    return unwrapped.inner;
+  };
+  const feed = (payload: string, readers: Node[]) => {
+    const kinds = readers.map((reader) => stdinReader(unwrap(argv(reader), parseWords).inner));
+    if (kinds.includes("shell")) collected.scripts.push(payload);
+    else if (kinds.includes("sql")) collected.code.push({ text: payload, sql: true });
+    else if (kinds.includes("code")) collected.code.push({ text: payload, sql: false });
+  };
+  const execute = (words: string[], unitText: string) => {
+    const inner = invoke(words, unitText);
+    for (const payload of launcherScripts(inner)) collected.scripts.push(payload);
+    for (const sql of sqlClientPayloads(inner)) collected.code.push({ text: sql, sql: true });
+    for (const code of inlineCodePayloads(inner)) collected.code.push({ text: code, sql: false });
+    return inner;
+  };
+  const visitCommand = (node: Node, children: Node[]) => {
+    const words = commandWords(node, script);
+    const inner = execute(argvOfWords(words), textOfWords(words));
+    for (const command of [...findExecCommands(inner), ...scannedCommands(inner)]) execute(command, command.join(" "));
+    if (readsScriptFiles(inner)) {
+      for (const word of words.flat()) {
+        const output = word.type === "process_substitution" ? substitutionOutput(word, script) : undefined;
+        if (output !== undefined) collected.scripts.push(output);
+      }
+    }
+    const herestring = children.find((child) => child.type === "herestring_redirect")?.lastNamedChild;
+    if (herestring) feed(literal(herestring, script), [node]);
+  };
+  const visitRedirects = (node: Node) => {
+    for (const redirect of node.childrenForFieldName("redirect")) {
+      if (!redirect) continue;
+      const body = redirect.namedChildren.find((child) => child?.type === "heredoc_body");
+      if (body) feed(body.text, redirectReceivers(node, redirect));
+      const process = redirect.namedChildren.find((child) => child?.type === "process_substitution");
+      const output =
+        process && redirect.children.some((child) => child?.type === "<")
+          ? substitutionOutput(process, script)
+          : undefined;
+      if (output !== undefined) feed(output, redirectReceivers(node, redirect));
+    }
+  };
+  const visitPipeline = (node: Node) => {
+    collected.pipelines.push(pipelineStages(node, (command) => unwrap(argv(command), parseWords).inner));
+    const stages = node.namedChildren.map(commandOf);
+    for (let i = 1; i < stages.length; i++) {
+      const [producer, consumer] = [stages[i - 1], stages[i]];
+      const produced = producer && consumer ? producerOutput(unwrap(argv(producer), parseWords).inner) : undefined;
+      if (produced) feed([produced.output, ...produced.leftover].join("\n"), [consumer!]);
+    }
+  };
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop()!;
+    const children = node.namedChildren.filter((child): child is Node => child !== null);
     if (node.type === "variable_assignment") {
       const value = node.childForFieldName("value");
       const name = node.childForFieldName("name")?.text;
-      if (name && value && bareWord(literal(value))) variables.set(name, literal(value));
-    }
-    if (node.type === "function_definition") {
+      if (name && value && bareWord(literal(value, script))) variables.set(name, literal(value, script));
+    } else if (node.type === "function_definition") {
       const name = node.childForFieldName("name")?.text;
       if (name) collected.functions.push(name);
-    }
-    if (node.type === "command") {
-      const invocation = invocationOf(node);
-      const argv = invocation.chain[0]!;
-      const inner = innermost(invocation.chain);
-      collected.invocations.push(invocation);
-      collected.scripts.push(...shellPayloads(invocation.chain));
-      collected.code.push(
-        ...sqlClientPayloads(inner).map((text) => ({ text, sql: true })),
-        ...inlineCodePayloads(inner).map((text) => ({ text, sql: false })),
-      );
-      const position = argv.length - inner.length;
-      const word = commandWords(node)[position];
-      const variable = word?.length === 1 ? variableName(word[0]!) : undefined;
-      const value = variable === undefined ? undefined : variables.get(variable);
-      if (value !== undefined)
-        collected.scripts.push([...argv.slice(0, position), value, ...argv.slice(position + 1)].join(" "));
-      const herestring = node.namedChildren.find((child) => child?.type === "herestring_redirect")?.lastNamedChild;
-      if (herestring) feed(literal(herestring), [argv]);
-    }
-    for (const redirect of node.type === "redirected_statement" ? node.childrenForFieldName("redirect") : []) {
-      const body = redirect?.namedChildren.find((child) => child?.type === "heredoc_body");
-      if (body) feed(body.text, heredocReceivers(node, redirect!));
-    }
-    if (node.type === "pipeline") {
-      collected.pipelines.push(pipelineStages(node));
-      const stages = node.namedChildren.map(commandOf);
-      for (let i = 1; i < stages.length; i++) {
-        const [producer, consumer] = [stages[i - 1], stages[i]];
-        const payload = producer && consumer ? literalProducerPayload(argvOf(producer)) : undefined;
-        if (payload) feed(payload, [argvOf(consumer!)]);
-      }
-    }
-    for (const child of node.children) if (child) visit(child);
-  };
-  visit(root);
+    } else if (node.type === "command") visitCommand(node, children);
+    else if (node.type === "redirected_statement") {
+      recordRedirectTail(node, script);
+      visitRedirects(node);
+    } else if (node.type === "pipeline") visitPipeline(node);
+    for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
+  }
   return collected;
 }
 
-function decodeAnsiC(value: string): string {
-  const named: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
-  return value.replace(/\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|.)/g, (_, escape: string) => {
-    const kind = escape.charAt(0);
-    if ("xuU".includes(kind) && escape.length > 1) return String.fromCodePoint(Number.parseInt(escape.slice(1), 16));
-    if ("01234567".includes(kind)) return String.fromCodePoint(Number.parseInt(escape, 8));
-    return named[escape] ?? ("\\'\"".includes(escape) ? escape : `\\${escape}`);
-  });
-}
-
-function inlineCodePayloads(words: string[]): string[] {
-  const executable = basename(words[0] ?? "");
-  const options = INLINE_CODE_OPTIONS[executable.startsWith("python") ? "python" : executable];
-  if (!options) return [];
-  const payloads: string[] = [];
-  for (let i = 1; i < words.length; i++) {
-    const arg = words[i]!;
-    const option = options.find((opt) => arg === opt || arg.startsWith(`${opt}=`));
-    if (!option) continue;
-    if (arg === option) {
-      if (words[i + 1] !== undefined) payloads.push(words[++i]!);
-    } else payloads.push(arg.slice(option.length + 1));
+function parsedWords(text: string, budget: Budget): string[] {
+  const tree = parse(text, budget);
+  if (!tree) return [];
+  try {
+    const command = tree.rootNode.descendantsOfType("command")[0];
+    return command ? argvOf(command, newScript(text)) : [];
+  } finally {
+    tree.delete();
   }
-  return payloads;
-}
-
-function sqlClientSpec(words: string[]): { options: string[]; sqlPositionalsAfter?: number } | undefined {
-  return SQL_CLIENT_SPECS[basename(words[0] ?? "").toLowerCase()];
-}
-
-function sqlClientPayloads(words: string[]): string[] {
-  const spec = sqlClientSpec(words);
-  if (!spec) return [];
-  const args = words.slice(1);
-  const payloads: string[] = [];
-  const positionals: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    let matched = false;
-    for (const opt of spec.options) {
-      if (arg === opt) {
-        if (args[i + 1] !== undefined) payloads.push(args[++i]!);
-        matched = true;
-        break;
-      }
-      if (arg.startsWith(`${opt}=`)) {
-        payloads.push(arg.slice(opt.length + 1));
-        matched = true;
-        break;
-      }
-      if (opt.length === 2 && !arg.startsWith("--") && arg.startsWith(opt) && arg.length > 2) {
-        payloads.push(arg.slice(2));
-        matched = true;
-        break;
-      }
-    }
-    if (!matched && !arg.startsWith("-")) positionals.push(arg);
-  }
-  if (spec.sqlPositionalsAfter !== undefined) payloads.push(...positionals.slice(spec.sqlPositionalsAfter));
-  return payloads;
 }
