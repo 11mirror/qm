@@ -135,6 +135,9 @@ test("debounced: an autonomous turn is skipped and never joins the live actor's 
   });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
   await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
+  // The flush first reads the notebook's known facts, which can wait on a cold test database.
+  const deadline = Date.now() + 5_000;
+  while (calls.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
   await new Promise((r) => setTimeout(r, 120));
 
   assert.deepEqual(calls, ["User said:\nhi\n\nAssistant replied:\nhello"], "one flush, the live turn only");
