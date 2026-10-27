@@ -1,3 +1,4 @@
+import { swallowAs } from "../../chassis/src/errors.ts";
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, highlightSpecialChars, keymap } from "@codemirror/view";
 import { HighlightStyle, foldGutter, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
@@ -9,7 +10,7 @@ export async function mountFileEditor(parent: HTMLElement, text: string, name: s
   const language =
     LanguageDescription.matchFilename(languages, name) ??
     languages.find((entry) => entry.alias.includes(mime.replace(/^application\/(?:x-)?/, "")));
-  const support = await language?.load().catch(() => undefined);
+  const support = await language?.load().catch(swallowAs("web-ui: editor language load (plain text)", undefined));
   if (!parent.isConnected) return () => {};
   const view = new EditorView({
     parent,

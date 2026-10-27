@@ -695,7 +695,7 @@ export function createChatSurface(
     let current: Promise<void>;
     do {
       current = transcriptRefresh;
-      await current.catch(() => undefined);
+      await current.catch(() => undefined); // refreshTranscriptFromItems callers get the failure; this only waits
     } while (current !== transcriptRefresh);
   }
 

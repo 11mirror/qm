@@ -1,3 +1,4 @@
+import { swallowAs } from "../../../chassis/src/errors.ts";
 import { html } from "lit";
 import { table, card, renderer, keepSearch, matches, subline, badge } from "./shared.ts";
 import { fmtTime, labelRole, relTime } from "./format.ts";
@@ -42,7 +43,7 @@ export class UsersView {
         );
         this.draw();
       })
-      .catch(() => {});
+      .catch(swallowAs("admin: people credential counts", undefined));
   }
   renderShell() {
     this.search = keepSearch(this.root.ownerDocument, this.search, () =>

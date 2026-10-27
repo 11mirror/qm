@@ -1,4 +1,4 @@
-import { errMessage } from "../../../chassis/src/errors";
+import { swallow } from "../../../chassis/src/errors";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { badge, card, table, renderer, stacked, statusBadge } from "./shared.ts";
@@ -18,7 +18,7 @@ export async function removeSkill(s: Data, c: Context) {
     c.invalidate();
     await c.reload();
   } catch (error) {
-    console.warn("[swallowed] admin: remove skill", errMessage(error));
+    swallow("admin: remove skill", error);
     alert("Could not remove skill.");
   }
 }
@@ -155,7 +155,7 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         else [message, tone] = ["Pack registered. Your newer changes have not been registered.", "ok"];
       }
     } catch (error) {
-      console.warn("[swallowed] admin: register skill pack", errMessage(error));
+      swallow("admin: register skill pack", error);
       [message, tone] = ["Registration failed.", "err"];
     } finally {
       registering = false;
@@ -206,7 +206,7 @@ export function packs(root: HTMLElement, rows: Data[], c: Context) {
         await c.reload();
       }
     } catch (error) {
-      console.warn("[swallowed] admin: skill pack " + action, errMessage(error));
+      swallow("admin: skill pack " + action, error);
       statuses.set(s.id, { text: "Request failed.", tone: "err" });
     } finally {
       pending.delete(s.id);
@@ -445,7 +445,7 @@ export async function browsePack(pack: Data, root: HTMLElement, c: Context) {
         }, 1500);
       }
     } catch (error) {
-      console.warn("[swallowed] admin: skill pack import", errMessage(error));
+      swallow("admin: skill pack import", error);
       [message, tone] = ["Import failed.", "err"];
     } finally {
       busy = false;

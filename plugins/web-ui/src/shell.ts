@@ -816,7 +816,8 @@ window.addEventListener("focus", () => {
 });
 
 function warmDeferredChunks(): void {
-  const warm = (): void => void import("@earendil-works/pi-web-ui").catch(() => {});
+  const warm = (): void =>
+    void import("@earendil-works/pi-web-ui").catch(swallowAs("web-ui: warm chat chunk", undefined));
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
   if (ric) ric(warm);
   else setTimeout(warm, 1500);
