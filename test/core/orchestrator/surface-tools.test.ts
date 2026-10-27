@@ -102,6 +102,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
     },
     postKeys: turnPostKeys("run-test"),
     spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext);
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
   assert.equal(r.ok, false);
@@ -127,6 +128,7 @@ test("surface channel settings preserve and reset the stored ambient reply polic
     },
     postKeys: turnPostKeys("run-test"),
     spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
 
   await tools.setChannelBehavior(undefined, true);
@@ -213,6 +215,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
     },
     postKeys: turnPostKeys("run-test"),
     spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
   const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
   assert.equal(r.ok, true);
@@ -371,4 +374,94 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   await staging.attach(["report.txt"]);
   assert.equal(staging.staged().length, 2);
   assert.ok(await store.open(id), "the staged file ID remains readable");
+});
+
+function pagedSurface(
+  messages: Array<{ ts: string; text: string }>,
+  pageSize: number,
+  opts: { failAfterPulls?: number; abortAfterPulls?: number } = {},
+) {
+  const pulls: Array<{ before?: string; match?: string }> = [];
+  const abort = new AbortController();
+  const pull = async (_source: string, query: { before?: string; match?: string; count?: number }) => {
+    pulls.push({ ...(query.before ? { before: query.before } : {}), ...(query.match ? { match: query.match } : {}) });
+    if (opts.failAfterPulls !== undefined && pulls.length > opts.failAfterPulls)
+      return { messages: [], note: "Slack is rate limiting history reads; try again in a minute." };
+    if (opts.abortAfterPulls !== undefined && pulls.length >= opts.abortAfterPulls) abort.abort();
+    const older = query.before ? messages.filter((m) => m.ts < query.before!) : messages;
+    const page = older.slice(-pageSize);
+    const hasMore = page.length < older.length;
+    return { messages: page, hasMore, ...(hasMore ? { nextBefore: page[0]!.ts } : {}), selfTs: [] };
+  };
+  const tools = createSurfaceToolDeps({
+    deps: { outbound: {}, surfaceContext: { pull } },
+    input: { surfaceTools: true, surface: "web" },
+    actor: { id: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1" },
+    session: { id: "S1" },
+    scopeId: "personal:U1",
+    defaultDestination: { type: "web", target: "dm:U1" },
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    signal: abort.signal,
+  } as unknown as SurfaceToolsContext)!;
+  return { tools, pulls };
+}
+
+const history = (count: number, text: (i: number) => string = (i) => `m${i}`) =>
+  Array.from({ length: count }, (_, i) => ({ ts: String(1000 + i).padStart(6, "0"), text: text(i) }));
+
+test("whatsNew pages back through the surface until it reaches the caller's checkpoint", async () => {
+  const { tools, pulls } = pagedSurface(history(1000), 200);
+  const result = await tools.whatsNew({ since: "001300" });
+  assert.ok(result.ok);
+  assert.equal(result.hereNew, 699);
+  assert.equal(result.message, undefined, "every message after the checkpoint was counted");
+  assert.equal(pulls.length, 4);
+  const unanchored = await pagedSurface(history(1000), 200).tools.whatsNew();
+  assert.ok(unanchored.ok);
+  assert.match(unanchored.message!, /Counts cover only the newest 200 messages\./);
+});
+
+test("live search pages back until it has the requested hits, and says how far it got when it stops short", async () => {
+  const needles = history(1000, (i) => (i % 150 === 0 ? `needle ${"x".repeat(900)} ${i}` : `hay ${i}`));
+  const { tools, pulls } = pagedSurface(needles, 200);
+  const result = await tools.search("needle", { limit: 3 });
+  assert.ok(result.ok);
+  assert.equal(result.hits!.length, 3);
+  assert.ok(
+    result.hits!.every((hit) => hit.snippet.length > 900),
+    "hits carry the whole message",
+  );
+  assert.equal(pulls.length, 2);
+  assert.match(result.message!, /Searched only the newest 400 messages\./);
+  const everything = await pagedSurface(needles, 200).tools.search("needle", { limit: 50 });
+  assert.ok(everything.ok);
+  assert.equal(everything.hits!.length, 7);
+  assert.equal(everything.message, undefined);
+});
+
+test("paging stops at the first surface failure such as a rate limit, keeping what it has", async () => {
+  const { tools, pulls } = pagedSurface(history(1000), 200, { failAfterPulls: 2 });
+  const result = await tools.search("m", { limit: 5000 });
+  assert.ok(result.ok);
+  assert.equal(pulls.length, 3, "the failing page is the last one asked for");
+  assert.match(result.message!, /rate limiting/);
+  assert.match(result.message!, /Searched only the newest 400 messages\./);
+  assert.equal(result.hits!.length, 400);
+});
+
+test("paging stops when the turn is aborted", async () => {
+  const { tools, pulls } = pagedSurface(history(1000), 200, { abortAfterPulls: 2 });
+  const result = await tools.whatsNew({ since: "000000" });
+  assert.ok(result.ok);
+  assert.equal(pulls.length, 2);
+  assert.match(result.message!, /Counts cover only the newest 400 messages\./);
 });
