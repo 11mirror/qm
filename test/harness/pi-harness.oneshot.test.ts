@@ -400,6 +400,7 @@ test("complete routes configured models through the model gateway without mutati
   const compact = harness.models.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+    summaryTokenBudget: 4_000,
     history: [
       storedItem(
         { kind: "UserMessage", text: "what? local recovery what?" },
