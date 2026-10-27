@@ -170,15 +170,22 @@ async function loadRuntimeAuth(ctx: TurnCtx, purposeDefault: PurposeDefault, run
   return { userProviderKeys, userModelOverride, personalAuth, authLabel };
 }
 
+async function servingRuntimeAuth(ctx: TurnCtx, purposeDefault: PurposeDefault, choice: RuntimeChoice) {
+  const auth = await loadRuntimeAuth(ctx, purposeDefault, choice);
+  if (auth.personalAuth && !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
+    throw new NonRetryableTurnError(
+      "Your connected AI account cannot serve this model. Choose a compatible runtime from get.",
+    );
+  return auth;
+}
+
 async function checkTurnRuntimeAuth(
   ctx: TurnCtx,
   purposeDefault: PurposeDefault,
   choice: RuntimeChoice,
 ): Promise<string | null> {
   try {
-    const auth = await loadRuntimeAuth(ctx, purposeDefault, choice);
-    if (auth.personalAuth && !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
-      return "Your connected AI account cannot serve this model. Choose a compatible runtime from get.";
+    await servingRuntimeAuth(ctx, purposeDefault, choice);
     return null;
   } catch (error) {
     return errMessage(error);
@@ -192,10 +199,11 @@ async function adoptTurnRuntime(
   choice: RuntimeChoice,
   lifetime: "task" | "scope",
 ): Promise<void> {
-  const error = await checkTurnRuntimeAuth(ctx, purposeDefault, choice);
-  if (error) throw new NonRetryableTurnError(error);
+  const auth = await servingRuntimeAuth(ctx, purposeDefault, choice).catch((error: unknown) => {
+    throw error instanceof NonRetryableTurnError ? error : new NonRetryableTurnError(errMessage(error));
+  });
   runtimeState.agentSwitch = lifetime;
-  Object.assign(runtimeState, await loadRuntimeAuth(ctx, purposeDefault, choice));
+  Object.assign(runtimeState, auth);
   runtimeState.requestedRuntime = runtimeState.userModelOverride
     ? { ...choice, modelId: runtimeState.userModelOverride }
     : choice;
