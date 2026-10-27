@@ -65,6 +65,16 @@ const legacy = async (admin: pg.Pool, tenant: string | null) => {
       history: [revision, { ...revision, content: "Be brief.", version: 1, updatedAt: 10 }],
     }),
   ]);
+  const soul = (id: string, content: string, updatedBy?: string) =>
+    insert("soul_configs", "id, json", [
+      id,
+      JSON.stringify({ scopeId: id, content, version: 1, updatedAt: 5, ...(updatedBy ? { updatedBy } : {}) }),
+    ]);
+  await soul("group:web-project-p2", "Project rules.");
+  // What the retired 0002 left on a database it ran on: a web project's guidance under a channel scope.
+  await soul("channel:web-project-p3", "Misfiled guidance.", "U6");
+  await soul("group:web-project-p3", "Group rules.");
+  await soul("channel:web-project-p4", "Lone misfiled guidance.", "U7");
   await insert("soul_configs", "id, json", [
     "channel:C3",
     JSON.stringify({ scopeId: "channel:C3", content: "Untouched.", version: 1, updatedAt: 5 }),
@@ -74,6 +84,8 @@ const legacy = async (admin: pg.Pool, tenant: string | null) => {
     ["C2", "Post a digest on Fridays.", null],
     ["G1", "Answer in Spanish.", "U3"],
     ["C3", "   ", "U4"],
+    ["web-project-p1", "Use the project glossary.", "U5"],
+    ["web-project-p2", "Ship on Fridays.", null],
   ])
     await insert("channel_policy", "org_id, container, orders, set_by, updated_at", ["o", container, orders, setBy, 1]);
   await insert("channel_state", "org_id, container, kind, updated_at", ["o", "G1", "group", 1]);
@@ -91,11 +103,15 @@ const instructions = async (admin: pg.Pool) =>
 for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
   test(`channel guidance moves into the channel's instructions${tenant ? " per tenant" : ""}`, { skip }, async () => {
     await withDatabase(async (url, admin) => {
-      // A fresh database gets the schema baseline; then put the three tables back in their pre-0002 shape and
-      // rerun 0002 alone, as on a database that booted before this migration existed.
+      // A fresh database gets the schema baseline; then put the three tables back in their pre-move shape and
+      // rerun the move alone, as on a database that booted before it existed. The ledger also keeps a row for
+      // the retired 0002, as on a database that ran it; boot must not trip over it.
       await migrate(url);
       await admin.query(
-        "DELETE FROM qm_schema_migrations WHERE id = 'surface-cache/channel-policy/0002-orders-into-instructions'",
+        "DELETE FROM qm_schema_migrations WHERE id = 'surface-cache/channel-policy/0003-orders-into-instructions'",
+      );
+      await admin.query(
+        "INSERT INTO qm_schema_migrations (id, checksum) VALUES ('surface-cache/channel-policy/0002-orders-into-instructions', 'retired') ON CONFLICT DO NOTHING",
       );
       await admin.query("DROP TABLE soul_configs, channel_policy, channel_state CASCADE");
       await legacy(admin, tenant);
@@ -119,10 +135,31 @@ for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
       assert.equal(rows["channel:G1"], undefined);
       assert.equal(rows["channel:C3"]!.content, "Untouched.", "blank guidance leaves instructions alone");
       assert.equal(rows["channel:C3"]!.version, 1);
+      assert.equal(
+        rows["group:web-project-p1"]!.content,
+        "Use the project glossary.",
+        "a web project's guidance lands on its group scope without a channel_state row",
+      );
+      assert.equal(rows["group:web-project-p1"]!.updatedBy, "U5");
+      assert.equal(rows["group:web-project-p2"]!.content, "Project rules.\n\n---\n\nShip on Fridays.");
+      assert.equal(rows["group:web-project-p2"]!.version, 2);
+      assert.equal(rows["group:web-project-p3"]!.content, "Group rules.\n\n---\n\nMisfiled guidance.");
+      assert.equal(rows["group:web-project-p3"]!.updatedBy, "U6");
+      assert.equal(rows["group:web-project-p4"]!.content, "Lone misfiled guidance.");
+      for (const id of ["p1", "p2", "p3", "p4"])
+        assert.equal(rows[`channel:web-project-${id}`], undefined, `nothing is left on channel:web-project-${id}`);
       const orders = (await admin.query("SELECT container, orders FROM channel_policy ORDER BY container")).rows;
-      assert.ok(
-        orders.every((r) => r.orders === ""),
-        "guidance is no longer kept on the channel policy",
+      assert.deepEqual(
+        orders.map((r) => [r.container, r.orders]),
+        [
+          ["C1", "Flag launch slips."],
+          ["C2", "Post a digest on Fridays."],
+          ["C3", "   "],
+          ["G1", "Answer in Spanish."],
+          ["web-project-p1", "Use the project glossary."],
+          ["web-project-p2", "Ship on Fridays."],
+        ],
+        "the channel policy keeps its guidance for a rollback",
       );
       await migrate(url);
       assert.deepEqual(await instructions(admin), rows, "the migration runs once");
