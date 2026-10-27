@@ -59,9 +59,7 @@ const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
 
 interface FrameTurnArgs {
   screenTrace: ScreenTrace;
-  useMemory: boolean;
   context: Awaited<ReturnType<typeof resolveTurnContext>>;
-  memoryScopeId: ScopeId;
   memoryStrategy: MemoryStrategy;
   observeSecurityData: SecurityObserver;
 }
@@ -79,8 +77,10 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     turnTimezone,
     resolution,
     scopeId,
+    useMemory,
   } = ctx;
-  const { useMemory, context, memoryScopeId, memoryStrategy } = turn;
+  const { context, memoryStrategy } = turn;
+  const { memoryScopeId } = context;
   const profile = surfaceProfile(input.surface);
   const isWeb = profile.traits.includes("transcript");
   const surfaceTool = input.surface ?? "slack";
@@ -297,40 +297,28 @@ const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
 
 export async function finishSystemPrompt(
   ctx: TurnCtx,
-  turn: {
-    systemPrompt: string;
-    strictReadOnly: boolean;
-    turnContextBlocks: Record<string, string>;
-    configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>;
-    timeBlock: string;
-    onboardingBlock: string;
+  framed: Pick<
+    Awaited<ReturnType<typeof frameTurnPrompt>>,
+    "systemPrompt" | "turnContextBlocks" | "configuredProviders" | "timeBlock" | "onboardingBlock"
+  >,
+  catalog: {
     openSpeakerKeychain: boolean;
     credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>;
     serviceCredRecords: PublicServiceCredential[];
     grantedCredSlugs: Set<string>;
     actorIsOrgAdmin: boolean;
-    reachAvailable: boolean;
+  },
+  directoryViews: {
     reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn } = ctx;
-  const {
-    strictReadOnly,
-    turnContextBlocks,
-    configuredProviders,
-    timeBlock,
-    onboardingBlock,
-    openSpeakerKeychain,
-    credentialDescriptions,
-    serviceCredRecords,
-    grantedCredSlugs,
-    actorIsOrgAdmin,
-    reachAvailable,
-    reachableChannelsFor,
-    directoryIndexFor,
-  } = turn;
-  let systemPrompt = turn.systemPrompt;
+  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable } = ctx;
+  const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock } = framed;
+  const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =
+    catalog;
+  const { reachableChannelsFor, directoryIndexFor } = directoryViews;
+  let systemPrompt = framed.systemPrompt;
   if (
     serviceCredRecords.some(
       (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),

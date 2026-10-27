@@ -32,7 +32,6 @@ export async function settleTurnResult(
   ctx: TurnCtx,
   turn: {
     session: Session;
-    strictReadOnly: boolean;
     hasSurfaceToolDeps: boolean;
     isPollFire: boolean;
     emittedEntries: Item[];
@@ -45,10 +44,9 @@ export async function settleTurnResult(
     turnUserSeq: number | undefined;
   },
 ): Promise<TurnResult> {
-  const { deps, input, withManagedRosterVersion, approvalOwner } = ctx;
+  const { deps, input, withManagedRosterVersion, approvalOwner, strictReadOnly } = ctx;
   const {
     session,
-    strictReadOnly,
     hasSurfaceToolDeps,
     isPollFire,
     emittedEntries,
@@ -214,7 +212,6 @@ export async function concludeTurn(
     partial: PartialTurn | null;
     turnInput: string;
     emittedEntries: Item[];
-    useMemory: boolean;
     memoryScopeId: ScopeId;
     captureDependencies: () => MemoryProvenance[];
     memoryStrategy: MemoryStrategy;
@@ -222,7 +219,7 @@ export async function concludeTurn(
     pendingCaptures: Map<ScopeId, Promise<void>>;
   },
 ) {
-  const { deps, input, actor, automatedTurn, scopeId } = ctx;
+  const { deps, input, actor, automatedTurn, scopeId, useMemory } = ctx;
   const {
     session,
     result,
@@ -231,7 +228,6 @@ export async function concludeTurn(
     partial,
     turnInput,
     emittedEntries,
-    useMemory,
     memoryScopeId,
     captureDependencies,
     memoryStrategy,
