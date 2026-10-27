@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import process from "node:process";
 import { parseArgs } from "node:util";
-
-const ROOT_TEST_DIR = new URL("../test/", import.meta.url);
+import { rootTestFiles } from "./root-test-files.mjs";
 
 function parsePositiveInteger(value, name) {
   const parsed = Number(value);
@@ -32,15 +31,9 @@ function parseShard(value) {
   return { index, total };
 }
 
-async function rootTestFiles() {
-  const entries = await readdir(ROOT_TEST_DIR, { withFileTypes: true });
-  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"));
-  const sized = await Promise.all(
-    files.map(async (entry) => ({
-      file: `test/${entry.name}`,
-      size: (await stat(new URL(entry.name, ROOT_TEST_DIR))).size,
-    })),
-  );
+async function sizedRootTestFiles() {
+  const files = await rootTestFiles();
+  const sized = await Promise.all(files.map(async (file) => ({ file, size: (await stat(file)).size })));
   return sized.sort((a, b) => b.size - a.size || a.file.localeCompare(b.file)).map((entry) => entry.file);
 }
 
@@ -99,7 +92,7 @@ async function main() {
       list: { type: "boolean" },
     },
   });
-  const allFiles = await rootTestFiles();
+  const allFiles = await sizedRootTestFiles();
 
   if (flags.check) {
     const total = parsePositiveInteger(flags.shards ?? process.env.CORE_TEST_TOTAL_SHARDS ?? "5", "shards");

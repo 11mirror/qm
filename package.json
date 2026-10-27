@@ -24,7 +24,7 @@
     "dev-instance:no-slack": "bash scripts/dev-instance.sh up --no-slack",
     "dev-instance:status": "bash scripts/dev-instance.sh status",
     "dev-instance:down": "bash scripts/dev-instance.sh down",
-    "test": "node scripts/run-pg-tests.mjs test/*.test.ts",
+    "test": "node scripts/run-pg-tests.mjs",
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:root:shard:check": "node scripts/run-root-test-shard.mjs --check --shards 5",
     "test:e2e": "node --test test/e2e/*.test.ts",

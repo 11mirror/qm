@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { FIRST_PARTY_SECRET_SPECS } from "../../cli/src/secrets.ts";
+import { isInvalidSecret as cliRejectsSecret } from "../../cli/src/util.ts";
+import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../../src/deployment/secret-schema.ts";
+
+// The runtime schema (src/deployment/secret-schema.ts, validated on core boot) and the CLI
+// provisioning schema (cli/src/secrets.ts, driving `qm secrets`) are maintained separately by
+// design — the CLI never imports core. This test keeps them from drifting apart silently:
+// every secret the runtime can demand must be one the CLI knows how to provision.
+
+// The env name a CLI spec ultimately delivers to the core process.
+const cliCoreEnvNames = new Set(
+  FIRST_PARTY_SECRET_SPECS.filter((spec) => spec.service === "core").map((spec) => spec.envName ?? spec.name),
+);
+
+test("every runtime-validated core secret is provisionable through the CLI schema", () => {
+  const missing = CORE_SECRET_SPECS.map((spec) => spec.name).filter((name) => !cliCoreEnvNames.has(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `runtime secret-schema names with no matching CLI secret spec (name or envName, service "core"): ${missing.join(
+      ", ",
+    )} — add a spec to cli/src/secrets.ts or drop it from src/deployment/secret-schema.ts`,
+  );
+});
+
+test("runtime schema conditions reference env vars the CLI schema also conditions on", () => {
+  // Env vars the runtime's requiredWhen rules read. Each must also drive a CLI spec condition,
+  // so `qm secrets` and core boot validation agree about when a secret becomes required.
+  const runtimeConditionEnv = [
+    "SANDBOX_BACKEND",
+    "DEPLOY_PROVIDER",
+    "DEPLOY_APPS_DOMAIN",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "DROPBOX_OAUTH_CLIENT_ID",
+    "LINEAR_OAUTH_CLIENT_ID",
+  ];
+  const cliConditionEnv = new Set<string>();
+  interface CliCondition {
+    kind?: string;
+    name?: string;
+    names?: string[];
+    conditions?: CliCondition[];
+  }
+  const collect = (when: CliCondition): void => {
+    if (when.kind === "sandbox-backend") cliConditionEnv.add("SANDBOX_BACKEND");
+    if (when.name) cliConditionEnv.add(when.name);
+    for (const name of when.names ?? []) cliConditionEnv.add(name);
+    for (const nested of when.conditions ?? []) collect(nested);
+  };
+  for (const spec of FIRST_PARTY_SECRET_SPECS) {
+    if (typeof spec.required === "boolean") continue;
+    collect(spec.required.when as CliCondition);
+  }
+  const missing = runtimeConditionEnv.filter((name) => !cliConditionEnv.has(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `runtime schema conditions use env vars the CLI schema never conditions on: ${missing.join(", ")}`,
+  );
+});
+
+test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
+  const cli = new Set(
+    FIRST_PARTY_SECRET_SPECS.filter((secret) => secret.service === "core" && secret.required !== false).map(
+      (secret) => secret.envName ?? secret.name,
+    ),
+  );
+  const runtime = new Set(CORE_SECRET_SPECS.map((secret) => secret.name));
+  assert.deepEqual([...runtime].sort(), [...cli].filter((name) => name !== "PUBLIC_API_URL").sort());
+});
+
+test("background ownership requires strong control credentials only for configured deployments", () => {
+  assert.deepEqual(validateCoreSecretEnv({}), []);
+  for (const secret of [undefined, "", " ".repeat(32), "short", "separate-control-secret-value-0000000000\n"]) {
+    assert.deepEqual(
+      validateCoreSecretEnv({
+        BACKGROUND_DEPLOYMENT_ID: "core:release",
+        DEPLOYMENT_CONTROL_SECRET: secret,
+      }),
+      ["DEPLOYMENT_CONTROL_SECRET"],
+    );
+    assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", secret), true, `the CLI preflight agrees on ${secret}`);
+  }
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      BACKGROUND_DEPLOYMENT_ID: "core:release",
+      DEPLOYMENT_CONTROL_SECRET: "separate-control-secret-value-0000000000",
+    }),
+    [],
+  );
+  assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", "separate-control-secret-value-0000000000"), false);
+});
+
+test('deploy/core/Dockerfile pins NODE_ENV=production — the "production" secret gate is load-bearing on that line', () => {
+  const dockerfile = readFileSync(new URL("../../deploy/core/Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /^ENV NODE_ENV=production$/m);
+});
+
+test("deployment app domains reject a missing or placeholder gate secret", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_APPS_DOMAIN: "apps.example.com" } as NodeJS.ProcessEnv), [
+    "AWS_DEPLOY_GATE_SECRET",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "replace-me",
+    } as NodeJS.ProcessEnv),
+    ["AWS_DEPLOY_GATE_SECRET"],
+  );
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "short",
+    } as NodeJS.ProcessEnv),
+    ["AWS_DEPLOY_GATE_SECRET"],
+    "a guessable gate secret would let anyone forge owner tokens, so strength is enforced",
+  );
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+    } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
+test("a declared base model provider is enforced at boot, not just at deploy time", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider } as NodeJS.ProcessEnv), [key]);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "real-key" } as NodeJS.ProcessEnv), []);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "replace-me" } as NodeJS.ProcessEnv), [
+      key,
+    ]);
+  }
+  assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
+});
+
+test("an OpenAI base model needs an API key unless a company ChatGPT login serves it", () => {
+  assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: "openai" } as NodeJS.ProcessEnv), ["OPENAI_API_KEY"]);
+  assert.deepEqual(
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
+test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {
+  const names = CORE_SECRET_SPECS.map((spec) => spec.name);
+  assert.deepEqual(
+    names.filter((name, i) => names.indexOf(name) !== i),
+    [],
+    "give a secret answering to several rules one spec with a requiredWhen list",
+  );
+});
+
+test("production rejects weak encryption key material for managed credentials", () => {
+  const strong = "x".repeat(32);
+  const env = {
+    NODE_ENV: "production",
+    CAPABILITY_SECRET: "capability",
+    CONNECTOR_SECRET_KEY: strong,
+    CORE_SIGNING_SECRET: strong,
+    PORTAL_IDENTITY_SECRET: "identity",
+    DATABASE_URL: "postgres://qm@localhost/qm",
+  } as NodeJS.ProcessEnv;
+  assert.deepEqual(validateCoreSecretEnv(env), []);
+  assert.deepEqual(validateCoreSecretEnv({ ...env, CONNECTOR_SECRET_KEY: "short" }), ["CONNECTOR_SECRET_KEY"]);
+});
+
+test("the Porter deploy provider requires PORTER_DEPLOY_API_TOKEN", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "porter" } as NodeJS.ProcessEnv), [
+    "PORTER_DEPLOY_API_TOKEN",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({ DEPLOY_PROVIDER: "porter", PORTER_DEPLOY_API_TOKEN: "t-1" } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
+test("E2B sandboxes and E2B publishing share E2B_API_KEY", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
+  assert.deepEqual(validateCoreSecretEnv({ SANDBOX_BACKEND: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "k" } as NodeJS.ProcessEnv), []);
+});

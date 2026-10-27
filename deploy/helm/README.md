@@ -174,7 +174,7 @@ endpoints, not restart it through liveness.
 Install Helm 3 on PATH (or set `HELM_BIN`) and run:
 
 ```bash
-node --test test/helm-chart.test.ts
+node --test test/repo/helm-chart.test.ts
 ```
 
 These tests render real manifests and parse them with Helm's YAML parser. Missing

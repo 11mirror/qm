@@ -50,4 +50,4 @@ for attempt in $(seq 1 60); do
   if docker logs "$name-pool" 2>&1 | grep -q 'process up'; then break; fi
   sleep 1
 done
-node --test test/pg-pool-routing.test.ts
+node --test test/persistence/pg-pool.routing.test.ts
