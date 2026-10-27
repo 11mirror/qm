@@ -27,6 +27,7 @@ const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
+const UPLOAD_ID = /^[0-9a-f]{32}$/;
 
 export function multipartChecksum(checksums: string[]): string {
   return `${createHash("sha256")
@@ -140,10 +141,7 @@ export function createDirectFileUploads(options: {
         )
       )
         throw new FileUploadError("checksums must contain one base64 SHA-256 per 64 MiB part");
-      if (
-        input.requestId !== undefined &&
-        (typeof input.requestId !== "string" || !/^[0-9a-f]{32}$/.test(input.requestId))
-      )
+      if (input.requestId !== undefined && (typeof input.requestId !== "string" || !UPLOAD_ID.test(input.requestId)))
         throw new FileUploadError("requestId must be 32 lowercase hex characters");
       const id = input.requestId ?? randomUUID().replaceAll("-", "");
       const name = safeAttachmentName(input.name);
@@ -359,7 +357,7 @@ export function createDirectFileUploads(options: {
           )
             continue;
           const id = upload.Key.slice(`${options.prefix ?? ""}files/uploads/`.length);
-          if (!/^[0-9a-f]{32}$/.test(id)) continue;
+          if (!UPLOAD_ID.test(id)) continue;
           const row = await store.get(id);
           if (row?.state === "completing" && row.uploadId === upload.UploadId) continue;
           await client.send(

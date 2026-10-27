@@ -22,6 +22,7 @@ const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
+const modelToolName = (serverId: string, name: string): string => `${serverId}_${name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
 
 function modelInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const properties = schema.properties;
@@ -294,7 +295,7 @@ export function createMcpToolService(opts: {
         if (server.auth === "oauth-user") {
           nextPerUser.set(server.id, server);
           next.push({
-            name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+            name: modelToolName(server.id, "sign_in"),
             serverId: server.id,
             remoteName: "sign_in",
             signIn: true,
@@ -308,7 +309,7 @@ export function createMcpToolService(opts: {
         } else tools = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
         for (const tool of tools) {
           next.push({
-            name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+            name: modelToolName(server.id, tool.name),
             serverId: server.id,
             remoteName: tool.name,
             description: tool.description || `${tool.name} on ${server.name}`,

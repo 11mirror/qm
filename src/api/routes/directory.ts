@@ -71,9 +71,8 @@ async function pushDirectory(ctx: ApiCtx): Promise<RouteResult> {
       error: "bad_request",
       message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
     });
-  if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
-    await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
-  }
+  const workspaceUrl = typeof b.workspaceUrl === "string" ? b.workspaceUrl.replace(/\/+$/, "") : "";
+  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(workspaceUrl);
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
     const members = b.members

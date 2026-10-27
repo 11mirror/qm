@@ -17,6 +17,8 @@ import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts
 import { tenant } from "../../tenant.ts";
 import { slackStatus, completeSlack } from "./composio-slack.ts";
 
+const TOOLKIT_SLUG = /^[a-z0-9_-]{1,100}$/;
+const UPSTREAM_SLUG = /^[a-zA-Z0-9_-]{1,100}$/;
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
 export function composioUserId(org: string, principal: string): string {
@@ -184,7 +186,7 @@ async function catalog(ctx: ApiCtx): Promise<RouteResult> {
       if (
         !item ||
         typeof item.slug !== "string" ||
-        !/^[a-z0-9_-]{1,100}$/.test(item.slug) ||
+        !TOOLKIT_SLUG.test(item.slug) ||
         typeof item.name !== "string" ||
         (Array.isArray(item.auth_schemes) && item.auth_schemes.every((scheme: unknown) => scheme === "NO_AUTH"))
       )
@@ -224,8 +226,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<RouteResult> {
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
   if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
     return reply(403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
-  if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
-    return reply(400, { error: "invalid_toolkit" });
+  if (typeof toolkit !== "string" || !TOOLKIT_SLUG.test(toolkit)) return reply(400, { error: "invalid_toolkit" });
   const callbackUrl = (ctx.body as { callbackUrl?: unknown }).callbackUrl;
   if (callbackUrl !== undefined && !validCallback(callbackUrl)) return reply(400, { error: "invalid_callback" });
   const userId = composioUserId(tenant().orgId, canonicalPerson(access.principal));
@@ -357,7 +358,7 @@ async function connections(ctx: ApiCtx): Promise<RouteResult> {
         typeof item.id === "string" &&
         ACCOUNT_ID.test(item.id) &&
         typeof item.toolkit?.slug === "string" &&
-        /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
+        UPSTREAM_SLUG.test(item.toolkit.slug),
     );
     const configIds = [
       ...new Set(
@@ -423,7 +424,7 @@ async function tools(ctx: ApiCtx): Promise<RouteResult> {
   const toolkit = ctx.url.searchParams.get("toolkit") ?? "";
   const query = ctx.url.searchParams.get("query") ?? "";
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
-  if (!/^[a-z0-9_-]{1,100}$/.test(toolkit) || query.length > 1000 || cursor.length > 2048)
+  if (!TOOLKIT_SLUG.test(toolkit) || query.length > 1000 || cursor.length > 2048)
     return reply(400, { error: "invalid_query" });
   const params = new URLSearchParams({ toolkit_slug: toolkit, query, limit: "25", toolkit_versions: "latest" });
   if (cursor) params.set("cursor", cursor);
@@ -460,7 +461,7 @@ async function execute(ctx: ApiCtx): Promise<RouteResult> {
     typeof body.accountId !== "string" ||
     !ACCOUNT_ID.test(body.accountId) ||
     typeof body.version !== "string" ||
-    !/^[a-zA-Z0-9_-]{1,100}$/.test(body.version) ||
+    !UPSTREAM_SLUG.test(body.version) ||
     body.version === "latest" ||
     !body.arguments ||
     typeof body.arguments !== "object" ||

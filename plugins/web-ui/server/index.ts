@@ -512,9 +512,7 @@ export const apiRoutes: readonly WebRoute[] = [
     if (result.status !== 200) return relay(c.res, result);
     const data = JSON.parse(result.text) as { returnTo?: string | null };
     const base = new URL(PUBLIC_URL);
-    const target = data.returnTo
-      ? new URL(data.returnTo, base)
-      : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
+    const target = data.returnTo ? new URL(data.returnTo, base) : new URL("./?view=settings", `${PUBLIC_URL}/`);
     if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
     c.res.writeHead(303, { location: target.href });
     c.res.end();
