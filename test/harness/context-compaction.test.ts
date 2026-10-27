@@ -1,3 +1,4 @@
+import { countTokens } from "../../src/util/tokens.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -57,46 +58,58 @@ test("compactTranscript labels overheard entries by author and keeps a file-only
   assert.match(out, /UserMessage#3: whose selfie is that\?/);
 });
 
-test("compactTranscript bounds a giant entry payload, hoisting isError out of the JSON", () => {
-  const out = compactTranscript([
-    ent(
-      {
-        kind: "ToolResult",
-        tool: "execute",
-        callId: "c1",
-        isError: true,
-        text: "tail: [exit 1]",
-        body: { stdout: "x".repeat(900_000) },
-      },
-      1,
-    ),
-  ]);
-  assert.ok(out.length <= 16_000, `line stays within the declared cap (got ${out.length} chars)`);
-  assert.ok(out.includes("…[truncated —"), "truncation is marked with the original size");
+test("compactTranscript fits the summarizer's token budget by cutting the longest entries' middles first, hoisting isError out of the JSON", () => {
+  const rows = Array.from({ length: 20_000 }, (_, i) => `row ${i} ok`).join("\n");
+  const out = compactTranscript(
+    [
+      ent(
+        {
+          kind: "ToolResult",
+          tool: "execute",
+          callId: "c1",
+          isError: true,
+          text: "tail: [exit 1]",
+          body: { stdout: rows },
+        },
+        1,
+      ),
+      ent({ kind: "UserMessage", text: "short question" }, 2),
+    ],
+    2_000,
+  );
+  assert.ok(countTokens(out) <= 2_000, `transcript stays within the budget (got ${countTokens(out)} tokens)`);
+  assert.ok(out.includes("…[truncated —"), "truncation is marked with how much was cut");
   assert.ok(out.startsWith("ToolResult#1: [isError]"), "failure status survives regardless of JSONB key order");
   assert.ok(out.includes("[exit 1]"), "the payload tail survives the cut");
+  assert.ok(out.endsWith("UserMessage#2: short question"), "short entries are left whole");
 });
 
-test("compactTranscript bounds a giant text entry too", () => {
+test("compactTranscript without a budget leaves every entry whole", () => {
   const out = compactTranscript([ent({ kind: "UserMessage", text: `start ${"x".repeat(900_000)} end` }, 1)]);
-  assert.ok(out.length <= 16_000, `line stays within the declared cap (got ${out.length} chars)`);
-  assert.ok(out.startsWith("UserMessage#1: start ") && out.endsWith(" end"), "head and tail of the text survive");
+  assert.equal(out, `UserMessage#1: start ${"x".repeat(900_000)} end`);
 });
 
-test("compactTranscript bounds a giant prior-summary line and a giant overheard file list", () => {
-  const out = compactTranscript([
-    ent({ kind: "ContextCompaction", throughSeq: 3, text: "s".repeat(900_000) }, 1),
-    ent(
-      {
-        kind: "UserMessage",
-        text: "hi",
-        body: { overheard: true, name: "ada", files: Array.from({ length: 5_000 }, (_, i) => `file-${i}.txt`) },
-      },
-      2,
-    ),
-  ]);
-  for (const line of out.split("\n"))
-    assert.ok(line.length <= 16_000, `every line is bounded (got ${line.length} chars)`);
+test("compactTranscript fits a giant prior-summary line and a giant overheard file list into the budget", () => {
+  const out = compactTranscript(
+    [
+      ent(
+        { kind: "ContextCompaction", throughSeq: 3, text: Array.from({ length: 30_000 }, (_, i) => `s${i}`).join(" ") },
+        1,
+      ),
+      ent(
+        {
+          kind: "UserMessage",
+          text: "hi",
+          body: { overheard: true, name: "ada", files: Array.from({ length: 5_000 }, (_, i) => `file-${i}.txt`) },
+        },
+        2,
+      ),
+    ],
+    3_000,
+  );
+  assert.ok(countTokens(out) <= 3_000, `every line fits the budget together (got ${countTokens(out)} tokens)`);
+  assert.match(out, /Prior summary through seq 3: s0 /);
+  assert.match(out, /overheard#2 \(ada\): hi \(files: file-0\.txt/);
 });
 
 test("compactTranscript stamps every line with its entry's UTC timestamp", () => {
