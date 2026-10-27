@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { EgressPolicy } from "../types.ts";
 
 function normalizeHost(host: string): string {
@@ -8,9 +9,8 @@ function normalizeHost(host: string): string {
     .replace(/\.$/, "")
     .replace(/^\[(.*)\]$/, "$1");
   if (!s) return "";
-  const isIPv6 = (s.match(/:/g)?.length ?? 0) >= 2;
   try {
-    return new URL(`https://${isIPv6 ? `[${s}]` : s}`).hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+    return new URL(`https://${isIP(s) === 6 ? `[${s}]` : s}`).hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
   } catch {
     return s;
   }
@@ -30,12 +30,13 @@ export function parseEgressPolicy(input: unknown): { policy: EgressPolicy } | { 
       if (!candidate) continue;
       if (/\s|\*|:\/\/|[/?#@]/.test(candidate))
         return { error: `${candidate} is not a host name; omit schemes, wildcards, ports, paths, and credentials` };
-      const colonCount = (candidate.match(/:/g) ?? []).length;
-      if (colonCount === 1) return { error: `${candidate} includes a port; enter a host name only` };
       const normalized = normalizeHost(candidate);
+      const ipLiteral = isIP(normalized) !== 0;
+      if (!ipLiteral && candidate.includes(":"))
+        return { error: `${candidate} includes a port; enter a host name only` };
       if (
         !normalized ||
-        (colonCount < 2 &&
+        (!ipLiteral &&
           !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalized))
       ) {
         return { error: `${candidate} is not a valid host name` };
