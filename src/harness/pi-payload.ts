@@ -1,5 +1,5 @@
 import type { LlmTransportMeta } from "../sessions/session-store.ts";
-import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
+import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
 import { promptEnvelopeWithoutHistory } from "./harness.ts";
 import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
 

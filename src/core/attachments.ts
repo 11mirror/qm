@@ -31,8 +31,6 @@ const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "imag
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
-export const MAX_LLM_REQUEST_BYTES = 18_000_000;
-
 export interface InboundImage {
   name: string;
   mimeType: string;

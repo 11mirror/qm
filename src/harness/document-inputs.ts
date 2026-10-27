@@ -79,7 +79,7 @@ export async function documentBlocks(
             source: {
               type: "text",
               media_type: "text/plain",
-              data: fitText((await documentText(document, signal)).text),
+              data: fitText(await documentText(document, signal)),
             },
           });
         } catch {
