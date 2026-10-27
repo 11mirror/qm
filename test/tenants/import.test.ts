@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
-import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { importTenant, migrateWithBuild } from "../../src/tenants/import.ts";
 import { upsertTenant } from "../../src/tenants/registry.ts";
 
@@ -106,26 +105,20 @@ test(
           createStaging: true,
           batchSize: 100,
           migrate,
-          writeTenant: async (id) => {
-            const pool = createPgPool(target);
-            try {
-              await upsertTenant(
-                pool,
-                {
-                  id,
-                  slug: name,
-                  orgId: name,
-                  hosts: [`${name}.example.test`],
-                  status: "active",
-                  env: {},
-                  secretEnv: {},
-                },
-                key,
-              );
-            } finally {
-              await pool.close();
-            }
-          },
+          writeTenant: (id, db) =>
+            upsertTenant(
+              db,
+              {
+                id,
+                slug: name,
+                orgId: name,
+                hosts: [`${name}.example.test`],
+                status: "active",
+                env: {},
+                secretEnv: {},
+              },
+              key,
+            ),
           log: (line) => lines.push(line),
         });
 

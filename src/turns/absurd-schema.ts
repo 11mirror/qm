@@ -23,8 +23,11 @@ export const ABSURD_MIGRATION: PgMigrationDefinition = {
   id: "absurd/0.5.1",
   script: true,
   statements: [readFileSync(ABSURD_SQL_URL, "utf8"), ...TURN_QUEUES.flatMap(queueSetup)],
-  expectedChecksum: "0c43a7c73f71963654a5bb378cd6aa711d18d4e1bb16990631b63db62a8ad1e1",
-  acceptedChecksums: ["4f8dd2e6249339a7c89d650d4d71b5a04228cf329a45f515a834acdeca3864e9"],
+  expectedChecksum: "1ff2d7e74b5a2b0454ec1ccea7f29fdf48fc58cbe89dc8e9f8f9e896ea5c8a2b",
+  acceptedChecksums: [
+    "4f8dd2e6249339a7c89d650d4d71b5a04228cf329a45f515a834acdeca3864e9",
+    "0c43a7c73f71963654a5bb378cd6aa711d18d4e1bb16990631b63db62a8ad1e1",
+  ],
 };
 
 const RETIRED_FUNCTIONS = [
@@ -45,7 +48,7 @@ export const ABSURD_UNPARTITIONED_MIGRATION: PgMigrationDefinition = {
   script: true,
   statements: [
     ...RETIRED_FUNCTIONS.map((name) => `DROP FUNCTION IF EXISTS absurd.${name}`),
-    readFileSync(ABSURD_SQL_URL, "utf8").replace(/^create function /gm, "create or replace function "),
+    readFileSync(ABSURD_SQL_URL, "utf8"),
   ],
 };
 

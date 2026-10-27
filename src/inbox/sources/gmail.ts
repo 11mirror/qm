@@ -68,7 +68,7 @@ export function replySubject(item: InboxItem, draft: ReplyDraft): string {
   if (explicit) return explicit;
   const original = metaOf(item)?.subject?.trim() ?? titleOf(item).trim();
   if (!original) return "Re:";
-  return /^re:/i.test(original) ? original : `Re: ${original}`;
+  return original.toLowerCase().startsWith("re:") ? original : `Re: ${original}`;
 }
 
 export async function buildGmailReplyMime(item: InboxItem, draft: ReplyDraft): Promise<Buffer | null> {

@@ -34,7 +34,7 @@ create schema if not exists absurd;
 
 -- Returns either the actual current timestamp or a fake one if
 -- the session sets `absurd.fake_now`.  This lets tests control time.
-create function absurd.current_time ()
+create or replace function absurd.current_time ()
   returns timestamptz
   language plpgsql
   volatile
@@ -53,7 +53,7 @@ $$;
 
 -- Calculates a retry delay with a global maximum of one day. Invalid explicit
 -- delays are rejected; exponential overflow saturates at the configured cap.
-create function absurd.retry_delay_seconds (
+create or replace function absurd.retry_delay_seconds (
   p_strategy jsonb,
   p_attempt integer
 )
@@ -164,7 +164,7 @@ $$;
 -- We intentionally cap UTF-8 byte length so generated explicit index names
 -- (for instance r_<queue>_sai) stay within PostgreSQL's 63-byte identifier
 -- limit. Character set is otherwise delegated to PostgreSQL quoted-ident rules.
-create function absurd.validate_queue_name (p_queue_name text)
+create or replace function absurd.validate_queue_name (p_queue_name text)
   returns text
   language plpgsql
 as $$
@@ -181,7 +181,7 @@ begin
 end;
 $$;
 
-create function absurd.ensure_queue_tables (p_queue_name text)
+create or replace function absurd.ensure_queue_tables (p_queue_name text)
   returns void
   language plpgsql
 as $$
@@ -369,7 +369,7 @@ $$;
 -- Creates the queue with the given name and storage mode.
 --
 -- Existing queues are idempotent as long as the requested mode matches.
-create function absurd.create_queue (
+create or replace function absurd.create_queue (
   p_queue_name text,
   p_storage_mode text
 )
@@ -420,7 +420,7 @@ $$;
 -- Drop a queue if it exists.
 -- We intentionally don't validate the provided name here so legacy queues
 -- created under older naming rules can still be removed.
-create function absurd.drop_queue (p_queue_name text)
+create or replace function absurd.drop_queue (p_queue_name text)
   returns void
   language plpgsql
 as $$
@@ -447,7 +447,7 @@ end;
 $$;
 
 -- Lists all queues that currently exist.
-create function absurd.list_queues ()
+create or replace function absurd.list_queues ()
   returns table (queue_name text)
   language sql
 as $$
@@ -455,7 +455,7 @@ as $$
 $$;
 
 -- Returns queue maintenance policy metadata.
-create function absurd.get_queue_policy (
+create or replace function absurd.get_queue_policy (
   p_queue_name text
 )
   returns table (
@@ -495,7 +495,7 @@ $$;
 -- * detach_mode ('none' | 'empty')
 -- * detach_min_age (interval text)
 -- * default_partition ('enabled' | 'disabled')
-create function absurd.set_queue_policy (
+create or replace function absurd.set_queue_policy (
   p_queue_name text,
   p_policy jsonb
 )
@@ -652,7 +652,7 @@ $$;
 -- Non-terminal states (pending/running/sleeping) return result/failure_reason
 -- as NULL. Completed tasks expose completed_payload as result. Failed tasks
 -- expose the last run failure_reason.
-create function absurd.get_task_result (
+create or replace function absurd.get_task_result (
   p_queue_name text,
   p_task_id uuid
 )
@@ -687,7 +687,7 @@ $$;
 -- with that key already exists. If so, it returns the existing task_id with run_id
 -- and attempt set to NULL to signal "already exists". This is race-safe via
 -- INSERT ... ON CONFLICT DO NOTHING.
-create function absurd.spawn_task (
+create or replace function absurd.spawn_task (
   p_queue_name text,
   p_task_name text,
   p_params jsonb,
@@ -838,7 +838,7 @@ $$;
 
 -- Workers call this to reserve a task from a given queue
 -- for a given reservation period in seconds.
-create function absurd.claim_task (
+create or replace function absurd.claim_task (
   p_queue_name text,
   p_worker_id text,
   p_claim_timeout integer default 30,
@@ -1004,7 +1004,7 @@ end;
 $$;
 
 -- Markes a run as completed
-create function absurd.complete_run (
+create or replace function absurd.complete_run (
   p_queue_name text,
   p_run_id uuid,
   p_state jsonb default null
@@ -1066,7 +1066,7 @@ begin
 end;
 $$;
 
-create function absurd.schedule_run (
+create or replace function absurd.schedule_run (
   p_queue_name text,
   p_run_id uuid,
   p_wake_at timestamptz
@@ -1112,7 +1112,7 @@ begin
 end;
 $$;
 
-create function absurd.fail_run (
+create or replace function absurd.fail_run (
   p_queue_name text,
   p_run_id uuid,
   p_reason jsonb,
@@ -1266,7 +1266,7 @@ $$;
 --   coalesce(current max_attempts, current attempts) + 1 and must be greater
 --   than current attempts; for spawn_new it overrides copied max_attempts on
 --   the new task.
-create function absurd.retry_task (
+create or replace function absurd.retry_task (
   p_queue_name text,
   p_task_id uuid,
   p_options jsonb default '{}'::jsonb
@@ -1391,7 +1391,7 @@ begin
 end;
 $$;
 
-create function absurd.set_task_checkpoint_state (
+create or replace function absurd.set_task_checkpoint_state (
   p_queue_name text,
   p_task_id uuid,
   p_step_name text,
@@ -1478,7 +1478,7 @@ begin
 end;
 $$;
 
-create function absurd.extend_claim (
+create or replace function absurd.extend_claim (
   p_queue_name text,
   p_run_id uuid,
   p_extend_by integer
@@ -1541,7 +1541,7 @@ $$;
 
 -- Returns one checkpoint by name. By default only committed checkpoint rows
 -- are visible; pass p_include_pending = true to include pending rows.
-create function absurd.get_task_checkpoint_state (
+create or replace function absurd.get_task_checkpoint_state (
   p_queue_name text,
   p_task_id uuid,
   p_step_name text,
@@ -1570,7 +1570,7 @@ $$;
 
 -- Returns committed checkpoints visible to the given run. The run must belong
 -- to the provided task, and checkpoints from later attempts are hidden.
-create function absurd.get_task_checkpoint_states (
+create or replace function absurd.get_task_checkpoint_states (
   p_queue_name text,
   p_task_id uuid,
   p_run_id uuid
@@ -1623,7 +1623,7 @@ begin
 end;
 $$;
 
-create function absurd.await_event (
+create or replace function absurd.await_event (
   p_queue_name text,
   p_task_id uuid,
   p_run_id uuid,
@@ -1810,7 +1810,7 @@ begin
 end;
 $$;
 
-create function absurd.emit_event (
+create or replace function absurd.emit_event (
   p_queue_name text,
   p_event_name text,
   p_payload jsonb default null
@@ -1907,7 +1907,7 @@ $$;
 -- Manually cancels a task by its task_id.
 -- Sets the task state to 'cancelled' and prevents any future runs.
 -- Currently running code will detect cancellation at the next checkpoint or heartbeat.
-create function absurd.cancel_task (
+create or replace function absurd.cancel_task (
   p_queue_name text,
   p_task_id uuid
 )
@@ -1975,7 +1975,7 @@ $$;
 
 -- Runs one cleanup batch for all queues (or one specific queue), using
 -- per-queue policy stored in absurd.queues.
-create function absurd.cleanup_all_queues (
+create or replace function absurd.cleanup_all_queues (
   p_queue_name text default null
 )
   returns table (
@@ -2036,7 +2036,7 @@ $$;
 -- is older than the specified TTL in seconds.
 --
 -- Returns the number of tasks deleted.
-create function absurd.cleanup_tasks (
+create or replace function absurd.cleanup_tasks (
   p_queue_name text,
   p_ttl_seconds integer,
   p_limit integer default 1000
@@ -2175,7 +2175,7 @@ $$;
 -- Deletes events whose emitted_at timestamp is older than the specified TTL in seconds.
 --
 -- Returns the number of events deleted.
-create function absurd.cleanup_events (
+create or replace function absurd.cleanup_events (
   p_queue_name text,
   p_ttl_seconds integer,
   p_limit integer default 1000
@@ -2219,7 +2219,7 @@ end;
 $$;
 
 -- utility function to generate a uuidv7 even for older postgres versions.
-create function absurd.portable_uuidv7 ()
+create or replace function absurd.portable_uuidv7 ()
   returns uuid
   language plpgsql
   volatile

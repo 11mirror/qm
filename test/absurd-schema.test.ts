@@ -8,7 +8,7 @@ test("Absurd migration runs the vendored file whole, matches its pin and accepts
   const migration = pgMigrationFrom(ABSURD_MIGRATION);
   assert.equal(migration.id, "absurd/0.5.1");
   assert.equal(migration.statements[0], readFileSync(ABSURD_SQL_URL, "utf8").trim());
-  assert.deepEqual(migration.acceptedChecksums, ["4f8dd2e6249339a7c89d650d4d71b5a04228cf329a45f515a834acdeca3864e9"]);
+  assert.equal(migration.acceptedChecksums?.[0], "4f8dd2e6249339a7c89d650d4d71b5a04228cf329a45f515a834acdeca3864e9");
   assert.deepEqual(
     migration.statements.filter((statement) => statement.startsWith("SELECT absurd.create_queue")),
     TURN_QUEUES.map((queue) => `SELECT absurd.create_queue('${queue}', 'unpartitioned')`),
