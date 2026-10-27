@@ -1,53 +1,35 @@
+import type { MemoryModule } from "./memory.ts";
+import type { CronsModule } from "./crons.ts";
+import type { StoresModule } from "./stores.ts";
+import type { ApiAppModule } from "./api-app.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
+import type { HarnessModule } from "./harness.ts";
 import type { Head } from "./late.ts";
 import { createSuggestedActivityProfileStore, createSuggestedActivityService } from "../suggestions/activities.ts";
 import { createMemoryTidyProfileStore, createMemoryTidyService } from "../memory/tidy.ts";
-import { createJobWorker } from "../jobs/job-worker.ts";
 import { createScheduler } from "../cron/scheduler.ts";
 import { createControlService } from "../api/control-service.ts";
 import { availableRuntimeError } from "../api/runtime-config.ts";
 import { providerKeysPresent } from "../config.ts";
 import { createRuntimeService } from "../harness/runtime-control.ts";
-import type { StoresModule } from "./stores.ts";
-import type { MemoryModule } from "./memory.ts";
-import type { CronsModule } from "./crons.ts";
-import type { ApiAppModule } from "./api-app.ts";
-import type { TriggersModule } from "./triggers.ts";
-import type { OrchestratorModule } from "./orchestrator.ts";
-import type { HarnessModule } from "./harness.ts";
-import type { ModelCredentialsModule } from "./model-credentials.ts";
-import type { ModelKeysModule } from "./model-keys.ts";
 
-export function buildScheduler(
-  w: Head &
-    StoresModule &
-    MemoryModule &
-    CronsModule &
-    ApiAppModule &
-    TriggersModule &
-    OrchestratorModule &
-    HarnessModule &
-    ModelCredentialsModule &
-    ModelKeysModule,
-) {
-  const {
-    baseMemory,
-    crons,
-    late,
-    databaseUrl,
-    admittedWork,
-    app,
-    advisoryLock,
-    triggerDeps,
-    config,
-    sessions,
-    orchestratorDeps,
-    admin,
-    configStore,
-    fallback,
-    modelCredentials,
-    overrides,
-    refreshModels,
-  } = w;
+type SchedulerInputs = Pick<Head, "late" | "admittedWork" | "config" | "overrides"> & {
+  memory: MemoryModule;
+  crons: CronsModule;
+  stores: StoresModule;
+  apiApp: ApiAppModule;
+  orchestrator: OrchestratorModule;
+  harness: HarnessModule;
+};
+
+export function buildScheduler(deps: SchedulerInputs) {
+  const { baseMemory } = deps.memory;
+  const { crons } = deps.crons;
+  const { late, admittedWork, config, overrides } = deps;
+  const { databaseUrl, advisoryLock, sessions, admin, configStore, every, jobs } = deps.stores;
+  const { app, triggerDeps, sweepAsks } = deps.apiApp;
+  const { orchestratorDeps } = deps.orchestrator;
+  const { fallback, modelCredentials, refreshModels } = deps.harness;
 
   const suggestedActivityProfiles = createSuggestedActivityProfileStore(databaseUrl);
   const memoryTidy = createMemoryTidyService({
@@ -58,7 +40,6 @@ export function buildScheduler(
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
   late.memoryTidy = memoryTidy;
-  const jobs = createJobWorker(databaseUrl);
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
@@ -108,7 +89,17 @@ export function buildScheduler(
     },
     app,
   );
-  return { jobs, scheduler, suggestedActivities };
+  every("cron:repair", 60_000, () => scheduler.repair(), { immediate: true });
+  every("cron:asks", 5_000, () => sweepAsks(Date.now()));
+  every("cron:stranded-fires", 10 * 60_000, async () => {
+    const swept = await crons.sweepStrandedFires(Date.now());
+    if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
+  });
+  every("cron:fire-gc", 6 * 60 * 60_000, async () => {
+    const pruned = await crons.pruneFires(Date.now());
+    if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
+  });
+  return { scheduler, suggestedActivities };
 }
 
 export type SchedulerModule = ReturnType<typeof buildScheduler>;
