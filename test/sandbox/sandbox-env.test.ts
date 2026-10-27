@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox } from "../../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../../src/sandbox/sandbox-env.ts";
 import { installFakeSprites, type FakeSprites } from "../support/fake-sprites.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "../support/test-database.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -19,7 +19,7 @@ after(() => ff.cleanup());
 function spritesHandle(env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    store: testMap(),
+    store: testSandboxBodies(SPRITES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

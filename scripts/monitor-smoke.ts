@@ -1,7 +1,8 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
+import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -61,7 +62,7 @@ print("PHASE: image saved diffusion-out.png", flush=True)
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "monitor-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
-  store: smokeMap("sprites_initialization"),
+  store: createSandboxBodies(databaseUrl, SPRITES_BODIES),
   advisoryLock: createNoopAdvisoryLock(),
 });
 if (!supportsProcessSessions(sb)) throw new Error("Sprites sandbox does not advertise process sessions");

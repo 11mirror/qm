@@ -1,17 +1,23 @@
 import type { Head } from "./late.ts";
 import type { ScopeId } from "../types.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS } from "../connectors/background-exec-broker.ts";
-import { type StoredE2bSandbox, createE2bSandbox, E2B_TEMPLATE_TOOLS } from "../sandbox/e2b-sandbox.ts";
-import { type StoredModalSandbox, modalRecordShapeMigration, createModalSandbox } from "../sandbox/modal-sandbox.ts";
+import { type StoredE2bSandbox, createE2bSandbox, E2B_BODIES, E2B_TEMPLATE_TOOLS } from "../sandbox/e2b-sandbox.ts";
+import { type StoredModalSandbox, MODAL_BODIES, createModalSandbox } from "../sandbox/modal-sandbox.ts";
 import type { BackendSandbox } from "../sandbox/sandbox.ts";
-import { createLocalSandbox, type StoredLocalSandbox } from "../sandbox/local-sandbox.ts";
-import { createSpritesSandbox, type StoredSpritesSandbox } from "../sandbox/sprites-sandbox.ts";
+import { createLocalSandbox, LOCAL_BODIES, type StoredLocalSandbox } from "../sandbox/local-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES, type StoredSpritesSandbox } from "../sandbox/sprites-sandbox.ts";
 import { loadConnectorSdk } from "../sandbox/connector-sdk.ts";
-import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "../sandbox/smolmachines-sandbox.ts";
+import { createSandboxBodies } from "../sandbox/sandbox-bodies.ts";
+import {
+  createSmolmachinesSandbox,
+  SMOLMACHINES_BODIES,
+  type StoredSmolmachinesSandbox,
+} from "../sandbox/smolmachines-sandbox.ts";
 import { type E2bClient, createSdkE2bClient } from "../sandbox/e2b-client.ts";
 import { E2B_DEPLOY_IDLE_TIMEOUT_SEC } from "../deploy/e2b-deploy-provider.ts";
 import {
   createManagedAgentsSandbox,
+  MANAGED_AGENTS_BODIES,
   QM_TEMPLATE_TOOLS,
   type StoredManagedAgentsSandbox,
 } from "../sandbox/managed-agents-sandbox.ts";
@@ -24,7 +30,7 @@ import type { StoresModule } from "./stores.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
 export function buildSandboxBackends(w: Head & FilesModule & StoresModule & DeploymentLayerModule) {
-  const { errors, config, advisoryLock, blobTransfer, deploymentLayer, artifactMap, pgArtifactMap, workspace } = w;
+  const { errors, config, advisoryLock, blobTransfer, deploymentLayer, databaseUrl, workspace } = w;
 
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
@@ -52,27 +58,26 @@ export function buildSandboxBackends(w: Head & FilesModule & StoresModule & Depl
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     onError: sandboxOnError,
   };
-  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
-  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  pgArtifactMap.pool.registerMigration(modalRecordShapeMigration("modal_sandbox_bodies"));
+  const e2bBodies = createSandboxBodies<StoredE2bSandbox>(databaseUrl, E2B_BODIES);
+  const modalBodies = createSandboxBodies<StoredModalSandbox>(databaseUrl, MODAL_BODIES);
   const buildLocal = (): BackendSandbox =>
     createLocalSandbox(workspace, {
       ...sandboxShared,
       ...config.localSandbox,
-      store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
+      store: createSandboxBodies<StoredLocalSandbox>(databaseUrl, LOCAL_BODIES),
     });
   const buildSprites = (): BackendSandbox =>
     createSpritesSandbox(workspace, {
       ...sandboxShared,
       ...config.spritesSandbox,
-      store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
+      store: createSandboxBodies<StoredSpritesSandbox>(databaseUrl, SPRITES_BODIES),
       connectorSdk: loadConnectorSdk,
     });
   const buildSmolmachines = (): BackendSandbox =>
     createSmolmachinesSandbox(workspace, {
       ...sandboxShared,
       ...config.smolmachinesSandbox,
-      store: artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies"),
+      store: createSandboxBodies<StoredSmolmachinesSandbox>(databaseUrl, SMOLMACHINES_BODIES),
     });
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
@@ -108,7 +113,7 @@ export function buildSandboxBackends(w: Head & FilesModule & StoresModule & Depl
         ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
+      store: createSandboxBodies<StoredManagedAgentsSandbox>(databaseUrl, MANAGED_AGENTS_BODIES),
     });
   };
   const buildModal = (): BackendSandbox => {

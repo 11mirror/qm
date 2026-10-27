@@ -1,6 +1,5 @@
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import type { MapConversion } from "../persistence/typed-table.ts";
 import { tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
@@ -18,6 +17,7 @@ import {
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
 import type { BackendSandbox, ComputerStatus, ExecResult, SandboxHandle, TeardownOptions } from "./sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 
 const HOME_DIR = "/root";
 const ROTATE_MARGIN_MS = 4 * 3600_000;
@@ -38,37 +38,47 @@ export interface StoredModalSandbox extends StoredSandboxRecord {
 
 export interface ModalSandboxOptions extends SandboxShared {
   client: ModalClient;
-  store: DurableMap<StoredModalSandbox>;
+  store: SandboxBodies<StoredModalSandbox>;
 }
 
-/** One-off rewrite of rows written by the previous Modal record shape (nativeSnapshotId era). */
-export function modalRecordShapeMigration(table: string): PgMigrationDefinition {
-  const retiredKeys = [
-    "hydrationPending",
-    "nativeSnapshotId",
-    "nativeSnapshotExpiresAtMs",
-    "recoveryError",
-    "snapshotGeneration",
-    "lastSnapshotAttemptMs",
-  ];
-  return {
-    id: `durable-map/${table}/0002-legacy-modal-record-shape`,
-    statements: [
-      `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-      `UPDATE ${table} SET json = (json - ${retiredKeys.map((k) => `'${k}'`).join(" - ")})
-        || CASE WHEN json->>'hydrationPending' = 'true' THEN '{"initializationPending": true}'::jsonb ELSE '{}'::jsonb END
-        || CASE WHEN coalesce(json->>'nativeSnapshotId', '') <> '' THEN jsonb_strip_nulls(jsonb_build_object(
-             'checkpointId', json->'nativeSnapshotId',
-             'checkpointAtMs', coalesce(
-               (nullif(json->>'nativeSnapshotExpiresAtMs', '0'))::bigint - ${MODAL_CHECKPOINT_RETENTION_MS},
-               (json->>'lastSnapshotMs')::bigint)))
-           ELSE '{}'::jsonb END
-        || CASE WHEN coalesce(json->>'recoveryError', '') <> '' THEN jsonb_build_object('snapshotError', json->'recoveryError')
-           ELSE '{}'::jsonb END
-       WHERE json ?| array[${retiredKeys.map((k) => `'${k}'`).join(", ")}]`,
-    ],
-  };
-}
+const RETIRED_KEYS = [
+  "hydrationPending",
+  "nativeSnapshotId",
+  "nativeSnapshotExpiresAtMs",
+  "recoveryError",
+  "snapshotGeneration",
+  "lastSnapshotAttemptMs",
+].map((k) => `'${k}'`);
+
+const typed = sandboxBodiesMigration("modal_sandbox_bodies", {
+  sandboxId: { type: "text" },
+  createdAtMs: { type: "bigint" },
+  expiresAtMs: { type: "bigint" },
+  lastActivityMs: { type: "bigint" },
+  orgId: { type: "text" },
+});
+
+export const MODAL_BODIES: MapConversion = {
+  ...typed,
+  statements: [
+    `DO $legacy$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('modal_sandbox_bodies') AND attname = 'json' AND NOT attisdropped) THEN
+        UPDATE modal_sandbox_bodies SET json = (json - ${RETIRED_KEYS.join(" - ")})
+          || CASE WHEN json->>'hydrationPending' = 'true' THEN '{"initializationPending": true}'::jsonb ELSE '{}'::jsonb END
+          || CASE WHEN coalesce(json->>'nativeSnapshotId', '') <> '' THEN jsonb_strip_nulls(jsonb_build_object(
+               'checkpointId', json->'nativeSnapshotId',
+               'checkpointAtMs', coalesce(
+                 (nullif(json->>'nativeSnapshotExpiresAtMs', '0'))::bigint - ${MODAL_CHECKPOINT_RETENTION_MS},
+                 (json->>'lastSnapshotMs')::bigint)))
+             ELSE '{}'::jsonb END
+          || CASE WHEN coalesce(json->>'recoveryError', '') <> '' THEN jsonb_build_object('snapshotError', json->'recoveryError')
+             ELSE '{}'::jsonb END
+         WHERE json ?| array[${RETIRED_KEYS.join(", ")}];
+      END IF;
+    END $legacy$`,
+    ...typed.statements,
+  ],
+};
 
 export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandboxOptions): BackendSandbox {
   const { client } = opts;
@@ -115,7 +125,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const now = Date.now();
     if (now - (lastTouch.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
     lastTouch.set(scope, now);
-    await store.merge(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
+    await store.update(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
   }
 
   async function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
@@ -205,7 +215,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         const scope = await provider.scopeOf(name);
         const now = Date.now();
         if (scope)
-          await store.merge(scope, {
+          await store.update(scope, {
             sandboxId: session.sandboxId,
             createdAtMs: now,
             expiresAtMs: now + client.lifetimeMs,
@@ -366,7 +376,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const scope = handle.scratch || td?.destroy ? undefined : provider.scopeFor(handle.id);
       if (scope)
         await store
-          .merge(scope, { lastActivityMs: Date.now() })
+          .update(scope, { lastActivityMs: Date.now() })
           .catch(swallowAs("modal-sandbox: record activity", undefined));
     },
 
@@ -394,7 +404,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         if (!rec.initializationPending && (await client.fromName(name)))
           await provider.captureCheckpoint(scopeId, name);
         await destroy(name);
-        await store.merge(scopeId, { initializationPending: undefined, snapshotError: undefined });
+        await store.update(scopeId, { initializationPending: undefined, snapshotError: undefined });
       });
     },
 

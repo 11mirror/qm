@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { egressProxyHost } from "./sandbox-env.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
@@ -46,10 +46,12 @@ interface MachineExecResponse {
 
 export type StoredSmolmachinesSandbox = StoredSandboxRecord;
 
+export const SMOLMACHINES_BODIES = sandboxBodiesMigration("smolmachines_sandbox_bodies");
+
 export interface SmolmachinesSandboxOptions extends SandboxShared {
   token?: string;
   baseUrl?: string;
-  store: DurableMap<StoredSmolmachinesSandbox>;
+  store: SandboxBodies<StoredSmolmachinesSandbox>;
   fetchImpl?: typeof fetch;
 }
 
