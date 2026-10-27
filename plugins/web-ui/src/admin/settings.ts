@@ -28,8 +28,6 @@ export class SettingsState extends SettingState {
   editing = false;
   history: Data[] = [];
   collect(_validate = true): Data {
-    if (_validate && this.key === "instructions" && (this.draft.content || "").length > 100000)
-      throw new Error("Maximum length reached");
     if (this.key !== "runtime" && runtimeKeys.includes(this.key)) {
       if (this.draft.inherit) return { inherit: true };
       const { inherit: _inherit, ...selection } = this.draft;
@@ -232,8 +230,6 @@ function instructionsCard(s: SettingsState) {
           >${s.draft.expectedVersion ? "Saved version " + s.draft.expectedVersion : "No saved revision"}</span
         ><span id="instructions-size"
           >${content.length.toLocaleString() + " characters · about " + Math.ceil(content.length / 4).toLocaleString() + " tokens"}</span
-        ><span id="instructions-validation"
-          >${content.length >= 100000 ? "Maximum length reached" : "Draft valid"}</span
         >
       </div>
       <div class="instructions-diff" id="instructions-diff">
