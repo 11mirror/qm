@@ -146,17 +146,79 @@ export function modalEgressAllowlist(
   );
 }
 
+type SdkClient = InstanceType<ModalSdk["ModalClient"]>;
+type SdkApp = Awaited<ReturnType<SdkClient["apps"]["fromName"]>>;
+type SdkImage = ReturnType<SdkClient["images"]["fromRegistry"]>;
+type SdkSandbox = Awaited<ReturnType<SdkClient["sandboxes"]["fromId"]>>;
+
+type Ctx = { sdk: ModalSdk; client: SdkClient; app: SdkApp; image: SdkImage };
+
+const wrap = (sdk: ModalSdk, sbx: SdkSandbox, maxCommandMs: number, loadCtx: () => Promise<Ctx>): ModalSession => ({
+  sandboxId: sbx.sandboxId,
+  async runCommand(command, runOpts): Promise<ModalCommandResult> {
+    const commandMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs);
+    const timeoutMs = commandMs + MODAL_EXEC_GRACE_MS;
+    try {
+      let args = ["timeout", String(commandMs / 1000), "sh", "-c", command];
+      if (Buffer.byteLength(command, "utf8") > MODAL_MAX_EXEC_ARG_BYTES) {
+        const spooled = `/tmp/.qm-exec-${randomUUID()}.sh`;
+        await sbx.filesystem.writeBytes(Buffer.from(command, "utf8"), spooled);
+        args = ["sh", "-c", `timeout ${commandMs / 1000} sh ${spooled}; rc=$?; rm -f ${spooled}; exit $rc`];
+      }
+      const p = await sbx.exec(args, {
+        mode: "text",
+        timeoutMs,
+        ...(runOpts?.env && Object.keys(runOpts.env).length ? { env: runOpts.env } : {}),
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
+      return { stdout, stderr, exitCode };
+    } catch (err) {
+      if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+      if (err instanceof sdk.TimeoutError) return { stdout: "", stderr: errText(err), exitCode: 124 };
+      throw err;
+    }
+  },
+  async readFileBytes(absPath): Promise<Uint8Array | null> {
+    try {
+      return await sbx.filesystem.readBytes(absPath);
+    } catch (err) {
+      if (err instanceof sdk.SandboxFilesystemNotFoundError) return null;
+      if (err instanceof sdk.SandboxFilesystemFileTooLargeError)
+        throw new Error(
+          `modal read ${absPath}: the file exceeds Modal's filesystem read limit; move it with blob staging or split it`,
+          { cause: err },
+        );
+      if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+      throw err;
+    }
+  },
+  async writeFileBytes(absPath, data): Promise<void> {
+    try {
+      await sbx.filesystem.writeBytes(data, absPath);
+    } catch (err) {
+      if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+      throw err;
+    }
+  },
+  async snapshotHome() {
+    const image = await sbx.snapshotDirectory("/root", {
+      ttlMs: MODAL_CHECKPOINT_RETENTION_MS,
+      timeoutMs: SNAPSHOT_CALL_TIMEOUT_MS,
+    });
+    return image.imageId;
+  },
+  async restoreHome(imageId): Promise<void> {
+    const { client } = await loadCtx();
+    await sbx.mountImage("/root", await client.images.fromId(imageId));
+  },
+  terminate: () => stop(sdk, sbx),
+});
+
 export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const sandboxTimeoutMs = wholeSeconds(Math.min(opts.sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS));
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
-  type SdkClient = InstanceType<ModalSdk["ModalClient"]>;
-  type SdkApp = Awaited<ReturnType<SdkClient["apps"]["fromName"]>>;
-  type SdkImage = ReturnType<SdkClient["images"]["fromRegistry"]>;
-  type SdkSandbox = Awaited<ReturnType<SdkClient["sandboxes"]["fromId"]>>;
-
-  type Ctx = { sdk: ModalSdk; client: SdkClient; app: SdkApp; image: SdkImage };
   let ctx: Promise<Ctx> | null = null;
   const buildCtx = async (): Promise<Ctx> => {
     let sdk: ModalSdk;
@@ -180,70 +242,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       throw e;
     }));
 
-  const wrap = (sdk: ModalSdk, sbx: SdkSandbox): ModalSession => ({
-    sandboxId: sbx.sandboxId,
-    async runCommand(command, runOpts): Promise<ModalCommandResult> {
-      const commandMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs);
-      const timeoutMs = commandMs + MODAL_EXEC_GRACE_MS;
-      try {
-        let args = ["timeout", String(commandMs / 1000), "sh", "-c", command];
-        if (Buffer.byteLength(command, "utf8") > MODAL_MAX_EXEC_ARG_BYTES) {
-          const spooled = `/tmp/.qm-exec-${randomUUID()}.sh`;
-          await sbx.filesystem.writeBytes(Buffer.from(command, "utf8"), spooled);
-          args = ["sh", "-c", `timeout ${commandMs / 1000} sh ${spooled}; rc=$?; rm -f ${spooled}; exit $rc`];
-        }
-        const p = await sbx.exec(args, {
-          mode: "text",
-          timeoutMs,
-          ...(runOpts?.env && Object.keys(runOpts.env).length ? { env: runOpts.env } : {}),
-        });
-        const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
-        return { stdout, stderr, exitCode };
-      } catch (err) {
-        if (await hasExited(sdk, sbx, err))
-          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
-        if (err instanceof sdk.TimeoutError) return { stdout: "", stderr: errText(err), exitCode: 124 };
-        throw err;
-      }
-    },
-    async readFileBytes(absPath): Promise<Uint8Array | null> {
-      try {
-        return await sbx.filesystem.readBytes(absPath);
-      } catch (err) {
-        if (err instanceof sdk.SandboxFilesystemNotFoundError) return null;
-        if (err instanceof sdk.SandboxFilesystemFileTooLargeError)
-          throw new Error(
-            `modal read ${absPath}: the file exceeds Modal's filesystem read limit; move it with blob staging or split it`,
-            { cause: err },
-          );
-        if (await hasExited(sdk, sbx, err))
-          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
-        throw err;
-      }
-    },
-    async writeFileBytes(absPath, data): Promise<void> {
-      try {
-        await sbx.filesystem.writeBytes(data, absPath);
-      } catch (err) {
-        if (await hasExited(sdk, sbx, err))
-          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
-        throw err;
-      }
-    },
-    async snapshotHome() {
-      const image = await sbx.snapshotDirectory("/root", {
-        ttlMs: MODAL_CHECKPOINT_RETENTION_MS,
-        timeoutMs: SNAPSHOT_CALL_TIMEOUT_MS,
-      });
-      return image.imageId;
-    },
-    async restoreHome(imageId): Promise<void> {
-      const { client } = await loadCtx();
-      await sbx.mountImage("/root", await client.images.fromId(imageId));
-    },
-    terminate: () => stop(sdk, sbx),
-  });
-
   return {
     lifetimeMs: sandboxTimeoutMs,
     async create(createOpts): Promise<ModalSession> {
@@ -258,7 +256,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           memoryMiB: opts.memoryMb ?? DEFAULT_MEMORY_MB,
           ...network,
         });
-        return wrap(sdk, sbx);
+        return wrap(sdk, sbx, maxCommandMs, loadCtx);
       } catch (err) {
         if (err instanceof sdk.AlreadyExistsError)
           throw new ModalNameConflictError(createOpts.name ?? "(unnamed)", errText(err), { cause: err });
@@ -271,7 +269,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         const sbx = await client.sandboxes.fromId(sandboxId);
         const exited = await sbx.poll();
         if (exited !== null) throw new ModalSandboxGoneError(sandboxId, `exited with code ${exited}`);
-        return wrap(sdk, sbx);
+        return wrap(sdk, sbx, maxCommandMs, loadCtx);
       } catch (err) {
         if (err instanceof ModalSandboxGoneError) throw err;
         if (isSandboxIdLookupGone(sdk, err)) throw new ModalSandboxGoneError(sandboxId, errText(err), { cause: err });
@@ -294,7 +292,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         if (isSandboxGoneError(sdk, err)) return null;
         throw err;
       }
-      return wrap(sdk, sbx);
+      return wrap(sdk, sbx, maxCommandMs, loadCtx);
     },
     async terminate(sandboxId): Promise<void> {
       const { sdk, client } = await loadCtx();

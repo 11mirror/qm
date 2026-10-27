@@ -34,6 +34,51 @@ export interface E2bSandboxOptions extends SandboxShared {
   store: SandboxBodies<StoredE2bSandbox>;
 }
 
+interface E2bState {
+  client: E2bClient;
+  sessions: Map<string, E2bSession>;
+  restoredFrom: Map<string, string>;
+  observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb">;
+}
+
+async function locate(client: E2bClient, name: string): Promise<{ sandboxId: string; state: string } | null> {
+  const listed = await client.list({ name });
+  return listed.find((s) => s.state === "running") ?? listed[0] ?? null;
+}
+
+async function destroy(state: E2bState, name: string): Promise<void> {
+  const { client, sessions, restoredFrom } = state;
+  const ids = new Set([sessions.get(name)?.sandboxId, ...(await client.list({ name })).map((s) => s.sandboxId)]);
+  for (const id of ids) if (id) await client.kill(id);
+  sessions.delete(name);
+  restoredFrom.delete(name);
+}
+
+async function inspect(state: E2bState, name: string): Promise<MachineState | null> {
+  const { client, sessions, observed } = state;
+  const found = await locate(client, name);
+  if (!found) return null;
+  const running = found.state === "running";
+  const session = sessions.get(name);
+  const metrics = running && session ? await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null)) : null;
+  if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
+  return {
+    state: running ? "running" : "parked",
+    detail: `e2b sandbox ${found.sandboxId} ${found.state}`,
+    ...(metrics
+      ? {
+          resources: {
+            cpuUsedPct: metrics.cpuUsedPct,
+            memUsedMb: Math.round(metrics.memUsedBytes / 2 ** 20),
+            memTotalMb: Math.round(metrics.memTotalBytes / 2 ** 20),
+            diskUsedGb: Math.round((metrics.diskUsedBytes / 2 ** 30) * 10) / 10,
+            diskTotalGb: Math.round((metrics.diskTotalBytes / 2 ** 30) * 10) / 10,
+          },
+        }
+      : {}),
+  };
+}
+
 export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
   const { client, store } = opts;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
@@ -42,6 +87,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const restoredFrom = new Map<string, string>();
   const reviving = new Map<string, Promise<E2bSession>>();
   const observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb"> = {};
+  const state: E2bState = { client, sessions, restoredFrom, observed };
 
   async function adopt(name: string, session: E2bSession): Promise<E2bSession> {
     sessions.set(name, session);
@@ -49,11 +95,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (info?.cpuCount) observed.cpus = info.cpuCount;
     if (info?.memoryMb) observed.memoryMb = info.memoryMb;
     return session;
-  }
-
-  async function locate(name: string): Promise<{ sandboxId: string; state: string } | null> {
-    const listed = await client.list({ name });
-    return listed.find((s) => s.state === "running") ?? listed[0] ?? null;
   }
 
   async function launch(name: string, scratch: boolean, fromSnapshot?: string): Promise<E2bSession> {
@@ -80,14 +121,14 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   async function connect(name: string): Promise<E2bSession> {
     const cached = sessions.get(name);
     if (cached) return cached;
-    const found = await locate(name);
+    const found = await locate(client, name);
     if (!found) throw new Error(`e2b sandbox ${name} is not provisioned`);
     return adopt(name, await client.connect(found.sandboxId));
   }
 
   async function replace(name: string): Promise<E2bSession> {
     if (scratchNames.has(name)) return launch(name, true);
-    const found = await locate(name);
+    const found = await locate(client, name);
     if (found) return adopt(name, await client.connect(found.sandboxId));
     const scope = sandbox.scopeFor(name);
     if (!scope) throw new Error(`e2b sandbox ${name} is not provisioned`);
@@ -111,37 +152,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     }
   }
 
-  async function destroy(name: string): Promise<void> {
-    const ids = new Set([sessions.get(name)?.sandboxId, ...(await client.list({ name })).map((s) => s.sandboxId)]);
-    for (const id of ids) if (id) await client.kill(id);
-    sessions.delete(name);
-    restoredFrom.delete(name);
-  }
-
-  async function inspect(name: string): Promise<MachineState | null> {
-    const found = await locate(name);
-    if (!found) return null;
-    const running = found.state === "running";
-    const session = sessions.get(name);
-    const metrics = running && session ? await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null)) : null;
-    if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
-    return {
-      state: running ? "running" : "parked",
-      detail: `e2b sandbox ${found.sandboxId} ${found.state}`,
-      ...(metrics
-        ? {
-            resources: {
-              cpuUsedPct: metrics.cpuUsedPct,
-              memUsedMb: Math.round(metrics.memUsedBytes / 2 ** 20),
-              memTotalMb: Math.round(metrics.memTotalBytes / 2 ** 20),
-              diskUsedGb: Math.round((metrics.diskUsedBytes / 2 ** 30) * 10) / 10,
-              diskTotalGb: Math.round((metrics.diskTotalBytes / 2 ** 30) * 10) / 10,
-            },
-          }
-        : {}),
-    };
-  }
-
   const sandbox: ProviderSandbox = createProviderSandbox(
     workspace,
     {
@@ -162,7 +172,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       exec: (name, script, timeoutSec) => withSession(name, (s) => runE2bScript(s, script, timeoutSec)),
       writeAbsBytes: (name, absPath, data) => withSession(name, (s) => s.writeFileBytes(absPath, data)),
       readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
-      inspect,
+      inspect: (name) => inspect(state, name),
       async create(name, { scratch, scope }) {
         if (scratch || !scope) await launch(name, scratch);
         else await createResident(name, scope);
@@ -178,7 +188,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         await session.pause();
         sessions.delete(name);
       },
-      destroy,
+      destroy: (name) => destroy(state, name),
       isLive: (name) => sessions.has(name),
       forget(name) {
         sessions.delete(name);
@@ -197,7 +207,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           const fresh = restoredFrom.get(name) === checkpointId;
           restoredFrom.delete(name);
           if (fresh) return;
-          await destroy(name);
+          await destroy(state, name);
           await launch(name, false, checkpointId);
         },
         drop: (_name, checkpointId) => client.deleteSnapshot(checkpointId),

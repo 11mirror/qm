@@ -3,7 +3,12 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { hasParentPathSegment } from "./sandbox.ts";
-import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import {
+  createProviderSandbox,
+  type SandboxDriver,
+  type SandboxShared,
+  type StoredSandboxRecord,
+} from "./provider-sandbox.ts";
 import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import {
   ManagedAgentsCommandLostError,
@@ -41,14 +46,15 @@ export interface ManagedAgentsSandboxOptions extends SandboxShared {
   store: SandboxBodies<StoredManagedAgentsSandbox>;
 }
 
-export function createManagedAgentsSandbox(
-  workspace: WorkspaceStore,
-  opts: ManagedAgentsSandboxOptions,
-): BackendSandbox {
-  const { client, store } = opts;
+type ManagedAgentsSessions = ReturnType<typeof managedAgentsSessions>;
+
+function managedAgentsSessions(
+  client: ManagedAgentsClient,
+  store: SandboxBodies<StoredManagedAgentsSandbox>,
+  scopeOf: (name: string) => string | undefined,
+  ensureResident: (scopeId: string) => Promise<void>,
+) {
   const sessions = new Map<string, ManagedAgentsSession>();
-  const knownScopes = new Map<string, string>();
-  const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name) ?? knownScopes.get(name);
 
   async function recordSession(name: string, sessionId: string): Promise<void> {
     const scope = scopeOf(name);
@@ -106,7 +112,7 @@ export function createManagedAgentsSandbox(
       forget(name);
       const scope = e instanceof ManagedAgentsSandboxGoneError ? scopeOf(name) : undefined;
       if (!scope || (await store.get(scope))?.initializationPending) throw e;
-      await sandbox.ensureResident(scope);
+      await ensureResident(scope);
       return action(await connect(name));
     }
   }
@@ -125,123 +131,145 @@ export function createManagedAgentsSandbox(
     });
   }
 
-  const relayFailure = (what: string, r: ExecResult): Error =>
-    new Error(`do-managed-agents ${what} failed: ${r.stderr.trim() || `exit ${r.code}`}`);
+  return { client, store, sessions, scopeOf, recordSession, findSession, connect, forget, withSession, exec };
+}
 
-  async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    if (transfersDirectly(absPath)) return withSession(name, (session) => session.writeFileBytes(absPath, data));
-    const relay = `${WORKSPACE_ROOT}/${TRANSFER_RELAY_BASENAME}${randomUUID()}`;
-    await withSession(name, (session) => session.writeFileBytes(relay, data));
-    const moved = await exec(
-      name,
-      `find ${WORKSPACE_ROOT} -maxdepth 1 -name ${shq(`${TRANSFER_RELAY_BASENAME}*`)} -mmin +120 -delete 2>/dev/null; mkdir -p "$(dirname ${shq(absPath)})" && mv -f ${shq(relay)} ${shq(absPath)} || { rm -f ${shq(relay)}; exit 1; }`,
-      60,
-    );
-    if (moved.code !== 0) throw relayFailure(`write ${absPath}`, moved);
+const relayFailure = (what: string, r: ExecResult): Error =>
+  new Error(`do-managed-agents ${what} failed: ${r.stderr.trim() || `exit ${r.code}`}`);
+
+async function writeAbsBytes(
+  ctx: ManagedAgentsSessions,
+  name: string,
+  absPath: string,
+  data: Uint8Array,
+): Promise<void> {
+  if (transfersDirectly(absPath)) return ctx.withSession(name, (session) => session.writeFileBytes(absPath, data));
+  const relay = `${WORKSPACE_ROOT}/${TRANSFER_RELAY_BASENAME}${randomUUID()}`;
+  await ctx.withSession(name, (session) => session.writeFileBytes(relay, data));
+  const moved = await ctx.exec(
+    name,
+    `find ${WORKSPACE_ROOT} -maxdepth 1 -name ${shq(`${TRANSFER_RELAY_BASENAME}*`)} -mmin +120 -delete 2>/dev/null; mkdir -p "$(dirname ${shq(absPath)})" && mv -f ${shq(relay)} ${shq(absPath)} || { rm -f ${shq(relay)}; exit 1; }`,
+    60,
+  );
+  if (moved.code !== 0) throw relayFailure(`write ${absPath}`, moved);
+}
+
+async function readAbsBytes(ctx: ManagedAgentsSessions, name: string, absPath: string): Promise<Uint8Array | null> {
+  if (transfersDirectly(absPath)) return ctx.withSession(name, (session) => session.readFileBytes(absPath));
+  const relay = `${WORKSPACE_ROOT}/${TRANSFER_RELAY_BASENAME}${randomUUID()}`;
+  const copied = await ctx.exec(name, `test -f ${shq(absPath)} || exit 3; cp ${shq(absPath)} ${shq(relay)}`, 60);
+  if (copied.code === 3) return null;
+  if (copied.code !== 0) throw relayFailure(`read ${absPath}`, copied);
+  try {
+    return await ctx.withSession(name, (session) => session.readFileBytes(relay));
+  } finally {
+    await ctx
+      .exec(name, `rm -f ${shq(relay)}`, 60)
+      .catch(swallowAs("managed-agents-sandbox: transfer relay cleanup", undefined));
   }
+}
 
-  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
-    if (transfersDirectly(absPath)) return withSession(name, (session) => session.readFileBytes(absPath));
-    const relay = `${WORKSPACE_ROOT}/${TRANSFER_RELAY_BASENAME}${randomUUID()}`;
-    const copied = await exec(name, `test -f ${shq(absPath)} || exit 3; cp ${shq(absPath)} ${shq(relay)}`, 60);
-    if (copied.code === 3) return null;
-    if (copied.code !== 0) throw relayFailure(`read ${absPath}`, copied);
+async function destroy(ctx: ManagedAgentsSessions, name: string): Promise<void> {
+  const { client, store, sessions } = ctx;
+  const cached = sessions.get(name);
+  sessions.delete(name);
+  const scope = ctx.scopeOf(name);
+  const storedId = scope ? (await store.get(scope))?.sessionId : undefined;
+  const ids = new Set([cached?.sessionId, storedId].filter((id): id is string => !!id));
+  if (!ids.size) for (const summary of await client.list(name)) ids.add(summary.sessionId);
+  for (const id of ids) {
     try {
-      return await withSession(name, (session) => session.readFileBytes(relay));
-    } finally {
-      await exec(name, `rm -f ${shq(relay)}`, 60).catch(
-        swallowAs("managed-agents-sandbox: transfer relay cleanup", undefined),
-      );
-    }
-  }
-
-  async function destroy(name: string): Promise<void> {
-    const cached = sessions.get(name);
-    sessions.delete(name);
-    const scope = scopeOf(name);
-    const storedId = scope ? (await store.get(scope))?.sessionId : undefined;
-    const ids = new Set([cached?.sessionId, storedId].filter((id): id is string => !!id));
-    if (!ids.size) for (const summary of await client.list(name)) ids.add(summary.sessionId);
-    for (const id of ids) {
-      try {
-        if (cached && id === cached.sessionId) await cached.kill();
-        else await client.kill(id);
-      } catch (e) {
-        if (!(e instanceof ManagedAgentsSandboxGoneError)) throw e;
-      }
-    }
-  }
-
-  async function rollback(name: string, checkpointId: string): Promise<void> {
-    const scope = scopeOf(name);
-    const found = await findSession(name);
-    if (!found) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
-    forget(name);
-    try {
-      const restored = await client.rollback(found.sessionId, checkpointId);
-      opts.onError?.({
-        category: "agent_computer",
-        code: "checkpoint_restored",
-        message: `session ${found.sessionId}: restored checkpoint ${checkpointId} onto sandbox ${restored.sandboxId}`,
-        ...(scope ? { scopeLabel: scope } : {}),
-      });
+      if (cached && id === cached.sessionId) await cached.kill();
+      else await client.kill(id);
     } catch (e) {
-      opts.onError?.({
-        category: "agent_computer",
-        code: "checkpoint_rollback_failed",
-        message: errMessage(e),
-        ...(scope ? { scopeLabel: scope } : {}),
-      });
-      throw e;
+      if (!(e instanceof ManagedAgentsSandboxGoneError)) throw e;
     }
   }
+}
 
-  const sandbox = createProviderSandbox(
-    workspace,
-    {
-      backend: "do-managed-agents",
-      homeDir: HOME_DIR,
-      os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
-      tools: ["git", "curl", "tar", "python3"],
-      writablePersistence: "provider_managed",
-      egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
-      exec,
-      writeAbsBytes,
-      readAbsBytes,
-      async inspect(name) {
+async function rollback(
+  ctx: ManagedAgentsSessions,
+  opts: ManagedAgentsSandboxOptions,
+  name: string,
+  checkpointId: string,
+): Promise<void> {
+  const scope = ctx.scopeOf(name);
+  const found = await ctx.findSession(name);
+  if (!found) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
+  ctx.forget(name);
+  try {
+    const restored = await ctx.client.rollback(found.sessionId, checkpointId);
+    opts.onError?.({
+      category: "agent_computer",
+      code: "checkpoint_restored",
+      message: `session ${found.sessionId}: restored checkpoint ${checkpointId} onto sandbox ${restored.sandboxId}`,
+      ...(scope ? { scopeLabel: scope } : {}),
+    });
+  } catch (e) {
+    opts.onError?.({
+      category: "agent_computer",
+      code: "checkpoint_rollback_failed",
+      message: errMessage(e),
+      ...(scope ? { scopeLabel: scope } : {}),
+    });
+    throw e;
+  }
+}
+
+function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSandboxOptions): SandboxDriver {
+  const { client, sessions, findSession, connect, recordSession, exec, forget } = ctx;
+  return {
+    backend: "do-managed-agents",
+    homeDir: HOME_DIR,
+    os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
+    tools: ["git", "curl", "tar", "python3"],
+    writablePersistence: "provider_managed",
+    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    exec,
+    writeAbsBytes: (name, absPath, data) => writeAbsBytes(ctx, name, absPath, data),
+    readAbsBytes: (name, absPath) => readAbsBytes(ctx, name, absPath),
+    async inspect(name) {
+      const found = await findSession(name);
+      return found ? { state: found.paused ? "parked" : "running", detail: found.detail } : null;
+    },
+    async create(name, { scratch }) {
+      const session = await client.create({ name });
+      sessions.set(name, session);
+      if (!scratch) await recordSession(name, session.sessionId);
+    },
+    async resume(name) {
+      await connect(name);
+    },
+    async park(name, { keepWarm }) {
+      const session = sessions.get(name);
+      if (keepWarm || !session) return;
+      await session.pause();
+      sessions.delete(name);
+    },
+    destroy: (name) => destroy(ctx, name),
+    isLive: (name) => sessions.has(name),
+    forget,
+    checkpoints: {
+      machineBound: true,
+      capture: async (name) => (await (await connect(name)).createCheckpoint(CHECKPOINT_LABEL)).checkpointId,
+      restore: (name, checkpointId) => rollback(ctx, opts, name, checkpointId),
+      async drop(name, checkpointId) {
         const found = await findSession(name);
-        return found ? { state: found.paused ? "parked" : "running", detail: found.detail } : null;
-      },
-      async create(name, { scratch }) {
-        const session = await client.create({ name });
-        sessions.set(name, session);
-        if (!scratch) await recordSession(name, session.sessionId);
-      },
-      async resume(name) {
-        await connect(name);
-      },
-      async park(name, { keepWarm }) {
-        const session = sessions.get(name);
-        if (keepWarm || !session) return;
-        await session.pause();
-        sessions.delete(name);
-      },
-      destroy,
-      isLive: (name) => sessions.has(name),
-      forget,
-      checkpoints: {
-        machineBound: true,
-        capture: async (name) => (await (await connect(name)).createCheckpoint(CHECKPOINT_LABEL)).checkpointId,
-        restore: rollback,
-        async drop(name, checkpointId) {
-          const found = await findSession(name);
-          if (found) await client.deleteCheckpoint(found.sessionId, checkpointId);
-        },
+        if (found) await client.deleteCheckpoint(found.sessionId, checkpointId);
       },
     },
-    opts,
-    store,
-  );
+  };
+}
+
+export function createManagedAgentsSandbox(
+  workspace: WorkspaceStore,
+  opts: ManagedAgentsSandboxOptions,
+): BackendSandbox {
+  const { client, store } = opts;
+  const knownScopes = new Map<string, string>();
+  const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name) ?? knownScopes.get(name);
+  const ctx = managedAgentsSessions(client, store, scopeOf, (scope) => sandbox.ensureResident(scope));
+  const sandbox = createProviderSandbox(workspace, managedAgentsDriver(ctx, opts), opts, store);
 
   const remember = (scopeId: string): void => {
     knownScopes.set(sandbox.nameFor(scopeId), scopeId);

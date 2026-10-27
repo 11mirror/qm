@@ -170,6 +170,109 @@ async function isSandboxGone(sdk: E2bSdk, err: unknown, isRunning?: () => Promis
   );
 }
 
+type SdkSandbox = Awaited<ReturnType<E2bSdk["Sandbox"]["create"]>>;
+
+const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number, maxLifetimeMs: number, maxCommandMs: number): E2bSession => {
+  let expiresAtMs = Date.now() + ttlMs;
+  const isRunning = (): Promise<boolean> => sbx.isRunning();
+  const gone = async (err: unknown): Promise<unknown> =>
+    (await isSandboxGone(lib, err, isRunning)) ? new E2bSandboxGoneError(sbx.sandboxId, err) : err;
+  const extend = async (ms: number): Promise<void> => {
+    const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
+    const at = Date.now() + bounded;
+    try {
+      await sbx.setTimeout(bounded);
+    } catch (err) {
+      throw await gone(err);
+    }
+    expiresAtMs = at;
+  };
+  const cover = async (commandMs: number): Promise<void> => {
+    const needed = Math.min(commandMs, maxCommandMs) + E2B_EXEC_MARGIN_MS;
+    if (Date.now() + needed <= expiresAtMs) return;
+    await extend(Math.max(ttlMs, needed));
+  };
+  return {
+    sandboxId: sbx.sandboxId,
+    ...(sbx.trafficAccessToken ? { trafficAccessToken: sbx.trafficAccessToken } : {}),
+    host: (port) => sbx.getHost(port),
+    async runCommand(command, runOpts): Promise<E2bCommandResult> {
+      const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
+      await cover(timeoutMs);
+      let handle: Awaited<ReturnType<SdkSandbox["commands"]["run"]>>;
+      try {
+        handle = await sbx.commands.run(command, { background: true, timeoutMs });
+      } catch (err) {
+        if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
+        throw err;
+      }
+      let result: E2bCommandResult | null;
+      try {
+        result = commandResultFrom(await handle.wait());
+      } catch (err) {
+        const asResult = commandResultFrom(err);
+        if (asResult) return asResult;
+        if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
+        throw err;
+      }
+      if (!result) throw new Error(`e2b sandbox ${sbx.sandboxId}: the command finished without an exit code`);
+      return result;
+    },
+    async readFileBytes(absPath): Promise<Uint8Array | null> {
+      try {
+        const data = await sbx.files.read(absPath, { format: "bytes" });
+        return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+      } catch (err) {
+        if (err instanceof lib.FileNotFoundError) return null;
+        throw await gone(err);
+      }
+    },
+    async writeFileBytes(absPath, data): Promise<void> {
+      const buf = new ArrayBuffer(data.byteLength);
+      new Uint8Array(buf).set(data);
+      try {
+        await sbx.files.write(absPath, buf);
+      } catch (err) {
+        throw await gone(err);
+      }
+    },
+    keepAlive: (ms) => extend(ms),
+    async pause(pauseOpts): Promise<void> {
+      try {
+        await sbx.pause({ keepMemory: pauseOpts?.keepMemory ?? true });
+      } catch (err) {
+        throw await gone(err);
+      }
+    },
+    async createSnapshot(): Promise<{ snapshotId: string }> {
+      try {
+        const info = await sbx.createSnapshot();
+        return { snapshotId: info.snapshotId };
+      } catch (err) {
+        throw await gone(err);
+      }
+    },
+    async metrics(): Promise<E2bMetrics | null> {
+      const rows = await sbx.getMetrics();
+      const last = rows.at(-1);
+      if (!last) return null;
+      return {
+        cpuUsedPct: last.cpuUsedPct,
+        cpuCount: last.cpuCount,
+        memUsedBytes: last.memUsed,
+        memTotalBytes: last.memTotal,
+        diskUsedBytes: last.diskUsed,
+        diskTotalBytes: last.diskTotal,
+      };
+    },
+    async kill(): Promise<void> {
+      await sbx.kill().catch(async (err: unknown) => {
+        if (!(await isSandboxGone(lib, err, isRunning))) throw err;
+      });
+    },
+  };
+};
+
 export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const templateId = opts.templateId ?? DEFAULT_TEMPLATE;
   const { sandboxTtlMs, maxLifetimeMs, maxCommandMs } = e2bSandboxTtlMs(opts);
@@ -186,109 +289,6 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       },
     ));
     return loaded;
-  };
-
-  type SdkSandbox = Awaited<ReturnType<E2bSdk["Sandbox"]["create"]>>;
-
-  const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number): E2bSession => {
-    let expiresAtMs = Date.now() + ttlMs;
-    const isRunning = (): Promise<boolean> => sbx.isRunning();
-    const gone = async (err: unknown): Promise<unknown> =>
-      (await isSandboxGone(lib, err, isRunning)) ? new E2bSandboxGoneError(sbx.sandboxId, err) : err;
-    const extend = async (ms: number): Promise<void> => {
-      const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
-      const at = Date.now() + bounded;
-      try {
-        await sbx.setTimeout(bounded);
-      } catch (err) {
-        throw await gone(err);
-      }
-      expiresAtMs = at;
-    };
-    const cover = async (commandMs: number): Promise<void> => {
-      const needed = Math.min(commandMs, maxCommandMs) + E2B_EXEC_MARGIN_MS;
-      if (Date.now() + needed <= expiresAtMs) return;
-      await extend(Math.max(ttlMs, needed));
-    };
-    return {
-      sandboxId: sbx.sandboxId,
-      ...(sbx.trafficAccessToken ? { trafficAccessToken: sbx.trafficAccessToken } : {}),
-      host: (port) => sbx.getHost(port),
-      async runCommand(command, runOpts): Promise<E2bCommandResult> {
-        const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
-        await cover(timeoutMs);
-        let handle: Awaited<ReturnType<SdkSandbox["commands"]["run"]>>;
-        try {
-          handle = await sbx.commands.run(command, { background: true, timeoutMs });
-        } catch (err) {
-          if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
-          throw err;
-        }
-        let result: E2bCommandResult | null;
-        try {
-          result = commandResultFrom(await handle.wait());
-        } catch (err) {
-          const asResult = commandResultFrom(err);
-          if (asResult) return asResult;
-          if (await isSandboxGone(lib, err, isRunning)) throw new E2bCommandLostError(sbx.sandboxId, err);
-          throw err;
-        }
-        if (!result) throw new Error(`e2b sandbox ${sbx.sandboxId}: the command finished without an exit code`);
-        return result;
-      },
-      async readFileBytes(absPath): Promise<Uint8Array | null> {
-        try {
-          const data = await sbx.files.read(absPath, { format: "bytes" });
-          return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
-        } catch (err) {
-          if (err instanceof lib.FileNotFoundError) return null;
-          throw await gone(err);
-        }
-      },
-      async writeFileBytes(absPath, data): Promise<void> {
-        const buf = new ArrayBuffer(data.byteLength);
-        new Uint8Array(buf).set(data);
-        try {
-          await sbx.files.write(absPath, buf);
-        } catch (err) {
-          throw await gone(err);
-        }
-      },
-      keepAlive: (ms) => extend(ms),
-      async pause(pauseOpts): Promise<void> {
-        try {
-          await sbx.pause({ keepMemory: pauseOpts?.keepMemory ?? true });
-        } catch (err) {
-          throw await gone(err);
-        }
-      },
-      async createSnapshot(): Promise<{ snapshotId: string }> {
-        try {
-          const info = await sbx.createSnapshot();
-          return { snapshotId: info.snapshotId };
-        } catch (err) {
-          throw await gone(err);
-        }
-      },
-      async metrics(): Promise<E2bMetrics | null> {
-        const rows = await sbx.getMetrics();
-        const last = rows.at(-1);
-        if (!last) return null;
-        return {
-          cpuUsedPct: last.cpuUsedPct,
-          cpuCount: last.cpuCount,
-          memUsedBytes: last.memUsed,
-          memTotalBytes: last.memTotal,
-          diskUsedBytes: last.diskUsed,
-          diskTotalBytes: last.diskTotal,
-        };
-      },
-      async kill(): Promise<void> {
-        await sbx.kill().catch(async (err: unknown) => {
-          if (!(await isSandboxGone(lib, err, isRunning))) throw err;
-        });
-      },
-    };
   };
 
   return {
@@ -320,14 +320,14 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         },
         network: { ...network, allowPublicTraffic: false },
       });
-      return wrap(lib, sbx, timeoutMs);
+      return wrap(lib, sbx, timeoutMs, maxLifetimeMs, maxCommandMs);
     },
     async connect(sandboxId): Promise<E2bSession> {
       const lib = await loadSdk();
       try {
         const sbx = await lib.Sandbox.connect(sandboxId, { ...common, timeoutMs: sandboxTtlMs });
         if (network) await sbx.updateNetwork(network);
-        return wrap(lib, sbx, sandboxTtlMs);
+        return wrap(lib, sbx, sandboxTtlMs, maxLifetimeMs, maxCommandMs);
       } catch (err) {
         if (await isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, err);
         throw err;
