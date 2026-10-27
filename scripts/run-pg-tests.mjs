@@ -6,6 +6,7 @@ import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
+import { rootTestFiles } from "./root-test-files.mjs";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -21,8 +22,9 @@ if (!Number.isInteger(jobs) || jobs < 1) throw new Error(`--jobs must be a posit
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   throw new Error(`--timeout must be a positive number of seconds, got ${values.timeout}`);
 }
-if (positionals.length === 0) throw new Error("Pass the Postgres test files to run");
-const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
+const files = (positionals.length > 0 ? positionals : await rootTestFiles()).toSorted(
+  (a, b) => statSync(b).size - statSync(a).size,
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
