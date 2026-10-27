@@ -5,7 +5,7 @@ import { tenant } from "../tenant.ts";
 import { destinationSource, type ActorAssertion } from "../types.ts";
 import { parseSurfaceDeliveryTarget, surfaceContainerRef } from "./refs.ts";
 import type { IngestEvent } from "../surface-cache/types.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import type { InboundMessage, InboundOutcome, InboundSurface, SurfaceUser } from "./surface.ts";
 
 const RESERVED_SURFACES = new Set([
@@ -119,8 +119,8 @@ export function createHttpChatSurface(
   const mirrorTs = (at: number): string => `${(at / 1000).toFixed(3)}${String(mirrorSeq++ % 1000).padStart(3, "0")}`;
   const conversationKey = (container: string): string =>
     surfaceContainerRef({ surface: config.surface, account: config.account, container });
-  const mirror = (event: IngestEvent): void => {
-    if (opts.mirror) void opts.mirror([event]).catch(swallowAs(`${config.surface}: mirror message`, undefined));
+  const mirror = async (event: IngestEvent): Promise<void> => {
+    await opts.mirror?.([event]);
   };
 
   const internalDomains = new Set(config.internalEmailDomains);
@@ -203,7 +203,7 @@ export function createHttpChatSurface(
       if (event.data.chat.kind !== "dm") return { status: 200, messages: [] };
       const message = normalizeEvent(event.data);
       const { conversation } = message;
-      mirror({
+      const recorded = mirror({
         container: conversationKey(conversation.key),
         ts: mirrorTs(event.data.message.sent_at ?? now()),
         sub: conversation.thread ?? null,
@@ -222,6 +222,11 @@ export function createHttpChatSurface(
         ...(conversation.name ? { containerName: conversation.name } : {}),
         members: (conversation.members ?? [message.author]).map((u) => principalFor(u).externalId),
       });
+      try {
+        await recorded;
+      } catch (error) {
+        return { status: 503, reason: `could not record the message: ${errMessage(error)}` };
+      }
       return { status: 200, messages: [message] };
     },
     async deliver(post) {
@@ -247,7 +252,7 @@ export function createHttpChatSurface(
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)
         throw permanent(`${config.surface} refused the post: HTTP ${response.status}`);
       if (!response.ok) throw new Error(`${config.surface} post failed: HTTP ${response.status}`);
-      mirror({
+      await mirror({
         container: conversationKey(target.container),
         ts: mirrorTs(now()),
         sub: target.thread ?? null,

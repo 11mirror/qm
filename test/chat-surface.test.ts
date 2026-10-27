@@ -305,6 +305,26 @@ test("an approval on a non-Slack surface is posted to the conversation as text w
   );
 });
 
+test("http-chat refuses an inbound message it could not record, so the sender retries", async () => {
+  const adapter = createHttpChatSurface(config(), {
+    now: () => 1_700_000_000_000,
+    mirror: async () => {
+      throw new Error("store down");
+    },
+  });
+  const outcome = await adapter.normalize(
+    signed(
+      dmEvent({
+        message: { id: 9002, text: "hello", sent_at: 1_700_000_000_000 },
+        author: { id: 7, email: "alice@example.com", name: "Alice" },
+      }),
+      SECRET,
+      1_700_000_000,
+    ),
+  );
+  assert.deepEqual(outcome, { status: 503, reason: "could not record the message: store down" });
+});
+
 test("http-chat writes its inbound and outbound messages to the surface message store under its own key", async () => {
   const mirrored: IngestEvent[] = [];
   const adapter = createHttpChatSurface(config(), {
