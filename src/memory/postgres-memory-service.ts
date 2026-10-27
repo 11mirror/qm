@@ -15,14 +15,26 @@ export const MEMORY_FACT_MIGRATIONS = [
     statements: [
       "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
       `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
-       BEGIN
-         NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
-         RETURN NEW;
-       END $$`,
+      BEGIN
+        NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
+        RETURN NEW;
+      END $$`,
       "DROP TRIGGER IF EXISTS memory_facts_text_hash ON memory_facts",
       `CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON memory_facts
-       FOR EACH ROW EXECUTE FUNCTION memory_facts_text_hash()`,
+        FOR EACH ROW EXECUTE FUNCTION memory_facts_text_hash()`,
       "UPDATE memory_facts SET text_hash = encode(sha256(convert_to(text, 'UTF8')), 'hex') WHERE text_hash IS NULL",
+      "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
+    ],
+    expectedChecksum: "c7ca6a779272265e9201ccf0430ec1ca98836701b2eff508b08af22e008aadb5",
+    // The first release of this id lacked SET NOT NULL; 0003 finishes those databases.
+    acceptedChecksums: ["3548fb7774545aa8d6ce9ab89eba26c8f4817b7865bb5b6d839011b52ea39a1e"],
+  },
+  {
+    id: "memory/facts/0003-text-hash-not-null",
+    statements: [
+      "SET LOCAL lock_timeout = '3s'",
+      "UPDATE memory_facts SET text_hash = encode(sha256(convert_to(text, 'UTF8')), 'hex') WHERE text_hash IS NULL",
+      "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
 ];

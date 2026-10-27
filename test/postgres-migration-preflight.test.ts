@@ -4,7 +4,8 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
+import { MEMORY_FACT_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
 
 // A refused migration run must leave the database exactly as it found it: no baseline adoption, no pending migration.
 
@@ -107,5 +108,83 @@ test("an id defined twice with different statements refuses the run", { skip }, 
       /test\/preflight-twin is defined twice/,
     );
     assert.equal(await relation(pool, "qm_schema_migrations"), null);
+  });
+});
+
+test(
+  "memory text_hash: a database that ran the first release of 0002 reaches NOT NULL through 0003",
+  { skip },
+  async () => {
+    const url = await createDatabase();
+    const migrations = MEMORY_FACT_MIGRATIONS.map((m) =>
+      definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
+    );
+    const current = migrations.find((m) => m.id === "memory/facts/0002-text-hash")!;
+    // memory/facts/0002-text-hash as the StyleUp line first released it (batch 17), which StyleUp databases recorded.
+    const firstRelease = [
+      "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
+      `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
+         RETURN NEW;
+       END $$`,
+      "DROP TRIGGER IF EXISTS memory_facts_text_hash ON memory_facts",
+      `CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON memory_facts
+       FOR EACH ROW EXECUTE FUNCTION memory_facts_text_hash()`,
+      "UPDATE memory_facts SET text_hash = encode(sha256(convert_to(text, 'UTF8')), 'hex') WHERE text_hash IS NULL",
+    ];
+    assert.equal(pgMigrationChecksum(firstRelease), current.acceptedChecksums![0]);
+    await withPool(url, async (pool) => {
+      await applyPgMigrations(pool, []);
+      await pool.query(
+        "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'old', 'unknown', true, 1, 1)",
+      );
+      for (const statement of firstRelease) await pool.query(statement);
+      await pool.query("INSERT INTO qm_schema_migrations(id, checksum) VALUES ($1, $2)", [
+        current.id,
+        current.acceptedChecksums![0],
+      ]);
+      await pool.query("ALTER TABLE memory_facts DISABLE TRIGGER memory_facts_text_hash");
+      await pool.query(
+        "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'unhashed', 'unknown', true, 1, 1)",
+      );
+      await pool.query("ALTER TABLE memory_facts ENABLE TRIGGER memory_facts_text_hash");
+
+      assert.equal(await applyPgMigrations(pool, migrations), 1);
+      const rows = await ledger(pool);
+      assert.equal(rows.find((r) => r.id === current.id)?.checksum, current.acceptedChecksums![0]);
+      assert.ok(rows.some((r) => r.id === "memory/facts/0003-text-hash-not-null"));
+      const column = await pool.query(
+        "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'memory_facts' AND column_name = 'text_hash'",
+      );
+      assert.equal(column.rows[0].is_nullable, "NO");
+      assert.equal(
+        (await pool.query("SELECT count(*)::int AS n FROM memory_facts WHERE text_hash IS NULL")).rows[0].n,
+        0,
+      );
+    });
+  },
+);
+
+test("memory text_hash: a fresh database and a database on the current 0002 both end NOT NULL", { skip }, async () => {
+  const url = await createDatabase();
+  const migrations = MEMORY_FACT_MIGRATIONS.map((m) =>
+    definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
+  );
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(
+      pool,
+      migrations.filter((m) => m.id !== "memory/facts/0003-text-hash-not-null"),
+    );
+    const column = () =>
+      pool
+        .query(
+          "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'memory_facts' AND column_name = 'text_hash'",
+        )
+        .then((r) => r.rows[0].is_nullable);
+    assert.equal(await column(), "NO");
+    assert.equal(await applyPgMigrations(pool, migrations), 1);
+    assert.equal(await applyPgMigrations(pool, migrations), 0);
+    assert.equal(await column(), "NO");
   });
 });
