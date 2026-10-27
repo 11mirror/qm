@@ -67,17 +67,24 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
-test("a channel cron fire gives the agent the people-here roster with real <@…> mention ids", async () => {
+test("a channel cron fire gives the agent the whole people-here roster with real <@…> mention ids", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const crowd = Array.from({ length: 60 }, (_, i) => ({
+    principalId: `W${i}`,
+    displayName: `Member${i}`,
+    type: "internal" as const,
+  }));
   await directory.replace([
     { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
     { principalId: "U5", displayName: "Dana", type: "internal" },
+    ...crowd,
   ]);
   await directory.replaceChannels(
     [{ channelId: "C1", name: "general", isPrivate: false }],
     [
       { channelId: "C1", principalId: "eve@acme.com" },
       { channelId: "C1", principalId: "U5" },
+      ...crowd.map((m) => ({ channelId: "C1", principalId: m.principalId })),
     ],
   );
   const { crons, calls, scheduler } = harness("done", directory);
@@ -93,6 +100,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
   const text = calls[0]?.text ?? "";
   assert.match(text, /People here: [^\n]*@Eve \(<@U9>\)/);
   assert.match(text, /People here: [^\n]*@Dana \(<@U5>\)/);
+  assert.match(text, /People here: [^\n]*@Member59 \(<@W59>\)/);
   assert.match(text, /@-mention them with their <@…> id/);
   assert.doesNotMatch(text, /<@eve@acme\.com>/);
 });
