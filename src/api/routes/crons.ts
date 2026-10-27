@@ -3,12 +3,12 @@ import type { Cron } from "../../types.ts";
 import type { CreateCronInput } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { userScheduleFromBody } from "../../cron/schedule.ts";
-import { refusal, sendJson } from "../http.ts";
+import { refusal } from "../http.ts";
 import { refuse } from "./shared.ts";
 import { z } from "zod";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { applyCronPatch, canAdministerCron } from "../control-service.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult, withActor } from "./route.ts";
 
 const cronRuntime = z.custom<Cron["runtime"]>(isCronRuntime, "expected { modelId, effortLevel?, fastMode? }");
 const cronSchedule = z.custom<unknown>((value) => userScheduleFromBody(value) !== null, "expected a valid schedule");
@@ -42,89 +42,89 @@ const cronPatchBody = z.object({
 });
 
 async function gateSourceCron(ctx: ApiCtx, id: string, read = false): Promise<Cron | null> {
-  const { res, app } = ctx;
+  const { app } = ctx;
   const cron = await app.getCron(id);
   const principalId = ctx.caller ?? null;
   if (cron && (!principalId || (await canAdministerCron(app, cron, principalId)))) return cron;
   if (cron && read && (await app.listCronsForViewer(principalId!)).visible.some((candidate) => candidate.id === id))
     return cron;
-  return refuse(res, 404, { error: "not_found" });
+  throw refuse(404, { error: "not_found" });
 }
 
-async function createCron(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
+async function createCron(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body } = ctx;
   try {
     const cron = await app.createCron(body as CreateCronInput);
-    return sendJson(res, 200, { cron });
+    return ok({ cron });
   } catch (e) {
     throw refusal(400, "cron_create_failed", e);
   }
 }
 
-async function listCrons(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+async function listCrons(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url } = ctx;
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
+  if (!viewer) return ok({ crons: await app.listCrons() });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,
     permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
   });
-  return sendJson(res, 200, {
+  return ok({
     crons: await Promise.all(owned.map(decorate)),
     visible: await Promise.all(visible.map(decorate)),
   });
 }
 
-async function disableCron(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
+async function disableCron(ctx: ApiCtx): Promise<RouteResult> {
+  const { app } = ctx;
   const id = ctx.params.id!;
   if (!(await gateSourceCron(ctx, id))) return;
   await app.setCronEnabled(id, false);
-  return sendJson(res, 200, { ok: true });
+  return ok({ ok: true });
 }
 
-async function runCronNow(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+async function runCronNow(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
   const id = ctx.params.id!;
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!deps.scheduler) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
+  if (!deps.scheduler) return reply(404, { error: "not_found", message: "scheduler not wired" });
   if (cron.archived || !cron.enabled)
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
     });
   const result = await deps.scheduler.runNow(id);
   if (!result.started) {
     const refusal = describeRunNowRefusal(id, result)!;
-    return sendJson(res, refusal.error === "already_running" ? 409 : 400, refusal);
+    return reply(refusal.error === "already_running" ? 409 : 400, refusal);
   }
-  return sendJson(res, 200, { ok: true, fireKey: result.fireKey });
+  return ok({ ok: true, fireKey: result.fireKey });
 }
 
-async function cronRuns(ctx: ApiCtx): Promise<void> {
-  const { res, url, app } = ctx;
+async function cronRuns(ctx: ApiCtx): Promise<RouteResult> {
+  const { url, app } = ctx;
   const id = ctx.params.id!;
   const rawLimit = url.searchParams.get("limit");
   const limit = rawLimit === null ? undefined : Number(rawLimit);
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-    return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
+    return reply(400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
-  return sendJson(res, 200, { cron: cron, runs, total });
+  return ok({ cron: cron, runs, total });
 }
 
-async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, method } = ctx;
+async function cronById(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, method } = ctx;
   const body = ctx.body as z.infer<typeof cronPatchBody>;
   const id = ctx.params.id!;
   if (method === "GET") {
     const cron = await gateSourceCron(ctx, id, true);
     if (!cron) return;
-    return sendJson(res, 200, { cron });
+    return ok({ cron });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
@@ -132,16 +132,16 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     await app.deleteCron(id);
     const editor = ctx.caller;
     if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
-    return sendJson(res, 200, { ok: true });
+    return ok({ ok: true });
   }
   if ((cron.unattendedGrants?.length ?? 0) > 0) {
-    return sendJson(res, 403, {
+    return reply(403, {
       error: "forbidden",
       message: "a privileged cron may only be patched by its owner from a live turn",
     });
   }
   if (body.unattendedGrants !== undefined) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "unattended grants can only be set by the cron's owner from a live turn",
     });
@@ -158,9 +158,9 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     },
     { actorId: ctx.caller ?? cron.owner },
   );
-  if (result.ok) return sendJson(res, 200, { cron: result.cron });
-  if (result.code === "not_found") return sendJson(res, 200, { cron: null });
-  return sendJson(res, result.code === "forbidden" ? 403 : 400, { error: result.code, message: result.message });
+  if (result.ok) return ok({ cron: result.cron });
+  if (result.code === "not_found") return ok({ cron: null });
+  return reply(result.code === "forbidden" ? 403 : 400, { error: result.code, message: result.message });
 }
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [

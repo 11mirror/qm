@@ -1,13 +1,12 @@
 import { runEmojiUpload } from "../../connectors/emoji-upload-service.ts";
-import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 
-async function addEmoji(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability } = ctx;
-  if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
+async function addEmoji(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, capability } = ctx;
+  if (!capability) return reply(401, { error: "unauthorized", message: "agent capability token required" });
   if (!deps.browserSessionStore) {
-    return sendJson(res, 404, {
+    return reply(404, {
       error: "not_supported",
       message: "the emoji uploader isn't available in this deployment",
     });
@@ -16,7 +15,7 @@ async function addEmoji(ctx: ApiCtx): Promise<void> {
   const name = typeof b.name === "string" ? b.name : "";
   const imageBase64 = typeof b.image === "string" ? b.image : "";
   if (!name || !imageBase64) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "name (string) and image (base64 PNG/GIF) are required",
     });
@@ -30,7 +29,7 @@ async function addEmoji(ctx: ApiCtx): Promise<void> {
     },
     { name, imageBase64, ...(typeof b.workspace === "string" && b.workspace ? { workspace: b.workspace } : {}) },
   );
-  return sendJson(res, result.ok ? 200 : 422, result);
+  return reply(result.ok ? 200 : 422, result);
 }
 
 export const emojiRoutes: ReadonlyArray<Route<ApiCtx>> = [

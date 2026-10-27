@@ -4,8 +4,7 @@ import { type Session } from "../../../types.ts";
 import { sessionCategory, type SessionCategory, type SessionSummary } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
 import { isUserMessage, type Item } from "../../../sessions/items.ts";
-import { sendJson } from "../../http.ts";
-import { type ApiCtx } from "../route.ts";
+import { type ApiCtx, ok, type RouteResult } from "../route.ts";
 import { badRequest, limitParam, requireScopedResource, scopedAdmin } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
 import { parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
@@ -45,7 +44,7 @@ async function cronFireResults(app: App, summaries: readonly SessionSummary[]): 
   return results;
 }
 
-export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
+export async function listAdminSessions(ctx: ApiCtx): Promise<RouteResult> {
   const { res, app, deps, url } = ctx;
   const authz = await scopedAdmin(ctx, "sessions");
   if (!authz) return;
@@ -103,7 +102,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
     }),
   );
   const activity = scopeActivity(deps.sessions);
-  return sendJson(res, 200, {
+  return ok({
     scopeId: scope,
     sessions,
     ...(cronId
@@ -123,8 +122,8 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
-  const { res, deps, params, url } = ctx;
+export async function getAdminSessionLlm(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, params, url } = ctx;
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
@@ -135,16 +134,16 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
     let opts: { orphans: true } | { turnSeqs: number[] } | null = null;
     if (turnParam === "orphan") opts = { orphans: true };
     else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
-    if (!opts) return badRequest(res, 'turnSeq must be an integer or "orphan"');
+    if (!opts) throw badRequest('turnSeq must be an integer or "orphan"');
     const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
-    return sendJson(res, 200, { session, requests });
+    return ok({ session, requests });
   }
   const requests = (await deps.sessions?.listLlmRequests(id, { omitRequest: true })) ?? [];
-  return sendJson(res, 200, { session, requests });
+  return ok({ session, requests });
 }
 
-export async function getAdminSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, url } = ctx;
+export async function getAdminSession(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, params, url } = ctx;
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
@@ -158,7 +157,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     : [];
   const hasMore = !all && raw.length > limit;
   const items = await labelTranscriptItems(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
-  return sendJson(res, 200, {
+  return ok({
     session,
     items,
     hasMore,

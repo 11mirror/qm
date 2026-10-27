@@ -1,5 +1,4 @@
-import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
 
 const MAX_BATCH = 500;
@@ -33,12 +32,12 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
   };
 }
 
-async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  if (!deps.egressAudit) return sendJson(res, 501, { error: "not_configured", message: "no egress audit sink wired" });
+async function ingestEgressAudit(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
+  if (!deps.egressAudit) return reply(501, { error: "not_configured", message: "no egress audit sink wired" });
   const records = (body as { records?: unknown })?.records;
   if (!Array.isArray(records) || records.length === 0 || records.length > MAX_BATCH) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `records must be a non-empty array of at most ${MAX_BATCH}`,
     });
@@ -50,7 +49,7 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
     deps.egressAudit.record(parsed);
     accepted++;
   }
-  return sendJson(res, 200, { accepted, rejected: records.length - accepted });
+  return ok({ accepted, rejected: records.length - accepted });
 }
 
 export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [

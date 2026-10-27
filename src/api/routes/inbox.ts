@@ -3,11 +3,10 @@ import type { Cron } from "../../types.ts";
 import { ensureInboxCron, inboxName, INBOX_SOURCES } from "../../inbox/sync-task.ts";
 import { isResolved, ledgerItemView } from "../../inbox/view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
-import { sendJson } from "../http.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { actingPrincipal, appCrons, cronSummary, inboxLoopsEnabled } from "./cron-items.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 type FeedKey = [number, number, string];
 
@@ -23,14 +22,44 @@ function inboxTitle(cron: Cron): string {
   return cron.inbox?.source ? inboxName(cron.inbox.source) : (cron.title ?? cron.id);
 }
 
-async function inbox(ctx: ApiCtx): Promise<void> {
+async function refreshSlackAvatars(
+  ctx: ApiCtx,
+  deps: NonNullable<ApiCtx["deps"]["inbox"]>,
+  actorId: string,
+  page: Awaited<ReturnType<NonNullable<ApiCtx["deps"]["inbox"]>["items"]["summaries"]>>,
+  cronsById: Map<string, Cron>,
+): Promise<void> {
+  const slack = (
+    await Promise.all(
+      page
+        .filter(
+          (item) =>
+            item.source === "slack" &&
+            cronsById.get(item.cronId)?.owner === actorId &&
+            !(
+              typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
+              Date.now() < item.inboxPreview.slackAvatarsRefreshAt
+            ),
+        )
+        .map((item) => deps.items.get(item.id)),
+    )
+  ).filter((item) => item !== null);
+  await ctx.deps.inboxSourceRefresh!(actorId, slack, "avatars");
+  for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
+    const summary = page.find((entry) => entry.id === refreshed?.id);
+    if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
+      summary.inboxPreview = { ...summary.inboxPreview, participants: refreshed.sourcePayload?.participants };
+  }
+}
+
+async function inbox(ctx: ApiCtx): Promise<RouteResult> {
   const deps = ctx.deps.inbox;
   const preferences = ctx.deps.uiState;
-  if (!deps || !preferences) return sendJson(ctx.res, 503, { error: "inbox_unavailable" });
+  if (!deps || !preferences) return reply(503, { error: "inbox_unavailable" });
   const actorId = actingPrincipal(ctx);
   if (!actorId) return;
-  if (!(await inboxLoopsEnabled(ctx, actorId))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
-  if (ctx.capability && ctx.capability.privateScope !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!(await inboxLoopsEnabled(ctx, actorId))) return reply(403, { error: "feature_disabled" });
+  if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
   const defaults = [];
   for (const { source } of INBOX_SOURCES) defaults.push(await ensureInboxCron(appCrons(ctx), actorId, source));
   const id = uiStateId(actorId, "inbox-crons");
@@ -47,11 +76,10 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       body.cronIds.length > 100 ||
       body.cronIds.some((value) => typeof value !== "string")
     ) {
-      return sendJson(ctx.res, 400, { error: "invalid_selection" });
+      return reply(400, { error: "invalid_selection" });
     }
     ids = [...new Set(body.cronIds as string[])];
-    if (ids.some((value) => !available.some((cron) => cron.id === value)))
-      return sendJson(ctx.res, 403, { error: "forbidden" });
+    if (ids.some((value) => !available.some((cron) => cron.id === value))) return reply(403, { error: "forbidden" });
     await preferences.put(id, { value: ids, updatedAt: Date.now() });
   }
   const selected = ids.flatMap((value) => available.filter((cron) => cron.id === value));
@@ -70,12 +98,12 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const itemId = ctx.url.searchParams.get("itemId");
   if (itemId) {
     const item = await deps.items.get(itemId);
-    if (!item || !selectedIds.includes(item.cronId)) return sendJson(ctx.res, 404, { error: "not_found" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+    if (!item || !selectedIds.includes(item.cronId)) return reply(404, { error: "not_found" });
+    return ok({ item: ledgerItemView(item) });
   }
   const requestedFilter = ctx.url.searchParams.get("filter");
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
-    return sendJson(ctx.res, 400, { error: "invalid_filter" });
+    return reply(400, { error: "invalid_filter" });
   const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(actorId, "inbox-filter")))?.value;
   const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
@@ -112,39 +140,18 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     try {
       value = JSON.parse(Buffer.from(cursor, "base64url").toString());
     } catch {
-      return sendJson(ctx.res, 400, { error: "invalid_cursor" });
+      return reply(400, { error: "invalid_cursor" });
     }
     if (!Array.isArray(value) || value.some((part) => typeof part !== "number" && typeof part !== "string"))
-      return sendJson(ctx.res, 400, { error: "invalid_cursor" });
+      return reply(400, { error: "invalid_cursor" });
     const after = value as Array<number | string>;
     feed = feed.filter((item) => compareKeys(keys.get(item.id)!, after) > 0);
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
-  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
-    const slack = (
-      await Promise.all(
-        page
-          .filter(
-            (item) =>
-              item.source === "slack" &&
-              cronsById.get(item.cronId)?.owner === actorId &&
-              !(
-                typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
-                Date.now() < item.inboxPreview.slackAvatarsRefreshAt
-              ),
-          )
-          .map((item) => deps.items.get(item.id)),
-      )
-    ).filter((item) => item !== null);
-    await ctx.deps.inboxSourceRefresh(actorId, slack, "avatars");
-    for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
-      const summary = page.find((entry) => entry.id === refreshed?.id);
-      if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
-        summary.inboxPreview = { ...summary.inboxPreview, participants: refreshed.sourcePayload?.participants };
-    }
-  }
-  sendJson(ctx.res, 200, {
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh)
+    await refreshSlackAvatars(ctx, deps, actorId, page, cronsById);
+  return ok({
     selected: selected.map((cron) => ({
       id: cron.id,
       name: inboxTitle(cron),
@@ -181,16 +188,16 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function access(ctx: ApiCtx): Promise<void> {
+async function access(ctx: ApiCtx): Promise<RouteResult> {
   const actorId = actingPrincipal(ctx);
-  if (actorId) sendJson(ctx.res, 200, { enabled: await inboxLoopsEnabled(ctx, actorId) });
+  if (actorId) return ok({ enabled: await inboxLoopsEnabled(ctx, actorId) });
 }
 
-async function viewers(ctx: ApiCtx): Promise<void> {
-  if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
+async function viewers(ctx: ApiCtx): Promise<RouteResult> {
+  if (ctx.capability || ctx.actor) return reply(403, { error: "forbidden" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const cron = typeof body.cronId === "string" ? await ctx.app.getCron(body.cronId) : null;
-  if (!cron?.inbox) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!cron?.inbox) return reply(404, { error: "not_found" });
   const candidates = Array.isArray(body.candidates)
     ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
     : [];
@@ -203,7 +210,7 @@ async function viewers(ctx: ApiCtx): Promise<void> {
         canAdministerCron(ctx.app, cron, canonicalPerson(id)),
     ),
   );
-  sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
+  return ok({ viewers: candidates.filter((_, i) => allowed[i]) });
 }
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [

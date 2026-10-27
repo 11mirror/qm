@@ -1,36 +1,35 @@
 import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
 import { sessionTreeRoot } from "../../subagents/tree.ts";
-import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 export async function conversationRef(ctx: ApiCtx): Promise<string | null> {
-  const { res, capability } = ctx;
+  const { capability } = ctx;
   if (!capability)
-    return refuse(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+    throw refuse(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   if (!capability.threadRef)
-    return refuse(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
+    throw refuse(400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
   if (!isSubagentThreadRef(capability.threadRef)) return capability.threadRef;
   const sessions = ctx.deps.sessions;
   const session = await sessions?.getByThread(capability.threadRef);
   const root = session && sessions ? await sessionTreeRoot(sessions, session) : null;
   if (!root || root.scopeId !== capability.scopeId || !(await sessions!.getForParticipant(root.id, capability.actorId)))
-    return refuse(res, 403, { error: "forbidden", message: "the originating conversation is no longer accessible" });
+    throw refuse(403, { error: "forbidden", message: "the originating conversation is no longer accessible" });
   return root.threadRef;
 }
 
-async function addPin(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
+async function addPin(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body, capability } = ctx;
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const b = isObj(body) ? body : {};
   const text = typeof b.text === "string" && b.text.trim() ? b.text.trim() : undefined;
   const seq = b.seq;
   if (seq !== undefined && (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0)) {
-    return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
+    return reply(400, { error: "bad_request", message: "seq must be a non-negative integer" });
   }
   if (!text && seq === undefined) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "pass `text` (a note to pin) and/or `seq` (a transcript entry to pin)",
     });
@@ -40,35 +39,35 @@ async function addPin(ctx: ApiCtx): Promise<void> {
     ...(seq !== undefined ? { entrySeq: seq } : {}),
   });
   if ("error" in out) {
-    if (out.error === "not_found") return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
+    if (out.error === "not_found") return reply(404, { error: "not_found", message: "no such conversation" });
     if (out.error === "bad_entry") {
-      return sendJson(res, 404, { error: "entry_not_found", message: `no transcript entry with seq ${seq}` });
+      return reply(404, { error: "entry_not_found", message: `no transcript entry with seq ${seq}` });
     }
-    return sendJson(res, 409, {
+    return reply(409, {
       error: "pin_limit",
       message: "this conversation already has the maximum number of pins — unpin something first",
     });
   }
-  return sendJson(res, 200, { ok: true, pin: out.pin });
+  return ok({ ok: true, pin: out.pin });
 }
 
-async function listPins(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
+async function listPins(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, capability } = ctx;
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const pins = await app.listConversationPins(threadRef, capability!.actorId);
-  if (pins === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
-  return sendJson(res, 200, { pins });
+  if (pins === null) return reply(404, { error: "not_found", message: "no such conversation" });
+  return ok({ pins });
 }
 
-async function removePin(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
+async function removePin(ctx: ApiCtx): Promise<RouteResult> {
+  const { app } = ctx;
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const removed = await app.unpinConversationItem(threadRef, ctx.params.id!);
-  if (removed === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
-  if (!removed) return sendJson(res, 404, { error: "not_found", message: "no such pin" });
-  return sendJson(res, 200, { ok: true });
+  if (removed === null) return reply(404, { error: "not_found", message: "no such conversation" });
+  if (!removed) return reply(404, { error: "not_found", message: "no such pin" });
+  return ok({ ok: true });
 }
 
 export const pinRoutes: ReadonlyArray<Route<ApiCtx>> = [

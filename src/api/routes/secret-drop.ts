@@ -9,8 +9,7 @@ import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from 
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 import { reportForeignTenant, tenant } from "../../tenant.ts";
@@ -185,31 +184,31 @@ ${inputs}
   );
 }
 
-async function mintDrop(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability, secret } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+async function mintDrop(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, capability, secret } = ctx;
+  if (!deps.keychain || !deps.secretDrops) return reply(404, { error: "not_found" });
   if (!capability)
-    return sendJson(res, 401, {
+    return reply(401, {
       error: "unauthorized",
       message: "secret-drop mint requires an agent capability token",
     });
   const capSecret = deps.capabilitySecret ?? secret;
   if (!capSecret)
-    return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
-  if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
+    return reply(500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
+  if (capability.triggered) return reply(403, { error: "forbidden", message: TRIGGERED });
   const b = body as Record<string, unknown>;
   if (typeof b.service !== "string" || !b.service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "expected { service, purpose, envKey?, host?, grantMode?, fields? }",
     });
   }
   if (b.grantMode !== undefined && b.grantMode !== "once" && b.grantMode !== "standing") {
-    return sendJson(res, 400, { error: "bad_request", message: 'grantMode must be "once" or "standing"' });
+    return reply(400, { error: "bad_request", message: 'grantMode must be "once" or "standing"' });
   }
   const fields = parseDropFields(b.fields);
   if (fields === "invalid") {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `fields must be 1–${MAX_DROP_FIELDS} items of { key: ENV_VAR_NAME, label?, secret? } with unique keys`,
     });
@@ -217,7 +216,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   let ownerId = capability.actorId;
   if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, capability.actorId)) {
     const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
-    if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+    if ("error" in speaker) return reply(403, { error: "forbidden", message: speaker.error });
     ownerId = speaker.principalId;
   }
   const scope = parseScopeId(capability.scopeId);
@@ -261,7 +260,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   );
   const formPath = `/drop/${dropId}/form?t=${encodeURIComponent(linkToken)}`;
   const base = (deps.portalUrl ?? deps.publicUrl)?.replace(/\/$/, "");
-  return sendJson(res, 200, { dropId, formPath, url: base ? `${base}${formPath}` : formPath });
+  return ok({ dropId, formPath, url: base ? `${base}${formPath}` : formPath });
 }
 
 async function dropForm(ctx: ApiCtx): Promise<void> {
@@ -274,23 +273,23 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
   sendHtml(res, 200, dropFormHtml(params.id!, peeked.rec));
 }
 
-async function redeemDrop(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, params, req } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+async function redeemDrop(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, params, req } = ctx;
+  if (!deps.keychain || !deps.secretDrops) return reply(404, { error: "not_found" });
   const { secret, values } = body as { secret?: unknown; values?: unknown };
   const peeked = await deps.secretDrops.peek(params.id!);
-  if (!peeked.ok) return sendJson(res, 404, dropGone(peeked.reason));
+  if (!peeked.ok) return reply(404, dropGone(peeked.reason));
   const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
-  if (!linkClaims) return sendJson(res, 404, dropGone());
+  if (!linkClaims) return reply(404, dropGone());
   if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId)) {
-    return sendJson(res, 403, {
+    return reply(403, {
       error: "forbidden",
       message: "sign in as the account owner to complete this credential drop",
     });
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
   if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
-    return sendJson(res, 409, {
+    return reply(409, {
       error: "scope_changed",
       message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
     });
@@ -303,17 +302,17 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     for (const f of dropFieldDefs) {
       const v = vmap[f.key];
       if (typeof v !== "string" || !v.trim())
-        return sendJson(res, 400, { error: "bad_request", message: `missing value for ${f.key}` });
+        return reply(400, { error: "bad_request", message: `missing value for ${f.key}` });
       saveFields.push({ envKey: f.key, value: v.trim(), secret: f.secret !== false });
     }
   } else if (typeof secret !== "string" || !secret.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "expected { secret }" });
+    return reply(400, { error: "bad_request", message: "expected { secret }" });
   }
   const redeemed = await deps.secretDrops.redeem(params.id!);
-  if (!redeemed.ok) return sendJson(res, 404, dropGone(redeemed.reason));
+  if (!redeemed.ok) return reply(404, dropGone(redeemed.reason));
   const drop = redeemed.rec;
   if (drop.orgId !== undefined && drop.orgId !== tenant().orgId)
-    return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
+    return reply(404, { error: "not_found", message: "this drop link is for a different org" });
   const keychain = deps.keychain;
   const secretDrops = deps.secretDrops;
   const meta = await keychain.save({
@@ -360,7 +359,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       });
     })().catch((e) => swallow("secret-drop: resolution fire failed", e));
   }
-  return sendJson(res, 200, { ok: true, credential: meta });
+  return ok({ ok: true, credential: meta });
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [

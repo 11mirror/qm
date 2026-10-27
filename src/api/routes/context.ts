@@ -1,9 +1,9 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { sendJson } from "../http.ts";
+import { HttpError } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
@@ -22,35 +22,33 @@ async function resolveSurfaceTarget(
   source: string;
   target: Pick<SurfaceContextQuery, "channelId" | "channelName" | "conversationTarget">;
 } | null> {
-  const { res, app, capability } = ctx;
+  const { app, capability } = ctx;
   const cap = capability!;
   if (typeof b.channel === "string" && b.channel.trim()) {
     const ref = b.channel.trim().replace(/^#/, "");
     if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
       if (!(await app.channelVisibleTo(cap.actorId, ref))) {
-        await notVisible(ctx, cap.actorId, b.channel);
-        return null;
+        throw await notVisible(ctx, cap.actorId, b.channel);
       }
       return { source: "slack", target: { channelId: ref } };
     }
     const r = await app.resolveChannel(ref);
     if (r.kind === "none")
-      return refuse(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
+      throw refuse(404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
     if (r.kind === "ambiguous")
-      return refuse(res, 409, {
+      throw refuse(409, {
         error: "ambiguous_channel",
         message: `"${b.channel}" matches multiple channels — pass an exact name or id`,
         candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
       });
     if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true))) {
-      await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
-      return null;
+      throw await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
     }
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
   if (!dest?.target || dest.type !== "slack")
-    return refuse(res, 400, {
+    throw refuse(400, {
       error: "no_conversation",
       message: "this conversation has no surface history to pull — name a channel instead",
     });
@@ -64,10 +62,10 @@ async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery
   return { rateLimitRecipient: { target: cap.destination.target, user: member?.slackId ?? cap.actorId } };
 }
 
-async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
+async function createSurfaceContextRequest(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body, capability } = ctx;
   if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+    return reply(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
   const count = Math.max(
@@ -92,20 +90,20 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
     ...(b.live === true ? { live: true } : {}),
   };
   const request = await app.createContextRequest(resolved.source, query);
-  return awaitOutcome(ctx, request.id, FULFILL_WAIT_MS, (result) => {
-    sendJson(res, 200, { ...(query.channelName ? { channel: `#${query.channelName}` } : {}), ...result });
-  });
+  return awaitOutcome(ctx, request.id, FULFILL_WAIT_MS, (result) =>
+    ok({ ...(query.channelName ? { channel: `#${query.channelName}` } : {}), ...result }),
+  );
 }
 
-async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
+async function createSurfaceFileRequest(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body, capability } = ctx;
   if (!capability) {
-    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+    return reply(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
   const ts = typeof b.ts === "string" && b.ts.trim() ? b.ts.trim() : undefined;
   if (!ts) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "pass the message's `ts` (find it via /v1/surface-context)",
     });
@@ -125,7 +123,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   return awaitOutcome(ctx, request.id, FILE_FULFILL_WAIT_MS, async (result) => {
     const file = result.file;
     if (!file) {
-      return sendJson(res, 502, {
+      return reply(502, {
         error: "surface_error",
         message:
           "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
@@ -147,7 +145,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
       ctx.deps.capabilityTokenCompression,
     );
     const { blobId, ...meta } = file;
-    return sendJson(res, 200, {
+    return ok({
       file: meta,
       download: {
         path: `/v1/blobs/${encodeURIComponent(blobId)}`,
@@ -160,9 +158,9 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function notVisible(ctx: ApiCtx, actorId: string, label: string): Promise<void> {
+async function notVisible(ctx: ApiCtx, actorId: string, label: string): Promise<HttpError> {
   const known = await ctx.app.directoryMember(actorId);
-  return sendJson(ctx.res, 403, {
+  return new HttpError(403, {
     error: known ? "not_visible" : "identity_unverified",
     message: known
       ? `I can only read a private channel you're in, and I can't confirm you're in ${label}.`
@@ -174,19 +172,19 @@ async function awaitOutcome(
   ctx: ApiCtx,
   requestId: string,
   waitMs: number,
-  onDone: (result: SurfaceContextResult) => void | Promise<void>,
-): Promise<void> {
-  const { res, app } = ctx;
+  onDone: (result: SurfaceContextResult) => RouteResult | Promise<RouteResult>,
+): Promise<RouteResult> {
+  const { app } = ctx;
   const outcome = await awaitContextOutcome(app, requestId, { waitMs, pollMs: FULFILL_POLL_MS });
   if (outcome.status === "done") return onDone(outcome.result);
   if (outcome.status === "failed") {
-    return sendJson(res, 502, { error: "surface_error", message: outcome.error ?? "the surface couldn't answer that" });
+    return reply(502, { error: "surface_error", message: outcome.error ?? "the surface couldn't answer that" });
   }
-  return sendJson(res, 504, { error: "surface_timeout", message: "the surface didn't answer in time — try again" });
+  return reply(504, { error: "surface_timeout", message: "the surface didn't answer in time — try again" });
 }
 
-async function listPendingContextRequests(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+async function listPendingContextRequests(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url } = ctx;
   const source = url.searchParams.get("source") ?? "slack";
   const waitMs = Math.max(0, Math.min(PENDING_WAIT_CAP_MS, Number(url.searchParams.get("waitMs")) || 0));
   const deadline = Date.now() + waitMs;
@@ -195,11 +193,11 @@ async function listPendingContextRequests(ctx: ApiCtx): Promise<void> {
     await app.awaitContextRequestEvent("created", null, Math.min(PENDING_POLL_MS, deadline - Date.now()));
     requests = await app.pendingContextRequests(source);
   }
-  return sendJson(res, 200, { requests: requests.map((r) => ({ id: r.id, query: r.query })) });
+  return ok({ requests: requests.map((r) => ({ id: r.id, query: r.query })) });
 }
 
-async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
+async function fulfillContextRequest(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body } = ctx;
   const id = ctx.params.id!;
   const b = isObj(body) ? body : {};
   const f = isObj(b.file) ? b.file : undefined;
@@ -230,11 +228,10 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(group ? { group } : {}),
           } satisfies SurfaceContextResult,
         };
-  const ok = await app.fulfillContextRequest(id, outcome);
-  return sendJson(
-    res,
-    ok ? 200 : 404,
-    ok ? { ok: true } : { error: "not_found", message: "request expired or already answered" },
+  const fulfilled = await app.fulfillContextRequest(id, outcome);
+  return reply(
+    fulfilled ? 200 : 404,
+    fulfilled ? { ok: true } : { error: "not_found", message: "request expired or already answered" },
   );
 }
 

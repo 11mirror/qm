@@ -1,7 +1,6 @@
 import type { DecisionLogStore } from "../../../surface-cache/decision-log-store.ts";
-import { sendJson } from "../../http.ts";
 import { badRequest, limitParam, notFound, orgAdmin } from "./common.ts";
-import { type ApiCtx } from "../route.ts";
+import { type ApiCtx, ok, type RouteResult } from "../route.ts";
 import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
 
 const CONTEXT_PAGE_MAX = 400;
@@ -29,8 +28,8 @@ async function directoryNames(deps: ApiCtx["deps"]) {
   };
 }
 
-export async function listAmbientContainers(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
+export async function listAmbientContainers(ctx: ApiCtx): Promise<RouteResult> {
+  const { app } = ctx;
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const { scope } = authz;
@@ -42,16 +41,16 @@ export async function listAmbientContainers(ctx: ApiCtx): Promise<void> {
     ...c,
     name: c.name ?? channelsById.get(c.container.toLowerCase()),
   }));
-  return sendJson(res, 200, { scopeId: scope, containers, hasMore, limit: CONTEXT_PAGE_MAX });
+  return ok({ scopeId: scope, containers, hasMore, limit: CONTEXT_PAGE_MAX });
 }
 
-export async function listAmbientMessages(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, url } = ctx;
+export async function listAmbientMessages(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, url } = ctx;
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const { scope } = authz;
   const container = (url.searchParams.get("container") ?? "").trim();
-  if (!container) return badRequest(res, "container required");
+  if (!container) throw badRequest("container required");
   const limit = limitParam(url, CONTEXT_PAGE_DEFAULT, CONTEXT_PAGE_MAX);
   authz.audit("ambient_context.messages.read", container);
   const names = await directoryNames(deps);
@@ -68,7 +67,7 @@ export async function listAmbientMessages(ctx: ApiCtx): Promise<void> {
     authorName: m.authorName ?? names.author(m.authorId),
     mentions: names.mentions(m.text, m.mentions),
   }));
-  return sendJson(res, 200, { scopeId: scope, container, messages, hasMore, limit });
+  return ok({ scopeId: scope, container, messages, hasMore, limit });
 }
 
 async function listDecisionLog<Outcome extends string>(
@@ -82,20 +81,20 @@ async function listDecisionLog<Outcome extends string>(
     many: string;
     empty: object;
   },
-): Promise<void> {
-  const { res, deps, url } = ctx;
+): Promise<RouteResult> {
+  const { deps, url } = ctx;
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const { scope } = authz;
-  if (!store) return sendJson(res, 200, { scopeId: scope, [log.many]: [], counts: log.empty });
+  if (!store) return ok({ scopeId: scope, [log.many]: [], counts: log.empty });
   const container = (url.searchParams.get("container") ?? "").trim() || undefined;
   const id = Number(url.searchParams.get("id"));
   authz.audit(`${log.action}.read`, container ?? "all");
   if (id) {
     const row = await store.get(id);
-    if (!row) return notFound(res);
+    if (!row) throw notFound();
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
-    return sendJson(res, 200, { scopeId: scope, [log.one]: row, workspaceUrl });
+    return ok({ scopeId: scope, [log.one]: row, workspaceUrl });
   }
   const values = (url.searchParams.get(log.param) ?? "")
     .split(",")
@@ -116,7 +115,7 @@ async function listDecisionLog<Outcome extends string>(
     store.counts(where),
   ]);
   const hasMore = rows.length > limit;
-  return sendJson(res, 200, {
+  return ok({
     scopeId: scope,
     [log.many]: hasMore ? rows.slice(0, limit) : rows,
     counts,
@@ -125,7 +124,7 @@ async function listDecisionLog<Outcome extends string>(
   });
 }
 
-export const listAmbientJudgments = (ctx: ApiCtx): Promise<void> =>
+export const listAmbientJudgments = (ctx: ApiCtx): Promise<RouteResult> =>
   listDecisionLog(ctx, ctx.deps.ambientJudgments, {
     action: "ambient_judgments",
     param: "decision",
@@ -135,7 +134,7 @@ export const listAmbientJudgments = (ctx: ApiCtx): Promise<void> =>
     empty: { act: 0, ignore: 0, fastlane: 0 },
   });
 
-export const listAckEmojiPicks = (ctx: ApiCtx): Promise<void> =>
+export const listAckEmojiPicks = (ctx: ApiCtx): Promise<RouteResult> =>
   listDecisionLog(ctx, ctx.deps.ackEmojiPicks, {
     action: "ack_emoji_picks",
     param: "outcome",

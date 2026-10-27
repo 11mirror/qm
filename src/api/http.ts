@@ -98,15 +98,20 @@ export function headerValue(req: IncomingMessage, name: string): string | undefi
   return typeof v === "string" ? v : undefined;
 }
 
+export type HttpErrorBody = { error: string; message?: string } & Record<string, unknown>;
+
 export class HttpError extends Error {
   readonly status: number;
-  readonly body: { error: string; message?: string };
-  constructor(status: number, body: { error: string; message?: string }) {
+  readonly body: HttpErrorBody;
+  constructor(status: number, body: HttpErrorBody) {
     super(body.message ?? body.error);
     this.status = status;
     this.body = body;
   }
 }
+
+export const fail = (status: number, error: string, message?: string): HttpError =>
+  new HttpError(status, message === undefined ? { error } : { error, message });
 
 export function isBackendFailure(error: unknown): boolean {
   return (

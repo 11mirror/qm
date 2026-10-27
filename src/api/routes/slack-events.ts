@@ -1,11 +1,10 @@
-import { sendJson } from "../http.ts";
-import type { BaseCtx, Route } from "./route.ts";
+import { type BaseCtx, reply, type Route, type RouteResult } from "./route.ts";
 
 const PATH = "/slack/events";
 
-async function receiveSlackEvents(ctx: BaseCtx): Promise<void> {
+async function receiveSlackEvents(ctx: BaseCtx): Promise<RouteResult> {
   const handle = ctx.deps.slackEvents?.(ctx.pathname.slice(PATH.length + 1));
-  if (!handle) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!handle) return reply(404, { error: "not_found" });
   await handle(ctx.req, ctx.res);
 }
 

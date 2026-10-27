@@ -2,8 +2,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
-import type { ApiCtx, BaseCtx } from "./route.ts";
+import { type ApiCtx, type BaseCtx, ok, reply, type RouteResult } from "./route.ts";
 import { verifyDeployGitAccess } from "../../deploy/access-token.ts";
 
 export const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
@@ -129,15 +128,15 @@ async function runGitHttpBackend(input: {
   });
 }
 
-export async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
+export async function serveDeploymentGit(ctx: BaseCtx): Promise<RouteResult> {
   const parts = deploymentGitParts(ctx.pathname);
-  if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
-  const forbid = (message: string): void => sendJson(ctx.res, 403, { error: "forbidden", message });
+  if (!parts) return reply(404, { error: "not_found" });
+  const forbid = (message: string): RouteResult => reply(403, { error: "forbidden", message });
   const service = gitServiceOf(parts.tail, ctx.url);
   if (!service) return forbid("unsupported deployment git service");
   const isPush = service === "git-receive-pack";
   if (isPush && !ctx.secret)
-    return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
+    return reply(503, { error: "unavailable", message: "deployment git push requires core signing" });
   let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
   if (ctx.secret) {
     const token = gitTokenFrom(ctx);
@@ -160,7 +159,7 @@ export async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     if (isPush && !access.principalId) return forbid("deployment git write access has been revoked");
   }
   const repoPath = await ctx.app.deploymentGitRepoPath(parts.id);
-  if (!repoPath) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!repoPath) return reply(404, { error: "not_found" });
   try {
     const body = ctx.method === "POST" ? await readRequestBytes(ctx.req) : Buffer.alloc(0);
     const runBackend = () =>
@@ -198,7 +197,7 @@ export async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     ctx.res.end(result.body);
   } catch (e) {
     console.error("[deploy-git] request failed:", errMessage(e));
-    return sendJson(ctx.res, 500, { error: "git_failed", message: "deployment git request failed" });
+    return reply(500, { error: "git_failed", message: "deployment git request failed" });
   }
 }
 
@@ -216,15 +215,14 @@ export async function withGitUrl<T extends { id: string }>(ctx: ApiCtx, d: T, pr
   return git ? { ...d, gitUrl: git.url } : d;
 }
 
-export async function deploymentGitUrl(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "a git URL requires an agent capability token" });
-  if (!ctx.secret) return sendJson(res, 503, { error: "unavailable", message: "core signing secret not configured" });
+export async function deploymentGitUrl(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden", message: "a git URL requires an agent capability token" });
+  if (!ctx.secret) return reply(503, { error: "unavailable", message: "core signing secret not configured" });
   const result = await app.deploymentGitUrlFor(params.id!, capability.actorId, {
     secret: ctx.secret,
     baseUrl: gitUrlBase(ctx),
   });
-  if (!result) return sendJson(res, 403, { error: "forbidden", message: "no access to this deployment" });
-  return sendJson(res, 200, result);
+  if (!result) return reply(403, { error: "forbidden", message: "no access to this deployment" });
+  return ok(result);
 }

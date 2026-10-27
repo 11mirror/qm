@@ -1,12 +1,11 @@
-import { sendJson } from "../../http.ts";
 import { orgAdmin } from "./common.ts";
-import type { ApiCtx } from "../route.ts";
+import { type ApiCtx, ok, type RouteResult } from "../route.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../../../audit/audit-log.ts";
 
 const MAX_FLAGS = 200;
 const FLAG_ACTIONS = [SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE];
 
-export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
+export async function listSecurityFlags(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const requested = Number(ctx.url.searchParams.get("limit") ?? 50);
@@ -20,5 +19,5 @@ export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
     detail: event.detail,
   }));
   authz.audit("security_posture.flags.read", "security-flags");
-  sendJson(ctx.res, 200, { flags });
+  return ok({ flags });
 }

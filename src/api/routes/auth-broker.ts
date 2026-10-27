@@ -2,11 +2,10 @@ import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
-import { sendJson } from "../http.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, audit, activePrincipal } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { tenant } from "../../tenant.ts";
 
 const NAMESPACE = "authbroker:";
@@ -14,10 +13,10 @@ const MAX_IDS = 64;
 const MAX_ID_LENGTH = 200;
 const MAX_HORIZON_MS = 24 * 60 * 60 * 1000;
 
-async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
+async function claimBrokerNonce(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
   if (!deps.replayDedupe) {
-    return sendJson(res, 503, {
+    return reply(503, {
       error: "not_configured",
       message:
         "single-use claims need the Postgres-backed replay store; set DATABASE_URL so a restart cannot resurrect a spent sign-in link",
@@ -30,7 +29,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
     ids.length > MAX_IDS ||
     !ids.every((id) => typeof id === "string" && id.length > 0 && id.length <= MAX_ID_LENGTH)
   ) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `ids must hold 1 to ${MAX_IDS} non-empty strings of at most ${MAX_ID_LENGTH} characters`,
     });
@@ -43,31 +42,31 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
     expiresAtMs <= now ||
     expiresAtMs > now + MAX_HORIZON_MS
   ) {
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "expiresAtMs must be a future epoch-millisecond timestamp within 24 hours",
     });
   }
   for (const id of ids as string[]) {
-    if (await deps.replayDedupe.claim(`${NAMESPACE}${id}`, expiresAtMs)) return sendJson(res, 200, { claimed: id });
+    if (await deps.replayDedupe.claim(`${NAMESPACE}${id}`, expiresAtMs)) return ok({ claimed: id });
   }
-  return sendJson(res, 200, { claimed: null });
+  return ok({ claimed: null });
 }
 
-async function emailAllowed(ctx: ApiCtx): Promise<void> {
-  const { res, deps, app, url } = ctx;
+async function emailAllowed(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, app, url } = ctx;
   const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
-  if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
-  if (!deps.identity) return sendJson(res, 200, { allowed: false });
+  if (!validEmail(email)) return reply(400, { error: "bad_request", message: "email required" });
+  if (!deps.identity) return ok({ allowed: false });
   await deps.identity.refresh();
-  if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
+  if (deps.identity.deactivationSource(email) === "manual") return ok({ allowed: false });
   const member = deps.identity.externalMember(email);
   const configured =
     deps.emailAuthPrincipals?.includes(email) ||
     Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
-  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
+  if (allowed) return ok({ allowed: true, expiresAt: member?.expiresAt });
   const grantee = `personal:${email}`;
   const sharedDeployments = ((await deps.acl?.list()) ?? []).flatMap((g) => {
     const ref = parseRef(g.ref);
@@ -83,19 +82,19 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
     }),
   );
   const appOnly = allowedOwners.some(Boolean);
-  return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
+  return ok(appOnly ? { allowed: true, appOnly: true } : { allowed: false });
 }
 
-async function brokerSession(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  if (!deps.brokerSessions) return sendJson(res, 503, { error: "not_configured" });
+async function brokerSession(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
+  if (!deps.brokerSessions) return reply(503, { error: "not_configured" });
   const b = isObj(body) ? body : {};
   if (ctx.pathname.endsWith("/use")) {
     if (typeof b.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(b.token))
-      return sendJson(res, 400, { error: "invalid_token" });
-    return sendJson(res, 200, { session: await deps.brokerSessions.use(b.token) });
+      return reply(400, { error: "invalid_token" });
+    return ok({ session: await deps.brokerSessions.use(b.token) });
   }
-  if (typeof b.email !== "string" || !validEmail(b.email)) return sendJson(res, 400, { error: "invalid_email" });
+  if (typeof b.email !== "string" || !validEmail(b.email)) return reply(400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
     if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, tenant().orgScope))) return;
@@ -106,7 +105,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
       resource: email,
       scopeLabel: tenant().orgScope,
     });
-    return sendJson(res, 200, { ok: true });
+    return ok({ ok: true });
   }
   const idleS = b.idleS;
   const absoluteS = b.absoluteS;
@@ -119,15 +118,15 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
     absoluteS < idleS ||
     absoluteS > 90 * 86400
   )
-    return sendJson(res, 400, { error: "invalid_lifetime" });
-  return sendJson(res, 200, await deps.brokerSessions.create(email, idleS, absoluteS));
+    return reply(400, { error: "invalid_lifetime" });
+  return ok(await deps.brokerSessions.create(email, idleS, absoluteS));
 }
 
-async function trustedAdmin(ctx: ApiCtx): Promise<void> {
-  const { deps, res, body } = ctx;
+async function trustedAdmin(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
   const secret = deps.portalIdentitySecret;
   if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe)
-    return sendJson(res, 503, { error: "not_configured" });
+    return reply(503, { error: "not_configured" });
   const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
   const claims = await verifySignedPayload(assertion, secret);
   const now = Date.now();
@@ -147,11 +146,11 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
     typeof claims.jti !== "string" ||
     !/^[a-f0-9-]{36}$/.test(claims.jti)
   )
-    return sendJson(res, 403, { error: "invalid_assertion" });
+    return reply(403, { error: "invalid_assertion" });
   const principalId = `oidc:${createHash("sha256").update(claims.issuer).digest("hex")}:${Buffer.from(claims.subject).toString("base64url")}`;
-  if (!(await activePrincipal(deps, principalId))) return sendJson(res, 403, { error: "inactive_principal" });
+  if (!(await activePrincipal(deps, principalId))) return reply(403, { error: "inactive_principal" });
   if (!(await deps.replayDedupe.claim(`trusted-admin:${claims.jti}`, claims.exp)))
-    return sendJson(res, 409, { error: "assertion_already_used" });
+    return reply(409, { error: "assertion_already_used" });
   try {
     const { grant, created } = await deps.admin.provisionTrustedEntry(claims.issuer, claims.subject);
     if (created)
@@ -161,18 +160,17 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
         resource: `${grant.principalId}/org_admin`,
         scopeLabel: grant.scopeId,
       });
-    return sendJson(res, 200, { ok: true });
+    return ok({ ok: true });
   } catch (error) {
-    if (error instanceof AdminError)
-      return sendJson(res, error.status, { error: "grant_failed", message: error.message });
+    if (error instanceof AdminError) return reply(error.status, { error: "grant_failed", message: error.message });
     throw error;
   }
 }
 
-async function redeemInvitation(ctx: ApiCtx): Promise<void> {
-  const { deps, res, body } = ctx;
+async function redeemInvitation(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
   if (!deps.portalIdentitySecret || !deps.replayDedupe || !deps.identity || !deps.portalUrl)
-    return sendJson(res, 503, { error: "not_configured" });
+    return reply(503, { error: "not_configured" });
   const token = isObj(body) && typeof body.token === "string" ? body.token : "";
   const claims = token.length <= 4096 ? await verifySignedPayload(token, deps.portalIdentitySecret) : null;
   const now = Date.now();
@@ -193,7 +191,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     typeof claims.jti !== "string" ||
     !/^[a-f0-9-]{36}$/.test(claims.jti)
   )
-    return sendJson(res, 400, { error: "invalid_invitation" });
+    return reply(400, { error: "invalid_invitation" });
   await deps.identity.refresh(true);
   const member = deps.identity.externalMember(claims.email);
   if (
@@ -204,16 +202,16 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     !externalMemberActive(member) ||
     deps.identity.classify(claims.email).type !== "internal"
   )
-    return sendJson(res, 403, { error: "invitation_revoked" });
+    return reply(403, { error: "invitation_revoked" });
   if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
-    return sendJson(res, 400, { error: "invitation_used" });
+    return reply(400, { error: "invitation_used" });
   audit(deps, {
     principalId: claims.email,
     action: "user.invite.redeem",
     resource: claims.email,
     scopeLabel: tenant().orgScope,
   });
-  return sendJson(res, 200, { email: claims.email });
+  return ok({ email: claims.email });
 }
 
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [

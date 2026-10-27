@@ -2,11 +2,11 @@ import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
-import { isTextualContentType, refusal, sendJson, verifySignedRoute } from "../http.ts";
+import { fail, isTextualContentType, refusal, verifySignedRoute } from "../http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
-import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { type ApiCtx, type BaseCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { resolveShareTarget as resolveShareTargetGrammar, type ResolvedShareTarget } from "../artifact-share.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import {
@@ -44,7 +44,7 @@ function isDeployInput(b: unknown): b is DeployInput {
   return isObj(b) && typeof b.ownerScopeId === "string" && typeof b.createdBy === "string" && isRedeployInput(b);
 }
 
-async function proxyDeployment(ctx: BaseCtx): Promise<void> {
+async function proxyDeployment(ctx: BaseCtx): Promise<RouteResult> {
   const { req, res, app, deps, secret, url, pathname, method } = ctx;
   const rest = pathname.slice("/d/".length);
   const slash = rest.indexOf("/");
@@ -58,11 +58,11 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     const tok = Array.isArray(rawTok) ? rawTok[0] : rawTok;
     const actor = psecret && tok ? await verifyPortalIdentity(tok, psecret, Date.now()) : null;
     if (!psecret || !actor || actor.p !== principal)
-      return sendJson(res, 403, { error: "forbidden", message: "portal identity required" });
+      return reply(403, { error: "forbidden", message: "portal identity required" });
     if (deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(actor.p).type !== "internal") {
-        return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
+        return reply(403, { error: "forbidden", message: "principal is no longer active" });
       }
     }
   }
@@ -88,24 +88,24 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   return proxyReach(ctx, reach, subPath, principal, { sandbox: true });
 }
 
-async function createDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  if (!isDeployInput(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a DeployInput" });
+async function createDeployment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body } = ctx;
+  if (!isDeployInput(body)) return reply(400, { error: "bad_request", message: "expected a DeployInput" });
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
-  if (principalId && body.createdBy !== principalId) return sendJson(res, 403, { error: "forbidden" });
+  if (principalId && body.createdBy !== principalId) return reply(403, { error: "forbidden" });
   try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.deploy(body)) });
+    return ok({ deployment: deploymentView(await app.deploy(body)) });
   } catch (e) {
     throw refusal(400, "deploy_failed", e);
   }
 }
 
-async function listDeployments(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, capability, actor } = ctx;
+async function listDeployments(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 200, { deployments: (await app.listDeployments()).map(deploymentView) });
+  if (!principalId) return ok({ deployments: (await app.listDeployments()).map(deploymentView) });
   const visible = await app.listDeploymentsForViewer(principalId);
-  return sendJson(res, 200, { deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
+  return ok({ deployments: await Promise.all(visible.map((d) => withGitUrl(ctx, d, principalId))) });
 }
 
 const LOGS_DEFAULT_TAIL_LINES = 200;
@@ -115,38 +115,37 @@ function boundedIntParam(ctx: ApiCtx, name: string, fallback: number, max: numbe
   const raw = ctx.url.searchParams.get(name);
   const value = raw === null ? fallback : Number(raw);
   if (Number.isInteger(value) && value >= 1 && value <= max) return value;
-  sendJson(ctx.res, 400, { error: "bad_request", message: `${name} must be an integer from 1 to ${max}` });
-  return null;
+  throw fail(400, "bad_request", `${name} must be an integer from 1 to ${max}`);
 }
 
-async function deploymentLogs(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, actor } = ctx;
+async function deploymentLogs(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  if (!viewer) return reply(401, { error: "capability_required" });
   const tailLines = boundedIntParam(ctx, "tailLines", LOGS_DEFAULT_TAIL_LINES, LOGS_MAX_TAIL_LINES);
   if (tailLines === null) return;
   const result = await app.deploymentLogsFor(params.id!, viewer, { tailLines });
-  if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
-  if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this deployment" });
-  return sendJson(res, 200, { logs: result.logs });
+  if (result.status !== "ok") return reply(404, { error: "not_found" });
+  if (result.logs === null) return ok({ logs: null, message: "no logs available for this deployment" });
+  return ok({ logs: result.logs });
 }
 
-async function fetchDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, actor, url } = ctx;
+async function fetchDeployment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, capability, actor, url } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  if (!viewer) return reply(401, { error: "capability_required" });
   const path = normalizedDeploymentFetchPath(url.searchParams.get("path"));
-  if (!path) return sendJson(res, 400, { error: "bad_request", message: "path must be a safe absolute path" });
+  if (!path) return reply(400, { error: "bad_request", message: "path must be a safe absolute path" });
   const maxBytes = boundedIntParam(ctx, "maxBytes", AGENT_FETCH_DEFAULT_MAX_BYTES, AGENT_FETCH_MAX_BYTES);
   if (maxBytes === null) return;
   const reach = await app.reachDeployment(params.id!, viewer);
-  if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
+  if (reach.status !== "ok") return reply(404, { error: "not_found" });
   try {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
     const text = isTextualContentType(contentType);
-    return sendJson(res, 200, {
+    return ok({
       status: response.status,
       contentType,
       body: response.body.toString(text ? "utf8" : "base64"),
@@ -155,12 +154,12 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
     });
   } catch (error) {
     swallow(`deployment fetch: ${params.id}`, error);
-    return sendJson(res, 502, { error: "upstream_unreachable" });
+    return reply(502, { error: "upstream_unreachable" });
   }
 }
 
-export async function getDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, capability, params } = ctx;
+export async function getDeployment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url, capability, params } = ctx;
   const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
   const id = params.id!;
   let deployment;
@@ -170,8 +169,8 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
     const stored = await app.getDeployment(id);
     deployment = stored ? deploymentView(stored) : undefined;
   }
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { deployment: principalId ? await withGitUrl(ctx, deployment, principalId) : deployment });
+  if (!deployment) return reply(404, { error: "not_found" });
+  return ok({ deployment: principalId ? await withGitUrl(ctx, deployment, principalId) : deployment });
 }
 
 async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boolean> {
@@ -184,24 +183,22 @@ function manageDeployment<T = undefined>(spec: {
   failure: string;
   parse?: { input: (body: unknown) => T | null | undefined; invalid: string };
   run: (ctx: ApiCtx, id: string, input: T) => Promise<unknown>;
-}): (ctx: ApiCtx) => Promise<void> {
+}): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
-    const { res, app, params, body } = ctx;
+    const { app, params, body } = ctx;
     const id = await deploymentId(app, params.id!);
-    if (!id) return sendJson(res, 404, { error: "not_found" });
+    if (!id) throw fail(404, "not_found");
     if (!(await callerMayManageDeployment(ctx, id)))
-      return sendJson(
-        res,
+      return reply(
         403,
         spec.verb
           ? { error: "forbidden", message: `only someone who manages this app can ${spec.verb}` }
           : { error: "forbidden" },
       );
     const input = spec.parse?.input(body);
-    if (spec.parse && (input === undefined || input === null))
-      return sendJson(res, 400, { error: "bad_request", message: spec.parse.invalid });
+    if (spec.parse && (input === undefined || input === null)) throw fail(400, "bad_request", spec.parse.invalid);
     try {
-      return sendJson(res, 200, await spec.run(ctx, id, input as T));
+      return ok(await spec.run(ctx, id, input as T));
     } catch (e) {
       throw refusal(400, spec.failure, e);
     }
@@ -296,41 +293,40 @@ export function resolveShareTarget(
   });
 }
 
-export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability } = ctx;
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
+export async function getDeploymentShares(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden" });
   const deployment = await app.getDeployment(params.id!);
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
+  if (!deployment) return reply(404, { error: "not_found" });
   if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
-    return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+    return reply(403, { error: "forbidden", message: "Only the owner can edit app permissions." });
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
-  return sendJson(res, 200, {
+  return ok({
     public: deployment.public === true && externalSharing,
     externalSharing,
     grantees: await app.deploymentGrantees(deployment.id),
   });
 }
 
-export async function shareDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
+export async function shareDeployment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, body, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden", message: "sharing requires an agent capability token" });
   const b: Record<string, unknown> = isObj(body) ? body : {};
-  const badRequest = (message: string): void => sendJson(res, 400, { error: "bad_request", message });
+  const badRequest = (message: string): RouteResult => reply(400, { error: "bad_request", message });
   if (b.public !== undefined) {
     if (typeof b.public !== "boolean") return badRequest("public must be a boolean");
     if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
       return badRequest("public access and person/scope access must be changed separately");
     try {
       const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: capability.actorId });
-      return sendJson(res, 200, {
+      return ok({
         ok: true,
         public: deployment.public === true,
         reach: deployment.public === true ? "anyone with the link" : "restricted",
         grantees: await app.deploymentGrantees(deployment.id),
       });
     } catch (e) {
-      return sendShareFailure(res, e);
+      return sendShareFailure(e);
     }
   }
   if (b.email !== undefined && typeof b.email !== "string") return badRequest("email must be a string");
@@ -347,12 +343,12 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   });
   if (target.kind === "invalid") return badRequest(target.message);
   if (target.kind === "none")
-    return sendJson(res, 404, {
+    return reply(404, {
       error: "recipient_not_found",
       message: `no teammate matches "${String(b.recipient)}"`,
     });
   if (target.kind === "ambiguous")
-    return sendJson(res, 409, {
+    return reply(409, {
       error: "ambiguous_recipient",
       message: "more than one teammate matches",
       candidates: target.candidates,
@@ -370,7 +366,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
     else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
     const deployment = await app.getDeployment(params.id!);
-    return sendJson(res, 200, {
+    return ok({
       ok: true,
       target: { scope: target.scope, label: target.label },
       access,
@@ -382,7 +378,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       grantees,
     });
   } catch (e) {
-    return sendShareFailure(res, e);
+    return sendShareFailure(e);
   }
 }
 
@@ -393,9 +389,8 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   public_links_unavailable: 409,
 };
 
-function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
-  if (e instanceof DeployAccessError)
-    return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
+function sendShareFailure(e: unknown): RouteResult {
+  if (e instanceof DeployAccessError) return reply(DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
   throw refusal(400, "share_failed", e);
 }
 

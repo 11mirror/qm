@@ -4,9 +4,9 @@ import type { Cron, InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
-import { refusal, sendJson } from "../http.ts";
+import { refusal } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult, withActor } from "./route.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import { scopeId, parseScopeId } from "../../types.ts";
@@ -39,7 +39,7 @@ export interface InboxServiceDeps {
 export function actingPrincipal(ctx: ApiCtx): string | null {
   const principalId = ctx.capability?.actorId || ctx.actor?.p || (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (principalId) return principalId;
-  return refuse(ctx.res, 403, {
+  throw refuse(403, {
     error: "forbidden",
     message: "inbox routes need an agent capability or a principalId",
   });
@@ -54,17 +54,16 @@ async function agentSessionId(ctx: ApiCtx): Promise<string | undefined> {
   return threadRef ? ((await ctx.deps.sessions?.getByThread(threadRef))?.id ?? undefined) : undefined;
 }
 
-function sendItem(ctx: ApiCtx, item: InboxItem): void {
-  sendJson(ctx.res, 200, { item: ledgerItemView(item, !!ctx.capability) });
+function sendItem(ctx: ApiCtx, item: InboxItem): RouteResult {
+  return ok({ item: ledgerItemView(item, !!ctx.capability) });
 }
 
-function sendConflict(ctx: ApiCtx, message: string, error = "conflict"): void {
-  sendJson(ctx.res, 409, { error, message });
+function sendConflict(message: string, error = "conflict"): RouteResult {
+  return reply(409, { error, message });
 }
 
-function sendItemOrConflict(ctx: ApiCtx, item: InboxItem | null, message: string): void {
-  if (item) sendItem(ctx, item);
-  else sendConflict(ctx, message);
+function sendItemOrConflict(ctx: ApiCtx, item: InboxItem | null, message: string): RouteResult {
+  return item ? sendItem(ctx, item) : sendConflict(message);
 }
 
 export function appCrons(ctx: ApiCtx): Pick<CronStore, "list" | "create"> {
@@ -73,12 +72,12 @@ export function appCrons(ctx: ApiCtx): Pick<CronStore, "list" | "create"> {
 
 async function loadInboxCron(ctx: ApiCtx): Promise<{ deps: InboxServiceDeps; cron: Cron; actorId: string } | null> {
   const deps = ctx.deps.inbox;
-  if (!deps) return refuse(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
+  if (!deps) throw refuse(404, { error: "not_found", message: "inboxes are not wired on this deployment" });
   const actorId = actingPrincipal(ctx);
   if (!actorId) return null;
   const cron = await ctx.app.getCron(ctx.params.id ?? "");
   if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, actorId)))
-    return refuse(ctx.res, 404, { error: "not_found", message: "no such cron inbox" });
+    throw refuse(404, { error: "not_found", message: "no such cron inbox" });
   return { deps, cron, actorId };
 }
 
@@ -88,7 +87,8 @@ async function requireCronAuthority(ctx: ApiCtx, cron: Cron): Promise<true | nul
   const refusal = principal
     ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
     : { message: "a privileged cron requires a live turn started by its owner" };
-  return refusal ? refuse(ctx.res, 403, { error: "forbidden", message: refusal.message }) : true;
+  if (refusal) throw refuse(403, { error: "forbidden", message: refusal.message });
+  return true;
 }
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -161,20 +161,20 @@ function parseIngestEntry(cron: Cron, raw: unknown): IngestEntryInput | { error:
 function readableItems(ctx: ApiCtx, cron: Cron): true | null {
   if (!ctx.capability || parseScopeId(cron.ownerScopeId).kind !== "personal") return true;
   if (ctx.capability.privateScope === true) return true;
-  return refuse(ctx.res, 403, {
+  throw refuse(403, {
     error: "forbidden",
     message: "a personal inbox is reachable only from its owner's own scope",
   });
 }
 
-async function listItems(ctx: ApiCtx): Promise<void> {
+async function listItems(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadInboxCron(ctx);
   if (!loaded) return;
   const { deps, cron } = loaded;
   if (!readableItems(ctx, cron)) return;
   const wanted = ctx.url.searchParams.get("state");
   if (wanted !== null && !isLedgerState(wanted)) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
+    return reply(400, { error: "bad_request", message: "unknown state filter" });
   }
   if (cron.inbox?.source === "gmail" && cron.owner === loaded.actorId) {
     const openMail = (await deps.items.byCron(cron.id)).filter((item) => !isResolved(item) && item.source === "gmail");
@@ -187,23 +187,23 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     const state = ledgerState(item);
     counts[state] = (counts[state] ?? 0) + 1;
   }
-  sendJson(ctx.res, 200, { items: items.map((item) => ledgerItemView(item, !!ctx.capability)), counts });
+  return ok({ items: items.map((item) => ledgerItemView(item, !!ctx.capability)), counts });
 }
 
-async function ingestItems(ctx: ApiCtx): Promise<void> {
+async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadInboxCron(ctx);
   if (!loaded) return;
   const { deps, cron } = loaded;
   if (!ctx.capability) {
-    return sendJson(ctx.res, 403, { error: "forbidden", message: "inbox items are ingested by the agent" });
+    return reply(403, { error: "forbidden", message: "inbox items are ingested by the agent" });
   }
   if (!readableItems(ctx, cron)) return;
   const body = isObj(ctx.body) ? ctx.body : {};
   if (!Array.isArray(body.items) || body.items.length === 0) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "items (non-empty array) required" });
+    return reply(400, { error: "bad_request", message: "items (non-empty array) required" });
   }
   if (body.items.length > MAX_ITEMS_PER_INGEST) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
+    return reply(400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
   }
   const sessionId = await agentSessionId(ctx);
   const classifyInboxEmail =
@@ -215,7 +215,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(cron, raw);
     if ("error" in parsed) {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
+      return reply(400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     }
     if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
       for (const key of ["automated", "probablyResolved"])
@@ -232,7 +232,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   }
   const outcome = await deps.items.ingest(entries);
   await deps.items.prune(cron.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
-  sendJson(ctx.res, 200, outcome);
+  return ok(outcome);
 }
 
 async function loadItem(
@@ -242,8 +242,7 @@ async function loadItem(
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.cron)) return null;
   const item = await loaded.deps.items.get(ctx.params.itemId ?? "");
-  if (!item || item.cronId !== loaded.cron.id)
-    return refuse(ctx.res, 404, { error: "not_found", message: "no such inbox item" });
+  if (!item || item.cronId !== loaded.cron.id) throw refuse(404, { error: "not_found", message: "no such inbox item" });
   return { ...loaded, item };
 }
 
@@ -262,17 +261,17 @@ function imageUrlFromItem(item: InboxItem, ctxIndex: number, imageIndex: number)
   return typeof url === "string" && url.startsWith("https://") ? url : null;
 }
 
-async function serveItemImage(ctx: ApiCtx): Promise<void> {
+async function serveItemImage(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { cron, item } = loaded;
   const ctxIndex = Number.parseInt(ctx.url.searchParams.get("ctx") ?? "", 10);
   const imageIndex = Number.parseInt(ctx.url.searchParams.get("i") ?? "", 10);
   if (!Number.isInteger(ctxIndex) || !Number.isInteger(imageIndex) || imageIndex < 0 || ctxIndex < -1) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "ctx and i required" });
+    return reply(400, { error: "bad_request", message: "ctx and i required" });
   }
   const url = imageUrlFromItem(item, ctxIndex, imageIndex);
-  if (!url) return sendJson(ctx.res, 404, { error: "not_found", message: "no such image on this item" });
+  if (!url) return reply(404, { error: "not_found", message: "no such image on this item" });
   const host = new URL(url).hostname;
   const slackHosted = host === "slack.com" || host.endsWith(".slack.com");
   let authHeader: Record<string, string> = {};
@@ -282,18 +281,18 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
       ? ((await tokens.connectorAccessToken("slack.com", cron.owner, "personal")) ??
         (await tokens.connectorAccessToken("slack.com", cron.owner)))
       : null;
-    if (!token) return sendJson(ctx.res, 502, { error: "not_connected", message: "Slack is not connected" });
+    if (!token) return reply(502, { error: "not_connected", message: "Slack is not connected" });
     authHeader = { authorization: `Bearer ${token}` };
   }
   let upstream: Response;
   try {
     upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    return reply(502, { error: "upstream", message: errMessage(e) });
   }
   const type = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
+    return reply(502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
   }
   let bytes: Buffer;
   try {
@@ -301,7 +300,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
       await collectBytes(upstream.body, { maxBytes: IMAGE_MAX_BYTES, tooLarge: () => new Error("image too large") })
     ).data;
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    return reply(502, { error: "upstream", message: errMessage(e) });
   }
   ctx.res.writeHead(200, {
     "content-type": type,
@@ -311,7 +310,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   ctx.res.end(bytes);
 }
 
-async function getItem(ctx: ApiCtx): Promise<void> {
+async function getItem(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   if (
@@ -320,7 +319,7 @@ async function getItem(ctx: ApiCtx): Promise<void> {
     loaded.cron.owner === loaded.actorId
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.cron.owner, [loaded.item]);
-  sendItem(ctx, (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item);
+  return sendItem(ctx, (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item);
 }
 
 function sameProposalData(item: InboxItem, data: InboxPayload): boolean {
@@ -335,7 +334,7 @@ function proposalFrom(item: InboxItem, raw: unknown): InboxPayload | null {
   return adapter ? adapter.parseProposal(data) : data;
 }
 
-async function actOnItem(ctx: ApiCtx): Promise<void> {
+async function actOnItem(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { deps, cron } = loaded;
@@ -343,18 +342,18 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const body = isObj(ctx.body) ? ctx.body : {};
   const kind = typeof body.kind === "string" ? body.kind.trim() : "";
   const proposalAuthor = ctx.capability ? ("agent" as const) : ("human" as const);
-  if (!kind) return sendJson(ctx.res, 400, { error: "bad_request", message: "kind required" });
+  if (!kind) return reply(400, { error: "bad_request", message: "kind required" });
   const args = isObj(body.args) ? body.args : {};
 
   const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
-  const draftChanged = (): void =>
-    sendJson(ctx.res, 409, {
+  const draftChanged = (): RouteResult =>
+    reply(409, {
       error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
   const staleDraft = (): boolean => expectedAt !== undefined && !!item.proposal && item.proposal.at !== expectedAt;
-  const invalidProposal = (): void =>
-    sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+  const invalidProposal = (): RouteResult =>
+    reply(400, { error: "bad_request", message: "proposal is not valid for this item" });
   const sessionId = await agentSessionId(ctx);
   const setProposal = (data: InboxPayload) =>
     deps.items.setProposal(
@@ -376,7 +375,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const closing = CLOSING_KINDS.get(kind);
   if (closing) {
     if (kind === "done" && adapterForItem(item))
-      return sendJson(ctx.res, 400, {
+      return reply(400, {
         error: "bad_request",
         message: "send this item's reply instead of marking it done",
       });
@@ -391,7 +390,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.source !== "gmail" || item.sourcePayload?.sentChat !== true)
-      return sendJson(ctx.res, 403, { error: "forbidden" });
+      return reply(403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     return sendItemOrConflict(ctx, next, "a reply is already being drafted");
   }
@@ -402,10 +401,10 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (kind === "send" && item.status !== "ready") {
-    return sendConflict(ctx, "This item needs a fresh draft before sending", "not_ready");
+    return sendConflict("This item needs a fresh draft before sending", "not_ready");
   }
   if (ledgerState(item) === "actioned") {
-    return sendConflict(ctx, "this item was already actioned", "already_actioned");
+    return sendConflict("this item was already actioned", "already_actioned");
   }
 
   if (staleDraft()) return draftChanged();
@@ -423,13 +422,13 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
     const tokens = ctx.deps.inboxSourceTokens;
-    if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
+    if (!tokens) return reply(404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
-    if (!decisionToken) return sendConflict(ctx, "an action is already in progress");
+    if (!decisionToken) return sendConflict("an action is already in progress");
     try {
       const current = await deps.items.get(item.id);
       if (!current || ledgerState(current) === "actioned")
-        return sendConflict(ctx, "this item was already actioned", "already_actioned");
+        return sendConflict("this item was already actioned", "already_actioned");
       if (current.proposal?.at !== item.proposal?.at) return draftChanged();
       item = current;
       const slackClient = ctx.deps.inboxSlackClient;
@@ -442,7 +441,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       if (!result.ok) {
         if (result.partial) await deps.items.appendThread(item.id, [{ role: "system", text: result.message }]);
         const statusByReason = { not_connected: 409, bad_item: 400, upstream: 502 } as const;
-        return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
+        return reply(statusByReason[result.reason], { error: result.reason, message: result.message });
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
       if (result.resolves === false) return sendItem(ctx, item);
@@ -453,7 +452,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     }
   }
 
-  sendJson(ctx.res, 400, { error: "bad_request", message: `unknown action "${kind}"` });
+  return reply(400, { error: "bad_request", message: `unknown action "${kind}"` });
 }
 
 const followUpOptionsSchema = z.object({
@@ -473,32 +472,31 @@ const followUpOptionsSchema = z.object({
     .optional(),
 });
 
-async function followUpOnItem(ctx: ApiCtx): Promise<void> {
+async function followUpOnItem(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { deps, cron, item } = loaded;
   if (!(await requireCronAuthority(ctx, cron))) return;
   const body = isObj(ctx.body) ? ctx.body : {};
   const parsed = followUpOptionsSchema.safeParse(body);
-  if (!parsed.success)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error.issues[0]?.message });
+  if (!parsed.success) return reply(400, { error: "bad_request", message: parsed.error.issues[0]?.message });
   const options = parsed.data;
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message && !options.attachments?.length)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });
+    return reply(400, { error: "bad_request", message: "message required" });
   if (message.length > MAX_FOLLOWUP_CHARS) {
-    return sendJson(ctx.res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `message must be under ${MAX_FOLLOWUP_CHARS} chars`,
     });
   }
   if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
-    return sendJson(ctx.res, 409, {
+    return reply(409, {
       error: "draft_changed",
       message: "the draft changed; review it before continuing",
     });
   }
-  if (!deps.chat) return sendJson(ctx.res, 404, { error: "not_found", message: "inbox chat is not wired" });
+  if (!deps.chat) return reply(404, { error: "not_found", message: "inbox chat is not wired" });
   try {
     const next = await deps.chat.followUp(
       cron,
@@ -507,9 +505,9 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendItem(ctx, next ?? item);
+    return sendItem(ctx, next ?? item);
   } catch (e) {
-    sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
+    return reply(502, { error: "followup_failed", message: errMessage(e) });
   }
 }
 
@@ -528,22 +526,22 @@ export function cronSummary(cron: Cron | null): {
   };
 }
 
-export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
+export async function ensureSentChat(ctx: ApiCtx): Promise<RouteResult> {
   const owner = ctx.actor?.p;
-  if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  if (!(await inboxLoopsEnabled(ctx, owner))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  if (!owner) return reply(403, { error: "forbidden" });
+  if (!(await inboxLoopsEnabled(ctx, owner))) return reply(403, { error: "feature_disabled" });
   const deps = ctx.deps.inbox;
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!deps) return reply(404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
   if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
-    return sendJson(ctx.res, 400, { error: "bad_request" });
+    return reply(400, { error: "bad_request" });
   const text = (key: string, max: number): string => (typeof body[key] === "string" ? body[key].slice(0, max) : "");
   const accountType = body.accountType === undefined ? "default" : body.accountType;
   const to = addressList(body.to === undefined ? [] : [body.to]);
   const cc = addressList(body.cc === undefined ? [] : [body.cc]);
   if (!isAccountType(accountType) || to === null || cc === null)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
+    return reply(400, { error: "bad_request", message: "invalid account or recipient headers" });
   const payload = {
     title: text("subject", 300),
     from: text("from", 500),
@@ -576,19 +574,18 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
     ]);
     item = (await deps.items.get(id)) ?? undefined;
   }
-  if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
+  if (!item) return reply(500, { error: "chat_unavailable" });
   item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
   if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
-  sendItem(ctx, item);
+  return sendItem(ctx, item);
 }
 
-async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.inbox)
-    return sendJson(ctx.res, 404, { error: "not_found", message: "inboxes are not wired on this deployment" });
+async function ensureInboxSyncCron(ctx: ApiCtx): Promise<RouteResult> {
+  if (!ctx.deps.inbox) return reply(404, { error: "not_found", message: "inboxes are not wired on this deployment" });
   const owner = actingPrincipal(ctx);
   if (!owner) return;
-  if (!(await inboxLoopsEnabled(ctx, owner))) return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  if (!(await inboxLoopsEnabled(ctx, owner))) return reply(403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
@@ -601,7 +598,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     const sources = INBOX_SOURCES.filter(
       (entry) => !requested || existing.some((cron) => cron.id === requested && cron.inbox?.source === entry.source),
     );
-    if (!sources.length) return sendJson(ctx.res, 404, { error: "not_found" });
+    if (!sources.length) return reply(404, { error: "not_found" });
     const crons: Array<ReturnType<typeof cronSummary>> = [];
     for (const { source } of sources) {
       const cron = await ensureInboxCron(appCrons(ctx), owner, source);
@@ -613,13 +610,13 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
       await ctx.app.setCronEnabled(cron.id, enable);
       crons.push(cronSummary(await ctx.app.getCron(cron.id)));
     }
-    sendJson(ctx.res, 200, { syncCron: crons[0], crons });
+    return ok({ syncCron: crons[0], crons });
   } catch (err) {
     throw refusal(400, "bad_request", err);
   }
 }
 
-function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+function serializeItemAction(handler: (ctx: ApiCtx) => Promise<RouteResult>): (ctx: ApiCtx) => Promise<RouteResult> {
   return (ctx) => {
     const lock = ctx.deps.inbox?.lock;
     return lock && !ctx.capability

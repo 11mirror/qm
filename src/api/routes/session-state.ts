@@ -1,4 +1,4 @@
-import type { BaseCtx, Route } from "./route.ts";
+import type { BaseCtx, Route, RouteResult } from "./route.ts";
 import type { App } from "../app.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { verifyOrReject } from "../http.ts";
@@ -15,7 +15,7 @@ export const SSE_HEADERS = {
 export function signedEventStream(
   event: string,
   subscribe: (app: App, send: (data: unknown) => void, onResync: () => void) => () => void,
-): (ctx: BaseCtx) => Promise<void> {
+): (ctx: BaseCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const { req, res, app, secret, auth, url, pathname, method } = ctx;
     const payload = canonicalPayload(method, pathname + url.search, "");

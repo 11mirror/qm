@@ -9,6 +9,7 @@ import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { PortalIdentity } from "../../auth/portal-identity.ts";
 import type { ZodType } from "zod";
+import { HttpError, sendJson } from "../http.ts";
 
 export interface BaseCtx {
   req: IncomingMessage;
@@ -47,8 +48,23 @@ export interface AdminAccess {
   unattended?: { grant: (typeof UNATTENDED_ADMIN_GRANTS)[number]; summary: string };
 }
 
+export class Reply {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, body: unknown) {
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export const ok = (body: unknown): Reply => new Reply(200, body);
+
+export const reply = (status: number, body: unknown): Reply => new Reply(status, body);
+
+export type RouteResult = Reply | undefined | void;
+
 export type Route<C extends BaseCtx = ApiCtx> = {
-  handle: (ctx: C) => void | Promise<void>;
+  handle: (ctx: C) => RouteResult | Promise<RouteResult>;
   auth: RouteAuth;
   actor?: RouteActor;
   admin?: AdminAccess;
@@ -97,5 +113,15 @@ export function createRouter<R extends RouteShape>(
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
-  await route.handle(ctx);
+  await respond(route.handle, ctx);
+}
+
+export async function respond<C extends BaseCtx>(handle: Route<C>["handle"], ctx: C): Promise<void> {
+  try {
+    const out = await handle(ctx);
+    if (out instanceof Reply) sendJson(ctx.res, out.status, out.body);
+  } catch (error) {
+    if (!(error instanceof HttpError) || ctx.res.headersSent) throw error;
+    sendJson(ctx.res, error.status, error.body);
+  }
 }

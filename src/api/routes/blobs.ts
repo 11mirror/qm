@@ -6,16 +6,15 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifySignedRoute } from "../http.ts";
-import type { BaseCtx, Route } from "./route.ts";
+import { extendBodyDeadline, fail, headerValue, pipeToResponse, verifySignedRoute } from "../http.ts";
+import { type BaseCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { reportForeignTenant } from "../../tenant.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 
 function rejectBlob(ctx: BaseCtx, message: string): null {
   ctx.req.resume();
-  sendJson(ctx.res, 403, { error: "forbidden", message });
-  return null;
+  throw fail(403, "forbidden", message);
 }
 
 async function authorizeBlob(
@@ -47,18 +46,17 @@ async function authorizeBlob(
 function blobStore(ctx: BaseCtx): NonNullable<BaseCtx["deps"]["blobTransfer"]> | null {
   if (ctx.deps.blobTransfer) return ctx.deps.blobTransfer;
   ctx.req.resume();
-  sendJson(ctx.res, 501, { error: "not_configured", message: "no blob transfer store wired" });
-  return null;
+  throw fail(501, "not_configured", "no blob transfer store wired");
 }
 
-async function putBlob(ctx: BaseCtx): Promise<void> {
-  const { req, res } = ctx;
+async function putBlob(ctx: BaseCtx): Promise<RouteResult> {
+  const { req } = ctx;
   const store = blobStore(ctx);
   if (!store) return;
   const declaredSha = headerValue(req, "x-content-sha256") ?? "";
   if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !/^[0-9a-f]{64}$/.test(declaredSha)) {
     req.resume();
-    return sendJson(res, 400, { error: "bad_request", message: "x-content-sha256 (hex sha-256) required" });
+    return reply(400, { error: "bad_request", message: "x-content-sha256 (hex sha-256) required" });
   }
   const via = await authorizeBlob(ctx, "write", null);
   if (!via) return;
@@ -68,21 +66,21 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
       maxBytes: via === "capability" ? MAX_STAGE_BLOB_BYTES : MAX_BLOB_BYTES,
       ...(declaredSha ? { expectedSha256: declaredSha } : {}),
     });
-    return sendJson(res, 200, { blobId: info.blobId, sizeBytes: info.sizeBytes });
+    return ok({ blobId: info.blobId, sizeBytes: info.sizeBytes });
   } catch (e) {
     req.resume();
-    if (e instanceof BlobTooLargeError) return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    if (e instanceof BlobHashMismatchError) return sendJson(res, 400, { error: "hash_mismatch", message: e.message });
+    if (e instanceof BlobTooLargeError) return reply(413, { error: "payload_too_large", message: e.message });
+    if (e instanceof BlobHashMismatchError) return reply(400, { error: "hash_mismatch", message: e.message });
     throw e;
   }
 }
 
-async function getBlob(ctx: BaseCtx): Promise<void> {
+async function getBlob(ctx: BaseCtx): Promise<RouteResult> {
   const { res, params } = ctx;
   const store = blobStore(ctx);
   if (!store || !(await authorizeBlob(ctx, "read", params.id!))) return;
   const blob = await store.open(params.id!);
-  if (!blob) return sendJson(res, 404, { error: "not_found" });
+  if (!blob) return reply(404, { error: "not_found" });
   res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(blob.sizeBytes) });
   pipeToResponse(res, blob.stream, "blob read failed");
 }

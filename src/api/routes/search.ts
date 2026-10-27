@@ -1,7 +1,6 @@
 import { parseScopeId, type Principal } from "../../types.ts";
-import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 function conversationPrincipals(ctx: ApiCtx): Principal[] | null {
   const capability = ctx.capability!;
   const { kind } = parseScopeId(capability.scopeId);
@@ -11,15 +10,14 @@ function conversationPrincipals(ctx: ApiCtx): Principal[] | null {
     principals.set(capability.actorId.toLowerCase(), { id: capability.actorId, type: "internal" });
   return [...principals.values()];
 }
-async function search(ctx: ApiCtx): Promise<void> {
-  if (!ctx.capability)
-    return sendJson(ctx.res, 401, { error: "capability_required", message: "agent capability token required" });
+async function search(ctx: ApiCtx): Promise<RouteResult> {
+  if (!ctx.capability) return reply(401, { error: "capability_required", message: "agent capability token required" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const query = typeof body.query === "string" ? body.query.trim() : "";
-  if (!query) return sendJson(ctx.res, 400, { error: "bad_request", message: "query required" });
+  if (!query) return reply(400, { error: "bad_request", message: "query required" });
   const principals = conversationPrincipals(ctx);
   if (!principals)
-    return sendJson(ctx.res, 409, {
+    return reply(409, {
       error: "principal_set_unavailable",
       message: "search requires the complete principal set for a shared conversation",
     });
@@ -37,7 +35,7 @@ async function search(ctx: ApiCtx): Promise<void> {
       failedBackends: result.failedBackends,
     }),
   });
-  return sendJson(ctx.res, 200, result);
+  return ok(result);
 }
 export const searchRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/search", auth: "either", handle: search },

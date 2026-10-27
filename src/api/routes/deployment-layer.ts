@@ -5,9 +5,8 @@ import {
   type DeploymentLayerBundle,
   type StoredDeploymentLayer,
 } from "../../deployment/deployment-layer-store.ts";
-import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 const persisted = (record: StoredDeploymentLayer) => ({
   version: record.version,
@@ -21,20 +20,20 @@ function bundleFrom(body: unknown): DeploymentLayerBundle | null {
   return body as unknown as DeploymentLayerBundle;
 }
 
-async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
+async function getDeploymentLayer(ctx: ApiCtx): Promise<RouteResult> {
   const store = ctx.deps.deploymentLayer;
-  if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!store) return reply(404, { error: "not_found" });
   const record = await store.get();
   const live = store.live();
   if (!record)
-    return sendJson(ctx.res, 200, {
+    return ok({
       contract: 1,
       version: 0,
       contentHash: null,
       source: live.source,
       resolved: live.resolved,
     });
-  return sendJson(ctx.res, 200, {
+  return ok({
     contract: 1,
     version: record.version,
     contentHash: record.contentHash,
@@ -48,26 +47,26 @@ async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
+async function putDeploymentLayer(ctx: ApiCtx): Promise<RouteResult> {
   const store = ctx.deps.deploymentLayer;
-  if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!store) return reply(404, { error: "not_found" });
   const bundle = bundleFrom(ctx.body);
   if (!bundle) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
+    return reply(400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
   }
   try {
     const record = await store.put(bundle, "source-authenticated deployment CLI");
-    return sendJson(ctx.res, 200, { ok: true, ...persisted(record) });
+    return ok({ ok: true, ...persisted(record) });
   } catch (error) {
     if (error instanceof DeploymentLayerPersistedError)
-      return sendJson(ctx.res, 202, {
+      return reply(202, {
         ok: true,
         status: "degraded",
         message: errMessage(error),
         ...persisted(error.record),
       });
     if (error instanceof DeploymentLayerValidationError)
-      return sendJson(ctx.res, 400, { error: "invalid_deployment_layer", message: errMessage(error) });
+      return reply(400, { error: "invalid_deployment_layer", message: errMessage(error) });
     throw error;
   }
 }

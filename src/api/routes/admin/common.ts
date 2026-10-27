@@ -1,10 +1,9 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
-import type { ServerResponse } from "node:http";
-import { sendJson } from "../../http.ts";
+import { fail, type HttpError } from "../../http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import type { ApiCtx } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
 import { ALL_PROVIDERS_AVAILABLE, type ModelProviderAvailability } from "../../../model/pi-models.ts";
 
@@ -42,10 +41,9 @@ export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuth
   return authz && authorized(ctx, authz.actor, authz.scope, read);
 }
 
-export const badRequest = (res: ServerResponse, message: string): void =>
-  sendJson(res, 400, { error: "bad_request", message });
+export const badRequest = (message: string): HttpError => fail(400, "bad_request", message);
 
-export const notFound = (res: ServerResponse): void => sendJson(res, 404, { error: "not_found" });
+export const notFound = (): HttpError => fail(404, "not_found");
 
 export const limitParam = (url: URL, fallback: number, max: number): number =>
   Math.min(max, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || fallback));
@@ -86,14 +84,12 @@ export async function requireScopedResource<T, K extends StringKey<T>>(
   if (!authz) return null;
   const record = await load();
   if (!record) {
-    notFound(ctx.res);
-    return null;
+    throw notFound();
   }
   const recordScope = record[scopeKey] as string;
   if (authz.orgWide || recordScope === authz.scope) return { ...authz, record };
   if (scopeMismatch === "forbid") {
-    sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
-    return null;
+    throw fail(403, "forbidden", `${noun} is outside the requested scope`);
   }
   return { ...authorized(ctx, authz.actor, recordScope), record };
 }

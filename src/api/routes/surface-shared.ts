@@ -1,7 +1,7 @@
 import { parseScopeId } from "../../types.ts";
-import { sendJson } from "../http.ts";
+import { fail, type HttpError } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx } from "./route.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "./route.ts";
 import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 
 export function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
@@ -14,12 +14,10 @@ export function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string
 export const AGENT_ONLY = { error: "capability_required", message: "this endpoint is for the agent self-API" };
 export const WINDOW_ERROR = "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one";
 
-export function badRequest(res: ApiCtx["res"], message: string): void {
-  return sendJson(res, 400, { error: "bad_request", message });
-}
+export const badRequest = (message: string): HttpError => fail(400, "bad_request", message);
 
-export function found(res: ApiCtx["res"], value: unknown): void {
-  return value ? sendJson(res, 200, value) : sendJson(res, 404, { error: "not_found" });
+export function found(value: unknown): RouteResult {
+  return value ? ok(value) : reply(404, { error: "not_found" });
 }
 
 export function bodyField(ctx: ApiCtx, name: string): unknown {
@@ -33,19 +31,21 @@ export function bodyPrincipal(ctx: ApiCtx): string | null {
 
 export function withQuery(
   name: "viewer" | "principalId",
-  handle: (ctx: ApiCtx, id: string) => Promise<void>,
-): (ctx: ApiCtx) => Promise<void> {
+  handle: (ctx: ApiCtx, id: string) => Promise<RouteResult>,
+): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const id = ctx.url.searchParams.get(name);
-    return id ? handle(ctx, id) : badRequest(ctx.res, `${name} required`);
+    if (!id) throw badRequest(`${name} required`);
+    return handle(ctx, id);
   };
 }
 
 export function withBodyPrincipal(
-  handle: (ctx: ApiCtx, principalId: string) => Promise<void>,
-): (ctx: ApiCtx) => Promise<void> {
+  handle: (ctx: ApiCtx, principalId: string) => Promise<RouteResult>,
+): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const principalId = bodyPrincipal(ctx);
-    return principalId ? handle(ctx, principalId) : badRequest(ctx.res, "principalId required");
+    if (!principalId) throw badRequest("principalId required");
+    return handle(ctx, principalId);
   };
 }

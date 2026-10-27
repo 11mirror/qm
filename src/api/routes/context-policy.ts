@@ -2,9 +2,8 @@ import { parseScopeId, type ScopeId } from "../../types.ts";
 import { InstructionsVersionConflictError } from "../app-types.ts";
 import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
-import { sendJson } from "../http.ts";
 import { audit, isObj, refuse } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 /** Validates a channel-settings write (bots, ambientEnabled) and checks it against the loaded snapshot. */
 export async function checkChannelSettings(
@@ -30,22 +29,21 @@ export async function checkChannelSettings(
 }
 
 async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
-  const { res, deps } = ctx;
-  if (!principalId || !scope)
-    return refuse(res, 400, { error: "bad_request", message: "principalId and scope required" });
+  const { deps } = ctx;
+  if (!principalId || !scope) throw refuse(400, { error: "bad_request", message: "principalId and scope required" });
   const { kind, ref } = parseScopeId(scope);
   if (!ref || (kind !== "channel" && kind !== "group"))
-    return refuse(res, 400, {
+    throw refuse(400, {
       error: "bad_request",
       message: "ambient policy applies to channel and group scopes only",
     });
-  if (!deps.channelPolicy) return refuse(res, 404, { error: "not_found", message: "not available on this deployment" });
+  if (!deps.channelPolicy) throw refuse(404, { error: "not_found", message: "not available on this deployment" });
   if ((await ctx.app.listContexts(principalId)).some((c) => c.scopeId === scope)) return ref;
-  return refuse(res, 403, { error: "forbidden" });
+  throw refuse(403, { error: "forbidden" });
 }
 
-export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+export async function getContextPolicy(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, url } = ctx;
   const container = await policyContainer(
     ctx,
     (url.searchParams.get("principalId") ?? "").trim(),
@@ -54,7 +52,7 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   if (!container) return;
   const p = await deps.channelPolicy!.get(container);
   const instructions = ctx.app.getInstructions((url.searchParams.get("scope") ?? "").trim() as ScopeId);
-  return sendJson(res, 200, {
+  return ok({
     policy: {
       instructions: instructions.instructions ?? "",
       instructionsVersion: instructions.instructionsVersion,
@@ -65,20 +63,20 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, app } = ctx;
+export async function setContextPolicy(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, app } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
   const container = await policyContainer(ctx, principalId, scope);
   if (!container) return;
   if (b.instructions !== undefined && typeof b.instructions !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "instructions must be a string" });
+    return reply(400, { error: "bad_request", message: "instructions must be a string" });
   if (typeof b.instructions === "string" && b.instructions.length > MAX_INSTRUCTIONS_CHARS)
-    return sendJson(res, 413, { error: "payload_too_large", message: new InstructionsTooLargeError().message });
+    return reply(413, { error: "payload_too_large", message: new InstructionsTooLargeError().message });
   const settings = await checkChannelSettings(deps.channelPolicy!, container, { ...b, bots: b.bots ?? {} });
   if ("message" in settings)
-    return sendJson(res, settings.status, {
+    return reply(settings.status, {
       error: settings.status === 409 ? "conflict" : "bad_request",
       message: settings.message,
     });
@@ -92,15 +90,14 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
         ...(typeof b.instructionsVersion === "number" ? { expectedVersion: b.instructionsVersion } : {}),
       });
     } catch (e) {
-      if (e instanceof InstructionsVersionConflictError)
-        return sendJson(res, 409, { error: "conflict", message: e.message });
+      if (e instanceof InstructionsVersionConflictError) return reply(409, { error: "conflict", message: e.message });
       throw e;
     }
   }
   const p = await deps.channelPolicy!.set(container, { setBy: principalId, ...settings });
   audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
   const saved = app.getInstructions(scope as ScopeId);
-  return sendJson(res, 200, {
+  return ok({
     policy: {
       instructions: saved.instructions ?? "",
       instructionsVersion: saved.instructionsVersion,

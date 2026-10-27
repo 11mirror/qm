@@ -3,25 +3,25 @@ import {
   type CustomProviderSpec,
   type CustomProviderProtocol,
 } from "../../../model/custom-providers.ts";
-import { refusal, sendJson } from "../../http.ts";
-import type { ApiCtx } from "../route.ts";
+import { refusal } from "../../http.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { badRequest, notFound, orgAdmin } from "./common.ts";
 import { apiKeyAccepted } from "./model-providers.ts";
 
-export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
+export async function getCustomProviders(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
   if (!authz) return;
-  if (!ctx.deps.customProviders) return notFound(ctx.res);
+  if (!ctx.deps.customProviders) throw notFound();
   authz.audit("custom-providers.read", "custom-providers");
-  return sendJson(ctx.res, 200, { providers: await ctx.deps.customProviders.statuses() });
+  return ok({ providers: await ctx.deps.customProviders.statuses() });
 }
 
-export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
+export async function putCustomProvider(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const store = ctx.deps.customProviders;
   const id = ctx.params.provider;
-  if (!store || !id) return notFound(ctx.res);
+  if (!store || !id) throw notFound();
   const body = ctx.body as {
     name?: unknown;
     protocol?: unknown;
@@ -31,9 +31,9 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     validate?: unknown;
   };
   if (typeof body.name !== "string" || typeof body.protocol !== "string" || typeof body.baseUrl !== "string")
-    return badRequest(ctx.res, "name, protocol, and baseUrl are required");
+    throw badRequest("name, protocol, and baseUrl are required");
   if (!(CUSTOM_PROVIDER_PROTOCOLS as readonly string[]).includes(body.protocol))
-    return badRequest(ctx.res, `protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
+    throw badRequest(`protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
   const spec: CustomProviderSpec = {
     id,
     name: body.name,
@@ -45,7 +45,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   const anthropic = spec.protocol === "anthropic";
   const url = `${spec.baseUrl}${anthropic ? "/v1/models" : "/models"}`;
   if (body.validate !== false && apiKey !== undefined && !(await apiKeyAccepted(ctx, url, anthropic, apiKey))) {
-    return sendJson(ctx.res, 400, {
+    return reply(400, {
       error: "invalid_api_key",
       message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
     });
@@ -58,16 +58,16 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshCustomProviders?.();
   authz.audit("custom-providers.update", id);
   const status = (await store.statuses()).find((item) => item.id === id);
-  return sendJson(ctx.res, 200, { ok: true, status });
+  return ok({ ok: true, status });
 }
 
-export async function deleteCustomProvider(ctx: ApiCtx): Promise<void> {
+export async function deleteCustomProvider(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
   if (!authz) return;
   const id = ctx.params.provider;
-  if (!ctx.deps.customProviders || !id) return notFound(ctx.res);
-  if (!(await ctx.deps.customProviders.delete(id, authz.actor.id))) return notFound(ctx.res);
+  if (!ctx.deps.customProviders || !id) throw notFound();
+  if (!(await ctx.deps.customProviders.delete(id, authz.actor.id))) throw notFound();
   await ctx.deps.refreshCustomProviders?.();
   authz.audit("custom-providers.delete", id);
-  return sendJson(ctx.res, 200, { ok: true });
+  return ok({ ok: true });
 }

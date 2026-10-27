@@ -1,19 +1,18 @@
 import { reportFailure } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { requireDeploymentControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 
 const running = new WeakSet<object>();
 const REQUEST_EXPIRY = Date.UTC(9999, 0, 1);
 
-async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
+async function deploymentLiveSmoke(ctx: ApiCtx): Promise<RouteResult> {
   if (!requireDeploymentControl(ctx)) return;
   const control = ctx.deps.backgroundOwnership!;
   const run = ctx.deps.deploymentLiveSmoke;
   const replay = ctx.deps.replayDedupe;
-  if (!run || !replay) return sendJson(ctx.res, 503, { error: "deployment_smoke_unavailable" });
+  if (!run || !replay) return reply(503, { error: "deployment_smoke_unavailable" });
   const body = ctx.body;
   if (
     !isObj(body) ||
@@ -22,17 +21,16 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId) ||
     body.expectedDeploymentId !== control.deploymentId
   )
-    return sendJson(ctx.res, 400, { error: "invalid_deployment_smoke_request" });
-  if (running.has(control)) return sendJson(ctx.res, 409, { error: "deployment_smoke_running" });
+    return reply(400, { error: "invalid_deployment_smoke_request" });
+  if (running.has(control)) return reply(409, { error: "deployment_smoke_running" });
   const valid = (state: BackgroundOwnership): boolean =>
     state.ownerDeploymentId === control.deploymentId && control.active();
   running.add(control);
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
-    if (!valid(await control.store.get()))
-      return sendJson(ctx.res, 409, { error: "deployment_smoke_ownership_conflict" });
+    if (!valid(await control.store.get())) return reply(409, { error: "deployment_smoke_ownership_conflict" });
     if (!(await replay.claim(`deployment-live-smoke:${body.requestId.toLowerCase()}`, REQUEST_EXPIRY))) {
-      return sendJson(ctx.res, 409, { error: "deployment_smoke_replay" });
+      return reply(409, { error: "deployment_smoke_replay" });
     }
     const identity = { requestId: body.requestId, deploymentId: control.deploymentId, instanceId: control.instanceId };
     ctx.res.writeHead(200, {

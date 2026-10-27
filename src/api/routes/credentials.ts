@@ -1,11 +1,10 @@
 import { brokerCredentialCall, brokerSinks, realBrokerFetch } from "../credential-broker.ts";
-import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 import { tenant } from "../../tenant.ts";
 
-async function brokerCredential(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability } = ctx;
-  if (!deps.serviceCreds) return sendJson(res, 404, { error: "not_found" });
+async function brokerCredential(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, capability } = ctx;
+  if (!deps.serviceCreds) return reply(404, { error: "not_found" });
   const result = await brokerCredentialCall({
     claims: capability!,
     body: body as Record<string, unknown>,
@@ -14,7 +13,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     fetchImpl: deps.brokerFetch ?? realBrokerFetch,
     ...brokerSinks(deps),
   });
-  return sendJson(res, result.status, result.json);
+  return reply(result.status, result.json);
 }
 
 export const credentialRoutes: ReadonlyArray<Route<ApiCtx>> = [

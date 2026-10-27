@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { postInstructions } from "../src/api/routes/surface-config.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
@@ -290,7 +290,7 @@ test("SOUL: the HTTP route reports durable storage failures as 500", async () =>
       out.body = data ? JSON.parse(data) : undefined;
     },
   };
-  await postInstructions({
+  await respond(postInstructions, {
     res,
     app,
     body: { content: "cannot persist" },
@@ -312,7 +312,7 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
       out.body = data ? JSON.parse(data) : undefined;
     },
   };
-  await postInstructions({
+  await respond(postInstructions, {
     res,
     app,
     body: { scopeId: scopeId("personal", OWNER), content: "not yours", actorId: OUTSIDER },
@@ -343,7 +343,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     end() {},
   };
 
-  await postInstructions({
+  await respond(postInstructions, {
     res,
     app,
     body: { content: "rejected cache value" },

@@ -4,8 +4,7 @@ import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
-import { sendJson } from "../http.ts";
-import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
+import { type ApiCtx, type BaseCtx, ok, reply, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
@@ -46,12 +45,12 @@ import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { toolManifestRoutes } from "./tool-manifest.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
+  { method: "GET", path: "/healthz", auth: "public", handle: (_ctx) => ok({ ok: true }) },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
-    handle: async ({ res, deps }) => {
+    handle: async ({ deps }) => {
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
@@ -62,10 +61,10 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
       });
       try {
         await Promise.race([Promise.resolve().then(() => deps.checkReadiness?.(controller.signal)), deadline]);
-        sendJson(res, 200, { ok: true });
+        return ok({ ok: true });
       } catch (error) {
         swallow("readiness", error);
-        sendJson(res, 503, { ok: false });
+        return reply(503, { ok: false });
       } finally {
         clearTimeout(timer);
       }

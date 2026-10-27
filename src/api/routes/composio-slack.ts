@@ -3,12 +3,11 @@ import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts"
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
-import { sendJson } from "../http.ts";
 import { reportFailure } from "../../util/errors.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { slackErrorCode } from "../../slack/payloads.ts";
 import { activePrincipal, audit } from "./shared.ts";
-import type { ApiCtx } from "./route.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "./route.ts";
 import { tenant } from "../../tenant.ts";
 import {
   credential,
@@ -20,17 +19,17 @@ import {
   reportComposioFailure,
 } from "./composio.ts";
 
-export async function slackStatus(ctx: ApiCtx): Promise<void> {
+export async function slackStatus(ctx: ApiCtx): Promise<RouteResult> {
   ctx.res.setHeader("Cache-Control", "no-store");
   const installation = await ctx.deps.slackInstallation?.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   let nativeOAuth = false;
   if (ctx.actor && !ctx.actor.imp && !ctx.capability) {
     try {
-      if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
+      if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return reply(403, { error: "forbidden" });
       const native = await nativeSlackConnection(ctx);
       if (native)
-        return sendJson(ctx.res, 200, {
+        return ok({
           connected: true,
           user: native.user,
           workspace: native.workspace,
@@ -39,10 +38,10 @@ export async function slackStatus(ctx: ApiCtx): Promise<void> {
         });
       nativeOAuth = await nativeSlackConfigured(ctx);
       if (nativeOAuth && !(await hasSlackAccount(ctx)))
-        return sendJson(ctx.res, 200, { connected: false, nativeOAuth, workspaceInstalled });
+        return ok({ connected: false, nativeOAuth, workspaceInstalled });
     } catch (error) {
       reportFailure("Slack connection status", error);
-      return sendJson(ctx.res, 502, { error: "slack_unavailable" });
+      return reply(502, { error: "slack_unavailable" });
     }
   }
   const access = await credential(ctx);
@@ -53,7 +52,7 @@ export async function slackStatus(ctx: ApiCtx): Promise<void> {
     if (!record || !samePerson(record.memberId, access.principal)) continue;
     try {
       if (activeAccount(await ownedAccount(ctx, access, record.accountId), "slack"))
-        return sendJson(ctx.res, 200, {
+        return ok({
           connected: true,
           workspaceInstalled,
           user: record.user,
@@ -64,8 +63,8 @@ export async function slackStatus(ctx: ApiCtx): Promise<void> {
     }
   }
   return failed
-    ? sendJson(ctx.res, 502, { error: "status_unavailable" })
-    : sendJson(ctx.res, 200, { connected: false, workspaceInstalled, nativeOAuth });
+    ? reply(502, { error: "status_unavailable" })
+    : ok({ connected: false, workspaceInstalled, nativeOAuth });
 }
 
 async function installedSlackTeam(deps: ApiCtx["deps"]): Promise<string | undefined> {
@@ -105,12 +104,12 @@ async function hasEstablishedConnections(ctx: ApiCtx, key: string, memberId: str
   return existingCredentials.length > 0 || hasPriorAccounts;
 }
 
-export async function completeSlack(ctx: ApiCtx): Promise<void> {
+export async function completeSlack(ctx: ApiCtx): Promise<RouteResult> {
   const access = await credential(ctx);
   if (!access) return;
-  const { deps, res } = ctx;
+  const { deps } = ctx;
   if (!deps.signingSecret || !deps.principalLinks || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
-    return sendJson(res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
+    return reply(403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   const ticket = (ctx.body as { ticket?: unknown } | null)?.ticket;
   const proof =
     typeof ticket === "string"
@@ -126,7 +125,7 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
     typeof proof.accountId !== "string" ||
     !ACCOUNT_ID.test(proof.accountId)
   )
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "invalid_link",
       message:
         "This connection expired or belongs to another QM account. Start again from the account you want to connect.",
@@ -134,12 +133,12 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
   try {
     const owned = await ownedAccount(ctx, access, proof.accountId);
     if (owned?.toolkit !== "slack" || owned.account.is_disabled === true)
-      return sendJson(res, 403, {
+      return reply(403, {
         error: "wrong_account",
         message: "This Slack connection does not belong to your QM account.",
       });
     if (owned.account.status !== "ACTIVE")
-      return sendJson(res, 409, {
+      return reply(409, {
         error: "not_connected",
         message: "Slack authorization has not completed. Try again after approving access.",
       });
@@ -156,19 +155,19 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
       !/^[UW][A-Z0-9]+$/.test(slack.user_id ?? "") ||
       !/^T[A-Z0-9]+$/.test(slack.team_id ?? "")
     )
-      return sendJson(res, 400, {
+      return reply(400, {
         error: "not_user",
         message: "Connect your personal Slack account, not a bot account.",
       });
     const teamId = await installedSlackTeam(deps);
     if (!teamId)
-      return sendJson(res, 409, {
+      return reply(409, {
         error: "workspace_unavailable",
         message:
           "Slack access is authorized. Ask an administrator to finish installing the company bot, then check the connection again.",
       });
     if (teamId !== slack.team_id)
-      return sendJson(res, 409, {
+      return reply(409, {
         error: "wrong_workspace",
         message: "Connect the Slack workspace where your company uses QM.",
       });
@@ -176,7 +175,7 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
       (m) => m.slackId === slack.user_id || m.principalId === slack.user_id,
     );
     if (members.length !== 1 || members[0]!.type !== "internal")
-      return sendJson(res, 409, {
+      return reply(409, {
         error: "member_unavailable",
         message:
           "QM could not find your company Slack membership. Message the bot and try again, or ask your administrator for help.",
@@ -184,20 +183,20 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
     const member = members[0]!;
     await deps.identity?.refresh(true);
     if (!(await activePrincipal(deps, member.principalId)) || !(await activePrincipal(deps, access.principal)))
-      return sendJson(res, 403, {
+      return reply(403, {
         error: "inactive_account",
         message: "An account is inactive. Ask your administrator for help.",
       });
     if (!samePerson(member.principalId, access.principal)) {
       if (await hasEstablishedConnections(ctx, access.key, member.principalId))
-        return sendJson(res, 409, {
+        return reply(409, {
           error: "established_account",
           message:
             "Your Slack identity already has connected services. Ask your administrator to combine these accounts so those connections are preserved.",
         });
 
       if (canonicalPerson(member.principalId) !== member.principalId)
-        return sendJson(res, 409, {
+        return reply(409, {
           error: "already_linked",
           message: "This Slack identity is connected to another QM account. Ask your administrator for help.",
         });
@@ -224,10 +223,10 @@ export async function completeSlack(ctx: ApiCtx): Promise<void> {
       user: slack.user ?? member.displayName,
       workspace: slack.team ?? slack.team_id!,
     });
-    return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
+    return ok({ connected: true, user: slack.user, workspace: slack.team });
   } catch (error) {
     if (!(error instanceof PrincipalLinkError)) reportComposioFailure("composio: slack link", access.key, error);
-    return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {
+    return reply(error instanceof PrincipalLinkError ? 409 : 502, {
       error: "slack_link_failed",
       message:
         error instanceof PrincipalLinkError

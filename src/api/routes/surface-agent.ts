@@ -6,9 +6,9 @@ import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { sendJson } from "../http.ts";
+import { fail } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
-import { type ApiCtx } from "./route.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "./route.ts";
 import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 import { withQuery, badRequest, bodyField, bodyPrincipal, sharedSkillCreateBlock } from "./surface-shared.ts";
 
@@ -39,13 +39,13 @@ export function parseIds(body: unknown): string[] | string {
     : "ids (non-empty string array) required";
 }
 
-export async function selfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, method, body } = ctx;
+export async function selfMemory(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, url, method, body } = ctx;
   const principalId =
     method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
   if (typeof principalId !== "string" || !principalId)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+    return reply(400, { error: "bad_request", message: "principalId required" });
+  if (!deps.memory) return reply(404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
   const viewerId = ctx.actor?.p ?? principalId;
   const actor = deps.identity?.classify(viewerId) ?? { id: viewerId, type: "internal" as const };
@@ -61,34 +61,34 @@ export async function selfMemory(ctx: ApiCtx): Promise<void> {
   });
   if (method === "PATCH") {
     const edits = parseEdits(body);
-    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+    if (typeof edits === "string") return reply(400, { error: "bad_request", message: edits });
     await memory.edit?.(scope, edits, principalId);
   } else if (method === "DELETE") {
     const ids = parseIds(body);
-    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+    if (typeof ids === "string") return reply(400, { error: "bad_request", message: ids });
     await memory.delete?.(scope, ids, principalId);
   }
   const action = method === "GET" ? "memory.self.read" : "memory.self.update";
   audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
-  return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
+  return ok({ scopeId: scope, facts: await memoryFacts(memory, scope) });
 }
 
-export async function sessionCapability(ctx: ApiCtx): Promise<void> {
-  const { res, deps, actor } = ctx;
-  if (!actor) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+export async function sessionCapability(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, actor } = ctx;
+  if (!actor) return reply(401, { error: "unauthorized", message: "portal identity required" });
   const secret = deps.capabilitySecret ?? ctx.secret;
-  if (!secret) return sendJson(res, 503, { error: "not_configured", message: "capability secret not set" });
+  if (!secret) return reply(503, { error: "not_configured", message: "capability secret not set" });
   const token = await mintCapabilityToken(
     { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
     secret,
     deps.capabilityTokenCompression,
   );
-  return sendJson(res, 200, { token });
+  return ok({ token });
 }
 
-export async function listAgentApis(ctx: ApiCtx): Promise<void> {
-  const { res, deps, capability } = ctx;
-  if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
+export async function listAgentApis(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, capability } = ctx;
+  if (!capability) return reply(401, { error: "unauthorized", message: "agent capability token required" });
   const admin: { isAdmin: boolean; role?: string } = deps.admin
     ? await deps.admin
         .adminStatusOf({ id: capability.actorId, type: "internal" })
@@ -100,11 +100,7 @@ export async function listAgentApis(ctx: ApiCtx): Promise<void> {
     resource: "apis",
     scopeLabel: capability.scopeId,
   });
-  return sendJson(
-    res,
-    200,
-    renderAgentApis(capability, { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) }),
-  );
+  return ok(renderAgentApis(capability, { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) }));
 }
 
 export function parseFacts(body: unknown): string[] | string {
@@ -117,7 +113,7 @@ export function parseFacts(body: unknown): string[] | string {
   return facts;
 }
 
-export const listSkills = withQuery("principalId", async ({ res, app, url }, principalId) => {
+export const listSkills = withQuery("principalId", async ({ app, url }, principalId) => {
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
   const resolved = (await app.listVisibleSkills(principalId)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
@@ -149,17 +145,16 @@ export const listSkills = withQuery("principalId", async ({ res, app, url }, pri
       editable: await app.canManageSkill(r.skill, principalId),
     })),
   );
-  return sendJson(res, 200, { skills });
+  return ok({ skills });
 });
 
 function skillReader(ctx: ApiCtx, fallback: unknown): string | null {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof fallback === "string" ? fallback : "");
   if (!ctx.capability && !ctx.actor && ctx.secret) {
-    sendJson(ctx.res, 401, { error: "capability_required" });
-    return null;
+    throw fail(401, "capability_required");
   }
   if (principalId) return principalId;
-  badRequest(ctx.res, "principalId required");
+  throw badRequest("principalId required");
   return null;
 }
 
@@ -174,8 +169,8 @@ function skillView(skill: Skill) {
   };
 }
 
-export async function getSkillDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
+export async function getSkillDetail(ctx: ApiCtx): Promise<RouteResult> {
+  const { app } = ctx;
   const principalId = skillReader(ctx, ctx.url.searchParams.get("principalId"));
   if (!principalId) return;
   const skill = await app.getSkill(ctx.params.id!);
@@ -184,9 +179,9 @@ export async function getSkillDetail(ctx: ApiCtx): Promise<void> {
     (!(await app.canManageSkill(skill, principalId)) &&
       !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
   ) {
-    return sendJson(res, 404, { error: "not_found" });
+    return reply(404, { error: "not_found" });
   }
-  return sendJson(res, 200, {
+  return ok({
     skill: {
       ...skillView(skill),
       scope: parseScopeId(skill.scopeId).kind ?? skill.scopeId,
@@ -203,64 +198,61 @@ export async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function restoreSkill(ctx: ApiCtx): Promise<void> {
+export async function restoreSkill(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = skillReader(ctx, bodyField(ctx, "principalId"));
   if (!principalId) return;
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
-  return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
+  return restored ? ok({ ok: true }) : reply(404, { error: "not_found" });
 }
 
 function skillOwner(ctx: ApiCtx): string | null {
   return ctx.capability ? ctx.capability.actorId : bodyPrincipal(ctx);
 }
 
-export async function updateSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
+export async function updateSkill(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, capability } = ctx;
   const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
+  if (principalId === null) throw badRequest("principalId required");
   const patch: { description?: string; body?: string } = {};
   for (const field of ["description", "body"] as const) {
     const value = bodyField(ctx, field);
-    if (value !== undefined && typeof value !== "string") return badRequest(res, `${field} must be a string`);
+    if (value !== undefined && typeof value !== "string") throw badRequest(`${field} must be a string`);
     if (typeof value === "string") patch[field] = value;
   }
   const liveActor = capability ? livePersonCapability(capability) : true;
   const updated = await app.updateOwnedSkill(ctx.params.id!, principalId, patch, { liveActor });
-  if (updated === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
-  if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
-  return sendJson(res, 200, { skill: skillView(updated) });
+  if (updated === "trigger_blocked") return reply(403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
+  if (!updated) return reply(404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
+  return ok({ skill: skillView(updated) });
 }
 
-export async function deleteSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
+export async function deleteSkill(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, capability } = ctx;
   const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
+  if (principalId === null) throw badRequest("principalId required");
   const liveActor = capability ? livePersonCapability(capability) : true;
   const outcome = await app.deleteOwnedSkill({ principalId, id: ctx.params.id!, liveActor });
-  if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
-  if (outcome === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
-  if (outcome === "forbidden")
-    return sendJson(res, 403, { error: "forbidden", message: "that skill isn't yours to archive" });
-  return sendJson(res, 200, { ok: true });
+  if (outcome === "missing") return reply(404, { error: "not_found", message: "no such skill" });
+  if (outcome === "trigger_blocked") return reply(403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
+  if (outcome === "forbidden") return reply(403, { error: "forbidden", message: "that skill isn't yours to archive" });
+  return ok({ ok: true });
 }
 
-export async function createSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
+export async function createSkill(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, capability } = ctx;
   const blocked = sharedSkillCreateBlock(capability);
-  if (blocked) return sendJson(res, 403, { error: "forbidden", message: blocked });
+  if (blocked) return reply(403, { error: "forbidden", message: blocked });
   const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
+  if (principalId === null) throw badRequest("principalId required");
   let homeScope = capability?.scopeId;
   const requestedScope = bodyField(ctx, "scopeId");
   if (!capability && typeof requestedScope === "string" && requestedScope !== makeScopeId("personal", principalId)) {
     if (!(await app.managesScope(principalId, requestedScope as ScopeId)))
-      return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
+      return reply(403, { error: "forbidden", message: "you cannot create a skill in that context" });
     homeScope = requestedScope as ScopeId;
   }
   if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
-    return sendJson(res, 403, {
+    return reply(403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
     });
@@ -271,7 +263,7 @@ export async function createSkill(ctx: ApiCtx): Promise<void> {
     body: bodyField(ctx, "body"),
   };
   for (const [field, value] of Object.entries(fields))
-    if (typeof value !== "string" || !value.trim()) return badRequest(res, `${field} required`);
+    if (typeof value !== "string" || !value.trim()) throw badRequest(`${field} required`);
   const created = await app.createOwnedSkill({
     principalId,
     ...(homeScope ? { homeScope } : {}),
@@ -280,9 +272,9 @@ export async function createSkill(ctx: ApiCtx): Promise<void> {
     body: fields.body as string,
   });
   if (!created)
-    return sendJson(res, 409, {
+    return reply(409, {
       error: "exists",
       message: "a skill of that name already exists here — edit it instead",
     });
-  return sendJson(res, 201, { skill: skillView(created) });
+  return reply(201, { skill: skillView(created) });
 }

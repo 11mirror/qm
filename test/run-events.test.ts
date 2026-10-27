@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { runEventRoutes } from "../src/api/routes/run-events.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import type { App } from "../src/api/app.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { emitRunReasoning, emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
@@ -41,7 +41,7 @@ test("run events push deltas without snapshot polling and recover a separate wor
     },
   } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
-    void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
+    void respond(runEventRoutes[0]!.handle, { app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const controller = new AbortController();
@@ -134,7 +134,7 @@ test("run events deliver a pending activity snapshot before subsequent text and 
     },
   } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
-    void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
+    void respond(runEventRoutes[0]!.handle, { app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const controller = new AbortController();
@@ -238,7 +238,7 @@ async function streamToolRun(entries: Item[], state: { status: "running" | "done
     },
   } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
-    void runEventRoutes[0]!.handle({
+    void respond(runEventRoutes[0]!.handle, {
       app,
       req,
       res,
@@ -453,7 +453,7 @@ test("run events forward reasoning per block, dedupe overlap, and catch up gaps 
     },
   } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
-    void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
+    void respond(runEventRoutes[0]!.handle, { app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const controller = new AbortController();

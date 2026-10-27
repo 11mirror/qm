@@ -1,17 +1,16 @@
 import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
-import { sendJson } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 function identity(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 2048;
 }
 
-function status(ctx: ApiCtx, state: BackgroundOwnership): void {
+function status(ctx: ApiCtx, state: BackgroundOwnership): RouteResult {
   const control = ctx.deps.backgroundOwnership!;
-  sendJson(ctx.res, 200, {
+  return ok({
     protocol: 2,
     deploymentId: control.deploymentId,
     instanceId: control.instanceId,
@@ -33,14 +32,14 @@ export function requireDeploymentControl(ctx: ApiCtx): true | null {
     !isBearerSecret(secret) ||
     secret === ctx.secret
   )
-    return refuse(ctx.res, 503, { error: "background_control_unavailable" });
+    throw refuse(503, { error: "background_control_unavailable" });
   const bearer = ctx.req.headers.authorization;
   if (!constantTimeEqual(typeof bearer === "string" ? bearer : "", `Bearer ${secret}`))
-    return refuse(ctx.res, 401, { error: "unauthorized" });
+    throw refuse(401, { error: "unauthorized" });
   return true;
 }
 
-async function backgroundWork(ctx: ApiCtx): Promise<void> {
+async function backgroundWork(ctx: ApiCtx): Promise<RouteResult> {
   if (!requireDeploymentControl(ctx)) return;
   const control = ctx.deps.backgroundOwnership!;
   if (ctx.method === "GET") return status(ctx, await control.store.get());
@@ -55,7 +54,7 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
       identity(body.expectedOwnerDeploymentId)
     )
   ) {
-    return sendJson(ctx.res, 400, { error: "invalid_background_request" });
+    return reply(400, { error: "invalid_background_request" });
   }
   return status(
     ctx,

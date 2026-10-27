@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ensureSentChat, cronItemRoutes } from "../src/api/routes/cron-items.ts";
 import { buildGmailReplyMime } from "../src/inbox/sources/gmail.ts";
-import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, findRoute, respond, run } from "../src/api/routes/route.ts";
 import { createInboxLedger } from "../src/inbox/ledger.ts";
 import { inboxApp } from "./support/inbox-app.ts";
 import { testMap } from "./support/test-database.ts";
@@ -30,18 +30,18 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
       },
     },
   } as unknown as ApiCtx;
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.equal(status, 403);
   assert.equal((await crons.list()).length, 0);
   previewEnabled = true;
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.equal(status, 200);
   const original = response!.item;
   assert.equal(original.state, "held");
   assert.equal((await crons.get(original.cronId))!.owner, "alice");
   assert.equal((await items.get(original.id))!.sourcePayload!.snippet, "The sent email body");
   await items.appendThread(original.id, [{ role: "human", text: "Summarize this" }]);
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.equal(response!.item.id, original.id);
   assert.equal(response!.item.thread[0]!.text, "Summarize this");
   await items.setProposal(original.id, { data: { body: "My unfinished draft" }, by: "human" });
@@ -53,7 +53,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
     from: "New sender",
     text: "New context",
   };
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   const refreshed = (await items.get(original.id))!;
   assert.deepEqual(refreshed.proposal, proposal);
   assert.equal(refreshed.sourcePayload!.snippet, "New context");
@@ -62,14 +62,14 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   assert.equal(refreshed.sourceSummary, "New title");
   assert.equal((refreshed.sourcePayload!.gmail as { messageId: string }).messageId, "newer-message");
   ctx.body = { ...(ctx.body as object), accountType: "personal" };
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.notEqual(response!.item.id, original.id);
   ctx.actor = { p: "bob" } as ApiCtx["actor"];
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.notEqual(response!.item.id, original.id);
   assert.equal(response!.item.thread.length, 0);
   ctx.actor = undefined;
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.equal(status, 403);
 });
 
@@ -107,7 +107,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
       },
     },
   } as unknown as ApiCtx;
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   const { id, cronId } = response!.item;
   const found = findRoute(cronItemRoutes, "POST", `/v1/crons/${cronId}/items/${id}/action`)!;
   const action = async (kind: string, args = {}) => {
@@ -179,7 +179,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
       },
     },
   } as unknown as ApiCtx;
-  await ensureSentChat(ctx);
+  await respond(ensureSentChat, ctx);
   assert.equal(status, 200);
   const stored = (await items.get(id))!;
   const mime = (await buildGmailReplyMime(stored, { body: "Hello" }))!.toString();
@@ -192,7 +192,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
     { accountType: ["default"] },
   ]) {
     ctx.body = { threadId: "t", ...invalid };
-    await ensureSentChat(ctx);
+    await respond(ensureSentChat, ctx);
     assert.equal(status, 400);
     assert.deepEqual((await items.get(stored.id))!.sourcePayload, stored.sourcePayload);
   }

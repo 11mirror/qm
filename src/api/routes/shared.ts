@@ -5,8 +5,7 @@ import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
-import type { ServerResponse } from "node:http";
-import { headerValue, sendJson } from "../http.ts";
+import { fail, headerValue, HttpError, type HttpErrorBody } from "../http.ts";
 import { tenant } from "../../tenant.ts";
 import type { z } from "zod";
 
@@ -32,20 +31,17 @@ export async function authorizeAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
   _scope: string,
 ): Promise<Principal | null> {
-  const { res, deps } = ctx;
+  const { deps } = ctx;
   if (!deps.admin) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
+    throw fail(404, "not_found");
   }
   const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
   if (actor && !(await activePrincipal(deps, actor.id))) {
-    sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
-    return null;
+    throw fail(403, "forbidden", "this principal is no longer active");
   }
   if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
-  sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
-  return null;
+  throw fail(403, "forbidden", "admin grant required for this scope");
 }
 
 export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
@@ -59,8 +55,7 @@ export async function requireScopedAdmin(
 ): Promise<{ actor: Principal; scope: string } | null> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
   if (!scope) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "scope required" });
-    return null;
+    throw fail(400, "bad_request", "scope required");
   }
   const actor = await authorizeAdmin(ctx, scope);
   return actor ? { actor, scope } : null;
@@ -105,7 +100,4 @@ export function zodMessage(field: string, error: z.ZodError): string {
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
-export function refuse(res: ServerResponse, status: number, body: unknown): null {
-  sendJson(res, status, body);
-  return null;
-}
+export const refuse = (status: number, body: HttpErrorBody): HttpError => new HttpError(status, body);

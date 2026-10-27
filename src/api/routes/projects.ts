@@ -1,6 +1,6 @@
-import { sendJson } from "../http.ts";
+import { fail } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult, withActor } from "./route.ts";
 
 type ProjectMutation = Awaited<ReturnType<ApiCtx["app"]["addProjectMember"]>>;
 
@@ -18,48 +18,44 @@ function bodyText(ctx: ApiCtx, key: string): string {
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
-  if (requested && requested !== ctx.capability.actorId) return refuse(ctx.res, 404, { error: "not_found" });
+  if (requested && requested !== ctx.capability.actorId) throw refuse(404, { error: "not_found" });
   return ctx.capability.actorId;
 }
 
-async function listProjects(ctx: ApiCtx): Promise<void> {
+async function listProjects(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = capabilityPrincipal(ctx, (ctx.url.searchParams.get("principalId") ?? "").trim());
   if (principalId === null) return;
-  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(ctx.res, 200, { projects: await ctx.app.listProjects(principalId) });
+  if (!principalId) return reply(400, { error: "bad_request", message: "principalId required" });
+  return ok({ projects: await ctx.app.listProjects(principalId) });
 }
 
-async function createProject(ctx: ApiCtx): Promise<void> {
+async function createProject(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
   if (principalId === null) return;
   const name = bodyText(ctx, "name");
-  if (!principalId || !name)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and name required" });
+  if (!principalId || !name) return reply(400, { error: "bad_request", message: "principalId and name required" });
   const project = await ctx.app.createProject(principalId, name);
-  return project ? sendJson(ctx.res, 201, { project }) : sendJson(ctx.res, 403, { error: "forbidden" });
+  return project ? reply(201, { project }) : reply(403, { error: "forbidden" });
 }
 
 function projectMutation(
   field: string | null,
   call: (ctx: ApiCtx, principalId: string, value: string) => Promise<ProjectMutation>,
   read: (ctx: ApiCtx) => string = (ctx) => (field ? bodyText(ctx, field) : ""),
-): (ctx: ApiCtx) => Promise<void> {
+): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
     if (principalId === null) return;
     const value = read(ctx);
     if (!principalId || (field && !value))
-      return sendJson(ctx.res, 400, {
-        error: "bad_request",
-        message: field ? `principalId and ${field} required` : "principalId required",
-      });
+      throw fail(400, "bad_request", field ? `principalId and ${field} required` : "principalId required");
     const result = await call(ctx, principalId, value);
-    if (result.status === "ok") return sendJson(ctx.res, 200, { project: result.project });
-    if (result.status === "not_found") return sendJson(ctx.res, 404, { error: "not_found" });
+    if (result.status === "ok") return ok({ project: result.project });
+    if (result.status === "not_found") throw fail(404, "not_found");
     if (result.status === "forbidden")
-      return sendJson(ctx.res, ctx.capability ? 404 : 403, { error: ctx.capability ? "not_found" : "forbidden" });
+      return reply(ctx.capability ? 404 : 403, { error: ctx.capability ? "not_found" : "forbidden" });
     const [status, message] = MUTATION_ERRORS[result.status]!;
-    return sendJson(ctx.res, status, { error: result.status, message });
+    return reply(status, { error: result.status, message });
   };
 }
 
