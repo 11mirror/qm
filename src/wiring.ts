@@ -34,7 +34,6 @@ import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import type { HandledEvent } from "./slack/message-gating.ts";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
@@ -83,29 +82,17 @@ import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
 import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
-import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
-import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
+import { type Outbound } from "./surfaces/outbound.ts";
 import { wireRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { type EnvironmentStore } from "./environments/environment-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
-import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
-import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
-import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
-import { createE2bDeployProvider, type StoredE2bDeployBody } from "./deploy/e2b-deploy-provider.ts";
-import type { DeployProvider } from "./deploy/deploy-provider.ts";
-import { createDeployService } from "./deploy/deploy-service.ts";
 import { createCurrentScopeMembers, rosterAdmits } from "./resolution/scope-membership.ts";
-import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -128,7 +115,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { type SecretDropStore } from "./credentials/secret-drop.ts";
-import { externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
+import { type FeatureFlagStore } from "./feature-flags.ts";
 import { type OAuthClientResolver } from "./connectors/oauth.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { type BrowserSessionStore } from "./connectors/browser-session-store.ts";
@@ -146,10 +133,7 @@ import { type ProviderKeys } from "./harness/pi-harness.ts";
 import { resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
-import { classifiedMemory } from "./memory/classification.ts";
-import { createPerTurnStrategy, type PendingCapture } from "./memory/strategies/per-turn.ts";
 import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
-import { mintCapabilityToken, CREDENTIAL_BROKER_AUD, DEPLOYMENT_CREDENTIAL_TTL_MS } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
@@ -185,9 +169,7 @@ import { type SessionStateBus } from "./runs/session-state-bus.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
-import { createSlackSurface } from "./chat-surface/slack.ts";
-import { createHttpChatSurface } from "./chat-surface/http-chat.ts";
-import { createSurfaceRegistry, type SurfaceRegistry } from "./chat-surface/registry.ts";
+import { type SurfaceRegistry } from "./chat-surface/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
@@ -230,11 +212,15 @@ import { buildHarness } from "./wiring/harness.ts";
 
 import { buildStartup } from "./wiring/startup.ts";
 
-import { buildMemory } from "./wiring/memory.ts";
-
 import { buildRuns } from "./wiring/runs.ts";
 
 import { buildRunStreams } from "./wiring/run-streams.ts";
+
+import { buildMemory } from "./wiring/memory.ts";
+
+import { buildOutbound } from "./wiring/outbound.ts";
+
+import { buildDeploy } from "./wiring/deploy.ts";
 
 export interface Runtime {
   start(): void;
@@ -555,13 +541,17 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     identity,
     configStore,
   });
-  const { baseMemory, semanticMemory } = buildMemory({
+  const { memory, memoryStrategy, baseMemory, semanticMemory } = buildMemory({
     databaseUrl,
     configStore,
     resolveMemoryEmbedder,
     leaderLease,
     createSweeper,
     late,
+    harness,
+    config,
+    artifactMap,
+    errors,
   });
   const {
     runs,
@@ -587,161 +577,34 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     brokerSessions,
     appPageViews,
   } = buildRunStreams({ sandbox, databaseUrl, late, config, runs, runStoreKind });
-  const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
-    pg: pgArtifactMap.pool,
-    git: {
-      repoRoot: config.deployGitDir,
-      archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
-      ...(config.s3Bucket ? { archiveBytes: s3Bytes(config.s3Bucket, "deploy-git/") } : {}),
-    },
+  const { outbound, chatSurfaces, recentDmPosts, slackSurface, idempotency } = buildOutbound({
+    artifactMap,
+    sessions,
+    sessionStateBus,
+    config,
+    late,
+    pgArtifactMap,
   });
-  const buildAwsDeploy = (): DeployProvider =>
-    createAwsDeployProvider({
-      ...config.awsDeploy,
-      advisoryLock,
-      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
-      onError: sandboxOnError,
-    });
-  const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
-    aws: buildAwsDeploy,
-    docker: () => createDockerDeployProvider({ onError: sandboxOnError }),
-    porter: () =>
-      createPorterDeployProvider({
-        ...config.porterDeploy,
-        advisoryLock,
-        store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
-        onError: sandboxOnError,
-      }),
-    e2b: () =>
-      createE2bDeployProvider({
-        client: e2bClient("apps"),
-        ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
-        advisoryLock,
-        store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
-        onError: sandboxOnError,
-      }),
-  };
-  const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
-  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket) {
-    console.warn(
-      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
-    );
-  }
-  const memory = classifiedMemory(baseMemory, harness.models);
-  const memoryStrategy = createPerTurnStrategy({
-    harness: harness.models,
-    memory,
-    captureQuietMs: config.memoryCaptureQuietMs,
-    pending: artifactMap<PendingCapture>("memory_capture_pending"),
-    onCaptureError: (e, scope) =>
-      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
-  });
-  const deployGitSecret = config.signingSecret;
-  const deployGitBase = config.apiBaseUrl;
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
-  const transcripts = { sessions, sessionStates: sessionStateBus };
-  const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
-  const outbound = createOutbound({
-    idempotency,
-    retries: artifactMap<QueuedPost>("queued_posts"),
-    afterSend: (post, receipt) => {
-      const recipientId = post.destination.target;
-      const threadRef = receipt.recipientThreadRef;
-      if (post.destination.type !== "principal" || !threadRef) return;
-      void (async () => {
-        const session = await sessions.getOrCreateByThread(
-          threadRef,
-          "dm",
-          scopeId("personal", recipientId),
-          undefined,
-          "slack",
-        );
-        await sessions.addParticipant(session.id, recipientId);
-        await rememberDmPost(recentDmPosts, threadRef, {
-          key: post.idempotencyKey,
-          text: post.text,
-          at: Date.now(),
-          ...(post.destination.onBehalfOf ? { onBehalfOf: post.destination.onBehalfOf } : {}),
-          ...(post.provenance?.trigger ? { trigger: post.provenance.trigger } : {}),
-        });
-      })().catch(swallowAs("outbound: remember DM post", undefined));
-    },
-  });
-  outbound.register(["web"], createWebSender(transcripts));
-  const slackSurface = createSlackSurface();
-  const chatSurfaces = createSurfaceRegistry({
-    surfaces: [
-      slackSurface,
-      ...(config.chatSurfaces ?? []).map((surface) =>
-        createHttpChatSurface(surface, { mirror: (events) => app.ingestSurfaceEvents(events, surface.surface) }),
-      ),
-    ],
+  const { deployService } = buildDeploy({
+    artifactMap,
+    pgArtifactMap,
+    config,
+    s3Bytes,
+    advisoryLock,
+    sandboxOnError,
+    e2bClient,
     outbound,
-    turn: (request) => app.turn(request),
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "delivery/store/0007-drop",
-    statements: ["DROP TABLE IF EXISTS deliveries"],
-  });
-  const deployService = createDeployService({
-    outbound,
-    deployAppsDomain: config.awsDeploy.appsDomain,
-    publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
-    publicWebUrl: config.publicWebUrl,
-    appPublished: productAnalytics.appPublished,
-    deployStore,
-    provider: deployProvider,
-    deployDir: join(config.dataDir, "deployments"),
+    productAnalytics,
     auditLog,
     acl,
     leaderLease,
-    advisoryLock,
     canReadScope,
     canWriteScope,
-    externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
-    canManageEmail: async (email) => {
-      await identity.refresh();
-      return (
-        identity.isInternal(identity.classify(email)) &&
-        ((await directory.get(email))?.type === "internal" ||
-          config.emailAuthPrincipals?.includes(email) ||
-          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-          identity.externalMember(email) !== undefined)
-      );
-    },
+    featureFlags,
+    identity,
+    directory,
     managesArtifactHome,
-    ...(deployGitSecret && deployGitBase
-      ? {
-          deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const env: Record<string, string> = {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
-            };
-            const orgScope = scopeId("org", config.orgId);
-            const credentials = await deploymentCredentialSlugs(
-              await serviceCreds.listServiceCredentials(orgScope),
-              orgScope,
-              acl,
-            );
-            if (credentials.length) {
-              env.AGENT_API_URL = deployGitBase;
-              env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
-                {
-                  actorId: deployment.createdBy,
-                  scopeId: personalScope(deployment.createdBy),
-                  aud: CREDENTIAL_BROKER_AUD,
-                  credentials,
-                  deployment: deployment.id,
-                  exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-                },
-                config.capabilitySecret ?? deployGitSecret,
-                config.capabilityTokenCompression,
-              );
-            }
-            return env;
-          },
-        }
-      : {}),
+    serviceCreds,
   });
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
   const cronOwnerCache = new Map<string, string>();
@@ -1198,6 +1061,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     providerKeys,
     runWaitMs: config.runWaitMs,
   });
+  late.app = app;
   const inboxRealtime = createInboxRealtime({
     crons,
     items: inboxItems,
