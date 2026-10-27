@@ -17,6 +17,66 @@ export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
 export const EXEC_TIMEOUT_MAX_MS = 300_000;
 
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
+  const {
+    scratchExec,
+    reachExec,
+    controlTools,
+    surfaceTools,
+    delegateWork,
+    execTimeoutSec,
+    execCeilingSec,
+    bgTtlSec,
+    bgTtlMaxSec,
+    bgTtlMin,
+    bgTtlMaxMin,
+    capabilityTtlHours,
+    capabilityExpiry,
+  } = kitSettings(opts);
+  const { log } = kitLog(ref);
+  const {
+    retryMarks,
+    recordCall,
+    resultQueue,
+    recordResult,
+    recordCoreAuthoredResult,
+    recordExternalResult,
+    recordText,
+    recordFail,
+  } = kitRecorders(ref, { log });
+  const { unavailable, isUnavailable, refused } = kitReplies({ recordFail });
+  return {
+    ref,
+    opts,
+    scratchExec,
+    reachExec,
+    controlTools,
+    surfaceTools,
+    delegateWork,
+    execTimeoutSec,
+    execCeilingSec,
+    bgTtlSec,
+    bgTtlMaxSec,
+    bgTtlMin,
+    bgTtlMaxMin,
+    capabilityTtlHours,
+    capabilityExpiry,
+    log,
+    retryMarks,
+    recordCall,
+    resultQueue,
+    recordResult,
+    recordCoreAuthoredResult,
+    recordExternalResult,
+    recordText,
+    recordFail,
+    unavailable,
+    isUnavailable,
+    refused,
+  };
+}
+
+/** The tool options and limits every tool builder reads. */
+function kitSettings(opts?: AgentToolsOptions) {
   const scratchExec = !!opts?.scratchExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
@@ -30,6 +90,25 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
   const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;
   const capabilityExpiry = `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
+  return {
+    scratchExec,
+    reachExec,
+    controlTools,
+    surfaceTools,
+    delegateWork,
+    execTimeoutSec,
+    execCeilingSec,
+    bgTtlSec,
+    bgTtlMaxSec,
+    bgTtlMin,
+    bgTtlMaxMin,
+    capabilityTtlHours,
+    capabilityExpiry,
+  };
+}
+
+/** Appends tool call/result entries to the transcript. */
+function kitLog(ref: ToolContextRef) {
   const log = async (kind: "ToolCall" | "ToolResult", summary: Record<string, unknown>): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     const { tool, callId, ...body } = summary;
@@ -56,7 +135,11 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
       body: { ...rest, ...(isObj(output) ? { output: kept } : {}) },
     });
   };
+  return { log };
+}
 
+/** Records each tool call and its result, screening external output and tracking retry safety. */
+function kitRecorders(ref: ToolContextRef, { log }: Pick<ReturnType<typeof kitLog>, "log">) {
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
     const mark = retryMarks.get(callId);
@@ -176,7 +259,20 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     recordResult(callId, summary, text(body));
   const recordFail = (callId: string, summary: Record<string, unknown>, body: string) =>
     recordResult(callId, summary, text(body), true);
+  return {
+    retryMarks,
+    recordCall,
+    resultQueue,
+    recordResult,
+    recordCoreAuthoredResult,
+    recordExternalResult,
+    recordText,
+    recordFail,
+  };
+}
 
+/** Standard replies for an unavailable control plane or a refused request. */
+function kitReplies({ recordFail }: Pick<ReturnType<typeof kitRecorders>, "recordFail">) {
   const unavailable = (callId: string, tool: string) =>
     recordFail(
       callId,
@@ -187,36 +283,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     isObj(r) && r.code === "control_unavailable";
   const refused = (callId: string, tool: string, r: { code: string; message?: string }) =>
     isUnavailable(r) ? unavailable(callId, tool) : recordFail(callId, { tool, error: r.code }, `[error] ${r.message}`);
-
-  return {
-    ref,
-    opts,
-    scratchExec,
-    reachExec,
-    controlTools,
-    surfaceTools,
-    delegateWork,
-    execTimeoutSec,
-    execCeilingSec,
-    bgTtlSec,
-    bgTtlMaxSec,
-    bgTtlMin,
-    bgTtlMaxMin,
-    capabilityTtlHours,
-    capabilityExpiry,
-    log,
-    retryMarks,
-    recordCall,
-    resultQueue,
-    recordResult,
-    recordCoreAuthoredResult,
-    recordExternalResult,
-    recordText,
-    recordFail,
-    unavailable,
-    isUnavailable,
-    refused,
-  };
+  return { unavailable, isUnavailable, refused };
 }
 
 export type ToolKit = ReturnType<typeof createToolKit>;
