@@ -1,8 +1,6 @@
 import { BatchDeleteImageCommand } from "@aws-sdk/client-ecr";
 import { createHash, randomUUID } from "node:crypto";
-import { writeFileSync, existsSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync, existsSync } from "node:fs";
 import { acquireAwsLease as acquireLease, awsErrorCode, releaseAwsLease as releaseLease } from "../../aws-lease.ts";
 import { canonicalJson } from "../../canonical-json.ts";
 import { type AwsConfig, type QmConfig, IMAGE_TAG } from "../../config.ts";
@@ -380,9 +378,7 @@ async function registerUpTasks(run: UpRun, before: ServiceSnapshot, images: Reco
       targets[item.service] = before.tasks[item.service]!;
       continue;
     }
-    const file = join(mkdtempSync(join(tmpdir(), "qm-task-")), `${item.service}.json`);
-    writeFileSync(file, JSON.stringify(item.task));
-    targets[item.service] = await registerTaskDefinition(config, file);
+    targets[item.service] = await registerTaskDefinition(config, item.task);
   }
   const changed = new Set(desired.filter((item) => item.changed).map((item) => item.service));
   return { targets, changed, changedCore: !!changedCore, backgroundDeploymentId };

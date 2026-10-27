@@ -1,12 +1,13 @@
 import https from "node:https";
 import { CloudFrontClient, paginateListDistributions } from "@aws-sdk/client-cloudfront";
-import { DescribeServicesCommand } from "@aws-sdk/client-ecs";
+import { DescribeServicesCommand, type Service, type ServiceConnectConfiguration } from "@aws-sdk/client-ecs";
 import {
   DescribeLoadBalancersCommand,
   paginateDescribeListeners,
   paginateDescribeTargetGroups,
   paginateDescribeRules,
   DescribeTargetHealthCommand,
+  type Listener,
   type Rule,
 } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { ServiceDiscoveryClient, paginateListNamespaces, paginateListServices } from "@aws-sdk/client-servicediscovery";
@@ -138,18 +139,7 @@ export function assertAwsPublicListener(
   throw new Error(`publicUrl must use http or https (got ${protocol})`);
 }
 
-interface AwsPublicListener {
-  ListenerArn?: string;
-  Protocol?: string;
-  Port?: number;
-  Certificates?: Array<{ CertificateArn?: string }>;
-  DefaultActions?: Array<{
-    Type?: string;
-    TargetGroupArn?: string;
-    FixedResponseConfig?: { StatusCode?: string };
-    RedirectConfig?: { Protocol?: string; Port?: string; StatusCode?: string };
-  }>;
-}
+type AwsPublicListener = Listener;
 
 interface AwsPublicFrontDoor {
   loadBalancerArn: string;
@@ -174,41 +164,10 @@ function isHttpsRedirectListener(listener: AwsPublicListener): boolean {
   return actions.length === 1 && actions[0]?.Type === "redirect" && actions[0].RedirectConfig?.Protocol === "HTTPS";
 }
 
-interface AwsServiceConnectConfiguration {
-  enabled?: boolean;
-  namespace?: string;
-  services?: Array<{
-    portName?: string;
-    discoveryName?: string;
-    clientAliases?: Array<{ dnsName?: string; port?: number }>;
-  }>;
-}
+export type AwsEcsRoutingService = Service;
 
-export interface AwsEcsRoutingService {
-  serviceName?: string;
-  status?: string;
-  serviceConnectConfiguration?: AwsServiceConnectConfiguration;
-  deployments?: Array<{
-    status?: string;
-    serviceConnectConfiguration?: AwsServiceConnectConfiguration;
-  }>;
-  loadBalancers?: Array<{
-    targetGroupArn?: string;
-    containerPort?: number;
-    advancedConfiguration?: {
-      alternateTargetGroupArn?: string;
-      productionListenerRule?: string;
-    };
-  }>;
-}
-
-function awsServiceConnectConfiguration(
-  service: Pick<AwsEcsRoutingService, "serviceConnectConfiguration" | "deployments">,
-): AwsServiceConnectConfiguration | undefined {
-  return (
-    service.serviceConnectConfiguration ??
-    service.deployments?.find((deployment) => deployment.status === "PRIMARY")?.serviceConnectConfiguration
-  );
+function awsServiceConnectConfiguration(service: AwsEcsRoutingService): ServiceConnectConfiguration | undefined {
+  return service.deployments?.find((deployment) => deployment.status === "PRIMARY")?.serviceConnectConfiguration;
 }
 
 export async function assertAwsServiceDiscovery(

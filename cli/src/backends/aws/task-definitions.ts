@@ -5,7 +5,6 @@ import {
   DescribeTaskDefinitionCommand,
 } from "@aws-sdk/client-ecs";
 import { DescribeSecretCommand, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
-import { readFileSync } from "node:fs";
 import { awsErrorCode } from "../../aws-lease.ts";
 import { canonicalJson } from "../../canonical-json.ts";
 import {
@@ -38,13 +37,14 @@ export function containerSecretNames(service: string, secret: ComputedSecret): s
   return names.length ? names : [secret.name];
 }
 
-export async function registerTaskDefinition(config: QmConfig, file: string): Promise<string> {
-  const definition = JSON.parse(readFileSync(file, "utf8")) as RegisterTaskDefinitionCommandInput;
+export async function registerTaskDefinition(config: QmConfig, definition: object): Promise<string> {
   const tags = [
     { key: "ManagedBy", value: "qm-cli" },
     { key: "Deployment", value: config.orgId },
   ];
-  const { taskDefinition } = await ecs(config.aws!).send(new RegisterTaskDefinitionCommand({ ...definition, tags }));
+  const { taskDefinition } = await ecs(config.aws!).send(
+    new RegisterTaskDefinitionCommand({ ...(definition as RegisterTaskDefinitionCommandInput), tags }),
+  );
   return taskDefinition?.taskDefinitionArn ?? "";
 }
 

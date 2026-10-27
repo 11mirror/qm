@@ -1,7 +1,4 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { awsText, deployLocksTable, deploymentStateKey, withAwsLease } from "../../aws-lease.ts";
 import {
   type BackgroundWorkTransport,
@@ -607,36 +604,29 @@ export async function awsSetBackgroundWork(
       );
       return;
     }
-    const dir = mkdtempSync(join(tmpdir(), "qm-background-work-"));
+    const target = await registerTaskDefinition(config, desired);
+    await applyServiceTargets(config, { core: target }, { core: before.counts.core }, { timeoutMs });
     try {
-      const file = join(dir, "core.json");
-      writeFileSync(file, JSON.stringify(desired));
-      const target = await registerTaskDefinition(config, file);
-      await applyServiceTargets(config, { core: target }, { core: before.counts.core }, { timeoutMs });
+      await recordDeploymentManifest(
+        aws,
+        { ...before.tasks, core: target },
+        {
+          counts: current.counts,
+          imageLabel: current.imageLabel,
+          dbRestorePoint: current.dbRestorePoint,
+          layer: current.layer,
+          imageProvenance: current.imageProvenance,
+        },
+      );
+    } catch (error) {
+      const failures: string[] = [];
       try {
-        await recordDeploymentManifest(
-          aws,
-          { ...before.tasks, core: target },
-          {
-            counts: current.counts,
-            imageLabel: current.imageLabel,
-            dbRestorePoint: current.dbRestorePoint,
-            layer: current.layer,
-            imageProvenance: current.imageProvenance,
-          },
-        );
-      } catch (error) {
-        const failures: string[] = [];
-        try {
-          await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core }, { timeoutMs });
-          await manifestTransaction(aws, current, current.id);
-        } catch (restoreError) {
-          failures.push(`restoring background work: ${errMessage(restoreError)}`);
-        }
-        throwAfterCompensation(error, failures);
+        await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core }, { timeoutMs });
+        await manifestTransaction(aws, current, current.id);
+      } catch (restoreError) {
+        failures.push(`restoring background work: ${errMessage(restoreError)}`);
       }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+      throwAfterCompensation(error, failures);
     }
   });
   ok(`background work ${enabled ? "enabled" : "disabled"}`);

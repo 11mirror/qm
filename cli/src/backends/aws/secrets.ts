@@ -1,7 +1,6 @@
 import { UpdateServiceCommand } from "@aws-sdk/client-ecs";
 import { GetSecretValueCommand, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { withAwsLease, awsErrorCode } from "../../aws-lease.ts";
 import { type AwsConfig, type QmConfig } from "../../config.ts";
@@ -170,14 +169,7 @@ async function registerRotatedTasks(
     }
     const desired = renderTaskDefinition(config, workload, container.image, arns, baseline.backgroundDeploymentId);
     if (!taskDefinitionChanges(desired, (live as Record<string, unknown> | undefined) ?? null).length) continue;
-    const dir = mkdtempSync(join(tmpdir(), "qm-task-"));
-    try {
-      const file = join(dir, `${workload}.json`);
-      writeFileSync(file, JSON.stringify(desired));
-      changed[workload] = await registerTaskDefinition(config, file);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    changed[workload] = await registerTaskDefinition(config, desired);
   }
   return changed;
 }
