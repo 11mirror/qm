@@ -1967,6 +1967,7 @@ export function buildApp(
     outbound,
     resume: (ask, grant) => askResolution(ask, grant),
   });
+  const slackHandledEvents = artifactMap<HandledEvent>("slack_handled_events");
   const slackCore = createSlackCoreClient({
     identity,
     memory,
@@ -1980,7 +1981,7 @@ export function buildApp(
     app,
     leaderLease,
     stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
-    handledEvents: artifactMap<HandledEvent>("slack_handled_events"),
+    handledEvents: slackHandledEvents,
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -2287,6 +2288,12 @@ export function buildApp(
   if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
   if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep());
   every("memory-vector-index", 30_000, () => semanticMemory.index());
+  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));
+  every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"));
+  every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
+  every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));
+  const handledEventCutoff = () => Date.now() - 24 * 60 * 60_000;
+  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBelow("at", handledEventCutoff()));
   every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()));
   every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup());

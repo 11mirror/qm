@@ -340,9 +340,7 @@ class FakeCore implements SlackCoreClient {
     return fn(new Promise<void>(() => {}));
   }
 
-  holdEnvelopeReplay<T>(_account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-    return fn(new Promise<void>(() => {}));
-  }
+  readonly upkeep: SlackCoreClient["upkeep"] = { attach: () => async () => {}, run: async () => {} };
 
   readonly senders: SurfaceSender[] = [];
   readonly slack: SlackNative = {
