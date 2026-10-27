@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { edgeTenant } from "./tenant-hosts.ts";
 
 export interface PortalIdentity {
   p: string;
@@ -9,7 +10,7 @@ export interface PortalIdentity {
   exp: number;
 }
 
-const coreTenant = (): string | undefined => process.env.CORE_ORG_ID?.trim() || undefined;
+const coreTenant = (): string | undefined => edgeTenant()?.orgId ?? (process.env.CORE_ORG_ID?.trim() || undefined);
 
 const HEADER = Buffer.from(JSON.stringify({ alg: "HS256" }), "utf8").toString("base64url");
 

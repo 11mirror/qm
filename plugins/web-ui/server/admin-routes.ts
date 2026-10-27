@@ -2,7 +2,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { type HttpMethod } from "../../chassis/src/core-client.ts";
 import { json } from "../../chassis/src/http.ts";
 
-import { CORE_ORG_ID as ORG } from "../../chassis/src/env.ts";
+import { coreOrgId } from "../../chassis/src/env.ts";
 
 import {
   type WebCtx,
@@ -49,7 +49,7 @@ export async function adminRoute(c: WebCtx): Promise<unknown> {
   const rest = url.pathname.slice("/api/admin/".length);
   const first = rest.split("/")[0] ?? "";
   const corePath = `/v1/admin/${rest}${url.search}`;
-  const headers = { "x-admin-actor": `${c.user}@${ORG}`, ...portalHeaders() };
+  const headers = { "x-admin-actor": `${c.user}@${coreOrgId()}`, ...portalHeaders() };
   const relayAdmin = async (to: HttpMethod, path = corePath, withBody = to !== "GET" && to !== "DELETE") =>
     relayCore(res, to, path, withBody ? await readBody(req) : "", headers);
   if (method === "GET" && rest === "connector-catalog") return relayAdmin("GET", "/v1/connectors/catalog");
@@ -83,7 +83,10 @@ export async function adminRoute(c: WebCtx): Promise<unknown> {
     if (method === "PUT" && rest.lastIndexOf("/") > "scopes/".length) {
       if (!rest.endsWith("/branding")) return relayAdmin("PUT");
       const saved = await coreFetch("PUT", corePath, await readBody(req), undefined, headers);
-      if (saved.status < 300) await brandingCache.refreshNow().catch((err: unknown) => reportBackendError(err));
+      if (saved.status < 300)
+        await brandingCache()
+          .refreshNow()
+          .catch((err: unknown) => reportBackendError(err));
       return relay(res, saved);
     }
   }
