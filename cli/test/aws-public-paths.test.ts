@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -137,11 +138,11 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
 }
 
 for (const blueGreen of [false, true]) {
-  test(`declared public plugin paths qualify ${blueGreen ? "blue/green" : "rolling"} ingress`, () => {
+  test(`declared public plugin paths qualify ${blueGreen ? "blue/green" : "rolling"} ingress`, async () => {
     const f = fixture(undefined, blueGreen);
     try {
       const config = loadConfigAt(f.configPath).config;
-      assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
+      assert.equal((await assertAwsPublicRouting(config, f.services)).get("hooks"), "hooks");
       assert.match(
         terraformVars(config, "", ["core_public_hosts", "public_port"]),
         /"public_paths": \[\s*"\/hooks\/\*"/,
@@ -150,20 +151,23 @@ for (const blueGreen of [false, true]) {
       f.close();
     }
   });
-  test(`public plugin cannot sit behind core or portal ${blueGreen ? "blue/green" : "rolling"} routes`, () => {
+  test(`public plugin cannot sit behind core or portal ${blueGreen ? "blue/green" : "rolling"} routes`, async () => {
     const f = fixture(undefined, blueGreen, "15");
     try {
-      assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
+      await assert.rejects(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
     } finally {
       f.close();
     }
   });
 }
 
-test("public plugin live routing cannot broaden declared paths", () => {
+test("public plugin live routing cannot broaden declared paths", async () => {
   const f = fixture(["/hooks/events/*"]);
   try {
-    assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /exactly its declared/);
+    await assert.rejects(
+      () => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services),
+      /exactly its declared/,
+    );
   } finally {
     f.close();
   }
@@ -196,7 +200,7 @@ for (const name of ["v1", "d", "key", "models", "slack"]) {
   });
 }
 
-test("the egress proxy may sit behind its own load balancer while other private services may not", () => {
+test("the egress proxy may sit behind its own load balancer while other private services may not", async () => {
   const f = fixture();
   try {
     const loaded = loadConfigAt(f.configPath).config;
@@ -217,15 +221,15 @@ test("the egress proxy may sit behind its own load balancer while other private 
       ...f.services,
       ["egress-proxy", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] }],
     ]);
-    assert.equal(assertAwsPublicRouting(config, services).has("egress-proxy"), false);
+    assert.equal((await assertAwsPublicRouting(config, services)).has("egress-proxy"), false);
     services.set("jobs", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] });
-    assert.throws(() => assertAwsPublicRouting(config, services), /private ECS service jobs is attached/);
+    await assert.rejects(() => assertAwsPublicRouting(config, services), /private ECS service jobs is attached/);
   } finally {
     f.close();
   }
 });
 
-test("the portal route must reach core's public port, never its API port", () => {
+test("the portal route must reach core's public port, never its API port", async () => {
   const f = fixture();
   try {
     const config = loadConfigAt(f.configPath).config;
@@ -233,7 +237,7 @@ test("the portal route must reach core's public port, never its API port", () =>
     core.loadBalancers = core.loadBalancers.map((item) =>
       item.targetGroupArn === "portal" ? { ...item, containerPort: 8080 } : item,
     );
-    assert.throws(() => assertAwsPublicRouting(config, f.services), /must reach core on its public port 8000/);
+    await assert.rejects(() => assertAwsPublicRouting(config, f.services), /must reach core on its public port 8000/);
   } finally {
     f.close();
   }

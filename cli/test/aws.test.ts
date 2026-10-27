@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   assertAwsDeploymentStorage,
   assertAwsServiceDiscovery,
@@ -1908,7 +1908,7 @@ test("AWS deploy rejects weak signing keys before mutation", async () => {
   }
 });
 
-test("AWS doctor verifies durable deployment storage and object-store access", () => {
+test("AWS doctor verifies durable deployment storage and object-store access", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-doctor-storage-"));
   const ready = fakeAws(
     dir,
@@ -1917,7 +1917,7 @@ if (a.includes("dynamodb describe-table")) console.log(JSON.stringify({ Table: {
 else console.log("");`,
   );
   try {
-    assert.doesNotThrow(() => assertAwsDeploymentStorage(config));
+    await assertAwsDeploymentStorage(config);
     const calls = readFileSync(ready.log, "utf8");
     assert.match(calls, /dynamodb describe-table --table-name acme-qm-deploy-locks/);
     assert.ok(
@@ -1935,7 +1935,7 @@ if (a.includes("dynamodb describe-table")) console.log(JSON.stringify({ Table: {
 else console.log("");`,
   );
   try {
-    assert.throws(() => assertAwsDeploymentStorage(config), /CREATING/);
+    await assert.rejects(() => assertAwsDeploymentStorage(config), /CREATING/);
     assert.doesNotMatch(readFileSync(inactive.log, "utf8"), /list-objects-v2/);
   } finally {
     inactive.restore();
@@ -1948,7 +1948,7 @@ else if (a.includes("s3api list-objects-v2")) { console.error("AccessDenied"); p
 else console.log("");`,
   );
   try {
-    assert.throws(() => assertAwsDeploymentStorage(config), /AccessDenied/);
+    await assert.rejects(() => assertAwsDeploymentStorage(config), /AccessDenied/);
   } finally {
     denied.restore();
     rmSync(dir, { recursive: true, force: true });
@@ -2478,7 +2478,7 @@ test("AWS retains built-in health enforcement when an image is overridden", () =
   assert.match((container.healthCheck as { command: string[] }).command[3]!, /\/healthz/);
 });
 
-test("AWS secret upload reads the deployment .env and removes every plaintext staging file", async () => {
+test("AWS secret upload reads the deployment .env and sends each value to Secrets Manager", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-"));
   const bin = join(dir, "aws-fake");
   const log = join(dir, "paths.log");
@@ -2499,11 +2499,12 @@ if [ "$1 $2" = "ecs describe-services" ]; then
   printf '%s\\n' '{"services":[{"serviceName":"acme-core","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-web-ui","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-portal","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]}],"failures":[]}'
   exit 0
 fi
-for arg in "$@"; do
-  case "$arg" in
-    file://*) path="\${arg#file://}"; test -f "$path" || exit 9; printf '%s\\n' "$path" >> "$AWS_SECRET_PATH_LOG" ;;
-  esac
-done
+if [ "$1 $2" = "secretsmanager put-secret-value" ]; then
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "--secret-string" ]; then printf '%s\\n' "$2" >> "$AWS_SECRET_PATH_LOG"; fi
+    shift
+  done
+fi
 `,
   );
   chmodSync(bin, 0o755);
@@ -2513,12 +2514,11 @@ done
   process.env.AWS_SECRET_PATH_LOG = log;
   try {
     await awsSecretsPush(config, dir);
-    const paths = readFileSync(log, "utf8").trim().split("\n");
-    assert.equal(paths.length, operatorSecrets.length);
-    for (const path of paths) {
-      assert.equal(existsSync(path), false);
-      assert.equal(existsSync(dirname(path)), false);
-    }
+    const values = readFileSync(log, "utf8").trim().split("\n");
+    assert.deepEqual(
+      values,
+      operatorSecrets.map(() => TEST_SECRET_VALUE),
+    );
   } finally {
     if (priorBin === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = priorBin;
@@ -2904,7 +2904,7 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     assert.ok(deployCalls.indexOf("rds describe-db-instances") < deployCalls.indexOf("ecs run-task"));
     assert.ok(deployCalls.indexOf("ecs run-task") < deployCalls.indexOf("ecs update-service"));
     assert.doesNotMatch(deployCalls, /rds (?:create|describe|delete)-db-snapshot/);
-    assert.doesNotMatch(deployCalls, /ecr get-authorization-token|ecr describe-images|imageTag=qm-staging/);
+    assert.doesNotMatch(deployCalls, /ecr get-authorization-token|ecr describe-images|"imageTag":"qm-staging/);
     assert.equal(readFileSync(dockerLog, "utf8"), "");
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     const current = state.dynamo["deployment/current"].manifestId.S;
@@ -4426,7 +4426,7 @@ test("aws up resolves image digests only while holding the deploy lease", async 
     assert.equal(transactions.length, 1, "the manifest is one unconditional transaction");
     assert.doesNotMatch(calls, /--client-request-token/);
     assert.doesNotMatch(calls, /dynamodb update-item/);
-    assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
+    assert.match(calls, /ecr batch-delete-image .*"imageTag":"qm-staging/);
     assert.ok(readFileSync(dockerLog, "utf8").includes("imagetools create"), "the image was pushed via docker");
     assert.match(readFileSync(dockerLog, "utf8"), /--tag [^\s]+\/qm-core:qm-staging/);
   } finally {
@@ -4586,8 +4586,8 @@ test("AWS up cleans staging tags when ECS deployment fails", async () => {
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /did not reach the requested state/);
     const calls = readFileSync(fake.log, "utf8");
-    assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
-    assert.doesNotMatch(calls, /imageTag=release/);
+    assert.match(calls, /ecr batch-delete-image .*"imageTag":"qm-staging/);
+    assert.doesNotMatch(calls, /"imageTag":"release/);
     assert.ok(calls.indexOf("ecr batch-delete-image") < calls.indexOf("dynamodb delete-item"));
   } finally {
     process.env.PATH = priorPath;
@@ -4822,7 +4822,7 @@ test("AWS up preserves the staging tag when stable-label promotion fails", async
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /dynamodb transact-write-items/);
-    assert.doesNotMatch(calls, /ecr batch-delete-image .*imageTag=qm-/);
+    assert.doesNotMatch(calls, /ecr batch-delete-image .*"imageTag":"qm-/);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
@@ -4842,7 +4842,7 @@ test("AWS up treats an already-current stable label as successful promotion", as
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /ecr put-image/);
-    assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
+    assert.match(calls, /ecr batch-delete-image .*"imageTag":"qm-staging/);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
@@ -4868,7 +4868,7 @@ test("AWS up keeps a healthy rollout and its staging tag when the manifest write
     assert.notEqual(state.services["acme-core"].taskDefinition, initialTask);
     assert.equal(state.dynamo["deployment/current"], undefined);
     const calls = readFileSync(fake.log, "utf8");
-    assert.doesNotMatch(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
+    assert.doesNotMatch(calls, /ecr batch-delete-image .*"imageTag":"qm-staging/);
     assert.ok(calls.indexOf("dynamodb transact-write-items") < calls.indexOf("dynamodb delete-item"));
   } finally {
     process.env.PATH = priorPath;
@@ -5515,7 +5515,7 @@ test("shared deployment state isolates company manifests and leases without muta
   }
 });
 
-test("shared ALB validates company routes while rejecting sibling overlap", () => {
+test("shared ALB validates company routes while rejecting sibling overlap", async () => {
   const company = { ...config, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } };
   const name = `acme-qm-port-${createHash("sha1").update("acme-qm:portal").digest("hex").slice(0, 6)}`;
   const primary = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${name}/1`;
@@ -5575,9 +5575,9 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
     });
     try {
       if (["valid", "apps", "sibling-apps"].includes(variant))
-        assert.equal(assertAwsPublicRouting(selected, services).get("portal"), primary);
-      else assert.throws(() => assertAwsPublicRouting(selected, services), /shared ALB/);
-      assert.throws(
+        assert.equal((await assertAwsPublicRouting(selected, services)).get("portal"), primary);
+      else await assert.rejects(() => assertAwsPublicRouting(selected, services), /shared ALB/);
+      await assert.rejects(
         () => assertAwsPublicRouting({ ...company, aws: { ...company.aws, sharedAlb: false } }, services),
         /unknown services/,
       );
@@ -5589,7 +5589,7 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
 });
 
 for (const shared of [false, true]) {
-  test(`AWS doctor checks ${shared ? "shared" : "dedicated"} discovery through ECS registrations`, () => {
+  test(`AWS doctor checks ${shared ? "shared" : "dedicated"} discovery through ECS registrations`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-aws-discovery-"));
     const namespace = shared ? "shared.internal" : "acme.internal";
     const discoveryName = shared ? "acme-core" : "core";
@@ -5611,16 +5611,19 @@ else console.log("");`,
       const services = new Map([
         ["core", { deployments: [{ status: "PRIMARY", serviceConnectConfiguration: connect }] }],
       ]);
-      assert.doesNotThrow(() => assertAwsServiceDiscovery(oneServiceConfig(), services));
+      await assertAwsServiceDiscovery(oneServiceConfig(), services);
       endpoint.clientAliases[0]!.dnsName = "core.other.internal";
-      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /client alias/);
+      await assert.rejects(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /client alias/);
       endpoint.clientAliases[0]!.dnsName = "core.acme.internal";
       endpoint.discoveryName = "missing";
-      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /is missing from/);
+      await assert.rejects(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /is missing from/);
       endpoint.discoveryName = discoveryName;
       connect.namespace = "missing.internal";
-      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /missing Cloud Map namespace/);
-      assert.match(readFileSync(fake.log, "utf8"), /Values=ns-shared/);
+      await assert.rejects(
+        () => assertAwsServiceDiscovery(oneServiceConfig(), services),
+        /missing Cloud Map namespace/,
+      );
+      assert.match(readFileSync(fake.log, "utf8"), /"Values":\["ns-shared"\]/);
     } finally {
       fake.restore();
       rmSync(dir, { recursive: true, force: true });

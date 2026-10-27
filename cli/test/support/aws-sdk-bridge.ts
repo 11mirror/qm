@@ -14,6 +14,7 @@ import { join } from "node:path";
 // [package, client export, AWS CLI service]
 const services = [
   ["@aws-sdk/client-cloudfront", "CloudFrontClient", "cloudfront"],
+  ["@aws-sdk/client-cloudwatch-logs", "CloudWatchLogsClient", "logs"],
   ["@aws-sdk/client-dynamodb", "DynamoDBClient", "dynamodb"],
   ["@aws-sdk/client-ec2", "EC2Client", "ec2"],
   ["@aws-sdk/client-ecr", "ECRClient", "ecr"],
@@ -24,6 +25,7 @@ const services = [
   ["@aws-sdk/client-rds", "RDSClient", "rds"],
   ["@aws-sdk/client-s3", "S3Client", "s3api"],
   ["@aws-sdk/client-secrets-manager", "SecretsManagerClient", "secretsmanager"],
+  ["@aws-sdk/client-servicediscovery", "ServiceDiscoveryClient", "servicediscovery"],
   ["@aws-sdk/client-sts", "STSClient", "sts"],
 ] as const;
 
