@@ -1,10 +1,10 @@
 import type { OrgBranding, ScopedConfigStore } from "./config-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import { cssUrlSafe } from "../../plugins/chassis/src/branding.ts";
 
 const LABEL_STRIP = /[\u0000-\u001F\u007F-\u009F\u2028\u2029<>{}]/g;
 const ACCENT_RE = /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-const MARK_URL_RE = /^https:\/\/[^\s"'()\\;]+$/;
 const MARK_BADGE_GRAPHEMES = 2;
 const graphemes = new Intl.Segmenter();
 
@@ -14,7 +14,8 @@ export function cleanBrandingLabel(value: unknown): string | undefined {
 
 function cleanBrandingMarkUrl(value: unknown): string | undefined {
   const cleaned = cleanBrandingLabel(value);
-  return cleaned && MARK_URL_RE.test(cleaned) ? cleaned : undefined;
+  const url = cleaned && URL.canParse(cleaned) ? new URL(cleaned) : undefined;
+  return url?.protocol === "https:" && cssUrlSafe(url.href) ? url.href : undefined;
 }
 
 export function sanitizeBranding(raw: {

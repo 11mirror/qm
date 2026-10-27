@@ -34,7 +34,8 @@ test("sanitizeBranding accepts only https mark image urls that cannot break out 
   assert.equal(sanitizeBranding({ markUrl: 'https://a/");background:url("evil' }), undefined);
   assert.equal(sanitizeBranding({ markUrl: "https://a/x;color:red" }), undefined);
   assert.equal(sanitizeBranding({ markUrl: "https://a/</style><script>alert(1)</script>" }), undefined);
-  assert.equal(sanitizeBranding({ markUrl: "https://a/ b" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: "https://a/x'y" }), undefined);
+  assert.deepEqual(sanitizeBranding({ markUrl: "https://a/ b" }), { markUrl: "https://a/%20b" });
   assert.deepEqual(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), {
     markUrl: `https://a/${"x".repeat(500)}`,
   });
