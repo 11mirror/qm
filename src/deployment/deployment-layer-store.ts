@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -88,15 +88,8 @@ const CURRENT = "current";
 const DEPLOYMENT_LAYER: TableSpec = {
   table: "deployment_layer",
   key: "id",
-  columns: {
-    contentHash: { type: "text", required: true },
-    version: { type: "bigint", required: true },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-    bundle: { type: "jsonb", required: true },
-    resolved: { type: "jsonb", required: true },
-    pendingAudits: { type: "jsonb" },
-  },
+  columns: cols(`contentHash text!, version bigint!, updatedAt bigint!, updatedBy text!, bundle jsonb!,
+    resolved jsonb!, pendingAudits jsonb`),
 };
 
 export const DEPLOYMENT_LAYER_MIGRATION = mapToTableMigration("deployment/layer/0001-typed", DEPLOYMENT_LAYER);

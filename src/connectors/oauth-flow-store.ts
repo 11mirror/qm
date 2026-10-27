@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { OAuthState } from "./oauth.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -15,18 +15,8 @@ const OAUTH_FLOWS: TableSpec = {
   table: "oauth_flows",
   key: "nonce",
   keyIsField: true,
-  columns: {
-    provider: { type: "text", required: true },
-    principalId: { type: "text", required: true },
-    redirectUri: { type: "text", required: true },
-    issuedAt: { type: "bigint", required: true },
-    returnTo: { type: "text" },
-    orgId: { type: "text" },
-    accountType: { type: "text" },
-    clientRef: { type: "text" },
-    codeVerifier: { type: "text" },
-    consentLinkId: { type: "text" },
-  },
+  columns: cols(`provider text!, principalId text!, redirectUri text!, issuedAt bigint!, returnTo text,
+    orgId text, accountType text, clientRef text, codeVerifier text, consentLinkId text`),
 };
 
 export const OAUTH_FLOWS_MIGRATION = mapToTableMigration("connectors/oauth-flows/0001-typed", OAUTH_FLOWS);

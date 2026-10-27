@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cols } from "../persistence/typed-table.ts";
 import { LRUCache } from "lru-cache";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
@@ -43,12 +44,10 @@ export interface StoredE2bDeployBody {
   createdAtMs: number;
 }
 
-export const E2B_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("e2b_deploy_bodies", {
-  sandboxId: { type: "text", required: true },
-  host: { type: "text", required: true },
-  trafficAccessToken: { type: "text" },
-  createdAtMs: { type: "bigint", required: true },
-});
+export const E2B_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable(
+  "e2b_deploy_bodies",
+  cols(`sandboxId text!, host text!, trafficAccessToken text, createdAtMs bigint!`),
+);
 
 export interface E2bDeployProviderOptions {
   client: E2bClient;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { errMessage } from "../util/errors.ts";
 
 /** A committed key, or — while `claim` is set — a key some process is running right now. */
@@ -31,7 +31,7 @@ const IDEMPOTENCY: TableSpec = {
   table: "idempotency",
   key: "key",
   keyIsField: true,
-  columns: { at: { type: "bigint", required: true }, claim: { type: "text" } },
+  columns: cols(`at bigint!, claim text`),
 };
 
 export const IDEMPOTENCY_MIGRATION = mapToTableMigration("idempotency/store/0001-typed", IDEMPOTENCY, {

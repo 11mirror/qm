@@ -1,6 +1,6 @@
 import { isReply, isUserMessage, type Item } from "./items.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface SharedAttachment {
   id: string;
@@ -30,15 +30,8 @@ const SESSION_SHARES: TableSpec = {
   table: "session_shares",
   key: "token",
   keyIsField: true,
-  columns: {
-    sessionId: { type: "text", required: true },
-    audience: { type: "text", required: true },
-    createdBy: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    visibility: { type: "jsonb", required: true },
-    messages: { type: "jsonb", required: true },
-    files: { type: "jsonb", required: true },
-  },
+  columns: cols(`sessionId text!, audience text!, createdBy text!, createdAt bigint!, visibility jsonb!,
+    messages jsonb!, files jsonb!`),
 };
 
 export const SESSION_SHARES_MIGRATION = mapToTableMigration("sessions/shares/0001-typed", SESSION_SHARES);

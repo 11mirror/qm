@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify } from "../util/text.ts";
 import {
   createDeployGitStore,
@@ -139,23 +139,10 @@ const DEPLOYMENTS: TableSpec = {
   table: "deployments",
   key: "id",
   keyIsField: true,
-  columns: {
-    ownerScopeId: { type: "text", required: true },
-    createdBy: { type: "text", required: true },
-    createdInScope: { type: "text" },
-    defaultAudience: { type: "jsonb" },
-    name: { type: "text" },
-    displayName: { type: "text" },
-    currentVersion: { type: "bigint", required: true },
-    status: { type: "text", required: true },
-    endpoint: { type: "jsonb" },
-    alwaysOn: { type: "boolean" },
-    embedAncestors: { type: "text[]" },
-    public: { type: "boolean" },
-    appliedVersion: { type: "bigint" },
-    lastAccessAt: { type: "bigint" },
-    versions: { type: "jsonb", required: true },
-  },
+  columns: cols(`ownerScopeId text!, createdBy text!, createdInScope text, defaultAudience jsonb, name text,
+    displayName text, currentVersion bigint!, status text!, endpoint jsonb, alwaysOn boolean,
+    embedAncestors text[], public boolean, appliedVersion bigint, lastAccessAt bigint,
+    versions jsonb!`),
 };
 
 const NAME_INDEX_SQL = `DO $$ BEGIN

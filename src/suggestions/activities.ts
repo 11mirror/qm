@@ -1,6 +1,6 @@
 import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify } from "../util/text.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -59,13 +59,8 @@ const SUGGESTED_ACTIVITY_PROFILES: TableSpec = {
   key: "id",
   columns: {
     ...MANAGED_CRON_COLUMNS,
-    timezone: { type: "text", required: true },
-    lastSeenAt: { type: "bigint", required: true },
-    lastBootstrapAt: { type: "bigint" },
-    dismissalRefreshAt: { type: "bigint" },
-    managedAction: { type: "text" },
-    seeds: { type: "jsonb" },
-    dismissed: { type: "jsonb" },
+    ...cols(`timezone text!, lastSeenAt bigint!, lastBootstrapAt bigint, dismissalRefreshAt bigint,
+    managedAction text, seeds jsonb, dismissed jsonb`),
   },
 };
 

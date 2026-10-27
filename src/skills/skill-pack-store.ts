@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { PackConfig } from "./normalize.ts";
 
 type PackKind = "git";
@@ -49,22 +49,9 @@ const SKILL_PACKS: TableSpec = {
   table: "skill_packs",
   key: "id",
   keyIsField: true,
-  columns: {
-    kind: { type: "text", required: true },
-    url: { type: "text", required: true },
-    ref: { type: "text", required: true },
-    syncMode: { type: "text", required: true },
-    trustTier: { type: "text", required: true },
-    config: { type: "jsonb" },
-    targetScopeId: { type: "text", required: true },
-    subset: { type: "jsonb", required: true },
-    authCredentialSlug: { type: "text" },
-    createdBy: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    lastImport: { type: "jsonb" },
-    updateAvailable: { type: "boolean" },
-    available: { type: "bigint" },
-  },
+  columns: cols(`kind text!, url text!, ref text!, syncMode text!, trustTier text!, config jsonb,
+    targetScopeId text!, subset jsonb!, authCredentialSlug text, createdBy text!,
+    createdAt bigint!, lastImport jsonb, updateAvailable boolean, available bigint`),
 };
 
 export const SKILL_PACKS_MIGRATION = mapToTableMigration("skills/packs/0001-typed", SKILL_PACKS);

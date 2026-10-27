@@ -10,7 +10,7 @@ import type {
 import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
 import type { ApprovalRecords } from "../approval-store.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { rosterIds, samePerson } from "../../directory/person.ts";
@@ -133,14 +133,7 @@ export interface ApprovalLedger {
 const APPROVAL_GRANTS: TableSpec = {
   table: "approval_grants",
   key: "id",
-  columns: {
-    actorId: { type: "text", required: true },
-    command: { type: "text", required: true },
-    scope: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    sessionId: { type: "text" },
-    approvalKey: { type: "text" },
-  },
+  columns: cols(`actorId text!, command text!, scope text!, createdAt bigint!, sessionId text, approvalKey text`),
 };
 
 export const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {

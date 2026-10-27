@@ -29,6 +29,28 @@ export interface MapConversion extends PgMigrationDefinition {
   contract: PgMigrationDefinition;
 }
 
+const COLUMN_TYPES: Record<string, ColumnType> = {
+  text: "text",
+  bigint: "bigint",
+  float: "double precision",
+  boolean: "boolean",
+  jsonb: "jsonb",
+  "text[]": "text[]",
+};
+
+export function cols(defs: string): Record<string, ColumnSpec> {
+  return Object.fromEntries(
+    defs
+      .split(",")
+      .map((def) => def.trim().split(/\s+/))
+      .map(([field, raw]) => {
+        const type = COLUMN_TYPES[raw!.replace(/!$/, "")];
+        if (!field || !type) throw new Error(`bad column definition: ${field} ${raw}`);
+        return [field, raw!.endsWith("!") ? { type, required: true } : { type }];
+      }),
+  );
+}
+
 export const columnName = (field: string): string => `"${field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}"`;
 
 function fromJson(source: string, field: string, type: ColumnType): string {

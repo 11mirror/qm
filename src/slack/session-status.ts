@@ -2,7 +2,7 @@ import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { lockedRow } from "../persistence/locked-row.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { isTerminal, type RunStore } from "../runs/run-store.ts";
@@ -50,18 +50,8 @@ export interface SlackStatusActivity {
 const SESSION_STATUS: TableSpec = {
   table: "slack_session_status",
   key: "id",
-  columns: {
-    writer: { type: "text" },
-    account: { type: "text", required: true },
-    channel: { type: "text", required: true },
-    threadTs: { type: "text", required: true },
-    anchorRunId: { type: "text", required: true },
-    startedAt: { type: "bigint" },
-    cardId: { type: "text" },
-    cardTs: { type: "text" },
-    cardContent: { type: "text" },
-    followUrl: { type: "text" },
-  },
+  columns: cols(`writer text, account text!, channel text!, threadTs text!, anchorRunId text!, startedAt bigint,
+    cardId text, cardTs text, cardContent text, followUrl text`),
 };
 
 export const SESSION_STATUS_MIGRATION = mapToTableMigration("slack/session-status/0001-typed", SESSION_STATUS);

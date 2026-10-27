@@ -4,7 +4,7 @@ import { parseScopeId } from "../types.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -72,19 +72,9 @@ const SKILLS: TableSpec = {
   table: "skills",
   key: "id",
   keyIsField: true,
-  columns: {
-    scopeId: { type: "text", required: true },
-    manifest: { type: "jsonb", required: true },
-    status: { type: "text", required: true },
-    createdBy: { type: "text", required: true },
-    version: { type: "bigint", required: true },
-    grantedCapabilities: { type: "text[]", required: true },
-    approvals: { type: "text[]", required: true },
-    createdAt: { type: "bigint" },
-    updatedAt: { type: "bigint" },
-    lastUsedAt: { type: "bigint" },
-    pack: { type: "jsonb" },
-  },
+  columns: cols(`scopeId text!, manifest jsonb!, status text!, createdBy text!, version bigint!,
+    grantedCapabilities text[]!, approvals text[]!, createdAt bigint, updatedAt bigint,
+    lastUsedAt bigint, pack jsonb`),
 };
 
 export const SKILLS_MIGRATION = mapToTableMigration("skills/store/0001-typed", SKILLS, {

@@ -1,6 +1,6 @@
 import type { Destination, ScopeId, TriggerBase } from "../types.ts";
 import { tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { tableCodec, type ColumnSpec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 
@@ -12,16 +12,9 @@ export interface CreateTriggerInput {
   ownerConsentedAt?: number;
 }
 
-export const TRIGGER_COLUMNS = {
-  ownerScopeId: { type: "text", required: true },
-  owner: { type: "text", required: true },
-  createdBy: { type: "text", required: true },
-  ownerConsentedAt: { type: "bigint" },
-  destination: { type: "jsonb" },
-  enabled: { type: "boolean", required: true },
-  createdAt: { type: "bigint", required: true },
-  lastFiredAt: { type: "bigint" },
-} as const satisfies Record<string, ColumnSpec>;
+export const TRIGGER_COLUMNS =
+  cols(`ownerScopeId text!, owner text!, createdBy text!, ownerConsentedAt bigint, destination jsonb,
+    enabled boolean!, createdAt bigint!, lastFiredAt bigint`);
 
 export function contentPart(value: unknown): string {
   return canonicalJson(value);

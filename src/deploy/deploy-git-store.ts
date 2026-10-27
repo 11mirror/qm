@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { cols } from "../persistence/typed-table.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -49,12 +50,10 @@ interface DeployGitArchive {
   updatedAt: number;
 }
 
-export const DEPLOY_GIT_REPOS_MIGRATION = deploymentKeyedTable("deploy_git_repos", {
-  bundleB64: { type: "text" },
-  blobKey: { type: "text" },
-  etag: { type: "text", required: true },
-  updatedAt: { type: "bigint", required: true },
-});
+export const DEPLOY_GIT_REPOS_MIGRATION = deploymentKeyedTable(
+  "deploy_git_repos",
+  cols(`bundleB64 text, blobKey text, etag text!, updatedAt bigint!`),
+);
 
 export interface DeployGitArchiveStore extends DeployBodyStore<DeployGitArchive> {
   slim(archive: DeployGitArchive, blobKey: string): Promise<void>;
