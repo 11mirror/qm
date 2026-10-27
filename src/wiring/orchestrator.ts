@@ -28,6 +28,7 @@ import type { RunStore } from "../runs/run-store.ts";
 import { createSessionMailbox } from "../sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../subagents/session-tools.ts";
 import { createPostgresSwarmBoard } from "../swarms/swarm-board.ts";
+import { createSwarmNoticeSweep } from "../swarms/swarm-notices.ts";
 import { startSession } from "../api/start-session.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import { createUiStateStore } from "../surfaces/ui-state.ts";
@@ -293,7 +294,7 @@ export type OrchestratorModule = ReturnType<typeof buildOrchestrator>;
 function buildSessionSyscalls(deps: OrchestratorInputs) {
   const { config, overrides, late } = deps;
   const { resolution } = deps.files;
-  const { canWriteScope, projects, currentScopeMembers, databaseUrl, sessions, advisoryLock, configStore } =
+  const { canWriteScope, projects, currentScopeMembers, databaseUrl, sessions, advisoryLock, configStore, every } =
     deps.stores;
   const { runs, maxAttempts } = deps.runs;
   const { runSignals, fallback, hydrateModelCatalog } = deps.harness;
@@ -340,9 +341,12 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
     };
   };
   const sessionMailbox = createSessionMailbox(databaseUrl);
+  const swarmBoard = createPostgresSwarmBoard(databaseUrl);
+  const swarmNotices = createSwarmNoticeSweep({ board: swarmBoard, mailbox: sessionMailbox, sessions, runs });
+  every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep());
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
-    board: createPostgresSwarmBoard(databaseUrl),
+    board: swarmBoard,
     sessions,
     runs,
     signals: runSignals,
