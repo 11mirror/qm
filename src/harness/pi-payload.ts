@@ -1,4 +1,5 @@
 import type { LlmTransportMeta } from "../sessions/session-store.ts";
+import { errMessage } from "../util/errors.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
 import { promptEnvelopeWithoutHistory } from "./harness.ts";
 import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
@@ -141,16 +142,12 @@ export function sanitizeLlmPayload(
   const transport = transportFromModel(model);
   const withTransport = (r: { envelope: unknown; truncated: boolean }) => (transport ? { ...r, transport } : r);
   let redacted: unknown;
-  try {
-    redacted = redactImageBytes(promptEnvelopeWithoutHistory(payload));
-  } catch {
-    return withTransport({ envelope: { note: "payload not capturable" }, truncated: true });
-  }
   let json: string;
   try {
+    redacted = redactImageBytes(promptEnvelopeWithoutHistory(payload));
     json = JSON.stringify(redacted);
-  } catch {
-    return withTransport({ envelope: { note: "payload not serializable" }, truncated: true });
+  } catch (e) {
+    return withTransport({ envelope: { note: "payload not capturable", error: errMessage(e) }, truncated: true });
   }
   if (json.length > MAX_CAPTURED_PAYLOAD_CHARS) {
     return withTransport({
