@@ -579,7 +579,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<RouteResult> {
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
-      ? Math.max(5 * 60 * 1000, Math.min(24 * 60 * 60 * 1000 - 1, Math.floor(body.everyMs)))
+      ? Math.floor(body.everyMs)
       : INBOX_SYNC_DEFAULT_EVERY_MS;
   const enable = body.enabled !== false;
   try {

@@ -5,16 +5,16 @@ import { normalizeSchedule, validateUserSchedule } from "../../src/cron/schedule
 const now = Date.UTC(2026, 6, 1, 12, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
 
-test("rejects a daily (24h) everyMs interval, steering to {cron,timezone}", () => {
-  assert.throws(() => normalizeSchedule({ everyMs: DAY }, now), /clock-time schedule in disguise|cron,timezone/);
+test("accepts elapsed-time intervals of a day or longer", () => {
+  for (const everyMs of [DAY, 7 * DAY]) {
+    const r = normalizeSchedule({ everyMs }, now);
+    assert.equal(r.schedule.everyMs, everyMs);
+    assert.equal(r.nextFireAt, now + everyMs);
+  }
 });
 
-test("rejects a weekly everyMs interval", () => {
-  assert.throws(() => normalizeSchedule({ everyMs: 7 * DAY }, now), /everyMs/);
-});
-
-test("rejects recurring schedules faster than once a minute", () => {
-  assert.throws(() => validateUserSchedule({ everyMs: 59_999 }), /at least 60000ms/);
+test("accepts a sub-minute recurring interval", () => {
+  assert.doesNotThrow(() => validateUserSchedule({ everyMs: 1_000 }));
 });
 
 test("allows a sub-day polling interval", () => {

@@ -4,8 +4,6 @@ import { isObj } from "../util/objects.ts";
 
 export const DEFAULT_CRON_TIMEZONE = "America/Los_Angeles";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MIN_RECURRING_CRON_MS = 60_000;
 const PAST_FIRE_GRACE_MS = 5 * 60_000;
 
 export interface NormalizedSchedule {
@@ -109,15 +107,6 @@ export function normalizeSchedule(
 
   if (hasTimezone) throw new Error("schedule.timezone requires schedule.cron");
 
-  if (input.everyMs !== undefined && input.everyMs >= DAY_MS) {
-    throw new Error(
-      "schedule.everyMs >= 24h is almost always a clock-time schedule in disguise — it anchors to an " +
-        "arbitrary epoch, has no timezone, and drifts with DST. Use {cron,timezone} for daily/weekly/monthly " +
-        'runs (e.g. { cron: "30 7 * * 1-5", timezone: "America/Los_Angeles" }). Reserve everyMs for ' +
-        "genuine sub-day polling where wall-clock time does not matter.",
-    );
-  }
-
   const everyMs = finitePositiveMs(input.everyMs, "schedule.everyMs");
   const firstFireAt =
     finiteEpochMs(input.firstFireAt, "schedule.firstFireAt") ?? (everyMs !== undefined ? now + everyMs : now);
@@ -126,9 +115,6 @@ export function normalizeSchedule(
 }
 
 export function validateUserSchedule(schedule: CronSchedule, now: number = Date.now()): void {
-  if (schedule.everyMs !== undefined && schedule.everyMs < MIN_RECURRING_CRON_MS) {
-    throw new Error(`schedule.everyMs must be at least ${MIN_RECURRING_CRON_MS}ms`);
-  }
   if (schedule.firstFireAt !== undefined && schedule.firstFireAt < now - PAST_FIRE_GRACE_MS) {
     throw new Error(
       `schedule.firstFireAt (${schedule.firstFireAt}) is in the past — it is now ` +
