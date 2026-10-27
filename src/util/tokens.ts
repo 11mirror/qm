@@ -55,3 +55,17 @@ export function fitNewestLinesToTokens(
   }
   return kept;
 }
+
+export function linesWithinTokenBudget(
+  lines: readonly string[],
+  budgetTokens: number,
+): { kept: string[]; omitted: number } {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    used += countTokens(line);
+    if (used > budgetTokens) break;
+    kept.push(line);
+  }
+  return { kept, omitted: lines.length - kept.length };
+}

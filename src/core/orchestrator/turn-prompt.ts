@@ -37,11 +37,13 @@ import {
 import {
   currentTimeBlock,
   deliveryMenu,
+  inventoryTokenBudget,
   renderConversationRoster,
   renderProjectHomeChannel,
   renderReachRoster,
   renderStandingObligations,
 } from "./prompt-blocks.ts";
+import { tokenBudgetFor } from "./compaction.ts";
 
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { TurnCtx } from "./turn-context.ts";
@@ -184,7 +186,8 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
       : undefined;
   if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
   turnContextBlocks["Where scheduled tasks post"] = cronBlock;
-  const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
+  const inventoryBudget = inventoryTokenBudget(tokenBudgetFor(deps, scopeId, input.model));
+  const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles, inventoryBudget);
   if (sharedFilesBlock) turnContextBlocks["Files shared with you"] = sharedFilesBlock;
 
   const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
@@ -320,7 +323,8 @@ export async function finishSystemPrompt(
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn } = ctx;
+  const { deps, input, actor, conversation, external, automatedTurn, scopeId } = ctx;
+  const inventoryBudget = inventoryTokenBudget(tokenBudgetFor(deps, scopeId, input.model));
   const {
     strictReadOnly,
     turnContextBlocks,
@@ -346,7 +350,7 @@ export async function finishSystemPrompt(
   if (actorIsOrgAdmin) {
     systemPrompt += `\n\n${ORG_ADMIN_MD}`;
   }
-  await addStandingObligations(ctx, turnContextBlocks);
+  await addStandingObligations(ctx, turnContextBlocks, inventoryBudget);
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
   }
@@ -357,10 +361,12 @@ export async function finishSystemPrompt(
     const roster = renderReachRoster(
       await reachableChannelsFor(deps.directory!, actor.id),
       actor.displayName ?? "this person",
+      inventoryBudget,
     );
     if (roster) turnContextBlocks["Other computers you can reach"] = roster;
   }
-  if (!external && deps.directory) await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor);
+  if (!external && deps.directory)
+    await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor, inventoryBudget);
   if (!strictReadOnly && (deps.keychain || credentialDescriptions.length))
     await addKeychainManifest(ctx, turnContextBlocks, openSpeakerKeychain, credentialDescriptions);
   if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm")
@@ -377,6 +383,7 @@ export async function finishSystemPrompt(
 async function addStandingObligations(
   { deps, scopeId, turnTimezone }: TurnCtx,
   turnContextBlocks: Record<string, string>,
+  budgetTokens: number,
 ): Promise<void> {
   if (!(deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors))) return;
   const nowMs = Date.now();
@@ -396,6 +403,7 @@ async function addStandingObligations(
         ),
         hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
         mons.filter((m) => m.enabled && m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+        budgetTokens,
         turnTimezone,
       ),
     )
@@ -409,6 +417,7 @@ async function addConversationRoster(
   { deps, actor, conversation }: TurnCtx,
   turnContextBlocks: Record<string, string>,
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>,
+  budgetTokens: number,
 ): Promise<void> {
   const rosterBlock = await (async () => {
     const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
@@ -426,7 +435,7 @@ async function addConversationRoster(
       if (m) resolved.push(m);
       else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
     }
-    return renderConversationRoster(resolved);
+    return renderConversationRoster(resolved, budgetTokens);
   })().catch(swallowAs("orchestrator: conversation roster", null));
   if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
 }
