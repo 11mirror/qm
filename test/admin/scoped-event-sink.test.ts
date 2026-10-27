@@ -1,11 +1,11 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScopedEventSink } from "../src/admin/scoped-event-sink.ts";
-import { scopeId } from "../src/types.ts";
-import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createScopedEventSink } from "../../src/admin/scoped-event-sink.ts";
+import { scopeId } from "../../src/types.ts";
+import { createPostgresErrorLog } from "../../src/admin/postgres-error-log.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const s1 = scopeId("personal", "u1");
 const s2 = scopeId("personal", "u2");

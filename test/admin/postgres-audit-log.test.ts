@@ -1,9 +1,9 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import type { AuditEvent } from "../src/audit/audit-log.ts";
-import { scopeId } from "../src/types.ts";
-import { truncateTables } from "./support/test-database.ts";
+import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
+import type { AuditEvent } from "../../src/audit/audit-log.ts";
+import { scopeId } from "../../src/types.ts";
+import { truncateTables } from "../support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";

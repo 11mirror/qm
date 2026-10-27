@@ -1,15 +1,15 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createAdminService } from "../src/admin/admin-service.ts";
-import { testConfig } from "./support/test-config.ts";
-import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
+import { signRequest } from "../../src/auth/source-auth.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createAdminService } from "../../src/admin/admin-service.ts";
+import { testConfig } from "../support/test-config.ts";
+import { testAdminGrantStore, testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig());

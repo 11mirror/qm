@@ -1,13 +1,13 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { computeUsers } from "../src/admin/users.ts";
-import type { TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { createInsecureTestServer } from "../../src/api/server.ts";
+import { buildApp } from "../support/build-app.ts";
+import { computeUsers } from "../../src/admin/users.ts";
+import type { TurnRequest } from "../../src/types.ts";
+import { testConfig } from "../support/test-config.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [

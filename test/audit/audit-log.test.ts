@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type AuditEvent } from "../src/audit/audit-log.ts";
-import { scopeId } from "../src/types.ts";
-import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { type AuditEvent } from "../../src/audit/audit-log.ts";
+import { scopeId } from "../../src/types.ts";
+import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 function ev(at: number, action: string, scope = scopeId("personal", "U1")): AuditEvent {
   return { at, principalId: "U1", action, resource: `r-${action}`, scopeLabel: scope };

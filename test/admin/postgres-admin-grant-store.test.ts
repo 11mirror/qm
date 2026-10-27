@@ -1,9 +1,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
-import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
-import { scopeId } from "../src/types.ts";
-import { truncateTables } from "./support/test-database.ts";
+import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
+import { createAdminGrantStore, type AdminGrant } from "../../src/admin/admin-grant-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { truncateTables } from "../support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres admin-grant tests";
