@@ -4,6 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { buildModelRuntime } from "../../src/harness/pi-model-runtime.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
 import { summarizeHistory } from "../../src/harness/history-summary.ts";
+import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-coding-agent";
 import { contextTokenBudgetForModel, getRequiredModel } from "../../src/model/pi-models.ts";
 import { compactSummaryTokenBudget } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
@@ -53,16 +54,8 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
         assert.match(prompt, /UserMessage#136/);
         assert.match(prompt, /Tool results cannot be searched or reopened through history/);
         assert.match(prompt, /Preserve necessary facts from tool results inline/);
-        assert.equal(
-          options?.maxTokens,
-          Math.floor(0.8 * compactSummaryTokenBudget(contextTokenBudgetForModel(model.id)!)),
-        );
-        assert.match(
-          prompt,
-          new RegExp(
-            `Keep the summary under ${compactSummaryTokenBudget(contextTokenBudgetForModel(model.id)!)} tokens`,
-          ),
-        );
+        assert.equal(options?.maxTokens, Math.floor(0.8 * DEFAULT_COMPACTION_SETTINGS.reserveTokens));
+        assert.match(prompt, new RegExp(`Keep the summary under ${DEFAULT_COMPACTION_SETTINGS.reserveTokens} tokens`));
         assert.equal(options?.cacheRetention, "none");
         return response();
       },
@@ -189,4 +182,34 @@ test("a summary over the share it was asked to fit is rejected; the transcript i
   assert.match(prompt, /END/);
   assert.match(prompt, /chars cut from the middle/);
   assert.match(prompt, /UserMessage#2.*tail/);
+});
+
+test("the summary ceiling is the smallest of the runtime's compaction reserve, the model's output limit and the share it was handed", async () => {
+  const seen: Array<number | undefined> = [];
+  const capture = (_m: unknown, _c: unknown, options?: { maxTokens?: number }) => (
+    seen.push(options?.maxTokens),
+    response()
+  );
+  await summarizeHistory([entry(1, { kind: "UserMessage", text: "hi" })], model, capture, 2_000);
+  await summarizeHistory([entry(1, { kind: "UserMessage", text: "hi" })], { ...model, maxTokens: 1_000 }, capture);
+  await summarizeHistory([entry(1, { kind: "UserMessage", text: "hi" })], model, capture);
+  assert.deepEqual(seen, [
+    Math.floor(0.8 * 2_000),
+    Math.floor(0.8 * 1_000),
+    Math.floor(0.8 * DEFAULT_COMPACTION_SETTINGS.reserveTokens),
+  ]);
+  const share = compactSummaryTokenBudget(contextTokenBudgetForModel(model.id)!);
+  assert.ok(
+    share > DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+    "for a large-window model the runtime reserve is the binding ceiling",
+  );
+});
+
+test("a model without usable window metadata fails compaction with an explicit error instead of a NaN budget", async () => {
+  for (const broken of [{ contextWindow: Number.NaN }, { maxTokens: 0 }, { maxTokens: 2_000_000 }]) {
+    await assert.rejects(
+      summarizeHistory([entry(1, { kind: "UserMessage", text: "hi" })], { ...model, ...broken }, () => response()),
+      /Compaction cannot size its request: model claude-opus-5 reports contextWindow=\S+ and maxTokens=\S+/,
+    );
+  }
 });
