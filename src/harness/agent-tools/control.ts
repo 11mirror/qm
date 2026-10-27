@@ -1,4 +1,3 @@
-// The instructions tool, the sharing/resource tools (files, apps, skills, …) and the admin tool's action list.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
@@ -18,7 +17,6 @@ export function controlPlaneTools(kit: ToolKit) {
   return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
 }
 
-/** The instructions tool: read and edit standing guidance for this channel or conversation. */
 function instructionsToolFor(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail, unavailable, isUnavailable } = kit;
   const instructionsTool = defineTool({
@@ -132,7 +130,6 @@ function instructionsToolFor(kit: ToolKit) {
   return { instructionsTool };
 }
 
-/** Builds the share and move actions for files, skills, deployments and crons. */
 const ARTIFACT_ID_DESCRIPTIONS = {
   file: "Artifact ID.",
   skill: "Skill id from skills list or search.",
@@ -248,7 +245,6 @@ function sharingTools(kit: ToolKit) {
   return { sharingTool };
 }
 
-/** Groups action tools under one resource tool, and the admin actions with their preamble. */
 function requiredSuffix(operation: ToolDefinition): string {
   const required = ((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action");
   return required.length ? ` Requires ${required.join(", ")}.` : "";

@@ -1,4 +1,3 @@
-// The read, write, install_canvas, publish and skill tools: workspace files, apps and skills.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -22,7 +21,6 @@ export function workspaceTools(kit: ToolKit) {
   return { discoverSkills, skill, read, installCanvas, write, publish };
 }
 
-/** The skills list/search and read actions. */
 function skillTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
   const discoverSkills = (search: boolean) =>
@@ -112,7 +110,6 @@ function skillTools(kit: ToolKit) {
   return { discoverSkills, skill };
 }
 
-/** The files read, install_canvas and write actions. */
 function fileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult, recordText, recordFail } = kit;
   const read = defineTool({
@@ -218,7 +215,6 @@ function fileTools(kit: ToolKit) {
   return { read, installCanvas, write };
 }
 
-/** The apps publish action. */
 function publishTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const publish = defineTool({

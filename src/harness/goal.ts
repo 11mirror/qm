@@ -1,33 +1,3 @@
-/**
- * Thread goals — the qm analog of Codex CLI's ext/goal and Claude Code's
- * goal affordance.
- *
- * Shape (verified against openai/codex codex-rs/ext/goal):
- * - The AGENT registers a goal with a tool when the user asks for one in
- *   plain language ("grind on QA for 30 minutes", "get these tests green");
- *   nothing is parsed out of message prefixes.
- * - The goal is persisted on the session and survives turns.
- * - The harness enforces it: while a goal is active, an attempt to stop is
- *   answered with a continuation prompt carrying a completion-audit
- *   discipline ("treat completion as unproven"), not a token nudge. The
- *   floor works the same way (matching Codex/Claude Code goal features):
- *   completing or stopping under an unmet floor is answered with a
- *   keep-going prompt, never a hard tool rejection.
- * - The agent cannot block, pause, or complete a goal on its own. A
- *   fresh-context governor (the harness's judge model, which never did the
- *   work) reviews it: every GOAL_GOVERNOR_ROUNDS continuation rounds or
- *   GOAL_GOVERNOR_INTERVAL_MS of work, and whenever the agent requests
- *   completion. It returns continue, complete (completion requests only),
- *   step back (the agent is looping or claims a blocker: inject
- *   GOAL_STEP_BACK_PROMPT), or pause (only right after a step back on the
- *   same blocker: the agent asks the user and the turn ends). Otherwise only
- *   a human pressing stop pauses a goal, and only a person's own message can
- *   resume it (goal update "resume" is refused on cron, webhook, ambient and
- *   delegated turns).
- * - Budgets are rails, not the goal: an optional floor (the old /grind
- *   semantics — keep working at least this much) and an optional token cap
- *   (wind down when exhausted; never auto-complete).
- */
 import { outermostJsonObject } from "../util/text.ts";
 import { countTokens, fitNewestLinesToTokens, fitPartsToTokens } from "../util/tokens.ts";
 import { Type, type Static } from "typebox";
@@ -41,22 +11,16 @@ type GoalStatus = "active" | "paused" | "complete" | "cancelled";
 export interface GoalRecord {
   objective: string;
   status: GoalStatus;
-  /** Keep-working-at-least budget (turns/time/tokens/spend) — the old /grind. */
   floor?: GrindBudget;
-  /** Wind-down token cap (Codex's token_budget). Never auto-completes the goal. */
   capTokens?: number;
   tokensUsed: number;
   createdAt: number;
   updatedAt: number;
-  /** Time spent actually running turns on this goal, banked at each turn end. */
   activeMs?: number;
-  /** When the user last resumed the goal; time before it (while paused) never counts. */
   activeSince?: number;
   completionNote?: string;
   cancelNote?: string;
-  /** The governor's last verdict; a pause is only honored right after a step back. */
   governor?: GovernorVerdict;
-  /** Why the governor paused the goal: the question waiting on the user. */
   pauseReason?: string;
 }
 
@@ -65,7 +29,6 @@ export interface GovernorVerdict {
   reasons: string;
 }
 
-/** Checkpoint cadence: every N continuation rounds or this much work, whichever comes first. */
 export const GOAL_GOVERNOR_ROUNDS = 3;
 const GOAL_GOVERNOR_INTERVAL_MS = 30 * 60_000;
 
@@ -173,7 +136,6 @@ function budgetLines(goal: GoalRecord, meter: GrindMeter): string {
   return lines.length ? `Budget:\n${lines.join("\n")}` : "";
 }
 
-/** Injected when the agent tries to end its reply while the goal is active. */
 export function goalContinuationPrompt(goal: GoalRecord, meter: GrindMeter): string {
   return [
     `[goal] The active goal is not marked complete. Continue working toward it.`,
@@ -200,7 +162,6 @@ function governorNote(goal: GoalRecord): string {
   return `An independent governor reviewed your recent work and the goal is not done:\n<governor>\n${escapeTags(g.reasons)}\n</governor>\nAddress these reasons before requesting completion again.`;
 }
 
-/** Injected once when the governor pauses the goal: hand the question to the user and end the turn. */
 function goalGovernorPausePrompt(goal: GoalRecord): string {
   return [
     `[goal] An independent governor paused this goal because it needs the user:`,
@@ -209,7 +170,6 @@ function goalGovernorPausePrompt(goal: GoalRecord): string {
   ].join("\n\n");
 }
 
-/** Injected once when the token cap is exhausted: wind down, never fake completion. */
 export function goalCapPrompt(goal: GoalRecord): string {
   return [
     `[goal] The goal's token cap is exhausted (${goal.tokensUsed}/${goal.capTokens} tokens).`,
@@ -220,8 +180,6 @@ export function goalCapPrompt(goal: GoalRecord): string {
   ].join("\n\n");
 }
 
-/** Injected when the agent stops while the work floor is unmet. */
-/** Prepended to the next turn's prompt when a paused goal was rehydrated from the session. */
 export function goalPausedNote(goal: GoalRecord): string {
   if (goal.pauseReason)
     return (
@@ -238,7 +196,6 @@ export function goalPausedNote(goal: GoalRecord): string {
   );
 }
 
-/** Prepended to the next turn's prompt when an active goal was rehydrated from the session. */
 export function goalSteeringNote(goal: GoalRecord): string {
   return (
     `[goal] This session has an active goal registered earlier (status: active` +
@@ -251,9 +208,7 @@ export function goalSteeringNote(goal: GoalRecord): string {
 export interface GoalGovernorInput {
   objective: string;
   trigger: "checkpoint" | "completion";
-  /** The agent's recent turns (messages, tool calls, results), trimmed; newest last. */
   recentWork: string;
-  /** Completion requests only: the agent's evidence note plus any files it named. */
   evidence?: readonly string[];
   previous?: GovernorVerdict;
 }
@@ -336,11 +291,6 @@ const GOVERNOR_VERDICTS: ReadonlyArray<GovernorVerdict["verdict"]> = ["continue"
 
 export class GovernorUndecided extends Error {}
 
-/**
- * Record a verdict on the goal and return the one that took effect. A pause is
- * honored only right after a step back (otherwise it becomes the step back);
- * it closes the goal until the user answers.
- */
 export function applyGovernorVerdict(goal: GoalRecord, verdict: GovernorVerdict, now = Date.now()): GovernorVerdict {
   const effective: GovernorVerdict =
     verdict.verdict === "pause" && goal.governor?.verdict !== "step_back"
@@ -402,7 +352,6 @@ function goalClockStart(goal: GoalRecord, turnStartedAt: number): number {
   return Math.max(turnStartedAt, goal.activeSince ?? goal.createdAt);
 }
 
-/** Active time on the goal: banked turns plus the running turn (counted since the goal was created or last resumed). A paused goal accrues nothing. */
 export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined, now = Date.now()): number {
   const running =
     turnStartedAt === undefined || goal.status === "paused"
@@ -411,7 +360,6 @@ export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined
   return (goal.activeMs ?? 0) + running;
 }
 
-/** Fold the finished turn into the goal's banked active time; call once, right before the end-of-turn snapshot. */
 export function bankGoalTurn(goal: GoalRecord, turnStartedAt: number, now = Date.now()): void {
   goal.activeMs = goalActiveMs(goal, turnStartedAt, now);
 }
@@ -461,7 +409,6 @@ export function createFloorCapPolicy(opts: {
   };
 }
 
-/** When a time-only floor ends (ms epoch); undefined when the floor is not purely time. */
 function goalFloorEndsAt(goal: GoalRecord, turnStartedAt: number): number | undefined {
   const f = goal.floor;
   if (f?.minMs === undefined || Object.keys(f).length !== 1) return undefined;
@@ -474,15 +421,6 @@ export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.n
   return !grindState(floor, goalFloorMeter(goal, meter, now), now).met;
 }
 
-/**
- * The turn-ending enforcement loop (replaces the old grind loop). While the
- * goal is active: a stop is answered with the continuation prompt; a spent
- * token cap gets one wind-down prompt. A closed goal with an unmet work
- * floor keeps drawing keep-going prompts (an artificial user message, the
- * Codex/Claude Code shape) until the floor is met. Nothing the agent does
- * (going idle, stalling, staying silent) ends it: only a human stop, a
- * verifier-approved completion, or the user's own token cap.
- */
 export async function enforceGoal<T>(opts: {
   goal: GoalRecord;
   meter: GrindMeter;
@@ -491,7 +429,6 @@ export async function enforceGoal<T>(opts: {
   blocked(): boolean;
   beforePrompt(note: string): void | Promise<void>;
   prompt(note: string): Promise<T>;
-  /** The checkpoint governor; given the agent's recent work, returns a verdict. */
   govern?: (previous: GovernorVerdict | undefined) => Promise<GovernorVerdict>;
   now?: () => number;
 }): Promise<T> {

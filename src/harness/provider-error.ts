@@ -1,9 +1,6 @@
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
 
-// Classifies a failed pi-ai AssistantMessage from structured fields only: providerError (HTTP status
-// plus the provider's documented error type/code, from our vendored pi-ai, see vendor/pi-ai/) and
-// rawStopReason. errorMessage is never inspected; it is carried as `raw` for the operator log.
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
@@ -47,7 +44,6 @@ export function providerTurnError(failed: ProviderFailure): ProviderTurnError {
   const message = bodyMessage
     ? `Model provider API error${type ? ` (${type})` : ""}: ${bodyMessage}`
     : raw || "Pi agent stopped with an error";
-  // A failure with no HTTP response or stop reason (network drop, stream cut) stays "unknown" but retryable.
   const retryable =
     RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
   return new ProviderTurnError(message, { code, retryable, status, raw });

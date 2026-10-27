@@ -1,4 +1,3 @@
-// The sessions, subagents and swarm tools: other conversations and delegated work.
 
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -14,7 +13,6 @@ export function conversationTools(kit: ToolKit) {
   return { subagentTool, swarmTool, sessionTool };
 }
 
-/** The subagents tool: open, brief, message and read background workers. */
 function subagentToolFor(kit: ToolKit) {
   const { opts, delegateWork } = kit;
   const sidebarSessions = surfaceHas(opts?.surfaceName, "sidebar");
@@ -66,7 +64,6 @@ function subagentParams() {
   });
 }
 
-/** Runs one subagents-tool action: open, follow up, message, read or wait. */
 async function runSubagentAction(kit: ToolKit, callId: string, p: Static<ReturnType<typeof subagentParams>>) {
   const { ref, delegateWork, recordCall, recordCoreAuthoredResult, recordText, recordFail } = kit;
   const tc = ref.current;
@@ -182,7 +179,6 @@ async function runSubagentAction(kit: ToolKit, callId: string, p: Static<ReturnT
   );
 }
 
-/** The swarm tool. */
 function swarmToolFor(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const swarmTool = defineTool({
@@ -250,7 +246,6 @@ function swarmToolFor(kit: ToolKit) {
   return { swarmTool };
 }
 
-/** The sessions tool: search, list, read, message, start or fork sidebar conversations. */
 function sessionToolFor(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const sessionTool = defineTool({
