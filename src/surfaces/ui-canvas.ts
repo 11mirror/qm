@@ -80,7 +80,7 @@ export async function writeUiCanvas(
     written = nextCanvas(rec?.value ?? null, patch);
     return { value: written, updatedAt: Date.now() };
   };
-  while (!(await store.update(id, apply)) && !(await store.insertIfAbsent(id, apply(null))));
+  await store.modify(id, apply);
   return asCanvas(written);
 }
 

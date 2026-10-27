@@ -217,8 +217,7 @@ function sessionListMethods(k: SessionKit) {
         ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
       };
       if (query.status === "waiting") {
-        const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
-        filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
+        filter.sessionIds = (await deps.approvals?.blockingSessionIds()) ?? [];
       }
       const firstPage = !query.before && query.status !== "archived";
       const [page, pinned, archived] = await Promise.all([

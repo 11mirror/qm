@@ -1,3 +1,4 @@
+import { createApprovalRecords, type ApprovalRecords } from "../../src/core/approval-store.ts";
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -13,7 +14,6 @@ import { createApp, type AppDeps } from "../../src/api/app.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { createLocalDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
 import type { NewItem } from "../../src/sessions/items.ts";
@@ -578,7 +578,7 @@ test("session approvals are read by session id, never by scanning every approval
   const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
   await sessions.addParticipant(mine.id, "alice");
   await sessions.addParticipant(mine.id, "bob");
-  const backing = testMap<PendingApprovalRecord>();
+  const backing = createApprovalRecords(testDatabaseUrl());
   await backing.put("a-blocking", approval(mine.id, "alice", "git push --force"));
   await backing.put("a-input", approval(mine.id, "alice", "ask", false));
   await backing.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
@@ -587,15 +587,11 @@ test("session approvals are read by session id, never by scanning every approval
   const expectedFromFullScan = (await backing.entries()).filter(([, r]) => r.sessionId === mine.id).map(([id]) => id);
 
   let fullReads = 0;
-  const approvals: DurableMap<PendingApprovalRecord> = {
+  const approvals: ApprovalRecords = {
     ...backing,
     async entries() {
       fullReads++;
       return backing.entries();
-    },
-    async all() {
-      fullReads++;
-      return backing.all();
     },
   };
   const app = createApp({

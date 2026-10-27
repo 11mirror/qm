@@ -33,17 +33,12 @@ export function buildRuns(w: Head & HarnessModule & StoresModule) {
       ? createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
       : undefined;
   const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
-  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
-    if (!sessionIds.length) return new Set();
-    const wanted = new Set(sessionIds);
-    return new Set(
-      (await late.approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
-        .filter(
-          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        )
-        .map((r) => r.sessionId),
+  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> =>
+    new Set(
+      (await late.approvals.forSessions(sessionIds))
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
     );
-  };
   const workingAncestors = async (session: Session) => {
     const candidates = await stoppableAncestors(sessions, session);
     const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));

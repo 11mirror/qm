@@ -4,7 +4,7 @@ import test from "node:test";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testQuery } from "./support/test-database.ts";
 
 const installation = {
   botToken: "xoxb-test",
@@ -22,12 +22,8 @@ const event = {
 };
 
 async function fixture(t: test.TestContext, appId = "A123") {
-  const map = testMap();
-  const store = createSlackInstallationStore(
-    "company",
-    map as Parameters<typeof createSlackInstallationStore>[1],
-    "test-encryption-key",
-  );
+  const url = testDatabaseUrl();
+  const store = createSlackInstallationStore("company", url, "test-encryption-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -44,7 +40,7 @@ async function fixture(t: test.TestContext, appId = "A123") {
   const address = server.address();
   assert(address && typeof address === "object");
   return {
-    map,
+    url,
     store,
     bridge,
     request: (
@@ -62,12 +58,12 @@ async function fixture(t: test.TestContext, appId = "A123") {
 }
 
 test("managed installation encrypts bot-only credentials and waits for its receiver", async (t) => {
-  const { request, map, store, bridge } = await fixture(t);
+  const { request, url, store, bridge } = await fixture(t);
   assert.equal((await request("installation", installation, "POST", "wrong-company")).status, 401);
   assert.equal(await store.get(), null);
   assert.equal((await request("installation", installation)).status, 202);
   assert.equal((await store.get())?.appToken, undefined);
-  assert.equal(JSON.stringify(await map.all()).includes("xoxb-test"), false);
+  assert.equal(JSON.stringify(await testQuery(url, `SELECT * FROM slack_installation`)).includes("xoxb-test"), false);
   const receiver = bridge.receiver(installation.installId);
   receiver.init?.({ processEvent: async () => {} } as unknown as BoltApp);
   await receiver.start(0 as never);
@@ -150,7 +146,7 @@ test("failed delivery withholds acknowledgment", async (t) => {
 });
 
 test("installation launch restricts redirect origin and hides service credentials", async () => {
-  const store = createSlackInstallationStore("company", testMap(), "test-key");
+  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -230,22 +226,14 @@ test("explicit app pin still rejects another app at installation", async (t) => 
 });
 
 test("managed Slack refuses a service credential that a bearer header cannot carry", () => {
-  const store = createSlackInstallationStore(
-    "company",
-    testMap() as Parameters<typeof createSlackInstallationStore>[1],
-    "test-encryption-key",
-  );
+  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-encryption-key");
   for (const token of ["", "company-token\n", " company-token"]) {
     assert.throws(() => createManagedSlack({ serviceUrl: "https://slack.example.com", token, store }), /credential/);
   }
 });
 
 test("managed service failures carry the HTTP status and body", async () => {
-  const store = createSlackInstallationStore(
-    "company",
-    testMap() as Parameters<typeof createSlackInstallationStore>[1],
-    "test-encryption-key",
-  );
+  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-encryption-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",

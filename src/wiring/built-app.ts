@@ -1,7 +1,7 @@
 import type { Head } from "./late.ts";
+import { createSlackAccounts } from "../connectors/composio-links.ts";
 import type { BuiltApp } from "../wiring.ts";
-import type { SlackAccountLink } from "../api/routes/composio.ts";
-import type { SessionShare } from "../sessions/session-share.ts";
+import { createSessionShareStore } from "../sessions/session-share.ts";
 import type { ApiAppModule } from "./api-app.ts";
 import type { StoresModule } from "./stores.ts";
 import type { AppServicesModule } from "./app-services.ts";
@@ -160,7 +160,6 @@ function builtAppTail(w: AssembleBuiltAppInputs) {
     egressAudit,
     identity,
     principalLinks,
-    artifactMap,
     composioReturns,
     workspace,
     memory,
@@ -198,6 +197,7 @@ function builtAppTail(w: AssembleBuiltAppInputs) {
     byteStore,
     slackCore,
     chatSurfaces,
+    databaseUrl,
   } = w;
   return {
     admin,
@@ -208,7 +208,7 @@ function builtAppTail(w: AssembleBuiltAppInputs) {
     egressAudit,
     identity,
     principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    slackAccounts: createSlackAccounts(databaseUrl),
     composioReturns,
     workspace,
     memory,
@@ -244,7 +244,7 @@ function builtAppTail(w: AssembleBuiltAppInputs) {
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: createSessionShareStore(databaseUrl),
     sessionShareBytes: byteStore("session-shares/", "session-shares"),
     slackCore,
     chatSurfaces,

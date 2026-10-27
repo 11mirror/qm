@@ -7,13 +7,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { sharedMessages, type SessionShare } from "../../../src/sessions/session-share.ts";
+import { createSessionShareStore, sharedMessages } from "../../../src/sessions/session-share.ts";
 import { createIdentityService } from "../../../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../../../src/api/routes/session-sharing.ts";
 import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import { scopeId } from "../../../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../../../src/sessions/items.ts";
-import { testMap } from "../../support/test-database.ts";
+import { testDatabaseUrl, testMap } from "../../support/test-database.ts";
 
 function entry(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
@@ -100,7 +100,7 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = testMap<SessionShare>();
+  const store = createSessionShareStore(testDatabaseUrl());
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
   const countedBytes = {

@@ -1,7 +1,8 @@
 import type { Head } from "./late.ts";
+import { createAmbientCursors } from "../api/ambient-cursors.ts";
+import { createContextRequests } from "../api/context-requests.ts";
 import { createApp } from "../api/app.ts";
 import { createPostgresResourceSearch } from "../search/resource-search.ts";
-import type { SurfaceContextRequest } from "../types.ts";
 import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import type { StoresModule } from "./stores.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
@@ -154,7 +155,6 @@ function appDepsTail(w: BuildApiAppInputs) {
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    artifactMap,
     contextRequestEvents,
     connectorSecretKey,
     engaged,
@@ -168,6 +168,7 @@ function appDepsTail(w: BuildApiAppInputs) {
     judgeModelId,
     fallback,
     providerKeys,
+    databaseUrl,
   } = w;
   return {
     deploy: deployService,
@@ -180,7 +181,7 @@ function appDepsTail(w: BuildApiAppInputs) {
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequests: createContextRequests(databaseUrl),
     contextRequestEvents,
     contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
     engaged,
@@ -191,7 +192,7 @@ function appDepsTail(w: BuildApiAppInputs) {
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: createAmbientCursors(databaseUrl),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,

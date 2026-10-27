@@ -85,11 +85,7 @@ export function buildStores(w: Head) {
     ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const connectorStatusCache = createConnectorStatusCache(databaseUrl);
-  const slackInstallation = createSlackInstallationStore(
-    config.orgId,
-    artifactMap("slack_installation"),
-    connectorSecretKey,
-  );
+  const slackInstallation = createSlackInstallationStore(config.orgId, databaseUrl, connectorSecretKey);
   return {
     artifactMap,
     managesArtifactHome,

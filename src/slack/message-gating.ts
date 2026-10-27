@@ -1,6 +1,7 @@
 import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
 import { swallowAs } from "../util/errors.ts";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
@@ -162,9 +163,39 @@ export function dedupeKey(e: { event_id?: string; client_msg_id?: string; channe
   return e.event_id || e.client_msg_id || `${e.channel ?? ""}:${e.ts ?? ""}`;
 }
 
-export interface HandledEvent {
-  at: number;
+const HANDLED_EVENTS: TableSpec = {
+  table: "slack_handled_events",
+  key: "id",
+  columns: { at: { type: "bigint", required: true } },
+};
+
+export const HANDLED_EVENTS_MIGRATION = mapToTableMigration("slack/handled-events/0001-typed", HANDLED_EVENTS, {
+  statements: [`CREATE INDEX IF NOT EXISTS slack_handled_events_at ON slack_handled_events (at)`],
+});
+
+export function createHandledEvents(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [HANDLED_EVENTS_MIGRATION]);
+  return {
+    async has(key: string): Promise<boolean> {
+      return (await q(`SELECT 1 FROM slack_handled_events WHERE id = $1`, [key])).length > 0;
+    },
+    async record(key: string, at: number): Promise<void> {
+      await q(
+        `INSERT INTO slack_handled_events (id, at) VALUES ($1, $2)
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET at = EXCLUDED.at`,
+        [key, at],
+      );
+    },
+    async forget(key: string): Promise<void> {
+      await q(`DELETE FROM slack_handled_events WHERE id = $1`, [key]);
+    },
+    async deleteBefore(at: number): Promise<number> {
+      return (await q(`DELETE FROM slack_handled_events WHERE at < $1 RETURNING id`, [at])).length;
+    },
+  };
 }
+
+export type HandledEvents = ReturnType<typeof createHandledEvents>;
 
 export interface Deduper {
   seen(key: string): Promise<boolean>;
@@ -172,21 +203,21 @@ export interface Deduper {
   forget(key: string): void;
 }
 
-export function createDeduper(max = 500, handled?: DurableMap<HandledEvent>, now = Date.now): Deduper {
+export function createDeduper(max = 500, handled?: HandledEvents, now = Date.now): Deduper {
   const cache = new LRUCache<string, true>({ max });
   return {
     async seen(key) {
       if (cache.has(key)) return true;
       cache.set(key, true);
       if (!handled) return false;
-      return (await handled.get(key).catch(swallowAs("slack: handled-event lookup", null))) !== null;
+      return await handled.has(key).catch(swallowAs("slack: handled-event lookup", false));
     },
     async done(key) {
-      await handled?.put(key, { at: now() }).catch(swallowAs("slack: handled-event record", undefined));
+      await handled?.record(key, now()).catch(swallowAs("slack: handled-event record", undefined));
     },
     forget(key) {
       cache.delete(key);
-      void handled?.delete(key).catch(swallowAs("slack: handled-event forget", undefined));
+      void handled?.forget(key).catch(swallowAs("slack: handled-event forget", undefined));
     },
   };
 }

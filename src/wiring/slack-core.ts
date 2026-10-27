@@ -1,11 +1,11 @@
 import type { Head } from "./late.ts";
+import { createStagedEnvelopes } from "../slack/envelope-staging.ts";
+import { createSessionStatusStore } from "../slack/session-status.ts";
+import { createTaskAckStore } from "../slack/task-ack.ts";
+import { createHandledEvents } from "../slack/message-gating.ts";
 import { createInboxRealtime } from "../inbox/realtime.ts";
 import { createKeychainApprovals } from "../credentials/keychain-approval.ts";
-import type { HandledEvent } from "../slack/message-gating.ts";
 import { createSlackCoreClient } from "../api/slack-core-client.ts";
-import type { TaskAckState } from "../slack/task-ack.ts";
-import type { SlackSessionStatusState } from "../slack/session-status.ts";
-import type { StagedEnvelope } from "../slack/envelope-staging.ts";
 import { auxiliaryModelForProvider } from "../model/pi-models.ts";
 import type { CronsModule } from "./crons.ts";
 import type { CredentialsModule } from "./credentials.ts";
@@ -50,7 +50,6 @@ export function buildSlackCore(
     auditLog,
     outbound,
     askResolution,
-    artifactMap,
     memory,
     surfaceCache,
     processes,
@@ -67,6 +66,7 @@ export function buildSlackCore(
     turnStream,
     ackEmojiPicks,
     harness,
+    databaseUrl,
   } = w;
 
   const inboxRealtime = createInboxRealtime({
@@ -83,20 +83,20 @@ export function buildSlackCore(
     outbound,
     resume: (ask, grant) => askResolution(ask, grant),
   });
-  const slackHandledEvents = artifactMap<HandledEvent>("slack_handled_events");
+  const slackHandledEvents = createHandledEvents(databaseUrl);
   const slackCore = createSlackCoreClient({
     identity,
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    taskAcknowledgements: createTaskAckStore(databaseUrl),
+    sessionStatus: createSessionStatusStore(databaseUrl),
     statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
+    stagedEnvelopes: createStagedEnvelopes(databaseUrl),
     handledEvents: slackHandledEvents,
     config: configStore,
     runtimeFallback: fallback,

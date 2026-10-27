@@ -6,7 +6,7 @@ import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store
 import type { NewItem } from "../sessions/items.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { QueuedPosts } from "./queued-posts.ts";
 import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 
 export interface OutboundPost {
@@ -33,12 +33,6 @@ export interface Outbound {
   retryQueued(now?: number): Promise<number>;
 }
 
-export interface QueuedPost {
-  post: OutboundPost;
-  firstFailedAt: number;
-  lastError: string;
-}
-
 const RETRY_MAX_AGE_MS = 6 * 60 * 60_000;
 const isPermanent = (error: unknown): boolean => (error as { permanent?: boolean } | null)?.permanent === true;
 
@@ -46,7 +40,7 @@ const DEFERRED = new Error("deferred to a live turn handler");
 
 export function createOutbound(opts: {
   idempotency?: Pick<IdempotencyStore, "once">;
-  retries?: DurableMap<QueuedPost>;
+  retries?: QueuedPosts;
   afterSend?: (post: OutboundPost, receipt: PostReceipt) => void;
 }): Outbound {
   const senders = new Map<string, SurfaceSender[]>();

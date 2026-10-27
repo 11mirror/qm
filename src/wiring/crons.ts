@@ -1,6 +1,5 @@
 import type { Head } from "./late.ts";
 import { createMonitorStore } from "../monitors/monitor-store.ts";
-import type { PendingApprovalRecord } from "../types.ts";
 import type { LedgerEvent } from "../inbox/events.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createInboxLedger, type InboxEventSink } from "../inbox/ledger.ts";
@@ -8,14 +7,14 @@ import { createPostgresCronFireStore } from "../cron/fire-store.ts";
 import { createCronStore, type CronStore } from "../cron/cron-store.ts";
 import { RUN_MAX_AGE_MS } from "../runs/reaper.ts";
 import { createWebhookStore } from "../webhooks/webhook-store.ts";
-import { createApprovalStore } from "../core/approval-store.ts";
+import { createApprovalRecords, createApprovalStore } from "../core/approval-store.ts";
 import { createSecurityScreenProxy } from "../security/security-screener.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OutboundModule } from "./outbound.ts";
 
 export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule) {
-  const { artifactMap, ledgerEventBus, late, databaseUrl, config, outbound, chatSurfaces, overrides } = w;
+  const { ledgerEventBus, late, databaseUrl, config, outbound, chatSurfaces, overrides } = w;
 
   const monitors = createMonitorStore(databaseUrl);
   const cronOwnerCache = new Map<string, string>();
@@ -61,7 +60,7 @@ export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule)
   };
   const webhooks = createWebhookStore(databaseUrl);
   const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
+  const approvals = createApprovalStore(createApprovalRecords(databaseUrl), outbound, {
     surfaces: chatSurfaces,
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
   });

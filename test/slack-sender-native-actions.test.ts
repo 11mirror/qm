@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackSender } from "../src/slack/sender.ts";
-import { createOutbound, type QueuedPost } from "../src/surfaces/outbound.ts";
+import { createOutbound } from "../src/surfaces/outbound.ts";
+import type { QueuedPost } from "../src/surfaces/queued-posts.ts";
 
 const platformError = (code: string) =>
   Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } });

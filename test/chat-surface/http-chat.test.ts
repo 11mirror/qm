@@ -5,12 +5,12 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { createHttpChatSurface, httpChatConfigsFromEnv, type HttpChatConfig } from "../../src/surfaces/http-chat.ts";
+import { createApprovalRecords, createApprovalStore } from "../../src/core/approval-store.ts";
+import { createHttpChatSurface, type HttpChatConfig, httpChatConfigsFromEnv } from "../../src/surfaces/http-chat.ts";
 import { createSurfaceRegistry, inboundTurn } from "../../src/surfaces/registry.ts";
 import { createSlackSurface } from "../../src/surfaces/slack-surface.ts";
 import { surfaceThreadRef } from "../../src/surfaces/refs.ts";
 import type { InboundMessage } from "../../src/surfaces/surface.ts";
-import { createApprovalStore } from "../../src/core/approval-store.ts";
 import { createOutbound, type OutboundPost } from "../../src/surfaces/outbound.ts";
 import { conversationScope } from "../../src/resolution/resolution-service.ts";
 import { tenant } from "../../src/tenant.ts";
@@ -19,7 +19,7 @@ import type { IngestEvent } from "../../src/surface-cache/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { settle } from "../support/settle.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const SECRET = "synthetic-chat-surface-signing-secret-0123456789";
 const PATH = "/v1/surfaces/forum/events";
@@ -270,7 +270,7 @@ test("an approval on a non-Slack surface is posted to the conversation as text w
   const forum = fakeForum();
   const outbound = createOutbound({});
   const registry = createSurfaceRegistry({ surfaces: [forum.adapter], outbound, turn: async () => ({}) });
-  const store = createApprovalStore(testMap<PendingApprovalRecord>(), outbound, {
+  const store = createApprovalStore(createApprovalRecords(testDatabaseUrl()), outbound, {
     surfaces: registry,
     webSessionUrl: (id) => `https://qm.test/s/${id}`,
   });

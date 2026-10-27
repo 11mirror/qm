@@ -92,7 +92,7 @@ export function registerEveryJobs(
   every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
   every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));
   const handledEventCutoff = () => Date.now() - 24 * 60 * 60_000;
-  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBelow("at", handledEventCutoff()));
+  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBefore(handledEventCutoff()));
   every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()));
   every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup());
@@ -103,10 +103,7 @@ export function registerEveryJobs(
     if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
   });
   every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
-  every("Composio consent returns", 30 * 60_000, async () => {
-    for (const [id, entry] of await composioReturns.entries())
-      if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-  });
+  every("Composio consent returns", 30 * 60_000, () => composioReturns.deleteExpired(Date.now()));
   every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments());
   if (reapDeepIdle)
     every("sandbox:deep-idle-reaper", 5 * 60_000, () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs));

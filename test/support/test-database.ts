@@ -74,6 +74,10 @@ export function testSandboxBodies<T extends object>(migration: MapConversion): S
   return createSandboxBodies<T>(testDatabaseUrl(), migration);
 }
 
+export function testQuery(url: string, text: string) {
+  return createPgPool(url).q(text);
+}
+
 export function testPgPool(): PgPool {
   return createPgPool(sharedDatabase().url);
 }

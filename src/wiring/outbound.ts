@@ -1,7 +1,8 @@
 import type { Head } from "./late.ts";
 import { createIdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { type RecentDmPosts, rememberDmPost } from "../surfaces/recent-dm-posts.ts";
-import { createOutbound, type QueuedPost, createWebSurface } from "../surfaces/outbound.ts";
+import { createRecentDmPosts } from "../surfaces/recent-dm-posts.ts";
+import { createQueuedPosts } from "../surfaces/queued-posts.ts";
+import { createOutbound, createWebSurface } from "../surfaces/outbound.ts";
 import { scopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createSlackSurface } from "../surfaces/slack-surface.ts";
@@ -11,14 +12,14 @@ import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 
 export function buildOutbound(w: Head & StoresModule & RunsModule) {
-  const { artifactMap, databaseUrl, sessions, sessionStateBus, config, late } = w;
+  const { databaseUrl, sessions, sessionStateBus, config, late } = w;
 
   const idempotency = createIdempotencyStore(databaseUrl);
   const transcripts = { sessions, sessionStates: sessionStateBus };
-  const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
+  const recentDmPosts = createRecentDmPosts(databaseUrl);
   const outbound = createOutbound({
     idempotency,
-    retries: artifactMap<QueuedPost>("queued_posts"),
+    retries: createQueuedPosts(databaseUrl),
     afterSend: (post, receipt) => {
       const recipientId = post.destination.target;
       const threadRef = receipt.recipientThreadRef;
@@ -32,7 +33,7 @@ export function buildOutbound(w: Head & StoresModule & RunsModule) {
           "slack",
         );
         await sessions.addParticipant(session.id, recipientId);
-        await rememberDmPost(recentDmPosts, threadRef, {
+        await recentDmPosts.remember(threadRef, {
           key: post.idempotencyKey,
           text: post.text,
           at: Date.now(),

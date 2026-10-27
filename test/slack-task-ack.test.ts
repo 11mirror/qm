@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
+import { createTaskAckStore, createTaskAcknowledgements } from "../src/slack/task-ack.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function setup() {
-  const store = testMap<TaskAckState>();
+  const store = createTaskAckStore(testDatabaseUrl());
   const events: string[] = [];
   const client = {
     reactions: {

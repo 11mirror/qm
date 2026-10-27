@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SocketModeClient } from "@slack/socket-mode";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
-import { createEnvelopeStaging, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
+import { createEnvelopeStaging, createStagedEnvelopes } from "../src/slack/envelope-staging.ts";
 import { createDeferredAckReceiver, type AckGate } from "../src/slack/deferred-ack.ts";
 import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { createDeduper, dedupedRun } from "../src/slack/message-gating.ts";
@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testQuery } from "./support/test-database.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
   const store = createPostgresDirectoryStore(testDatabaseUrl());
@@ -142,7 +142,9 @@ for (const mode of ["socket", "http"] as const)
       const options = { failWrite: true };
       const { observe } = fixture(options);
       const deduper = createDeduper();
-      const map = testMap<StagedEnvelope>();
+      const url = testDatabaseUrl();
+      const map = createStagedEnvelopes(url);
+      const staged = async () => (await testQuery(url, `SELECT id FROM slack_staged_envelopes`)).length;
       const staging = createEnvelopeStaging(map, { account: "test", staleAfterMs: 0 });
       let release!: () => void;
       const blocked = new Promise<void>((resolve) => {
@@ -254,7 +256,7 @@ for (const mode of ["socket", "http"] as const)
       deduper.forget("message-key");
       options.failWrite = false;
       if (afterCap) {
-        assert.equal((await map.entries()).length, 1);
+        assert.equal(await staged(), 1);
         assert.equal(
           await staging.sweep((replayed, ackGate) =>
             processEvent({ body: replayed, ack: async () => {}, customProperties: { ackGate } }),
@@ -262,7 +264,7 @@ for (const mode of ["socket", "http"] as const)
           1,
         );
       } else {
-        assert.equal((await map.entries()).length, 0);
+        assert.equal(await staged(), 0);
         const retryStatus = await deliver(1);
         if (mode === "http") assert.equal(retryStatus, 200);
         assert.equal(retries.at(-1), 1);
@@ -270,7 +272,6 @@ for (const mode of ["socket", "http"] as const)
       for (let i = 0; i < 200 && admitted === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(admitted, 1);
       assert.equal(attempts, 2);
-      for (let i = 0; i < 200 && (await map.entries()).length > 0; i++)
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal((await map.entries()).length, 0);
+      for (let i = 0; i < 200 && (await staged()) > 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(await staged(), 0);
     });

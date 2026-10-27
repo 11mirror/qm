@@ -14,7 +14,7 @@ import { TURN_QUEUES } from "../turns/absurd-schema.ts";
 import { RUN_MAX_CLAIMS, type Worker, createWorker, createRunPreemption } from "../runs/worker.ts";
 import { type ProcessReaper, createProcessReaper, createReaperKillHook } from "../processes/process-reaper.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import type { ComposioReturn } from "../api/routes/composio.ts";
+import { createComposioReturns } from "../connectors/composio-links.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
@@ -35,7 +35,6 @@ export function buildWorkers(
 ) {
   const {
     config,
-    artifactMap,
     gates,
     pgArtifactMap,
     turnLedger,
@@ -115,7 +114,7 @@ export function buildWorkers(
           : {}),
       })
     : null;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const composioReturns = createComposioReturns(databaseUrl);
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
