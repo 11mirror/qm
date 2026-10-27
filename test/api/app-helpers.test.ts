@@ -1,11 +1,11 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { projectGroupRef } from "../src/projects/project-store.ts";
-import type { Conversation, Principal } from "../src/types.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
-import { completeTurn } from "./support/turns.ts";
+import { projectGroupRef } from "../../src/projects/project-store.ts";
+import type { Conversation, Principal } from "../../src/types.ts";
+import { buildApp } from "../../src/wiring.ts";
+import { testConfig } from "../support/test-config.ts";
+import { completeTurn } from "../support/turns.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
