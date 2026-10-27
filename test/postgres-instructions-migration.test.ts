@@ -91,6 +91,13 @@ const instructions = async (admin: pg.Pool) =>
 for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
   test(`channel guidance moves into the channel's instructions${tenant ? " per tenant" : ""}`, { skip }, async () => {
     await withDatabase(async (url, admin) => {
+      // A fresh database gets the schema baseline; then put the three tables back in their pre-0002 shape and
+      // rerun 0002 alone, as on a database that booted before this migration existed.
+      await migrate(url);
+      await admin.query(
+        "DELETE FROM qm_schema_migrations WHERE id = 'surface-cache/channel-policy/0002-orders-into-instructions'",
+      );
+      await admin.query("DROP TABLE soul_configs, channel_policy, channel_state CASCADE");
       await legacy(admin, tenant);
       await migrate(url);
       const rows = await instructions(admin);
