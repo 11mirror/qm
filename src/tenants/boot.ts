@@ -53,7 +53,6 @@ export async function bootTenant(
 
   await built.start();
   await built.refreshCustomProviders();
-  built.deploymentLayerRefresh.start();
   built.runtime.start();
 
   await serve(server, config);
@@ -111,7 +110,6 @@ export async function bootTenant(
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
-      built.deploymentLayerRefresh.stop();
     },
     async stop() {
       await backgroundController?.stop();

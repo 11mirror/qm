@@ -14,7 +14,6 @@ import { testMap } from "./support/test-database.ts";
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
   t.after(async () => {
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   const threadRef = "dm:U1:subagent-visibility";
@@ -77,7 +76,6 @@ for (const fork of [false, true]) {
     const { startSession } = await import("../src/api/start-session.ts");
     const built = buildApp(testConfig({ memoryCapture: "off" }));
     t.after(async () => {
-      built.deploymentLayerRefresh.stop();
       await built.runtime.stop();
     });
     const threadRef = `web:U1:seed-${fork}`;

@@ -291,7 +291,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import {
   createProcessReaper,
@@ -414,7 +414,6 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -632,7 +631,7 @@ export function buildApp(
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
-  const deploymentLayerStore = createDeploymentLayerStore({
+  const layerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
@@ -659,9 +658,14 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
+  // Every instance re-applies the layer when any instance publishes one, and after a missed notification.
+  const deploymentLayerChanged = createPostgresNotifyBus<null>(databaseUrl, "deployment_layer", "deployment layer");
+  const deploymentLayerStore: DeploymentLayerStore = {
+    ...layerStore,
+    put: (bundle, by) => layerStore.put(bundle, by).finally(() => deploymentLayerChanged.emit(null)),
+  };
+  const rehydrateLayer = () => void layerStore.hydrate().catch(reportFailureAs("deployment layer refresh", undefined));
+  deploymentLayerChanged.subscribe(rehydrateLayer, { onResync: rehydrateLayer });
   const installCatalogs = async (): Promise<void> => {
     await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });
     for (const dir of config.pluginSkillDirs) {
@@ -2409,6 +2413,7 @@ export function buildApp(
           turnYields?.close?.(),
           sessionStateBus.close?.(),
           ledgerEventBus.close?.(),
+          deploymentLayerChanged.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
@@ -2428,7 +2433,6 @@ export function buildApp(
     deploymentLayerStore,
     brokeredTools,
     start: () => startOnce().ready,
-    deploymentLayerRefresh,
     sessions,
     runs,
     signals: runSignals,
