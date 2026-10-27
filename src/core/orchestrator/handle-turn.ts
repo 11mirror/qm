@@ -4,7 +4,7 @@ import { type Session, type TurnResult } from "../../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
-import { swallow, swallowAs } from "../../util/errors.ts";
+import { errMessage, swallow, swallowAs, withCleanup } from "../../util/errors.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { admitTurn } from "./admit.ts";
 import { holdTurnLease } from "./turn-lease.ts";
@@ -89,6 +89,7 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
   const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return held.refused;
   if (!ctx.ambientTurn) titling.assignSessionTitle();
+  let failure: unknown;
   try {
     const begun = await beginTurn(o, ctx, {
       frame,
@@ -126,9 +127,15 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
       ready,
     });
   } catch (err) {
+    failure = err;
     return await mapTurnFailure(ctx, { session, lease: held.lease, failureUserItem: run.failureUserItem }, err);
   } finally {
-    await releaseTurn(o, ctx, { session, held, run, reclaimBox: turnSandboxes.sandboxes.reclaimBox });
+    await releaseTurn(o, ctx, { session, held, run, reclaimBox: turnSandboxes.sandboxes.reclaimBox }).catch(
+      (releaseError: unknown) => {
+        if (failure === undefined) throw releaseError;
+        throw new AggregateError([failure, releaseError], errMessage(failure), { cause: failure });
+      },
+    );
   }
 }
 
@@ -355,8 +362,8 @@ async function executeTurn(
     },
   );
 
-  const tail = async (): Promise<void> => {
-    try {
+  const tail = (): Promise<void> =>
+    withCleanup(async () => {
       if (!pausing && turnCompleted && !session.title && !titling.title.write) {
         await titles.generateAndStore(
           session.id,
@@ -364,10 +371,7 @@ async function executeTurn(
           `User:\n${titling.titleText}\n\nAssistant:\n${result.reply}`,
         );
       }
-    } finally {
-      await sandboxes.reclaimBox();
-    }
-  };
+    }, sandboxes.reclaimBox);
 
   let finalResult = await settleTurnResult(ctx, {
     session,
