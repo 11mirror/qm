@@ -1,19 +1,20 @@
-import { SignatureV4 } from "@smithy/signature-v4";
-import { Sha256 } from "@aws-crypto/sha256-js";
-import { defaultProvider } from "@aws-sdk/credential-provider-node";
-import { fetchWithRetry, sleep } from "../util/async.ts";
-import { errMessage, execFailure, swallow, withRequestId } from "../util/errors.ts";
+import {
+  CreateMicrovmAuthTokenCommand,
+  CreateMicrovmImageCommand,
+  GetMicrovmCommand,
+  LambdaMicrovmsClient,
+  ListMicrovmImagesCommand,
+  ResumeMicrovmCommand,
+  RunMicrovmCommand,
+  SuspendMicrovmCommand,
+  TerminateMicrovmCommand,
+  UpdateMicrovmImageCommand,
+  type LambdaMicrovmsClientConfig,
+} from "@aws-sdk/client-lambda-microvms";
+import { sleep } from "../util/async.ts";
+import { errMessage, execFailure, swallow } from "../util/errors.ts";
 import { randomBytes } from "node:crypto";
 import { shq } from "../util/shell.ts";
-
-type CredentialProvider = () => Promise<{
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-  expiration?: Date;
-}>;
-
-const API = "/2025-09-09";
 
 export type MicrovmLifecycleState = "PENDING" | "RUNNING" | "SUSPENDING" | "SUSPENDED" | "TERMINATING" | "TERMINATED";
 
@@ -51,17 +52,14 @@ export interface MicrovmDescription {
   microvmId: string;
   endpoint?: string;
   state: MicrovmLifecycleState;
-  startedAt?: number;
   imageVersion?: string;
   stateReason?: string;
 }
 
-export interface AwsMicrovmApiOptions {
+/** `credentials` and `requestHandler` exist for tests; callers pass the region and an optional profile. */
+export interface AwsMicrovmApiOptions extends Pick<LambdaMicrovmsClientConfig, "credentials" | "requestHandler"> {
   region: string;
   profile?: string;
-  credentials?: CredentialProvider;
-  host?: string;
-  fetchImpl?: typeof fetch;
 }
 
 export interface AwsMicrovmApi {
@@ -95,119 +93,66 @@ export interface AwsMicrovmApi {
   ): Promise<MicrovmDescription>;
 }
 
-export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
-  const region = opts.region;
-  const host = opts.host ?? `lambda.${region}.amazonaws.com`;
-  const doFetch = opts.fetchImpl ?? fetch;
-  const credentials = opts.credentials ?? defaultProvider(opts.profile ? { profile: opts.profile } : {});
-  const signer = new SignatureV4({ service: "lambda", region, sha256: Sha256, credentials });
-
-  async function call<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    query: Record<string, string> = {},
-  ): Promise<{ status: number; json: T }> {
-    const payload = body === undefined ? "" : JSON.stringify(body);
-    const search = new URLSearchParams(query).toString();
-    const signed = await signer.sign({
-      method,
-      protocol: "https:",
-      hostname: host,
-      path,
-      headers: { host, "content-type": "application/json" },
-      body: payload,
-      query,
-    });
-    const res = await fetchWithRetry(
-      (signal) =>
-        doFetch(`https://${host}${path}${search ? `?${search}` : ""}`, {
-          method,
-          headers: signed.headers as Record<string, string>,
-          signal,
-          ...(payload ? { body: payload } : {}),
-        }),
-      method === "POST" ? "refused" : "idempotent",
+/** Service failures become AwsApiError with the HTTP status and AWS request id; transport errors pass through. */
+async function call<T>(operation: string, send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (e) {
+    const meta = (e as { $metadata?: { httpStatusCode?: number; requestId?: string } }).$metadata;
+    if (!meta?.httpStatusCode) throw e;
+    const requestId = meta.requestId ? ` [request id ${meta.requestId}]` : "";
+    throw new AwsApiError(
+      `lambda-microvms ${operation} -> ${meta.httpStatusCode}: ${errMessage(e)}${requestId}`,
+      meta.httpStatusCode,
+      (e as Error).name,
     );
-    const text = await res.text();
-    let json: unknown = undefined;
-    if (text.trim()) {
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = { message: text };
-      }
-    }
-    if (res.status < 200 || res.status >= 300) {
-      const msg = (json as { message?: string } | undefined)?.message ?? text ?? `HTTP ${res.status}`;
-      const awsCode = res.headers.get("x-amzn-errortype") ?? undefined;
-      throw new AwsApiError(
-        withRequestId(`lambda-microvms ${method} ${path} -> ${res.status}: ${msg}`, res.headers),
-        res.status,
-        awsCode,
-      );
-    }
-    return { status: res.status, json: (json ?? {}) as T };
   }
+}
+
+export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
+  // The SDK retries throttling and server errors; RunMicrovm and the image calls carry an
+  // idempotency token the SDK fills in, so a retried create cannot launch twice.
+  const { region, profile, credentials, requestHandler } = opts;
+  const client = new LambdaMicrovmsClient({
+    region,
+    maxAttempts: 4,
+    ...(profile ? { profile } : {}),
+    ...(credentials ? { credentials } : {}),
+    ...(requestHandler ? { requestHandler } : {}),
+  });
+  const image = (out: object) => out as MicrovmImageSummary;
+  const microvm = (out: object) => out as MicrovmDescription;
+  const microvmIdentifier = (id: string) => ({ microvmIdentifier: id });
 
   const api: AwsMicrovmApi = {
     async listImages(nameFilter?: string) {
       const items: MicrovmImageSummary[] = [];
-      let next: string | undefined;
+      let nextToken: string | undefined;
       do {
-        const { json } = await call<{ items?: MicrovmImageSummary[]; nextToken?: string }>(
-          "GET",
-          `${API}/microvm-images`,
-          undefined,
-          { ...(nameFilter ? { nameFilter } : {}), ...(next ? { nextToken: next } : {}) },
+        const page = await call("ListMicrovmImages", () =>
+          client.send(new ListMicrovmImagesCommand({ ...(nameFilter ? { nameFilter } : {}), nextToken })),
         );
-        items.push(...(json.items ?? []));
-        next = json.nextToken;
-      } while (next);
+        items.push(...(page.items ?? []).map(image));
+        nextToken = page.nextToken;
+      } while (nextToken);
       return items;
     },
     async findImage(name) {
       return (await api.listImages(name)).find((i) => i.name === name) ?? null;
     },
     async createImage({ name, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
-      const { json } = await call<MicrovmImageSummary>("POST", `${API}/microvm-images`, {
-        name,
-        codeArtifact: { uri: s3Uri },
-        baseImageArn,
-        buildRoleArn,
-        ...(clientToken ? { clientToken } : {}),
-      });
-      return json;
+      const input = { name, codeArtifact: { uri: s3Uri }, baseImageArn, buildRoleArn, clientToken };
+      return image(await call("CreateMicrovmImage", () => client.send(new CreateMicrovmImageCommand(input))));
     },
     async updateImage({ imageIdentifier, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
-      const { json } = await call<MicrovmImageSummary>(
-        "PUT",
-        `${API}/microvm-images/${encodeURIComponent(imageIdentifier)}`,
-        {
-          codeArtifact: { uri: s3Uri },
-          baseImageArn,
-          buildRoleArn,
-          ...(clientToken ? { clientToken } : {}),
-        },
-      );
-      return json;
+      const input = { imageIdentifier, codeArtifact: { uri: s3Uri }, baseImageArn, buildRoleArn, clientToken };
+      return image(await call("UpdateMicrovmImage", () => client.send(new UpdateMicrovmImageCommand(input))));
     },
     async runMicrovm(input) {
-      const { json } = await call<MicrovmDescription>("POST", `${API}/microvms`, {
-        imageIdentifier: input.imageIdentifier,
-        ...(input.imageVersion ? { imageVersion: input.imageVersion } : {}),
-        ingressNetworkConnectors: input.ingressNetworkConnectors,
-        egressNetworkConnectors: input.egressNetworkConnectors,
-        ...(input.executionRoleArn ? { executionRoleArn: input.executionRoleArn } : {}),
-        ...(input.idlePolicy ? { idlePolicy: input.idlePolicy } : {}),
-        ...(input.maximumDurationInSeconds ? { maximumDurationInSeconds: input.maximumDurationInSeconds } : {}),
-        ...(input.clientToken ? { clientToken: input.clientToken } : {}),
-      });
-      return json;
+      return microvm(await call("RunMicrovm", () => client.send(new RunMicrovmCommand(input))));
     },
     async getMicrovm(id) {
-      const { json } = await call<MicrovmDescription>("GET", `${API}/microvms/${encodeURIComponent(id)}`);
-      return json;
+      return microvm(await call("GetMicrovm", () => client.send(new GetMicrovmCommand(microvmIdentifier(id)))));
     },
     async tryGetMicrovm(id) {
       try {
@@ -218,23 +163,22 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       }
     },
     async createAuthToken(id, expirationInMinutes) {
-      const { json } = await call<{ authToken: Record<string, string> }>(
-        "POST",
-        `${API}/microvms/${encodeURIComponent(id)}/auth-token`,
-        { allowedPorts: [{ allPorts: {} }], expirationInMinutes },
+      const input = { ...microvmIdentifier(id), allowedPorts: [{ allPorts: {} }], expirationInMinutes };
+      const { authToken } = await call("CreateMicrovmAuthToken", () =>
+        client.send(new CreateMicrovmAuthTokenCommand(input)),
       );
-      const tok = json.authToken?.["X-aws-proxy-auth"] ?? Object.values(json.authToken ?? {})[0];
+      const tok = authToken?.["X-aws-proxy-auth"] ?? Object.values(authToken ?? {})[0];
       if (!tok) throw new AwsApiError("auth-token response missing token", 200);
       return tok;
     },
     async suspend(id) {
-      await call("POST", `${API}/microvms/${encodeURIComponent(id)}/suspend`);
+      await call("SuspendMicrovm", () => client.send(new SuspendMicrovmCommand(microvmIdentifier(id))));
     },
     async resume(id) {
-      await call("POST", `${API}/microvms/${encodeURIComponent(id)}/resume`);
+      await call("ResumeMicrovm", () => client.send(new ResumeMicrovmCommand(microvmIdentifier(id))));
     },
     async terminate(id) {
-      await call("DELETE", `${API}/microvms/${encodeURIComponent(id)}`);
+      await call("TerminateMicrovm", () => client.send(new TerminateMicrovmCommand(microvmIdentifier(id))));
     },
     async waitForState(id, target, waitOpts) {
       const timeoutMs = waitOpts?.timeoutMs ?? 120_000;

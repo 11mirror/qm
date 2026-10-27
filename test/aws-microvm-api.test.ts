@@ -7,14 +7,55 @@ import {
   AwsApiError,
   type AwsMicrovmApi,
 } from "../src/sandbox/aws-microvm-api.ts";
-import { SignatureV4 } from "@smithy/signature-v4";
-import { Sha256 } from "@aws-crypto/sha256-js";
+import { Readable } from "node:stream";
 
 interface Recorded {
   url: string;
   method: string;
   body?: string;
   headers: Record<string, string>;
+}
+
+interface FakeHttpRequest {
+  method: string;
+  hostname: string;
+  path: string;
+  query?: Record<string, string>;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+/** An SDK request handler that records each signed request and answers from `reply`. */
+function fakeHttp(
+  reply: (rec: Recorded, n: number) => { status: number; body?: unknown; headers?: Record<string, string> },
+): {
+  requestHandler: { handle(request: FakeHttpRequest): Promise<{ response: unknown }> };
+  calls: Recorded[];
+} {
+  const calls: Recorded[] = [];
+  const requestHandler = {
+    async handle(request: FakeHttpRequest) {
+      const search = new URLSearchParams(request.query ?? {}).toString();
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = v;
+      const rec: Recorded = {
+        url: `https://${request.hostname}${request.path}${search ? `?${search}` : ""}`,
+        method: request.method,
+        headers,
+        ...(request.body ? { body: String(request.body) } : {}),
+      };
+      calls.push(rec);
+      const r = reply(rec, calls.length - 1);
+      const text = r.body === undefined ? "" : JSON.stringify(r.body);
+      const response = {
+        statusCode: r.status,
+        headers: { "content-type": "application/json", ...r.headers },
+        body: Readable.from([Buffer.from(text)]),
+      };
+      return { response };
+    },
+  };
+  return { requestHandler, calls };
 }
 
 function fakeFetch(
@@ -44,11 +85,11 @@ function fakeFetch(
 const creds = async () => ({ accessKeyId: "AKIATEST", secretAccessKey: "secret" });
 
 test("runMicrovm posts to the versioned path, signs as lambda, and parses the body", async () => {
-  const { fetchImpl, calls } = fakeFetch(() => ({
+  const { requestHandler, calls } = fakeHttp(() => ({
     status: 200,
     body: { microvmId: "mvm-1", endpoint: "mvm-1.lambda-microvm.us-west-2.on.aws", state: "PENDING" },
   }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   const res = await api.runMicrovm({
     imageIdentifier: "img",
     ingressNetworkConnectors: ["ing"],
@@ -70,11 +111,11 @@ test("runMicrovm posts to the versioned path, signs as lambda, and parses the bo
 });
 
 test("createAuthToken extracts the X-aws-proxy-auth value", async () => {
-  const { fetchImpl, calls } = fakeFetch(() => ({
+  const { requestHandler, calls } = fakeHttp(() => ({
     status: 200,
     body: { authToken: { "X-aws-proxy-auth": "TOK123" } },
   }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   const tok = await api.createAuthToken("mvm-1", 30);
   assert.equal(tok, "TOK123");
   assert.equal(calls[0]!.url, "https://lambda.us-west-2.amazonaws.com/2025-09-09/microvms/mvm-1/auth-token");
@@ -82,8 +123,8 @@ test("createAuthToken extracts the X-aws-proxy-auth value", async () => {
 });
 
 test("suspend/resume/terminate hit the right verbs and paths", async () => {
-  const { fetchImpl, calls } = fakeFetch(() => ({ status: 200 }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const { requestHandler, calls } = fakeHttp(() => ({ status: 200 }));
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   await api.suspend("m1");
   await api.resume("m1");
   await api.terminate("m1");
@@ -94,12 +135,12 @@ test("suspend/resume/terminate hit the right verbs and paths", async () => {
 });
 
 test("tryGetMicrovm maps a 404 to null but rethrows other errors", async () => {
-  const { fetchImpl } = fakeFetch(() => ({ status: 404, body: { message: "nope" } }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const { requestHandler } = fakeHttp(() => ({ status: 404, body: { message: "nope" } }));
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   assert.equal(await api.tryGetMicrovm("gone"), null);
 
-  const { fetchImpl: f500 } = fakeFetch(() => ({ status: 500, body: { message: "boom" } }));
-  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: f500 });
+  const { requestHandler: f500 } = fakeHttp(() => ({ status: 500, body: { message: "boom" } }));
+  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler: f500 });
   await assert.rejects(
     () => api2.tryGetMicrovm("x"),
     (e) => e instanceof AwsApiError && e.status === 500,
@@ -108,27 +149,27 @@ test("tryGetMicrovm maps a 404 to null but rethrows other errors", async () => {
 
 test("waitForState polls getMicrovm until the target state", async () => {
   const states = ["PENDING", "PENDING", "RUNNING"];
-  const { fetchImpl, calls } = fakeFetch((_r, n) => ({
+  const { requestHandler, calls } = fakeHttp((_r, n) => ({
     status: 200,
     body: { microvmId: "m1", state: states[Math.min(n, states.length - 1)] },
   }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   const res = await api.waitForState("m1", "RUNNING", { intervalMs: 1 });
   assert.equal(res.state, "RUNNING");
   assert.equal(calls.length, 3);
 });
 
 test("waitForState throws if the microVM terminates while waiting", async () => {
-  const { fetchImpl } = fakeFetch(() => ({
+  const { requestHandler } = fakeHttp(() => ({
     status: 200,
     body: { microvmId: "m1", state: "TERMINATED", stateReason: "capped" },
   }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   await assert.rejects(() => api.waitForState("m1", "RUNNING", { intervalMs: 1 }), /terminated while waiting/);
 });
 
 test("findImage filters the list by name", async () => {
-  const { fetchImpl } = fakeFetch(() => ({
+  const { requestHandler } = fakeHttp(() => ({
     status: 200,
     body: {
       items: [
@@ -137,7 +178,7 @@ test("findImage filters the list by name", async () => {
       ],
     },
   }));
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   const img = await api.findImage("mine");
   assert.equal(img?.imageArn, "b");
   assert.equal(await api.findImage("absent"), null);
@@ -205,17 +246,17 @@ test("control-plane reads retry throttling and outages, and failures carry the A
     { status: 503, body: { message: "unavailable" }, headers: { "retry-after": "0" } },
     { status: 200, body: { microvmId: "mvm-1", endpoint: "e", state: "RUNNING" } },
   ];
-  const { fetchImpl, calls } = fakeFetch((_rec, n) => replies[n]!);
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const { requestHandler, calls } = fakeHttp((_rec, n) => replies[n]!);
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   assert.equal((await api.getMicrovm("mvm-1")).state, "RUNNING");
   assert.equal(calls.length, 3);
 
-  const failing = fakeFetch(() => ({
+  const failing = fakeHttp(() => ({
     status: 500,
     body: { message: "boom" },
     headers: { "x-amzn-requestid": "aws-req-1" },
   }));
-  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: failing.fetchImpl });
+  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler: failing.requestHandler });
   await assert.rejects(api2.getMicrovm("mvm-1"), (e: unknown) => {
     assert.ok(e instanceof AwsApiError);
     assert.equal(e.status, 500);
@@ -225,21 +266,24 @@ test("control-plane reads retry throttling and outages, and failures carry the A
   assert.equal(failing.calls.length, 4, "an idempotent read is retried until attempts run out");
 });
 
-test("runMicrovm retries a throttled create but never an ambiguous server error", async () => {
-  const throttled = fakeFetch((_rec, n) =>
+test("runMicrovm retries throttling and server errors under one idempotency token", async () => {
+  const throttled = fakeHttp((_rec, n) =>
     n === 0
       ? { status: 429, body: { message: "Rate exceeded" }, headers: { "retry-after": "0" } }
       : { status: 200, body: { microvmId: "mvm-2", endpoint: "e", state: "PENDING" } },
   );
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: throttled.fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler: throttled.requestHandler });
   const run = { imageIdentifier: "img", ingressNetworkConnectors: [], egressNetworkConnectors: [] };
   assert.equal((await api.runMicrovm(run)).microvmId, "mvm-2");
   assert.equal(throttled.calls.length, 2);
 
-  const broken = fakeFetch(() => ({ status: 502, body: { message: "bad gateway" } }));
-  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: broken.fetchImpl });
+  const broken = fakeHttp(() => ({ status: 502, body: { message: "bad gateway" } }));
+  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler: broken.requestHandler });
   await assert.rejects(api2.runMicrovm(run), /-> 502: bad gateway/);
-  assert.equal(broken.calls.length, 1);
+  const tokens = new Set(broken.calls.map((c) => JSON.parse(c.body!).clientToken as string));
+  assert.equal(broken.calls.length, 4);
+  assert.equal(tokens.size, 1, "every attempt carries the same client token, so the service runs at most one");
+  assert.ok([...tokens][0]);
 });
 
 test("writeAbs splits writes above the chunk size into parts, joins them in the MicroVM, and removes the parts", async () => {
@@ -287,36 +331,16 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
   assert.deepEqual(execs, [`rm -f '${other}'.part-* '${other}'.joined`]);
 });
 
-test("findImage filters by name, follows nextToken, and signs the query string it sends", async () => {
-  const { fetchImpl, calls } = fakeFetch((rec) =>
+test("findImage filters by name and follows nextToken", async () => {
+  const { requestHandler, calls } = fakeHttp((rec) =>
     rec.url.includes("nextToken=")
       ? { status: 200, body: { items: [{ name: "b-qm-sandbox", imageArn: "arn:b" }] } }
       : { status: 200, body: { items: [{ name: "b-qm-sandbox-old", imageArn: "arn:old" }], nextToken: "p/2" } },
   );
-  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, requestHandler });
   assert.equal((await api.findImage("b-qm-sandbox"))?.imageArn, "arn:b");
   assert.deepEqual(
-    calls.map((c) => new URL(c.url).search),
-    ["?nameFilter=b-qm-sandbox", "?nameFilter=b-qm-sandbox&nextToken=p%2F2"],
+    calls.map((c) => Object.fromEntries(new URL(c.url).searchParams)),
+    [{ nameFilter: "b-qm-sandbox" }, { nameFilter: "b-qm-sandbox", nextToken: "p/2" }],
   );
-  const signer = new SignatureV4({ service: "lambda", region: "us-west-2", credentials: creds, sha256: Sha256 });
-  const { url, headers } = calls[1]!;
-  const u = new URL(url);
-  const expected = await signer.sign(
-    {
-      method: "GET",
-      protocol: "https:",
-      hostname: u.hostname,
-      path: u.pathname,
-      headers: { host: u.hostname, "content-type": "application/json" },
-      body: "",
-      query: Object.fromEntries(u.searchParams),
-    },
-    {
-      signingDate: new Date(
-        headers["x-amz-date"]!.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z"),
-      ),
-    },
-  );
-  assert.equal(headers.authorization, (expected.headers as Record<string, string>).authorization);
 });
