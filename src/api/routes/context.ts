@@ -5,6 +5,8 @@ import { HttpError } from "../http.ts";
 import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
+import { parseDeliveryTarget } from "../../slack/delivery.ts";
+import { parseFileRef } from "../../surfaces/refs.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
@@ -96,22 +98,32 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<RouteResult> {
   if (!capability)
     return reply(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   const b = isObj(body) ? body : {};
-  const ts = typeof b.ts === "string" && b.ts.trim() ? b.ts.trim() : undefined;
+  const fileRef = typeof b.ref === "string" ? parseFileRef(b.ref) : undefined;
+  if (typeof b.ref === "string" && !fileRef)
+    return reply(400, { error: "bad_request", message: "`ref` is the [ref …] shown next to a file in a read" });
+  const ts = fileRef?.ts ?? (typeof b.ts === "string" && b.ts.trim() ? b.ts.trim() : undefined);
   if (!ts)
     return reply(400, {
       error: "bad_request",
-      message: "pass the message's `ts` (find it via /v1/surface-context)",
+      message: "pass the file's `ref`, or the message's `ts` (find either via /v1/surface-context)",
     });
-  const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
+  const threadTs =
+    fileRef?.threadTs ?? (typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined);
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : undefined;
-
-  const resolved = await resolveSurfaceTarget(ctx, b);
+  const here = capability.destination?.target ? parseDeliveryTarget(capability.destination.target).channel : undefined;
+  const elsewhere = fileRef && fileRef.channel !== here && b.channel === undefined;
+  const resolved = await resolveSurfaceTarget(ctx, elsewhere ? { ...b, channel: fileRef.channel } : b);
   if (!resolved) return;
   const query: SurfaceContextQuery = {
     ...resolved.target,
     count: 1,
     ...(await rateLimitRecipient(ctx)),
-    file: { ts, ...(threadTs ? { threadTs } : {}), ...(name ? { name } : {}) },
+    file: {
+      ts,
+      ...(threadTs ? { threadTs } : {}),
+      ...(fileRef ? { index: fileRef.index } : {}),
+      ...(!fileRef && name ? { name } : {}),
+    },
   };
   const request = await app.createContextRequest(resolved.source, query);
   return awaitOutcome(ctx, request.id, FILE_FULFILL_WAIT_MS, async (result) => {

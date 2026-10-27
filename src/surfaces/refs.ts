@@ -42,3 +42,29 @@ export function parseSurfaceDeliveryTarget(target: string): { container: string;
     return undefined;
   return thread ? { container, thread } : { container };
 }
+
+export interface SurfaceFileRef {
+  channel: string;
+  ts: string;
+  index: number;
+  threadTs?: string;
+}
+
+const SLACK_TS = "\\d+\\.\\d+";
+const FILE_REF = new RegExp(`^([A-Z0-9]+):(?:(${SLACK_TS})/)?(${SLACK_TS})#(\\d{1,3})$`);
+
+export function formatFileRef(ref: SurfaceFileRef): string {
+  return `${ref.channel}:${ref.threadTs && ref.threadTs !== ref.ts ? `${ref.threadTs}/` : ""}${ref.ts}#${ref.index}`;
+}
+
+export function parseFileRef(value: string): SurfaceFileRef | undefined {
+  const match = FILE_REF.exec(value.trim());
+  if (!match) return undefined;
+  const index = Number(match[4]);
+  if (index < 1) return undefined;
+  return { channel: match[1]!, ts: match[3]!, index, ...(match[2] ? { threadTs: match[2] } : {}) };
+}
+
+export function namedWithRef(name: string, ref: SurfaceFileRef): string {
+  return `${name} [ref ${formatFileRef(ref)}]`;
+}

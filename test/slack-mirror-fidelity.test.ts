@@ -192,7 +192,7 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
       readHistory,
     });
     const page = await readHistory({ conversations: { history: async () => ({ messages: [raw] }) } }, "C");
-    shaped.push(await serializer.shapeRecentMessages({}, page.raw, "", new Map([["U1", "New name"]])));
+    shaped.push(await serializer.shapeRecentMessages({}, "C", page.raw, "", new Map([["U1", "New name"]])));
   }
   assert.deepEqual(shaped[1], shaped[0]);
   assert.equal(shaped[1]![0]!.text, "Hi <@U1> and <@U2> & welcome");
@@ -281,7 +281,7 @@ test(`bot and attachment presentation metadata roundtrip`, async () => {
     assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
     assert.equal(views[1]!.messages[0]!.name, "Report bot");
     assert.deepEqual(views[1]!.files, views[0]!.files);
-    assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
+    assert.match(views[1]!.messages[0]!.files![0]!, /^Large report \[ref [^\]]+:1000#1\]$/);
     assert.deepEqual(views[1]!.files, []);
     assert.deepEqual(views[1]!.omittedFiles, []);
     await cache.ingest([{ container, ts: "1000", deleted: true }]);

@@ -41,6 +41,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
+import { parseFileRef } from "../../surfaces/refs.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
@@ -334,6 +335,30 @@ function readingTools(
   coverageForTurn: () => Promise<string | undefined>,
 ): Pick<SurfaceToolDeps, "readThread" | "whatsNew" | "readMembers" | "readFile"> {
   const { deps, input, actor, conversation, blobTransfer, here: currentDestination, rateLimitRecipient } = turn;
+  const stagedFileId = async (ref: string): Promise<{ id: string } | { message: string }> => {
+    if (/^[0-9a-f]{32}$/.test(ref)) return { id: ref };
+    const fileRef = parseFileRef(ref);
+    if (!fileRef)
+      return {
+        message: "that doesn't look like a file I can read — pass the [ref …] shown next to the file in a read.",
+      };
+    if (!deps.surfaceContext || !currentDestination.target)
+      return { message: "the surface can't be read from this turn" };
+    if (parseDeliveryTarget(currentDestination.target).channel !== fileRef.channel)
+      return {
+        message: `that file is in another conversation — fetch it with POST /v1/surface-file {"ref": "${ref}"}`,
+      };
+    const { channel: _channel, ...file } = fileRef;
+    const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
+      conversationTarget: currentDestination.target,
+      viewer: actor.id,
+      ...rateLimitRecipient,
+      count: 1,
+      file,
+    });
+    if (!result) return { message: "the surface didn't answer in time" };
+    return result.file ? { id: result.file.blobId } : { message: result.note ?? "I can't find that file." };
+  };
   return {
     readThread: async (opts?: { limit?: number }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
@@ -397,12 +422,9 @@ function readingTools(
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
     },
     readFile: async (ref: string, offset = 0) => {
-      const id = ref.trim();
-      if (!/^[0-9a-f]{32}$/.test(id))
-        return {
-          ok: false,
-          message: "that doesn't look like a file I can read — pass the reference shown next to the file in a thread.",
-        };
+      const staged = await stagedFileId(ref.trim());
+      if ("message" in staged) return { ok: false, message: staged.message };
+      const id = staged.id;
       let blob;
       try {
         blob = await blobTransfer.open(id);

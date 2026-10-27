@@ -323,6 +323,17 @@ describe("surface-context pulls", async () => {
     assert.equal((await asking).status, 200);
   });
 
+  it("takes the [ref …] a read shows next to a file and pulls that file by its position on the message", async () => {
+    const asking = post("/v1/surface-file", { ref: "C9:1700.0001/1700.2#2" }, { "x-agent-capability": await cap() });
+    const query = await fulfillNext(() => ({ file: { blobId: "b4", name: "notes.txt", sizeBytes: 9 } }));
+    assert.equal(query.conversationTarget, "C9:1700.0001");
+    assert.deepEqual(query.file, { ts: "1700.2", threadTs: "1700.0001", index: 2 });
+    assert.equal((await asking).status, 200);
+
+    const bad = await post("/v1/surface-file", { ref: "notes.txt" }, { "x-agent-capability": await cap() });
+    assert.equal(bad.status, 400);
+  });
+
   it("gates a file pull on the ASKER's visibility — a private channel's file is refused to a non-member, served to a member", async () => {
     const refused = await post(
       "/v1/surface-file",

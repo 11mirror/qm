@@ -184,6 +184,38 @@ test("read_file returns text content for a text blob and a POINTER (never bytes)
   }
 });
 
+test("read_file takes the [ref …] a read shows next to a file and fetches that file from its message", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  const blob = await built.blobTransfer.put(Buffer.from("notes from the channel"));
+  const asked: unknown[] = [];
+  let running = true;
+  const loop = (async () => {
+    while (running) {
+      for (const r of await built.app.pendingContextRequests("slack")) {
+        asked.push(r.query.file);
+        await built.app.fulfillContextRequest(r.id, {
+          result: { messages: [], file: { blobId: blob.blobId, name: "notes.txt", sizeBytes: 22 } },
+        });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(mention("!read_file C17:1700.1/1700.2#2", "C17", "1700.1"));
+    assert.match(await subToolResult(built, "C17:1700.1", "read_file"), /file: notes from the channel/);
+    assert.deepEqual(asked, [{ ts: "1700.2", index: 2, threadTs: "1700.1" }]);
+
+    await built.app.turn(mention("!read_file C99:1800.2#1", "C18", "1800.1"));
+    assert.match(await subToolResult(built, "C18:1800.1", "read_file"), /another conversation/);
+    assert.equal(asked.length, 1);
+  } finally {
+    running = false;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
 function surfaceTool(tc: Record<string, unknown>): any {
   const ref = { current: tc } as unknown as ToolContextRef;
   return createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;

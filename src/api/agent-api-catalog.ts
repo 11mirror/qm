@@ -394,7 +394,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/surface-file",
         summary:
-          "fetch a file someone posted in a channel/DM the asking person can see — body {ts, channel?, threadTs?, name?} (ts from /v1/surface-context; threadTs for a thread reply; name when the message carries several files) → file metadata plus a short-lived download: curl it with the returned header+token to save the bytes into your workspace, then use or deliver them (attach that path, or name it in post's files)",
+          "fetch a file someone posted in a channel/DM the asking person can see — body {ref} with the [ref …] shown next to the file in a read, or {ts, channel?, threadTs?, name?} → file metadata plus a short-lived download: curl it with the returned header+token to save the bytes into your workspace, then use or deliver them (attach that path, or name it in post's files)",
       },
     ],
   },

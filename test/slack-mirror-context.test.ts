@@ -83,7 +83,9 @@ test("automatic context renders overheard messages and preserves literal entitie
     { audience: [] },
   );
   assert.equal(result.view.messages.find((m) => m.ts === "1000.000001")?.text, "literal &lt;");
-  assert.deepEqual(result.view.messages.find((m) => m.ts === "1000.000001")?.files, ["notes.txt"]);
+  assert.deepEqual(result.view.messages.find((m) => m.ts === "1000.000001")?.files, [
+    "notes.txt [ref C1:1000.000001#1]",
+  ]);
   const rendered = renderConversationView(result.view);
   assert.ok(rendered.overheard.some((m) => m.text.includes("literal &lt;")));
   assert.match(rendered.header, /stored Slack events/);
@@ -273,8 +275,11 @@ test("surface context keeps a successful channel page when an empty thread is th
     } as SlackCoreClient,
     directory,
     serializer: {
-      shapeRecentMessages: async (_client: unknown, raw: import("../src/slack/payloads.ts").SlackHistoryMessage[]) =>
-        raw.map((m) => ({ ts: m.ts!, text: m.text!, name: "Alice" })),
+      shapeRecentMessages: async (
+        _client: unknown,
+        _channel: string,
+        raw: import("../src/slack/payloads.ts").SlackHistoryMessage[],
+      ) => raw.map((m) => ({ ts: m.ts!, text: m.text!, name: "Alice" })),
     } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
     botToken: "test",
     clientOptions: {},
@@ -368,7 +373,7 @@ test("thread history keeps file references and authors but only current files ar
   assert.deepEqual(view.files, [{ name: "current.txt" }]);
   const rendered = renderConversationView(view);
   assert.equal(rendered.overheard[0]?.name, "U1");
-  assert.deepEqual(rendered.overheard[0]?.files, ["old-notes.txt"]);
+  assert.deepEqual(rendered.overheard[0]?.files, ["old-notes.txt [ref C1:1000.000001#1]"]);
   assert.equal(rendered.overheard[1]?.role, "self");
   assert.match(rendered.overheard[1]!.text, /Shall I summarize/);
 });
