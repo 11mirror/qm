@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import https from "node:https";
@@ -205,7 +206,7 @@ test("check --live on aws runs live drift checks in plain and JSON modes", async
     aws,
     `#!/usr/bin/env node
 const args = process.argv.slice(2).join(" ");
-if (args.includes("sts get-caller-identity")) console.log("123456789012");
+if (args.includes("sts get-caller-identity")) console.log(JSON.stringify({ Account: "123456789012" }));
 else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
 else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s" }] }));
 else console.log("{}");
@@ -296,7 +297,7 @@ test("successful check --json --live reports the live-drift clause", async (t) =
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const args = argv.join(" ");
-if (args.includes("sts get-caller-identity")) console.log("123456789012");
+if (args.includes("sts get-caller-identity")) console.log(JSON.stringify({ Account: "123456789012" }));
 else if (args.includes("lambda-microvms get-microvm-image")) console.log(JSON.stringify({ imageArn: "arn:aws:lambda:us-west-2:123456789012:microvm-image:acme-microvm-app" }));
 else if (args.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] }));
 else if (args.includes("describe-secret")) console.log(JSON.stringify({ ARN: "arn", VersionIdsToStages: { current: ["AWSCURRENT"] } }));

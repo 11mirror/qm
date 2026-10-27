@@ -204,7 +204,7 @@ export type DeploymentLayerTransport = (
 export function httpDeploymentLayerTransport(
   o: {
     urlOf?: (config: QmConfig) => URL;
-    secretFallback?: (config: QmConfig) => string | undefined;
+    secretFallback?: (config: QmConfig) => Promise<string | undefined> | string | undefined;
     timeoutMs?: number;
     request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
   } = {},
@@ -213,7 +213,7 @@ export function httpDeploymentLayerTransport(
     const envPath = opts.envFile ?? join(opts.configDir, ".env");
     const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
     let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
-    if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
+    if (!secret && o.secretFallback) secret = await o.secretFallback(opts.config);
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
     const init: RequestInit = {
