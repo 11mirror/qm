@@ -63,6 +63,7 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
       ...r.missing.map((p) => `${p} (not found)`),
       ...r.empty.map((p) => `${p} (empty)`),
       ...r.oversized.map((p) => `${p} (too large)`),
+      ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
     ];
     if (bad.length)
       return {

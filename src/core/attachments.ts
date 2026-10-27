@@ -388,6 +388,7 @@ export async function collectNamedOutbound(
   missing: string[];
   empty: string[];
   oversized: string[];
+  overTotal: string[];
   createdArtifactIds: Set<string>;
 }> {
   const parsed = parseOutboundFiles(paths);
@@ -396,8 +397,9 @@ export async function collectNamedOutbound(
   const missing: string[] = [];
   const empty: string[] = [];
   const oversized: string[] = [];
+  const overTotal: string[] = [];
   const usedNames = new Set<string>(reservedNames);
-  const doomed = () => missing.length > 0 || empty.length > 0 || oversized.length > 0;
+  const doomed = () => missing.length > 0 || empty.length > 0 || oversized.length > 0 || overTotal.length > 0;
   const createdArtifactIds = new Set<string>();
   const rollback = async () => {
     await Promise.all(attachments.map((a) => discardOutbound(a, transfer, register, createdArtifactIds)));
@@ -425,8 +427,8 @@ export async function collectNamedOutbound(
       }
       const sizeBytes = stored?.sizeBytes ?? bytes!.length;
       if (sizeBytes === 0) empty.push(label);
-      if (sizeBytes > MAX_ATTACHMENT_BYTES || totalBytes + sizeBytes > MAX_REPLY_ATTACHMENT_BYTES)
-        oversized.push(label);
+      if (sizeBytes > MAX_ATTACHMENT_BYTES) oversized.push(label);
+      else if (totalBytes + sizeBytes > MAX_REPLY_ATTACHMENT_BYTES) overTotal.push(label);
       if (doomed()) {
         stored?.stream.destroy();
         continue;
@@ -461,7 +463,7 @@ export async function collectNamedOutbound(
       }
     }
     if (doomed()) await rollback();
-    return { attachments, missing, empty, oversized, createdArtifactIds };
+    return { attachments, missing, empty, oversized, overTotal, createdArtifactIds };
   } catch (error) {
     await rollback();
     throw error;

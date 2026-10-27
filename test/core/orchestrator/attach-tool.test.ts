@@ -106,7 +106,8 @@ test("a reply's files are bounded by their total bytes, counting what is already
   inflate = false;
   const second = await staging.attach(["b.bin"]);
   assert.ok(!second.ok);
-  assert.match(second.message, /b\.bin \(too large\)/);
+  assert.match(second.message, /b\.bin \(too large alongside the files already attached\)/);
+  assert.doesNotMatch(second.message, /b\.bin \(too large\)/);
   assert.equal(staging.staged().length, 1, "the overflowing call stages nothing");
   assert.ok((await staging.attach(["a.bin", "c.bin"])).ok, "replacing the staged file frees its bytes");
   assert.equal(staging.staged().length, 2);
