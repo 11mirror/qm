@@ -81,6 +81,7 @@ import {
   renderSandboxProfiles,
 } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
+import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -88,6 +89,7 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   BROWSER_MODEL_AUD,
+  SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -1076,7 +1078,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      let memoryView = await context.memorySnapshot(false);
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
@@ -1429,21 +1430,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           config: deps.config,
           isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
         }));
-      const isolateOwnerKeychain = !external && (openSpeakerKeychain || openAutomationKeychain);
-      const ownerAuthAvailable = isolateOwnerKeychain;
+      const ownCredentialsAllowed =
+        scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain;
+      const sharedScope =
+        !external &&
+        (scopeId !== personalScope(actor.id) ||
+          environmentId !== scopeId ||
+          ((await deps.environments?.attachmentsFor(environmentId)) ?? []).some(
+            (attachment) => attachment.scopeId !== scopeId,
+          ));
       const connectorEnv: Record<string, string> = {};
       const commandCredentials: CommandCredential[] = [];
       const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
       const credentialIdentities = new Map<string, string>();
 
       const authorizeOwnerCredentials = async (): Promise<void> => {
+        if (!openSpeakerKeychain && !openAutomationKeychain) return;
         if (
-          (openSpeakerKeychain || openAutomationKeychain) &&
-          (!(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
-            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
+          !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
+          (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
         ) {
           throw new Error("Open speaker keychain access is no longer authorized");
         }
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actor.id,
+          action: "keychain.open_speaker_use",
+          resource: "scratch execution",
+          scopeLabel: scopeId,
+        });
       };
       const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
         if (materialized.kind === "env") return { env: materialized.env };
@@ -1462,6 +1477,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         };
       };
+      const placeCredential = (credential: CommandCredential): CommandCredential => ({
+        ...credential,
+        scratchOnly: sharedScope && credential.scratchOnly !== false,
+      });
       const addCredentialToCatalog = (
         credential: CommandCredential,
         description: string,
@@ -1475,14 +1494,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return;
         }
         credentialIdentities.set(credential.handle, identity);
-        commandCredentials.push(credential);
-        credentialDescriptions.push({
-          handle: credential.handle,
-          ownerId,
-          description,
-          credentialId,
-          scope: credential.scope ?? "scoped",
-        });
+        commandCredentials.push(placeCredential(credential));
+        credentialDescriptions.push({ handle: credential.handle, ownerId, description, credentialId });
       };
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
@@ -1507,14 +1520,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             credential.id,
           );
         }
-        const ownAllowed = scopeId === personalScope(actor.id) || isolateOwnerKeychain;
-        if (ownAllowed) {
+        if (ownCredentialsAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
             addCredential(
               {
                 handle: credentialHandle(credential),
-                scope: isolateOwnerKeychain ? "owner" : "scoped",
                 resolve: async () => {
                   await authorizeOwnerCredentials();
                   return resolvedCredential(
@@ -1532,12 +1543,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       await registerKeychainCredentials(addCredentialToCatalog);
       const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (
-          !external &&
-          !strictReadOnly &&
-          deps.connectorTokens &&
-          (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
-        ) {
+        if (!external && !strictReadOnly && deps.connectorTokens && ownCredentialsAllowed) {
           const tokens = deps.connectorTokens;
           const inventory = tokens.listConnectorsByOwners
             ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
@@ -1558,7 +1564,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               addCredential(
                 {
                   handle: `connector:${host}:${accountType ?? "default"}`,
-                  scope: isolateOwnerKeychain ? "owner" : "scoped",
                   resolve: async () => {
                     await authorizeOwnerCredentials();
                     const token = await tokens.connectorAccessToken(host, actor.id, accountType);
@@ -1685,11 +1690,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         controlClaims = {
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
-          ...(!external &&
-          allInternal &&
-          (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
-            ? { ownerConnections: true }
-            : {}),
+          ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
           exp: sandboxTokenExpiry,
           ...(turnTimezone ? { timezone: turnTimezone } : {}),
           ...(destination ? { destination } : {}),
@@ -1735,6 +1736,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             deps.capabilitySecret ?? deps.signingSecret,
           );
+        }
+        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
+            { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
+            deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
+          );
+          turnContextBlocks["Model access"] =
+            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
@@ -1839,6 +1850,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             addCredential(
               {
                 handle: credential.slug,
+                scratchOnly: false,
                 resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
               },
               `${credential.name}; proxy ${credential.host}; ${(credential.allowedMethods?.length ? credential.allowedMethods : ["GET"]).toSorted().join("/")}; ${credential.allowedPathPrefixes?.length ? `paths ${credential.allowedPathPrefixes.toSorted().join(", ")}` : "any path"}; use the use-shared-credential skill`,
@@ -1937,12 +1949,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
 
       const {
-        ownerAuthCommand,
         provision,
         provisionScratch,
+        provisionJobComputer,
+        provisionJobSandbox,
         accessResource,
         provisionResource,
-        provisionOwnerAuth,
         useSkill,
         provisionForReach,
         reclaimBox,
@@ -1961,9 +1973,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
-        ownerAuthAvailable,
         visibleSkillsForTurn,
         emitGapWork,
       });
@@ -2013,7 +2023,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
 
-        memoryView = await context.memorySnapshot();
+        const memoryView = await context.memorySnapshot();
         const captureDependencies = () => [
           ...memoryView.facts,
           ...(!memoryView.complete ||
@@ -2445,7 +2455,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? createBackgroundBroker({
                 sandbox: deps.sandbox,
                 registry: deps.processes,
-                provisionSandbox: provisionResource,
+                provisionSandbox: provisionJobSandbox,
                 onExit: (handle, processId) =>
                   finishProcessCredentials(
                     {
@@ -2678,10 +2688,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           invalidateProvision,
           provision,
           provisionScratch,
+          provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
-          ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
-          ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           useSkill,
           listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           ...(reachAvailable
@@ -2716,7 +2725,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 return;
               }
               identities.set(credential.handle, identity);
-              refreshed.set(credential.handle, credential);
+              refreshed.set(credential.handle, placeCredential(credential));
             };
             await registerKeychainCredentials(add);
             await registerConnectorCredentials(add);
@@ -2867,7 +2876,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await historyWindow()).entries;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
+        const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {

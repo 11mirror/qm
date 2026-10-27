@@ -155,7 +155,6 @@ export interface PiHarnessOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  ownerAuthExec?: boolean;
   reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -1587,7 +1586,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -1596,7 +1594,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      ownerAuthExec,
       reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,

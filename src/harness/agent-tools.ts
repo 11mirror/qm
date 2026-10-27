@@ -324,7 +324,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 export interface AgentToolsOptions {
   sessionTools?: boolean;
   commandCredentialHandles?: readonly string[];
-  ownerAuthExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -349,8 +348,6 @@ export type CoreToolOptions = Omit<
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: true,
-    // Availability is checked per turn; Open can be enabled without restarting the harness.
-    ownerAuthExec: true,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -384,7 +381,6 @@ const outsideWorkspace = (path: string): string =>
   `[not in the computer's workspace: ${path}; only workspace files can be read, so copy it there or name it relative to the workspace]`;
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
-  const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -622,7 +618,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Authorized credential handles to expose to this command (a background job keeps them until it exits).",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
       }),
     ),
   };
@@ -659,7 +655,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       purpose?: string;
       credentials?: string[];
     },
-    route?: { scratch?: boolean; ownerAuth?: boolean; reachTarget?: string },
+    route?: { scratch?: boolean; reachTarget?: string },
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
@@ -668,10 +664,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
     } else if (route !== undefined) {
-      let scope = "scoped";
-      if (route.ownerAuth) scope = "owner";
-      else if (route.scratch) scope = "scratch";
-      scopeNote = { scope };
+      scopeNote = { scope: route.scratch ? "scratch" : "scoped" };
     }
     await recordCall(callId, {
       tool: "execute",
@@ -686,28 +679,32 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
-        ...(route?.ownerAuth ? { ownerAuth: true } : {}),
         ...(route?.reachTarget !== undefined ? { reachTarget: route.reachTarget } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
-      const { stdout: _stdout, stderr: _stderr, ...execMeta } = r;
+      const { stdout: _stdout, stderr: _stderr, scratchReroute, ...execMeta } = r;
+      const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
-      const reachedPrefix = r.reached ? `[ran on ${r.reached.label}'s computer]\n` : "";
-      const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
+      let placePrefix = "";
+      if (r.reached) placePrefix = `[ran on ${r.reached.label}'s computer]\n`;
+      else if (scratchReroute)
+        placePrefix =
+          "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n";
+      const localExec = !route?.scratch && !scratchReroute && route?.reachTarget === undefined && !r.reached;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
           ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(
         callId,
-        { tool: "execute", ...scopeNote, ...execMeta },
+        { tool: "execute", ...resultScope, ...execMeta },
         {
           content: [
             {
               type: "text" as const,
-              text: `${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
+              text: `${placePrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
             },
           ],
           details: r,
@@ -768,28 +765,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const reachScopeDescription =
     '"scoped" (default) | "scratch" | ' +
-    (ownerAuthExec ? '"owner" | ' : "") +
     'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
   const DURABLE_PARAM_DESC = "Fixed by scope: true on scoped, false elsewhere; omit.";
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
-  const ownerLine = ownerAuthExec
-    ? '- "owner": invocation-only box for the live speaker in Open shared conversations or owner-authorized automation: org-global files plus requested credentials, no shared workspace or $AGENT_API_* tokens, destroyed after the turn. Use it so personal logins never touch the shared computer.\n'
-    : "";
   const scratchLine =
     '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const reachDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +
     scratchLine +
-    ownerLine +
     "- a room like \"#project-alpha\" (a shared channel): runs on that room's computer. Visit only — read, search, fetch; don't rearrange. It has none of this conversation's logins or tokens; say where anything you bring back came from. Before calling work lost, check the rooms under 'Other computers you can reach'.\n" +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +
-    ownerLine +
     scratchLine +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
@@ -823,25 +814,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       return runExecute(callId, params, { scratch: true });
     }
-    if (keyword === "owner") {
-      if (!ownerAuthExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "owner_unavailable" },
-          '[error] an owner-auth box is not available on this turn — use scope:"scoped".',
-        );
-      }
-      if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "owner_durable" },
-          "[error] an owner-auth box is invocation-only and cannot be durable — drop `durable`.",
-        );
-      }
-      return runExecute(callId, params, { ownerAuth: true });
-    }
     return runExecute(callId, params, { reachTarget: scope });
   };
 
@@ -871,12 +843,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(
-          Type.Union(
-            [Type.Literal("scoped"), Type.Literal("scratch"), ...(ownerAuthExec ? [Type.Literal("owner")] : [])],
-            {
-              description: "Which computer runs this; see the tool description.",
-            },
-          ),
+          Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+            description: "Which computer runs this; see the tool description.",
+          }),
         ),
         durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })),
       }),
@@ -1837,7 +1806,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
-      const { output: _output, ...startMeta } = r;
+      const { output: _output, jobComputer, ...startMeta } = r;
+      const placePrefix = jobComputer
+        ? "[running on a computer reserved for this job because it names a private credential; nobody can run commands on it, and it is destroyed after the job ends]\n"
+        : "";
       return recordResult(
         callId,
         { tool: "execute", background: true, ...startMeta },
@@ -1845,7 +1817,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           content: [
             {
               type: "text" as const,
-              text: `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
+              text: `${placePrefix}started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
             },
           ],
           details: r,

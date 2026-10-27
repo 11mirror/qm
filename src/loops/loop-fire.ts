@@ -17,6 +17,7 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { fencedCodeBlocks, type FencedCodeBlock } from "../util/markdown.ts";
 import { errMessage } from "../util/errors.ts";
+import { promptText } from "../util/text.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { isRunnable, type LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
@@ -349,10 +350,6 @@ function notRunnable(loop: Loop): LoopFireResult {
 function excerpt(s: string | undefined): string {
   if (!s) return "";
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
-}
-
-function promptText(value: string): string {
-  return value.replaceAll("```", "ʼʼʼ");
 }
 
 function playbookText(loop: Loop): string {
