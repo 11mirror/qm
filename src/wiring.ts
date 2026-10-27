@@ -1,6 +1,6 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { createPostgresSwarmBoard } from "./swarms/swarm-board.ts";
-import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
+import { nonDeploymentCredential } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { type TeamStore } from "./teams/teams.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
@@ -48,7 +48,7 @@ import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import type { HandledEvent } from "./slack/message-gating.ts";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   baseModelProviders,
   companySubscriptionAuth,
@@ -130,20 +130,16 @@ import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { type McpToolService } from "./mcp/mcp-tool-service.ts";
 import { type BlobTransferStore } from "./persistence/blob-transfer.ts";
 import { type DurableByteStore } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
-import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
   credentialRequestHeaders,
-  createKeychain,
   type ConnectorTokenStore,
-  type OAuthToken,
   type Keychain,
   type KeychainAsk,
-  type KeychainCredential,
   type KeychainGrant,
   type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
@@ -153,29 +149,20 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
+import { type SecretDropStore } from "./credentials/secret-drop.ts";
 import { externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
-import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
-import {
-  createConnectorClientResolver,
-  deriveConnectorKey,
-  type SecretKey,
-} from "./connectors/connector-client-store.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "./connectors/browser-session-store.ts";
+import { type OAuthClientResolver } from "./connectors/oauth.ts";
+import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
+import { type BrowserSessionStore } from "./connectors/browser-session-store.ts";
 import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
-import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
-import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
+import { type ConsentLinkStore } from "./connectors/consent-link.ts";
+import { type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
+import { type ModelGateway } from "./model/model-gateway.ts";
 import { type ModelCredentialStore } from "./model/model-credential-store.ts";
-import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
-import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
+import { type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
@@ -280,6 +267,8 @@ import { buildFiles } from "./wiring/files.ts";
 import { buildSandboxBackends } from "./wiring/sandbox.ts";
 
 import { buildSandbox } from "./wiring/sandbox.ts";
+
+import { buildCredentials } from "./wiring/credentials.ts";
 
 export interface Runtime {
   start(): void;
@@ -563,100 +552,29 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     canUseSandboxScope,
     sandboxOnError,
   });
-  const secretSource = createEnvSecretSource(overrides.env);
-  const resolveClient: OAuthClientResolver = withPublicOAuthClients(
-    createConnectorClientResolver({
-      reader: configStore,
-      orgScopeId: (o) => scopeId("org", o),
-      secrets: secretSource,
-    }),
-  );
-  const legacyCredentialKey =
-    config.signingSecret && config.signingSecret !== connectorSecretKey
-      ? deriveConnectorKey(config.signingSecret, "keychain")
-      : undefined;
-  const credentialKey: SecretKey = {
-    ...deriveConnectorKey(connectorSecretKey, "keychain"),
-    ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
-  };
-  const credentialStore: Keychain = createKeychain({
-    creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
-    grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
-    asks: artifactMap<KeychainAsk>("keychain_asks"),
-    key: credentialKey,
-    lock: advisoryLock,
-    refreshConnector: (() => {
-      const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
-      return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
-        if (token.refreshToken && host === "auth.openai.com") {
-          const fresh = await refreshChatGPTTokens(token.refreshToken);
-          return oauthTokenFromUserTokens(fresh);
-        }
-        if (token.refreshToken && host === "claude.ai") {
-          const fresh = await refreshClaudeTokens(token.refreshToken);
-          return oauthTokenFromUserTokens(fresh);
-        }
-        return base(host, token, ctx);
-      };
-    })(),
+  const {
+    warnShadowedBrokerCredentials,
+    keychain,
+    serviceCreds,
+    userModelCredentials,
+    connectorTokens,
+    modelGateway,
+    mcpToolService,
+    resolveClient,
+    consentLinks,
+    oauthFlows,
+    secretDrops,
+    browserSessionStore,
+  } = buildCredentials({
+    overrides,
+    configStore,
+    config,
+    connectorSecretKey,
+    artifactMap,
+    advisoryLock,
+    mcpServers,
+    auditLog,
   });
-  const oauthTokenFromUserTokens = (fresh: {
-    accessToken: string;
-    refreshToken?: string;
-    idToken?: string;
-    accountId?: string;
-    expiresAt?: number;
-  }): OAuthToken => ({
-    accessToken: fresh.accessToken,
-    ...(fresh.refreshToken ? { refreshToken: fresh.refreshToken } : {}),
-    ...(fresh.idToken ? { idToken: fresh.idToken } : {}),
-    ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
-    ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
-  });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
-  const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
-  const keychain: Keychain = credentialStore;
-  const serviceCreds = withDeploymentCredentials(
-    credentialStore,
-    scopeId("org", config.orgId),
-    config.brokerCredentials ?? [],
-  );
-  const warnShadowedBrokerCredentials = (brokerCredentials: NonNullable<Config["brokerCredentials"]>) => {
-    const reserved = new Set(brokerCredentials.map((c) => c.slug));
-    void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
-      (stored) => {
-        const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
-        if (shadowed.length)
-          console.warn(`[broker-credentials] BROKER_CREDENTIALS overrides stored credentials: ${shadowed.join(", ")}`);
-      },
-      (error) =>
-        console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
-    );
-  };
-  const mcpToolService = createMcpToolService({
-    servers: mcpServers,
-    audit: auditLog,
-    userTokens: keychain,
-    ...(config.publicWebUrl
-      ? {
-          signInUrl: (id: string) =>
-            `${config.publicWebUrl!.replace(/\/$/, "")}/connect/${encodeURIComponent(id)}/self-connect`,
-        }
-      : {}),
-  });
-  const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
-    sessions: artifactMap<StoredBrowserSession>("browser_sessions"),
-    key: credentialKey,
-  });
-  const connectorTokens = credentialStore;
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
-  const modelGateway = createModelGateway();
 
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
