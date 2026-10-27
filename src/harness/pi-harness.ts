@@ -10,7 +10,7 @@ import {
   refusalFallbackModelId,
   type AssistantTextSession,
 } from "./turn-recovery.ts";
-import { createCallTelemetry } from "./call-telemetry.ts";
+import { createCallTelemetry, gatewayAttemptHeaders } from "./call-telemetry.ts";
 import {
   recordSteerIntake,
   imageRefs,
@@ -1322,7 +1322,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       const priorResponse = agent.onResponse;
       agent.onResponse = async (response, model) => {
         const last = ref.modelDispatch?.at(-1);
-        if (last && last.first === undefined) last.first = Date.now();
+        if (last && last.first === undefined) {
+          last.first = Date.now();
+          const gateway = gatewayAttemptHeaders(response.headers);
+          if (gateway) last.gateway = gateway;
+        }
         if (priorResponse) await priorResponse(response, model);
       };
       const priorTransform = agent.transformContext;
