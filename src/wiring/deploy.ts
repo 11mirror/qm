@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createDeployStore, type Deployment } from "../deploy/deploy-store.ts";
 import type { DeployGitArchive } from "../deploy/deploy-git-store.ts";
 import type { DeployProvider } from "../deploy/deploy-provider.ts";
@@ -22,24 +23,14 @@ import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { CredentialsModule } from "./credentials.ts";
 
 export function buildDeploy(
-  w: Pick<
-    StoresModule,
-    | "artifactMap"
-    | "pgArtifactMap"
-    | "advisoryLock"
-    | "canReadScope"
-    | "canWriteScope"
-    | "featureFlags"
-    | "identity"
-    | "directory"
-    | "managesArtifactHome"
-  > &
-    Pick<FilesModule, "s3Bytes" | "acl"> &
-    Pick<SandboxBackendsModule, "sandboxOnError" | "e2bClient"> &
-    Pick<OutboundModule, "outbound"> &
-    Pick<RunsModule, "productAnalytics"> &
-    Pick<DeploymentLayerModule, "auditLog"> &
-    Pick<CredentialsModule, "serviceCreds"> & { config: Config },
+  w: Head &
+    StoresModule &
+    FilesModule &
+    SandboxBackendsModule &
+    OutboundModule &
+    RunsModule &
+    DeploymentLayerModule &
+    CredentialsModule,
 ) {
   const {
     artifactMap,

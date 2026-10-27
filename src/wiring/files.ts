@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createPostgresToolOutputStore } from "../sessions/tool-output.ts";
 import { createAclStore } from "../acl/acl-store.ts";
 import { createPostgresGrantStore } from "../acl/postgres-grant-store.ts";
@@ -24,14 +25,8 @@ import { createMcpServerStore, type McpServer } from "../mcp/mcp-server-store.ts
 import { withErrorReporting } from "../admin/error-log.ts";
 import { createPostgresErrorLog } from "../admin/postgres-error-log.ts";
 import type { StoresModule } from "./stores.ts";
-import type { Config } from "../config.ts";
 
-export function buildFiles(
-  w: Pick<StoresModule, "managesArtifactHome" | "configStore" | "artifactMap" | "pgArtifactMap"> & {
-    databaseUrl: string;
-    config: Config;
-  },
-) {
+export function buildFiles(w: Head & StoresModule) {
   const { databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap } = w;
 
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {

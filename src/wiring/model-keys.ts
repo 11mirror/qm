@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createCustomProviderStore } from "../model/custom-provider-store.ts";
 import { setCustomProviders } from "../model/custom-providers.ts";
 import { type MemoryEmbedder, createMemoryEmbedder } from "../model/embeddings.ts";
@@ -8,15 +9,9 @@ import type { ProviderKeys } from "../harness/pi-model-runtime.ts";
 import { keychainHarnessAuthEnv } from "../credentials/harness-auth-env.ts";
 import type { StoresModule } from "./stores.ts";
 import type { ModelCredentialsModule } from "./model-credentials.ts";
-import type { AppOverrides } from "../wiring.ts";
-import type { Config } from "../config.ts";
 import type { CredentialsModule } from "./credentials.ts";
 
-export function buildModelKeys(
-  w: Pick<StoresModule, "advisoryLock" | "artifactMap"> &
-    Pick<ModelCredentialsModule, "gatewayCatalog" | "modelCredentials" | "gatewayTransport"> &
-    Pick<CredentialsModule, "keychain"> & { connectorSecretKey: string; overrides: AppOverrides; config: Config },
-) {
+export function buildModelKeys(w: Head & StoresModule & ModelCredentialsModule & CredentialsModule) {
   const {
     advisoryLock,
     artifactMap,

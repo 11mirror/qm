@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { type AwsRoleBroker, createAwsRoleBroker } from "../auth/aws-role-broker.ts";
 import type { BrokeredLayerTool } from "../deployment/load-layer.ts";
 import type { RunStore } from "../runs/run-store.ts";
@@ -9,35 +10,12 @@ import { scopeId } from "../types.ts";
 import { startSession } from "../api/start-session.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { PersistedUiState } from "../surfaces/ui-state.ts";
-import type { Config } from "../config.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { FilesModule } from "./files.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 import type { HarnessModule } from "./harness.ts";
-import type { Late } from "./late.ts";
 
-export function buildSessionSyscalls(
-  w: Pick<FilesModule, "resolution"> &
-    Pick<
-      StoresModule,
-      | "canWriteScope"
-      | "projects"
-      | "currentScopeMembers"
-      | "artifactMap"
-      | "featureFlags"
-      | "sessions"
-      | "advisoryLock"
-      | "configStore"
-    > &
-    Pick<RunsModule, "runs" | "maxAttempts"> &
-    Pick<HarnessModule, "runSignals" | "runtimeOrgScope" | "fallback" | "hydrateModelCatalog"> & {
-      config: Config;
-      overrides: AppOverrides;
-      databaseUrl: string;
-      late: Late;
-    },
-) {
+export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & RunsModule & HarnessModule) {
   const {
     config,
     overrides,

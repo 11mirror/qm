@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../processes/process-registry.ts";
 import { createPostgresAppPageViewLog } from "../deploy/page-views.ts";
@@ -12,16 +13,10 @@ import { createTurnStream } from "../runs/turn-stream.ts";
 import { type RunActivityStore, createMemoryRunActivityStore } from "../runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "../runs/postgres-run-activity-store.ts";
 import type { SandboxModule } from "./sandbox.ts";
-import type { Late } from "./late.ts";
-import type { Config } from "../config.ts";
 import type { RunsModule } from "./runs.ts";
 import type { HarnessModule } from "./harness.ts";
 
-export function buildRunStreams(
-  w: Pick<SandboxModule, "sandbox"> &
-    Pick<RunsModule, "runs"> &
-    Pick<HarnessModule, "runStoreKind"> & { databaseUrl: string; late: Late; config: Config },
-) {
+export function buildRunStreams(w: Head & SandboxModule & RunsModule & HarnessModule) {
   const { sandbox, databaseUrl, late, config, runs, runStoreKind } = w;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;

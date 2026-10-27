@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type Session, scopeId } from "../types.ts";
 import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
@@ -13,20 +14,20 @@ import type { StoresModule } from "./stores.ts";
 import type { SessionSyscallsModule } from "./session-syscalls.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { HarnessModule } from "./harness.ts";
-import type { Config } from "../config.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
 import type { CredentialsModule } from "./credentials.ts";
 
 export function buildSessionReturns(
-  w: Pick<RunsModule, "runs" | "sessionStateBus" | "blockingApprovalSessions" | "maxAttempts"> &
-    Pick<AppServicesModule, "engaged" | "pokeReaper"> &
-    Pick<ApiAppModule, "app"> &
-    Pick<StoresModule, "sessions" | "advisoryLock" | "featureFlags" | "leaderLease"> &
-    Pick<SessionSyscallsModule, "sessionMailbox" | "prepareSessionRequest"> &
-    Pick<OutboundModule, "outbound"> &
-    Pick<HarnessModule, "runSignals"> &
-    Pick<OrchestratorModule, "orchestratorDeps"> &
-    Pick<CredentialsModule, "keychain"> & { config: Config },
+  w: Head &
+    RunsModule &
+    AppServicesModule &
+    ApiAppModule &
+    StoresModule &
+    SessionSyscallsModule &
+    OutboundModule &
+    HarnessModule &
+    OrchestratorModule &
+    CredentialsModule,
 ) {
   const {
     runs,

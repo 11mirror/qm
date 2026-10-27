@@ -1,13 +1,11 @@
+import type { Head } from "./late.ts";
 import { resolveModel } from "../model/pi-models.ts";
 import { createGatewayCatalog } from "../model/gateway-catalog.ts";
-import { providerKeysPresent, type Config } from "../config.ts";
+import { providerKeysPresent } from "../config.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "../model/model-credential-store.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { StoresModule } from "./stores.ts";
 
-export function buildModelCredentials(
-  w: Pick<StoresModule, "artifactMap"> & { config: Config; overrides: AppOverrides; connectorSecretKey: string },
-) {
+export function buildModelCredentials(w: Head & StoresModule) {
   const { config, overrides, artifactMap, connectorSecretKey } = w;
 
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));

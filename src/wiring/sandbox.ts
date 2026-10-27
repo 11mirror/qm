@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { type SandboxResource, type SandboxDefault, createSandboxResources } from "../sandbox/sandbox-resources.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../core/orchestrator.ts";
@@ -5,13 +6,8 @@ import type { Sandbox } from "../sandbox/sandbox.ts";
 import { createSandboxRouter } from "../sandbox/sandbox-routing.ts";
 import type { StoresModule } from "./stores.ts";
 import type { SandboxBackendsModule } from "./sandbox-backends.ts";
-import type { Config } from "../config.ts";
-import type { Late } from "./late.ts";
 
-export function buildSandbox(
-  w: Pick<StoresModule, "artifactMap" | "advisoryLock" | "canUseSandboxScope"> &
-    Pick<SandboxBackendsModule, "sandboxBackends" | "sandboxOnError"> & { config: Config; late: Late },
-) {
+export function buildSandbox(w: Head & StoresModule & SandboxBackendsModule) {
   const { artifactMap, sandboxBackends, config, advisoryLock, late, canUseSandboxScope, sandboxOnError } = w;
 
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");

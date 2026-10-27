@@ -1,40 +1,33 @@
+import type { Head } from "./late.ts";
 import { type SuggestedActivityProfile, createSuggestedActivityService } from "../suggestions/activities.ts";
 import { createMemoryTidyService, type MemoryTidyProfile } from "../memory/tidy.ts";
 import { createJobWorker } from "../jobs/job-worker.ts";
 import { createScheduler } from "../cron/scheduler.ts";
 import { createControlService } from "../api/control-service.ts";
 import { availableRuntimeError } from "../api/runtime-config.ts";
-import { providerKeysPresent, type Config } from "../config.ts";
+import { providerKeysPresent } from "../config.ts";
 import { createRuntimeService } from "../harness/runtime-control.ts";
 import type { StoresModule } from "./stores.ts";
 import type { MemoryModule } from "./memory.ts";
 import type { CronsModule } from "./crons.ts";
-import type { Late } from "./late.ts";
-import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { ApiAppModule } from "./api-app.ts";
 import type { TriggersModule } from "./triggers.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
 import type { HarnessModule } from "./harness.ts";
 import type { ModelCredentialsModule } from "./model-credentials.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { ModelKeysModule } from "./model-keys.ts";
 
 export function buildScheduler(
-  w: Pick<StoresModule, "artifactMap" | "advisoryLock" | "sessions" | "admin" | "configStore"> &
-    Pick<MemoryModule, "baseMemory"> &
-    Pick<CronsModule, "crons"> &
-    Pick<ApiAppModule, "app"> &
-    Pick<TriggersModule, "triggerDeps"> &
-    Pick<OrchestratorModule, "orchestratorDeps"> &
-    Pick<HarnessModule, "fallback"> &
-    Pick<ModelCredentialsModule, "modelCredentials"> &
-    Pick<ModelKeysModule, "refreshModels"> & {
-      late: Late;
-      databaseUrl: string;
-      admittedWork: AdmittedWork;
-      config: Config;
-      overrides: AppOverrides;
-    },
+  w: Head &
+    StoresModule &
+    MemoryModule &
+    CronsModule &
+    ApiAppModule &
+    TriggersModule &
+    OrchestratorModule &
+    HarnessModule &
+    ModelCredentialsModule &
+    ModelKeysModule,
 ) {
   const {
     artifactMap,
@@ -118,3 +111,5 @@ export function buildScheduler(
   );
   return { jobs, scheduler, suggestedActivities };
 }
+
+export type SchedulerModule = ReturnType<typeof buildScheduler>;

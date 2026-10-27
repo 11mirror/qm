@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { wireRunResultPosts } from "../runs/run-results.ts";
 import { createGitFetcher, resolvePackAuth } from "../skills/pack-fetcher.ts";
@@ -13,7 +14,6 @@ import {
 import { type AckEmojiPickStore, createPostgresAckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
-import type { Config } from "../config.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { StoresModule } from "./stores.ts";
@@ -23,13 +23,14 @@ import type { ModelCredentialsModule } from "./model-credentials.ts";
 import type { HarnessModule } from "./harness.ts";
 
 export function buildAppServices(
-  w: Pick<RunsModule, "runs"> &
-    Pick<OutboundModule, "outbound" | "chatSurfaces"> &
-    Pick<StoresModule, "sessions" | "leaderLease"> &
-    Pick<CredentialsModule, "serviceCreds" | "keychain" | "modelGateway"> &
-    Pick<FilesModule, "errors" | "budget"> &
-    Pick<ModelCredentialsModule, "directProviderAvailability"> &
-    Pick<HarnessModule, "harness"> & { config: Config; databaseUrl: string },
+  w: Head &
+    RunsModule &
+    OutboundModule &
+    StoresModule &
+    CredentialsModule &
+    FilesModule &
+    ModelCredentialsModule &
+    HarnessModule,
 ) {
   const {
     config,

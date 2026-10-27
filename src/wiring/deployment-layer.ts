@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { loadDeploymentLayer, emptyDeploymentLayer } from "../deployment/load-layer.ts";
 import { resolve } from "node:path";
 import { scopeId } from "../types.ts";
@@ -12,15 +13,9 @@ import {
 import { installSeedSkills } from "../skills/seed.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import type { Config } from "../config.ts";
 import type { StoresModule } from "./stores.ts";
 
-export function buildDeploymentLayer(
-  w: Pick<StoresModule, "artifactMap" | "skills" | "skillBundles" | "advisoryLock"> & {
-    config: Config;
-    databaseUrl: string;
-  },
-) {
+export function buildDeploymentLayer(w: Head & StoresModule) {
   const { config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock } = w;
 
   const deploymentLayer = config.deploymentLayerDir

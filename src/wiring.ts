@@ -4,20 +4,14 @@ import { type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
-import {
-  createBackgroundOwnershipStore,
-  type BackgroundOwnershipControl,
-  type BackgroundOwnership,
-} from "./runs/background-ownership.ts";
-import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
+import { type BackgroundOwnershipControl } from "./runs/background-ownership.ts";
 import { createSuggestedActivityService } from "./suggestions/activities.ts";
 import { type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { type AwsRoleBroker } from "./auth/aws-role-broker.ts";
-import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
+import type { SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
@@ -48,7 +42,7 @@ import type { DirectoryStore } from "./directory/directory-store.ts";
 import { type EnvironmentStore } from "./environments/environment-store.ts";
 import { type Scheduler } from "./cron/scheduler.ts";
 import { type JobWorker } from "./jobs/job-worker.ts";
-import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
+import { type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -78,36 +72,15 @@ import { type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { type CustomProviderStore } from "./model/custom-provider-store.ts";
-import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { type SessionStore } from "./sessions/session-store.ts";
 import { type ProviderKeys } from "./harness/pi-model-runtime.ts";
 import type { Harness } from "./harness/harness.ts";
 import { type SecurityScreener } from "./security/security-screener.ts";
-import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
-import { isTerminal, type RunStore } from "./runs/run-store.ts";
-import { TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
-import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
-import { repairStaleTurns } from "./turns/turn-engine.ts";
-import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
-import {
-  createNoopInstanceRegistry,
-  createPostgresInstanceRegistry,
-  type InstanceRegistry,
-} from "./runs/instance-registry.ts";
-import { createDrainController, type DrainController } from "./runs/drain.ts";
+import { type RunStore } from "./runs/run-store.ts";
 import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { type ProcessRegistry } from "./processes/process-registry.ts";
-import {
-  createProcessReaper,
-  createReaperKillHook,
-  PROCESS_REAPER_INTERVAL_MS,
-  type ProcessReaper,
-} from "./processes/process-reaper.ts";
 import { type MonitorStore } from "./monitors/monitor-store.ts";
-import { createMonitorPoller, MONITOR_POLL_MS, type MonitorPoller } from "./monitors/monitor-poller.ts";
-import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
-import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
-import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { type SessionStateBus } from "./runs/session-state-bus.ts";
 import { type App } from "./api/app.ts";
 import { type SlackCoreClient } from "./api/slack-core-client.ts";
@@ -122,11 +95,11 @@ import { type ErrorLog } from "./admin/error-log.ts";
 import { type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import { type BrokeredLayerTool, type DeploymentLayerRuntime } from "./deployment/load-layer.ts";
 import { type DeploymentLayerStore } from "./deployment/deployment-layer-store.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
-import { sleep, withTimeout } from "./util/async.ts";
+import { errMessage } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
-import type { Gates, Late } from "./wiring/late.ts";
+import type { Gates, Head, Late } from "./wiring/late.ts";
 
 import { buildStores } from "./wiring/stores.ts";
 
@@ -177,6 +150,16 @@ import { buildSlackCore } from "./wiring/slack-core.ts";
 import { buildSessionReturns } from "./wiring/session-returns.ts";
 
 import { buildScheduler } from "./wiring/scheduler.ts";
+
+import { buildReceivers } from "./wiring/receivers.ts";
+
+import { buildWorkers } from "./wiring/workers.ts";
+
+import { registerEveryJobs } from "./wiring/every-jobs.ts";
+
+import { buildBackground } from "./wiring/background.ts";
+
+import { assembleBuiltApp } from "./wiring/built-app.ts";
 
 export interface Runtime {
   start(): void;
@@ -304,14 +287,12 @@ export interface BuiltApp {
   appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
   browserSessionStore: BrowserSessionStore;
-  monitorPoller?: MonitorPoller;
   ambientJudgments: AmbientJudgmentStore;
   ackEmojiPicks: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
-  skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
   chatSurfaces: SurfaceRegistry;
 }
@@ -356,851 +337,37 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
   mkdirSync(config.dataDir, { recursive: true });
-  const {
-    artifactMap,
-    managesArtifactHome,
-    skills,
-    skillBundles,
-    advisoryLock,
-    identity,
-    configStore,
-    pgArtifactMap,
-    canUseSandboxScope,
-    decisions,
-    featureFlags,
-    sessions,
-    canReadScope,
-    canWriteScope,
-    directory,
-    projects,
-    currentScopeMembers,
-    admin,
-    teams,
-    connectorStatusCache,
-    isCurrentSharedScopeMember,
-    environments,
-    leaderLease,
-    skillPacks,
-    slackInstallation,
-    principalLinks,
-  } = buildStores({ databaseUrl, config, connectorSecretKey });
-  const { gatewayCatalog, modelCredentials, gatewayTransport, directProviderAvailability } = buildModelCredentials({
-    config,
-    overrides,
-    artifactMap,
-    connectorSecretKey,
-  });
-  const {
-    toolOutput,
-    errors,
-    blobTransfer,
-    workspace,
-    mcpServers,
-    byteStore,
-    s3Bytes,
-    acl,
-    resolution,
-    files,
-    rateLimiter,
-    budget,
-    fileUploads,
-  } = buildFiles({ databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap });
-  const { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerChanged } =
-    buildDeploymentLayer({ config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock });
-  const { sandboxBackends, sandboxOnError, e2bClient } = buildSandboxBackends({
-    errors,
-    config,
-    advisoryLock,
-    blobTransfer,
-    deploymentLayer,
-    artifactMap,
-    pgArtifactMap,
-    workspace,
-  });
-  const { sandbox, sandboxResources } = buildSandbox({
-    artifactMap,
-    sandboxBackends,
-    config,
-    advisoryLock,
-    late,
-    canUseSandboxScope,
-    sandboxOnError,
-  });
-  const {
-    warnShadowedBrokerCredentials,
-    keychain,
-    serviceCreds,
-    userModelCredentials,
-    connectorTokens,
-    modelGateway,
-    mcpToolService,
-    resolveClient,
-    consentLinks,
-    oauthFlows,
-    secretDrops,
-    browserSessionStore,
-  } = buildCredentials({
-    overrides,
-    configStore,
-    config,
-    connectorSecretKey,
-    artifactMap,
-    advisoryLock,
-    mcpServers,
-    auditLog,
-  });
-  const {
-    resolveMemoryEmbedder,
-    resolvePiProviderKeys,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-    resolveBrowserCompanyKeys,
-  } = buildModelKeys({
-    advisoryLock,
-    artifactMap,
-    connectorSecretKey,
-    gatewayCatalog,
-    modelCredentials,
-    gatewayTransport,
-    overrides,
-    config,
-    keychain,
-  });
-  const {
-    runStoreKind,
-    harness,
-    runSignals,
-    runtimeOrgScope,
-    fallback,
-    hydrateModelCatalog,
-    orgBaseModelId,
-    judgeModelId,
-  } = buildHarness({
-    config,
-    databaseUrl,
-    configStore,
-    gatewayTransport,
-    directProviderAvailability,
-    overrides,
-    resolvePiProviderKeys,
-    decisions,
-    serviceCreds,
-    auditLog,
-    refreshModels,
-    modelCredentials,
-  });
-  const { skillsReady, startOnce } = buildStartup({
-    deploymentLayerStore,
-    config,
-    installCatalogs,
-    warnShadowedBrokerCredentials,
-    identity,
-    configStore,
-  });
-  const { memory, memoryStrategy, baseMemory, semanticMemory } = buildMemory({
-    databaseUrl,
-    configStore,
-    resolveMemoryEmbedder,
-    late,
-    harness,
-    config,
-    artifactMap,
-    errors,
-  });
-  const {
-    runs,
-    sessionStateBus,
-    productAnalytics,
-    ledgerEventBus,
-    maxAttempts,
-    ledger,
-    leaseTtlMs,
-    blockingApprovalSessions,
-    turnLedger,
-  } = buildRuns({ config, databaseUrl, runStoreKind, featureFlags, late, identity, sessions, advisoryLock });
-  const {
-    turnStream,
-    runActivity,
-    credentialUsage,
-    processes,
-    runStreamEvents,
-    contextRequestEvents,
-    stopStreamSync,
-    egressAudit,
-    replayDedupe,
-    brokerSessions,
-    appPageViews,
-  } = buildRunStreams({ sandbox, databaseUrl, late, config, runs, runStoreKind });
-  const { outbound, chatSurfaces, recentDmPosts, slackSurface, idempotency } = buildOutbound({
-    artifactMap,
-    sessions,
-    sessionStateBus,
-    config,
-    late,
-  });
-  const { deployService } = buildDeploy({
-    artifactMap,
-    pgArtifactMap,
-    config,
-    s3Bytes,
-    advisoryLock,
-    sandboxOnError,
-    e2bClient,
-    outbound,
-    productAnalytics,
-    auditLog,
-    acl,
-    canReadScope,
-    canWriteScope,
-    featureFlags,
-    identity,
-    directory,
-    managesArtifactHome,
-    serviceCreds,
-  });
-  const { securityScreener, approvals, monitors, crons, webhooks, inboxItems, recordInboxEvent } = buildCrons({
-    artifactMap,
-    ledgerEventBus,
-    late,
-    databaseUrl,
-    config,
-    outbound,
-    chatSurfaces,
-    overrides,
-  });
-  registerLegacyMigrations({ pgArtifactMap });
-  const { uiState, sessionSyscalls, layerBrokerFor, sessionMailbox, prepareSessionRequest } = buildSessionSyscalls({
-    config,
-    overrides,
-    resolution,
-    canWriteScope,
-    projects,
-    currentScopeMembers,
-    artifactMap,
-    databaseUrl,
-    featureFlags,
-    sessions,
-    runs,
-    runSignals,
-    maxAttempts,
-    advisoryLock,
-    late,
-    configStore,
-    runtimeOrgScope,
-    fallback,
-    hydrateModelCatalog,
-  });
-  const { orchestrator, surfaceCache, channelPolicy, orchestratorDeps } = buildOrchestrator({
-    databaseUrl,
-    chatSurfaces,
-    uiState,
-    late,
-    auditLog,
-    sessionStateBus,
-    config,
-    sessionSyscalls,
-    refreshModels,
-    identity,
-    resolution,
-    configStore,
-    userModelCredentials,
-    sessions,
-    workspace,
-    files,
-    toolOutput,
-    sandbox,
-    sandboxResources,
-    connectorTokens,
-    modelGateway,
-    rateLimiter,
-    budget,
-    harness,
-    memory,
-    deployService,
-    acl,
-    admin,
-    mcpToolService,
-    securityScreener,
-    gatewayTransport,
-    memoryStrategy,
-    skills,
-    skillBundles,
-    skillsReady,
-    advisoryLock,
-    errors,
-    ledger,
-    runSignals,
-    turnStream,
-    runActivity,
-    runs,
-    blobTransfer,
-    featureFlags,
-    teams,
-    credentialUsage,
-    connectorStatusCache,
-    resolveClient,
-    keychain,
-    serviceCreds,
-    outbound,
-    recentDmPosts,
-    approvals,
-    artifactMap,
-    processes,
-    monitors,
-    crons,
-    webhooks,
-    orgBaseModelId,
-    fallback,
-    directory,
-    isCurrentSharedScopeMember,
-    projects,
-    environments,
-    brokeredTools,
-    deploymentLayer,
-    layerBrokerFor,
-  });
-  const {
-    skillFetcher,
-    engaged,
-    pokeReaper,
-    screenSecurity,
-    ambientJudgments,
-    ackEmojiPicks,
-    providerKeys,
-    runResultRecovery,
-    reaper,
-  } = buildAppServices({
-    config,
-    runs,
-    outbound,
-    sessions,
-    chatSurfaces,
-    serviceCreds,
-    keychain,
-    leaderLease,
-    errors,
-    databaseUrl,
-    directProviderAvailability,
-    harness,
-    modelGateway,
-    budget,
-  });
-  const { app } = buildApiApp({
-    teams,
-    config,
-    admittedWork,
-    gates,
-    pgArtifactMap,
-    identity,
-    sessions,
-    orchestrator,
-    runs,
-    leaseTtlMs,
-    maxAttempts,
-    turnStream,
-    runStreamEvents,
-    runActivity,
-    runSignals,
-    modelGateway,
-    modelCredentials,
-    userModelCredentials,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-    mcpServers,
-    mcpToolService,
-    overrides,
-    acl,
-    admin,
-    skills,
-    skillPacks,
-    skillFetcher,
-    skillBundles,
-    advisoryLock,
-    auditLog,
-    configStore,
-    crons,
-    webhooks,
-    outbound,
-    directory,
-    projects,
-    environments,
-    deployService,
-    deploymentLayer,
-    processes,
-    monitors,
-    sandbox,
-    files,
-    approvals,
-    sessionStateBus,
-    ledgerEventBus,
-    artifactMap,
-    contextRequestEvents,
-    connectorSecretKey,
-    engaged,
-    pokeReaper,
-    surfaceCache,
-    channelPolicy,
-    harness,
-    screenSecurity,
-    ambientJudgments,
-    ackEmojiPicks,
-    judgeModelId,
-    fallback,
-    providerKeys,
-    late,
-  });
-  const { askResolution, triggerDeps, sweepAsks, inbox, dropResolution } = buildTriggers({
-    app,
-    outbound,
-    idempotency,
-    identity,
-    directory,
-    currentScopeMembers,
-    sessions,
-    crons,
-    keychain,
-    advisoryLock,
-    inboxItems,
-    recordInboxEvent,
-    auditLog,
-  });
-  const { slackCore, slackHandledEvents, keychainApprovals } = buildSlackCore({
-    crons,
-    inboxItems,
-    recordInboxEvent,
-    keychain,
-    app,
-    identity,
-    sessions,
-    auditLog,
-    outbound,
-    askResolution,
-    artifactMap,
-    memory,
-    surfaceCache,
-    processes,
-    monitors,
-    config,
-    featureFlags,
-    leaderLease,
-    configStore,
-    fallback,
-    blobTransfer,
-    slackSurface,
-    errors,
-    runs,
-    turnStream,
-    ackEmojiPicks,
-    harness,
-  });
-  const { sweepSessionReturns, wakeSweep } = buildSessionReturns({
-    runs,
-    engaged,
-    app,
-    sessions,
-    sessionStateBus,
-    blockingApprovalSessions,
-    advisoryLock,
-    maxAttempts,
-    sessionMailbox,
-    prepareSessionRequest,
-    featureFlags,
-    outbound,
-    runSignals,
-    pokeReaper,
-    config,
-    leaderLease,
-    orchestratorDeps,
-    keychain,
-  });
-  const { jobs, scheduler, suggestedActivities } = buildScheduler({
-    artifactMap,
-    baseMemory,
-    crons,
-    late,
-    databaseUrl,
-    admittedWork,
-    app,
-    advisoryLock,
-    triggerDeps,
-    config,
-    sessions,
-    orchestratorDeps,
-    admin,
-    configStore,
-    fallback,
-    modelCredentials,
-    overrides,
-    refreshModels,
-  });
-  const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials({ sandbox, processes: processes!, keychain }, handle, processId);
-  const monitorPoller: MonitorPoller | null =
-    processes && supportsProcessSessions(sandbox)
-      ? createMonitorPoller({
-          admittedWork,
-          monitors,
-          processes,
-          sandbox,
-          ...triggerDeps,
-          onProcessExit: finishCredentials,
-        })
-      : null;
-  const skillSyncEngine = createSkillSyncEngine({
-    packs: skillPacks,
-    fetcher: skillFetcher,
-    reconcile: (id) => app.syncSkillPack(id),
-  });
-  const webhookReceiver = createWebhookReceiver({
-    webhooks,
-    ...triggerDeps,
-    jobs,
-  });
-  const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
-    ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
-        instanceId: randomUUID(),
-        deploymentId: config.backgroundDeploymentId,
-        active: () => gates.backgroundActive(),
-      }
-    : undefined;
-  const instanceRegistry: InstanceRegistry =
-    !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
-      ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
-          instanceId: randomUUID(),
-          buildSha: config.buildSha,
-          startedAt: Date.now(),
-        })
-      : createNoopInstanceRegistry();
-  const drain: DrainController = createDrainController({ registry: instanceRegistry });
-  const canClaimRuns = () => gates.backgroundAdmission() && drain.canClaim();
-  const turnReady = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness")
-    : undefined;
-  const turnCancels = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels")
-    : undefined;
-  const turnYields = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields")
-    : undefined;
-  const turnRunner: TurnRunner | undefined = turnLedger
-    ? createTurnRunner({
-        ledger: turnLedger,
-        orchestrator,
-        queues: TURN_QUEUES,
-        slots: Math.max(1, config.workers),
-        capacity: () => Math.max(1, config.workers) - workers.filter((worker) => worker.held()).length,
-        ...(turnReady ? { ready: turnReady } : {}),
-        ...(turnCancels ? { cancels: turnCancels } : {}),
-        ...(turnYields ? { yields: turnYields } : {}),
-        canClaim: canClaimRuns,
-        errors,
-        maxClaims: RUN_MAX_CLAIMS,
-      })
-    : undefined;
-  const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
-  const canClaimRunSlot = () => canClaimRuns() && busyRuns() < Math.max(1, config.workers);
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRunSlot,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
-  const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
-  const processReaper: ProcessReaper | null = processes
-    ? createProcessReaper(processes, {
-        ...(supportsProcessSessions(sandbox)
-          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
-          : {}),
-      })
-    : null;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
-  const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
-  const devIdleMachineMs = 2 * 60 * 60_000;
-  const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
-  const every = (name: string, everyMs: number, fn: () => unknown) =>
-    jobs.every(name, everyMs, () => admittedWork.run(fn));
-  every("cron:repair", 60_000, () => scheduler.repair());
-  every("cron:asks", 5_000, () => sweepAsks(Date.now()));
-  every("cron:stranded-fires", 10 * 60_000, async () => {
-    const swept = await crons.sweepStrandedFires(Date.now());
-    if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
-  });
-  every("cron:fire-gc", 6 * 60 * 60_000, async () => {
-    const pruned = await crons.pruneFires(Date.now());
-    if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
-  });
-  if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
-  if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
-  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep());
-  every("memory-vector-index", 30_000, () => semanticMemory.index());
-  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));
-  every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"));
-  every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
-  every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));
-  const handledEventCutoff = () => Date.now() - 24 * 60 * 60_000;
-  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBelow("at", handledEventCutoff()));
-  every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()));
-  every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
-  every("spend:refresh", 60_000, () => sessions.refreshSpendRollup());
-  every("llm-capture:retention", 5 * 60_000, async () => {
-    const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-      deadline: Date.now() + 30_000,
-    });
-    if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-  });
-  every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
-  every("Composio consent returns", 30 * 60_000, async () => {
-    for (const [id, entry] of await composioReturns.entries())
-      if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-  });
-  every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments());
-  if (reapDeepIdle)
-    every("sandbox:deep-idle-reaper", 5 * 60_000, () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs));
-  every("orphaned-signals", config.reaperIntervalMs, async () => {
-    for (const runId of await runSignals.pendingRunIds()) {
-      const run = await runs.get(runId);
-      if (!run || isTerminal(run.status))
-        await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-    }
-  });
-  every("run-signals:prune", 60 * 60_000, () => runSignals.prune(7 * 24 * 60 * 60_000));
-  every("session-return-sweep", 1_000, sweepSessionReturns);
-  every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
-  every("queued-post-retry", 30_000, () => outbound.retryQueued());
-  every("approval-deliveries", 30_000, () => approvals.deliverPending());
-  if (turnLedger) {
-    every("turns:pointer-repair", 60_000, () => repairStaleTurns({ ledger: turnLedger, sessions, errors }));
-    every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
-  }
-  // Started together once background work is admitted, and stopped together.
-  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [reaper, wakeSweep];
-  let backgroundRunning = false;
-  let backgroundStopping: Promise<void> | null = null;
-  let backgroundClaimsStopping: Promise<void> = Promise.resolve();
-  let backgroundGeneration = 0;
-  function startBackground(): void {
-    if (backgroundRunning) return;
-    backgroundRunning = true;
-    admittedWork.resume();
-    drain.start();
-    const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
-    preemptionSweeper.start();
-    turnRunner?.start();
-    const startPeriodic = () => {
-      if (!backgroundRunning || generation !== backgroundGeneration) return;
-      for (const service of periodicServices) service.start();
-      void jobs
-        .start()
-        .catch(reportFailureAs("jobs: start (background jobs will not run from this process)", undefined));
-    };
-    if (backgroundStopping)
-      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
-    else startPeriodic();
-  }
-  function stopBackground(): Promise<void> {
-    admittedWork.pause();
-    backgroundRunning = false;
-    const previous = backgroundStopping;
-    backgroundGeneration++;
-    void semanticMemory.stop();
-    const stopping = [
-      ...periodicServices.map((service) => service.stop()),
-      jobs.stopClaims(),
-      preemptionSweeper.stop(),
-      turnRunner?.stopClaims(),
-      ...workers.map((worker) => worker.stopClaims()),
-    ];
-    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping])
-      .then(() => {})
-      .finally(() => {
-        if (backgroundStopping === draining) backgroundStopping = null;
-      });
-    backgroundStopping = draining;
-    return draining;
-  }
-  async function releaseInFlightRuns(): Promise<void> {
-    gates.inlineShutdown.abort();
-    await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
-      ),
-      ...workers.map((w) => w.releaseInFlight()),
-      turnRunner?.releaseInFlight(),
-    ]);
-  }
-  const runtime: Runtime = {
-    start() {
-      if (gates.inlineShutdown.signal.aborted) gates.inlineShutdown = new AbortController();
-      void blobTransfer
-        .ensureExpiry?.(1)
-        .catch(reportFailureAs("blob-transfer: S3 lifecycle expiry install (sweep is the fallback)", undefined));
-      drain.start();
-      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
-    },
-    startBackground,
-    setBackgroundAdmission(canClaim, active) {
-      gates.backgroundAdmission = canClaim;
-      gates.backgroundActive = active;
-    },
-    async stopBackgroundClaims() {
-      void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
-    },
-    stopBackground,
-    async backgroundDrained() {
-      await backgroundStopping;
-      await Promise.all([admittedWork.drained(), jobs.stop(), ...workers.map((worker) => worker.drained())]);
-    },
-    releaseInFlightRuns,
-    async stop() {
-      await turnRunner?.releaseInFlight();
-      await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        withTimeout(() => jobs.stop(), config.shutdownDrainMs, "background job drain"),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
-      await drain.stop();
-      stopStreamSync();
-      await Promise.all(
-        [
-          runs.close?.(),
-          runSignals.close?.(),
-          turnLedger?.close(),
-          turnReady?.close?.(),
-          contextRequestEvents.close?.(),
-          turnCancels?.close?.(),
-          turnYields?.close?.(),
-          sessionStateBus.close?.(),
-          ledgerEventBus.close?.(),
-          deploymentLayerChanged.close?.(),
-          runActivity.close?.(),
-          runStreamEvents.close?.(),
-        ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
-      );
-      await semanticMemory.close();
-      await errors.flush();
-    },
-  };
-
-  return {
-    app,
-    checkReadiness: async (signal) => {
-      await pgArtifactMap.pool.q("SELECT 1", [], { signal });
-    },
-    ...(screenSecurity ? { screenSecurity } : {}),
-    deploymentLayer,
-    deploymentLayerStore,
-    brokeredTools,
-    start: () => startOnce().ready,
-    sessions,
-    runs,
-    signals: runSignals,
-    sessionStateBus,
-    ledgerEventBus,
-    surfaceCache,
-    runtime,
-    config: configStore,
-    connectorTokens,
-    slackInstallation,
-    resolveClient,
-    consentLinks,
-    oauthFlows,
-    secretDrops,
-    modelGatewayTransport: gatewayTransport,
-    ...(budget ? { budget } : {}),
-    resolveBrowserCompanyKeys,
-    modelGateway,
-    modelCredentials,
-    userModelCredentials,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-    mcpServers,
-    mcpToolService,
-    acl,
-    skills,
-    skillBundles,
-    skillFetcher,
-    auditLog,
-    scheduler,
-    sweepAsks,
-    inbox,
-    webhookReceiver,
-    jobs,
-    admin,
-    rateLimiter,
-    errors,
-    crons,
-    credentialUsage,
-    egressAudit,
-    identity,
-    principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
-    composioReturns,
-    workspace,
-    memory,
-    keychain,
-    serviceCreds,
-    outbound,
-    keychainApprovals,
-    fireAskResolution: askResolution,
-    fireDropResolution: dropResolution,
-    sandbox,
-    sandboxResources,
-    advisoryLock,
-    blobTransfer,
-    files,
-    ...(fileUploads ? { fileUploads } : {}),
-    featureFlags,
-    teams,
-    decisions,
-    replayDedupe,
-    brokerSessions,
-    directory,
-    projects,
-    environments,
-    ...(processes ? { processes } : {}),
-    ...(appPageViews ? { appPageViews } : {}),
-    monitors,
-    browserSessionStore,
-    ...(monitorPoller ? { monitorPoller } : {}),
-    ambientJudgments,
-    ackEmojiPicks,
-    channelPolicy,
-    ...(config.suggestedActivitiesEnabled && (config.backgroundWorkEnabled || config.backgroundDeploymentId)
-      ? { suggestedActivities }
-      : {}),
-    ...(backgroundOwnership ? { backgroundOwnership } : {}),
-    uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
-    sessionShareBytes: byteStore("session-shares/", "session-shares"),
-    skillSyncEngine,
-    slackCore,
-    chatSurfaces,
-  };
+  const w0: Head = { config, overrides, gates, admittedWork, createSweeper, late, databaseUrl, connectorSecretKey };
+  const w1 = { ...w0, ...buildStores(w0) };
+  const w2 = { ...w1, ...buildModelCredentials(w1) };
+  const w3 = { ...w2, ...buildFiles(w2) };
+  const w4 = { ...w3, ...buildDeploymentLayer(w3) };
+  const w5 = { ...w4, ...buildSandboxBackends(w4) };
+  const w6 = { ...w5, ...buildSandbox(w5) };
+  const w7 = { ...w6, ...buildCredentials(w6) };
+  const w8 = { ...w7, ...buildModelKeys(w7) };
+  const w9 = { ...w8, ...buildHarness(w8) };
+  const w10 = { ...w9, ...buildStartup(w9) };
+  const w11 = { ...w10, ...buildMemory(w10) };
+  const w12 = { ...w11, ...buildRuns(w11) };
+  const w13 = { ...w12, ...buildRunStreams(w12) };
+  const w14 = { ...w13, ...buildOutbound(w13) };
+  const w15 = { ...w14, ...buildDeploy(w14) };
+  const w16 = { ...w15, ...buildCrons(w15) };
+  registerLegacyMigrations(w16);
+  const w17 = { ...w16, ...buildSessionSyscalls(w16) };
+  const w18 = { ...w17, ...buildOrchestrator(w17) };
+  const w19 = { ...w18, ...buildAppServices(w18) };
+  const w20 = { ...w19, ...buildApiApp(w19) };
+  const w21 = { ...w20, ...buildTriggers(w20) };
+  const w22 = { ...w21, ...buildSlackCore(w21) };
+  const w23 = { ...w22, ...buildSessionReturns(w22) };
+  const w24 = { ...w23, ...buildScheduler(w23) };
+  const w25 = { ...w24, ...buildReceivers(w24) };
+  const w26 = { ...w25, ...buildWorkers(w25) };
+  registerEveryJobs(w26);
+  const w27 = { ...w26, ...buildBackground(w26) };
+  return assembleBuiltApp(w27);
 }
 
 export function serverDeps(

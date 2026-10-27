@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { type SessionStateBus, createMemorySessionStateBus } from "../runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../runs/postgres-session-state-bus.ts";
 import { type LedgerEventBus, createPostgresLedgerEventBus } from "../inbox/events.ts";
@@ -11,19 +12,10 @@ import type { Session } from "../types.ts";
 import { stoppableAncestors, sessionTreeRunCount, sessionTreeRoot, SUBAGENT_TREE_RUN_CAP } from "../subagents/tree.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { createProductAnalytics } from "../util/product-analytics.ts";
-import type { Config } from "../config.ts";
 import type { HarnessModule } from "./harness.ts";
 import type { StoresModule } from "./stores.ts";
-import type { Late } from "./late.ts";
 
-export function buildRuns(
-  w: Pick<HarnessModule, "runStoreKind"> &
-    Pick<StoresModule, "featureFlags" | "identity" | "sessions" | "advisoryLock"> & {
-      config: Config;
-      databaseUrl: string;
-      late: Late;
-    },
-) {
+export function buildRuns(w: Head & HarnessModule & StoresModule) {
   const { config, databaseUrl, runStoreKind, featureFlags, late, identity, sessions, advisoryLock } = w;
 
   const sessionStateBus: SessionStateBus = config.databaseUrl

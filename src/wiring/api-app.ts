@@ -1,11 +1,9 @@
+import type { Head } from "./late.ts";
 import { createApp } from "../api/app.ts";
 import { createPostgresResourceSearch } from "../search/resource-search.ts";
 import type { SurfaceContextRequest } from "../types.ts";
 import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import type { StoresModule } from "./stores.ts";
-import type { Config } from "../config.ts";
-import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { Gates, Late } from "./late.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
 import type { RunsModule } from "./runs.ts";
 import type { RunStreamsModule } from "./run-streams.ts";
@@ -14,7 +12,6 @@ import type { CredentialsModule } from "./credentials.ts";
 import type { ModelCredentialsModule } from "./model-credentials.ts";
 import type { ModelKeysModule } from "./model-keys.ts";
 import type { FilesModule } from "./files.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { AppServicesModule } from "./app-services.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { CronsModule } from "./crons.ts";
@@ -22,47 +19,22 @@ import type { OutboundModule } from "./outbound.ts";
 import type { DeployModule } from "./deploy.ts";
 import type { SandboxModule } from "./sandbox.ts";
 
-type BuildApiAppInputs = Pick<
-  StoresModule,
-  | "teams"
-  | "pgArtifactMap"
-  | "identity"
-  | "sessions"
-  | "admin"
-  | "skills"
-  | "skillPacks"
-  | "skillBundles"
-  | "advisoryLock"
-  | "configStore"
-  | "directory"
-  | "projects"
-  | "environments"
-  | "artifactMap"
-> &
-  Pick<OrchestratorModule, "orchestrator" | "surfaceCache" | "channelPolicy"> &
-  Pick<RunsModule, "runs" | "leaseTtlMs" | "maxAttempts" | "sessionStateBus" | "ledgerEventBus"> &
-  Pick<RunStreamsModule, "turnStream" | "runStreamEvents" | "runActivity" | "processes" | "contextRequestEvents"> &
-  Pick<HarnessModule, "runSignals" | "harness" | "judgeModelId" | "fallback"> &
-  Pick<CredentialsModule, "modelGateway" | "userModelCredentials" | "mcpToolService"> &
-  Pick<ModelCredentialsModule, "modelCredentials"> &
-  Pick<ModelKeysModule, "refreshModels" | "customProviders" | "refreshCustomProviders"> &
-  Pick<FilesModule, "mcpServers" | "acl" | "files"> &
-  Pick<
-    AppServicesModule,
-    "skillFetcher" | "engaged" | "pokeReaper" | "screenSecurity" | "ambientJudgments" | "ackEmojiPicks" | "providerKeys"
-  > &
-  Pick<DeploymentLayerModule, "auditLog" | "deploymentLayer"> &
-  Pick<CronsModule, "crons" | "webhooks" | "monitors" | "approvals"> &
-  Pick<OutboundModule, "outbound"> &
-  Pick<DeployModule, "deployService"> &
-  Pick<SandboxModule, "sandbox"> & {
-    config: Config;
-    admittedWork: AdmittedWork;
-    gates: Gates;
-    overrides: AppOverrides;
-    connectorSecretKey: string;
-    late: Late;
-  };
+type BuildApiAppInputs = Head &
+  StoresModule &
+  OrchestratorModule &
+  RunsModule &
+  RunStreamsModule &
+  HarnessModule &
+  CredentialsModule &
+  ModelCredentialsModule &
+  ModelKeysModule &
+  FilesModule &
+  AppServicesModule &
+  DeploymentLayerModule &
+  CronsModule &
+  OutboundModule &
+  DeployModule &
+  SandboxModule;
 
 export function buildApiApp(w: BuildApiAppInputs) {
   const { late } = w;

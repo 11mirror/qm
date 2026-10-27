@@ -16,12 +16,7 @@ import type { CredentialsModule } from "./credentials.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
 export function buildTriggers(
-  w: Pick<ApiAppModule, "app"> &
-    Pick<OutboundModule, "outbound" | "idempotency"> &
-    Pick<StoresModule, "identity" | "directory" | "currentScopeMembers" | "sessions" | "advisoryLock"> &
-    Pick<CronsModule, "crons" | "inboxItems" | "recordInboxEvent"> &
-    Pick<CredentialsModule, "keychain"> &
-    Pick<DeploymentLayerModule, "auditLog">,
+  w: ApiAppModule & OutboundModule & StoresModule & CronsModule & CredentialsModule & DeploymentLayerModule,
 ) {
   const {
     app,
