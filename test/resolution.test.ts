@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { composeInstructions, createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { PersistedEgressPolicy, PersistedInstructions } from "../src/resolution/config-store.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
@@ -102,15 +102,15 @@ test("the writable layer is the scope, global is read-only", async () => {
 });
 
 test("resolution refreshes security config written by another instance", async () => {
-  const instructions = testMap<PersistedInstructions>();
-  const egressPolicies = testMap<PersistedEgressPolicy>();
-  const reader = testConfigStore("default-org", { instructions, egressPolicies });
+  const databaseUrl = testDatabaseUrl();
+  const reader = testConfigStore("default-org", { databaseUrl });
   const personal = scopeId("personal", "U1");
-  await instructions.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
-  await egressPolicies.put(personal, {
-    scopeId: personal,
-    policy: { allowedHosts: [], deniedHosts: ["blocked.example"] },
-  });
+  const db = createPgPool(databaseUrl);
+  await db.q("INSERT INTO soul_configs (scope_id, content, version) VALUES ($1, 'FLEET_LIVE', 1)", [personal]);
+  await db.q("INSERT INTO egress_policies (scope_id, policy) VALUES ($1, $2)", [
+    personal,
+    { allowedHosts: [], deniedHosts: ["blocked.example"] },
+  ]);
   const res = createResolutionService(
     "default-org",
     reader,

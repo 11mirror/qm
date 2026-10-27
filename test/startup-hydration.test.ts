@@ -28,16 +28,12 @@ mock.module("../src/identity/identity-service.ts", {
 mock.module("../src/resolution/config-store.ts", {
   namedExports: {
     ...configModule,
-    createConfigStore: (...args: Parameters<typeof configModule.createConfigStore>) =>
-      configModule.createConfigStore(args[0], {
-        ...args[1],
-        deploymentIdentity: {
-          ...args[1].deploymentIdentity,
-          putIfAbsent: async () => {
-            throw configFailure;
-          },
-        },
-      }),
+    createConfigStore: (...args: Parameters<typeof configModule.createConfigStore>) => ({
+      ...configModule.createConfigStore(...args),
+      hydrate: async () => {
+        throw configFailure;
+      },
+    }),
   },
 });
 

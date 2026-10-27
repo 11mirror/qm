@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
+import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
+import { tableCodec, type TableSpec } from "../src/persistence/typed-table.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the legacy base model migration test";
@@ -39,16 +41,25 @@ const migrate = (url: string) =>
     },
   });
 
-const rows = async (pool: pg.Pool, table: string) =>
-  Object.fromEntries(
-    (await pool.query(`SELECT id, json FROM ${table}`)).rows.map((row) => [row.id, row.json]),
-  ) as Record<string, Record<string, unknown>>;
+const typedRows = async (pool: pg.Pool, spec: TableSpec) => {
+  const codec = tableCodec<Record<string, unknown>>(spec);
+  const found = await pool.query(`SELECT ${codec.columns} FROM ${spec.table}`);
+  return Object.fromEntries(codec.rows(found.rows).map((row) => [row[spec.key], row]));
+};
+
+const asMapTables = async (pool: pg.Pool, specs: readonly TableSpec[]) => {
+  for (const { table } of specs) {
+    await pool.query(`DROP TABLE ${table}`);
+    await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [`typed/config/${table}/0001`]);
+  }
+};
 
 test("legacy base models become runtime selections with the same model", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     await migrate(url);
     await admin.query("DELETE FROM qm_schema_migrations WHERE id = 'runtime/0003-promote-legacy-base-models'");
-    await admin.query("CREATE TABLE IF NOT EXISTS base_model_configs (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await asMapTables(admin, [CONFIG_TABLES.baseModels]);
+    await admin.query("CREATE TABLE base_model_configs (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     const insert = (id: string, json: unknown) =>
       admin.query("INSERT INTO base_model_configs (id, json) VALUES ($1, $2)", [id, JSON.stringify(json)]);
     await insert("org:o", { scopeId: "org:o", modelId: "claude-opus-5", cronRuntime: { modelId: "gpt-5.5" } });
@@ -58,7 +69,7 @@ test("legacy base models become runtime selections with the same model", { skip 
 
     await migrate(url);
 
-    const base = await rows(admin, "base_model_configs");
+    const base = await typedRows(admin, CONFIG_TABLES.baseModels);
     assert.deepEqual(base["org:o"], {
       scopeId: "org:o",
       modelId: "claude-opus-5",

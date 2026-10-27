@@ -30,7 +30,7 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
-import { InstructionsTooLargeError } from "../resolution/config-store.ts";
+import { InstructionsTooLargeError } from "../resolution/config-instructions.ts";
 import { zodMessage } from "./routes/shared.ts";
 
 async function capabilityAdminDenied(

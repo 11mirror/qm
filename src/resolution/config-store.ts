@@ -1,11 +1,8 @@
-import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
+import type { ApprovalGrantModes, CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import type { ApprovalGrantModes } from "../types.ts";
 import {
   deriveConnectorKey,
   encryptSecret,
@@ -17,19 +14,8 @@ import {
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-
-/** The longest instruction text a scope may hold. */
-export const MAX_INSTRUCTIONS_CHARS = 100_000;
-
-export class InstructionsTooLargeError extends Error {
-  constructor() {
-    super(`instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters`);
-  }
-}
-
-function assertInstructionsSize(content: string): void {
-  if (content.length > MAX_INSTRUCTIONS_CHARS) throw new InstructionsTooLargeError();
-}
+import { openConfigTables, type ConfigTables, type KeyedTable } from "./config-tables.ts";
+import { createInstructions } from "./config-instructions.ts";
 
 export interface PersistedInstructions {
   scopeId: ScopeId;
@@ -38,7 +24,6 @@ export interface PersistedInstructions {
   updatedAt?: number;
   updatedBy?: string;
   history?: PersistedInstructionsRevision[];
-  mutationId?: string;
 }
 export interface PersistedInstructionsRevision {
   scopeId: ScopeId;
@@ -49,15 +34,15 @@ export interface PersistedInstructionsRevision {
 }
 type InstructionsSnapshot = PersistedInstructions | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
-export type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
-export type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
+type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
+type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
 export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
 
 interface PersistedModelAccount extends PersistedScopedFlag {
   provider?: "anthropic" | "openai";
 }
 
-export type PersistedScopedFlag = ScopedRow<"on", boolean>;
+type PersistedScopedFlag = ScopedRow<"on", boolean>;
 export interface PersistedBaseModel {
   scopeId: ScopeId;
   embeddingModelId?: string;
@@ -98,10 +83,10 @@ interface AutoFlaggerConfig {
   modelId: string;
   rubric: string;
 }
-export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
+interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
-export interface PersistedDeploymentIdentity {
+interface PersistedDeploymentIdentity {
   orgId: string;
 }
 export interface ScopedConfigStore {
@@ -157,58 +142,40 @@ export interface ScopedConfigStore {
   hydrate?(): Promise<void>;
 }
 
-export interface ConfigStoreMaps {
-  connectorClients?: DurableMap<StoredConnectorClient>;
-  instructions?: DurableMap<PersistedInstructions>;
-  instructionsHistory?: DurableMap<PersistedInstructionsRevision>;
-  commandPolicies?: DurableMap<ScopedRow<"policy", CommandPolicy>>;
-  approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
-  egressPolicies?: DurableMap<PersistedEgressPolicy>;
-  unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
-  externalSlackParticipants?: DurableMap<PersistedScopedFlag>;
-  channelHeaderPin?: DurableMap<PersistedScopedFlag>;
-  baseModels?: DurableMap<PersistedBaseModel>;
-  orgAmbient?: DurableMap<PersistedScopedFlag>;
-  interactiveFastMode?: DurableMap<PersistedScopedFlag>;
-  individualModelAuth?: DurableMap<PersistedModelAccount>;
-  webuiModels?: DurableMap<ScopedRow<"ids", string[]>>;
-  ackEmoji?: DurableMap<ScopedRow<"names", string[]>>;
-  slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
-  branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
-  browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
-  browseModels?: DurableMap<ScopedRow<"modelId", string>>;
-  autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
-  deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
+interface ConfigRecords {
+  connectorClients: StoredConnectorClient;
+  instructions: PersistedInstructions;
+  instructionsHistory: PersistedInstructionsRevision;
+  commandPolicies: ScopedRow<"policy", CommandPolicy>;
+  approvalGrantModes: PersistedApprovalGrantModes;
+  egressPolicies: PersistedEgressPolicy;
+  unfulfilledInsights: PersistedScopedFlag;
+  externalSlackParticipants: PersistedScopedFlag;
+  channelHeaderPin: PersistedScopedFlag;
+  baseModels: PersistedBaseModel;
+  orgAmbient: PersistedScopedFlag;
+  interactiveFastMode: PersistedScopedFlag;
+  individualModelAuth: PersistedModelAccount;
+  webuiModels: ScopedRow<"ids", string[]>;
+  ackEmoji: ScopedRow<"names", string[]>;
+  slackEmojiCatalog: PersistedSlackEmojiCatalog;
+  branding: ScopedRow<"branding", OrgBranding>;
+  browseMaxSteps: ScopedRow<"steps", number>;
+  browseModels: ScopedRow<"modelId", string>;
+  autoFlaggerConfigs: PersistedAutoFlaggerConfig;
+  deploymentIdentity: PersistedDeploymentIdentity;
 }
-
-const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
-  connectorClients: "connector_clients",
-  instructions: "soul_configs",
-  instructionsHistory: "soul_history",
-  commandPolicies: "command_policies",
-  approvalGrantModes: "approval_grant_modes",
-  egressPolicies: "egress_policies",
-  unfulfilledInsights: "unfulfilled_insights_flag",
-  externalSlackParticipants: "external_slack_participants_flag",
-  channelHeaderPin: "channel_header_pin_flag",
-  baseModels: "base_model_configs",
-  orgAmbient: "org_ambient_flag",
-  interactiveFastMode: "interactive_fast_mode_flag",
-  individualModelAuth: "individual_model_auth_flag",
-  webuiModels: "webui_model_configs",
-  ackEmoji: "ack_emoji",
-  slackEmojiCatalog: "slack_emoji_catalog",
-  branding: "branding_configs",
-  browseMaxSteps: "browse_max_steps_configs",
-  browseModels: "browse_model_configs",
-  autoFlaggerConfigs: "auto_flagger_configs",
-  deploymentIdentity: "deployment_identity",
-};
-
-export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
-  Object.fromEntries(
-    Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
-  ) as unknown as Required<ConfigStoreMaps>;
+type ConfigStoreTables = ConfigTables<ConfigRecords>;
+type SettingTable = Exclude<
+  keyof ConfigRecords,
+  | "connectorClients"
+  | "instructions"
+  | "instructionsHistory"
+  | "approvalGrantModes"
+  | "baseModels"
+  | "slackEmojiCatalog"
+  | "deploymentIdentity"
+>;
 
 /** What each per-scope setting reads as; null means "not set here". */
 export interface ScopeSettingValues {
@@ -231,8 +198,7 @@ export type ScopeSettingName = keyof ScopeSettingValues;
 export type ScopeSettingValue<K extends ScopeSettingName> = NonNullable<ScopeSettingValues[K]>;
 
 interface ScopeSettingSpec<V> {
-  /** The table-backed map that stores one row per scope. */
-  map: Exclude<keyof ConfigStoreMaps, "connectorClients">;
+  table: SettingTable;
   /** Where admins may set it: "org" settings are set on the org scope only. */
   target: "org" | "any";
   /** Stored once for the whole org, whatever scope is named. */
@@ -249,88 +215,93 @@ const emptyAsNull = (items: string[]): string[] | null => (items.length ? items 
 
 /** Every per-scope setting, declared once: the store's get/set and the admin resources come from here. */
 export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSettingValue<K>> } = {
-  commandPolicy: { map: "commandPolicies", target: "any", orgDefault: defaultOrgPolicy() },
-  egress: { map: "egressPolicies", target: "any", orgDefault: { allowedHosts: [], deniedHosts: [] } },
-  unfulfilledInsights: { map: "unfulfilledInsights", target: "any", inherit: "any" },
-  externalSlackParticipants: { map: "externalSlackParticipants", target: "org", inherit: "any" },
-  channelHeaderPin: { map: "channelHeaderPin", target: "org", inherit: "fallback", orgDefault: false },
-  orgAmbient: { map: "orgAmbient", target: "org", orgOnly: true, orgDefault: true },
-  interactiveFastMode: { map: "interactiveFastMode", target: "org", orgOnly: true, orgDefault: false },
-  individualModelAuth: { map: "individualModelAuth", target: "org", orgOnly: true, orgDefault: false },
-  webuiModels: { map: "webuiModels", target: "org", normalize: emptyAsNull },
-  ackEmoji: { map: "ackEmoji", target: "org", normalize: emptyAsNull },
-  branding: { map: "branding", target: "org" },
-  browseMaxSteps: { map: "browseMaxSteps", target: "org" },
-  browseModel: { map: "browseModels", target: "org" },
-  autoFlagger: { map: "autoFlaggerConfigs", target: "org", orgOnly: true },
+  commandPolicy: { table: "commandPolicies", target: "any", orgDefault: defaultOrgPolicy() },
+  egress: { table: "egressPolicies", target: "any", orgDefault: { allowedHosts: [], deniedHosts: [] } },
+  unfulfilledInsights: { table: "unfulfilledInsights", target: "any", inherit: "any" },
+  externalSlackParticipants: { table: "externalSlackParticipants", target: "org", inherit: "any" },
+  channelHeaderPin: { table: "channelHeaderPin", target: "org", inherit: "fallback", orgDefault: false },
+  orgAmbient: { table: "orgAmbient", target: "org", orgOnly: true, orgDefault: true },
+  interactiveFastMode: { table: "interactiveFastMode", target: "org", orgOnly: true, orgDefault: false },
+  individualModelAuth: { table: "individualModelAuth", target: "org", orgOnly: true, orgDefault: false },
+  webuiModels: { table: "webuiModels", target: "org", normalize: emptyAsNull },
+  ackEmoji: { table: "ackEmoji", target: "org", normalize: emptyAsNull },
+  branding: { table: "branding", target: "org" },
+  browseMaxSteps: { table: "browseMaxSteps", target: "org" },
+  browseModel: { table: "browseModels", target: "org" },
+  autoFlagger: { table: "autoFlaggerConfigs", target: "org", orgOnly: true },
 };
 
-export function createConfigStore(
-  orgId: string,
-  opts: Required<ConfigStoreMaps> & {
-    connectorSecretKey?: Buffer | string;
-  },
-): ScopedConfigStore {
-  const instructionsCache = new Map<ScopeId, { content: string; version: number }>();
-  const instructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
-  const legacyInstructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
-  const baseModels = new Map<ScopeId, PersistedBaseModel>();
-  const instructionsStore = opts.instructions;
-  const instructionsHistoryStore = opts.instructionsHistory;
-  const baseModelStore = opts.baseModels;
-  const slackEmojiCatalogStore = opts.slackEmojiCatalog;
-  const deploymentIdentity = opts.deploymentIdentity;
-  const writeQueue = createKeyedQueue();
-  const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
-    writeQueue(key, async () => {
-      await write();
-      apply();
-    });
-  type SettingKey = Exclude<keyof ConfigStoreMaps, "connectorClients">;
-  type Row<M extends SettingKey> = NonNullable<ConfigStoreMaps[M]> extends DurableMap<infer R> ? R : never;
-  const setting = <M extends SettingKey, T>(
-    name: M,
-    read: (row: Row<M>) => T,
-    toRow: (id: ScopeId, value: T) => Row<M>,
-    orgOnly = false,
-  ) => {
-    const store = opts[name] as DurableMap<Row<M>>;
-    const cache = new Map<ScopeId, T>();
-    const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
-    const refresh = async (id: ScopeId) => {
-      if (!orgOnly || id === org) load(id, await store.get(id));
-    };
-    return {
-      store,
-      refresh,
-      reload: (id: ScopeId) => writeQueue(`${name}:${id}`, () => refresh(id)),
-      get: (id: ScopeId) => cache.get(id),
-      durable: async (id: ScopeId) => {
-        const row = await store.get(id);
-        return row ? read(row) : undefined;
-      },
-      set(id: ScopeId, value: T | null) {
-        const row = value === null ? null : toRow(id, value);
-        return save(
-          `${name}:${id}`,
-          () => (row ? store.put(id, row) : store.delete(id)),
-          () => load(id, row),
-        );
-      },
-      async hydrate() {
-        if (orgOnly) await refresh(org);
-        else for (const row of await store.all()) load((row as { scopeId: ScopeId }).scopeId, row);
-      },
-    };
+type Queue = ReturnType<typeof createKeyedQueue<string>>;
+
+function notifier(label: string) {
+  const listeners = new Set<(id: ScopeId) => void>();
+  return {
+    add: (listener: (id: ScopeId) => void) => void listeners.add(listener),
+    note(id: ScopeId) {
+      for (const listener of listeners) {
+        try {
+          listener(id);
+        } catch (e) {
+          console.error(`[config] ${label} listener failed:`, errMessage(e));
+        }
+      }
+    },
   };
-  const field = <M extends SettingKey, K extends Exclude<keyof Row<M>, "scopeId">>(name: M, key: K, orgOnly = false) =>
-    setting(
+}
+
+function scopeSetting<R extends { scopeId: ScopeId }, T>(
+  org: ScopeId,
+  queue: Queue,
+  name: string,
+  rows: KeyedTable<R>,
+  read: (row: R) => T,
+  toRow: (id: ScopeId, value: T) => R,
+  orgOnly = false,
+) {
+  const cache = new Map<ScopeId, T>();
+  const load = (id: ScopeId, row: R | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
+  const refresh = async (id: ScopeId) => {
+    if (!orgOnly || id === org) load(id, await rows.get(id));
+  };
+  return {
+    rows,
+    refresh,
+    reload: (id: ScopeId) => queue(`${name}:${id}`, () => refresh(id)),
+    get: (id: ScopeId) => cache.get(id),
+    durable: async (id: ScopeId) => {
+      const row = await rows.get(id);
+      return row ? read(row) : undefined;
+    },
+    set: (id: ScopeId, value: T | null) =>
+      queue(`${name}:${id}`, async () => {
+        const row = value === null ? null : toRow(id, value);
+        if (row) await rows.put(id, row);
+        else await rows.delete(id);
+        load(id, row);
+      }),
+    async hydrate() {
+      if (orgOnly) await refresh(org);
+      else for (const row of await rows.all()) load(row.scopeId, row);
+    },
+  };
+}
+
+function createScopeSettings(org: ScopeId, tables: ConfigStoreTables, queue: Queue) {
+  const field = <N extends SettingTable | "approvalGrantModes", K extends Exclude<keyof ConfigRecords[N], "scopeId">>(
+    name: N,
+    key: K,
+    orgOnly = false,
+  ) =>
+    scopeSetting(
+      org,
+      queue,
       name,
+      tables[name] as KeyedTable<ConfigRecords[N]>,
       (row) => row[key],
-      (id, value: Row<M>[K]) => ({ scopeId: id, [key]: value }) as Row<M>,
+      (id, value: ConfigRecords[N][K]) => ({ scopeId: id, [key]: value }) as ConfigRecords[N],
       orgOnly,
     );
-  const settings = {
+  return {
     commandPolicies: field("commandPolicies", "policy"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
@@ -345,152 +316,32 @@ export function createConfigStore(
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     browseModels: field("browseModels", "modelId"),
-    autoFlaggerConfigs: setting(
+    autoFlaggerConfigs: scopeSetting(
+      org,
+      queue,
       "autoFlaggerConfigs",
+      tables.autoFlaggerConfigs,
       ({ modelId, rubric }): AutoFlaggerConfig => ({ modelId, rubric }),
       (id, config) => ({ scopeId: id, ...config }),
       true,
     ),
-  } satisfies Partial<Record<SettingKey, unknown>>;
-  const allSettings = Object.values(settings);
-  const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
-  const noteChannelHeaderPinChanged = (id: ScopeId): void => {
-    for (const listener of channelHeaderPinListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] channel-header-pin listener failed:", errMessage(e));
-      }
-    }
-  };
-  const runtimeSelectionListeners = new Set<(id: ScopeId) => void>();
-  const noteRuntimeSelectionChanged = (id: ScopeId): void => {
-    for (const listener of runtimeSelectionListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] runtime-selection listener failed:", errMessage(e));
-      }
-    }
-  };
-  const connectorClients = opts.connectorClients;
-  const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
-  const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
+  } satisfies Record<SettingTable | "approvalGrantModes", unknown>;
+}
 
-  const org = scopeId("org", orgId);
-  const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
-    id === org
-      ? {
-          ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
-          ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
-          ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
-          ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
-        }
-      : {};
-  const withoutRuntime = (id: ScopeId, row: PersistedBaseModel | null): PersistedBaseModel => ({
-    scopeId: id,
-    ...purposeFields(id, row),
-  });
-  const updateBaseModelRow = async (
-    id: ScopeId,
-    fn: (row: PersistedBaseModel | null) => PersistedBaseModel,
-  ): Promise<PersistedBaseModel | null> => {
-    for (;;) {
-      let saved = await baseModelStore.update(id, fn);
-      if (!saved) {
-        const fresh = fn(null);
-        if (Object.keys(fresh).length <= 1) return null;
-        if (!(await baseModelStore.insertIfAbsent(id, fresh))) continue;
-        saved = fresh;
-      }
-      if (Object.keys(saved).length > 1) return saved;
-      await baseModelStore.deleteIf(id, (row) => Object.keys(row).length <= 1);
-      return null;
-    }
-  };
-  const runtimeSelection = (row: PersistedBaseModel | null | undefined): ScopedRuntimeSelection | null => {
-    if (row?.orgRevision === undefined || !row.modelId) return null;
-    return {
-      modelId: row.modelId,
-      orgRevision: row.orgRevision ?? 0,
-      ...(row.revision !== undefined ? { revision: row.revision } : {}),
-      ...(row.effortLevel !== undefined ? { effortLevel: row.effortLevel } : {}),
-      ...(row.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
-    };
-  };
-  const cacheBaseModel = (id: ScopeId, row: PersistedBaseModel | null): void => {
-    if (row) baseModels.set(id, row);
-    else baseModels.delete(id);
-  };
-  const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
-    await writeQueue(`model:${org}`, async () => {
-      const key = `${purpose}Runtime` as const;
-      const saved = await updateBaseModelRow(org, (current) => {
-        const row: PersistedBaseModel = { ...current, scopeId: org };
-        if (selection) row[key] = { ...selection };
-        else delete row[key];
-        return row;
-      });
-      cacheBaseModel(org, saved);
-    });
-  };
-  const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };
-  const composeApprovalGrantModes = (orgModes: ApprovalGrantModes, scope?: ApprovalGrantModes): ApprovalGrantModes => ({
-    session: orgModes.session && (scope?.session ?? true),
-    always: orgModes.always && (scope?.always ?? true),
-  });
-  const defaultOrgInstructions = {
-    content:
-      "You are a helpful internal assistant for this organization. Be concise, accurate, and respect data boundaries: never reveal information to people who are not party to the current conversation.",
-    version: 1,
-  };
-  instructionsCache.set(org, defaultOrgInstructions);
+const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };
+const composeApprovalGrantModes = (orgModes: ApprovalGrantModes, scope?: ApprovalGrantModes): ApprovalGrantModes => ({
+  session: orgModes.session && (scope?.session ?? true),
+  always: orgModes.always && (scope?.always ?? true),
+});
 
-  let hydrated: Promise<void> | null = null;
-  const loadInstructionsCache = (id: ScopeId, instructions: PersistedInstructions | null): void => {
-    if (instructions) instructionsCache.set(id, { content: instructions.content, version: instructions.version });
-    else if (id === org) instructionsCache.set(org, defaultOrgInstructions);
-    else instructionsCache.delete(id);
-    if (instructions?.history) instructionsHistory.set(id, instructions.history);
-    else instructionsHistory.delete(id);
-  };
-  const cloneInstructions = (instructions: PersistedInstructions | null): InstructionsSnapshot =>
-    instructions ? structuredClone(instructions) : null;
-  const sameInstructions = (left: InstructionsSnapshot, right: InstructionsSnapshot): boolean =>
-    isDeepStrictEqual(left, right);
-  const mergeInstructionsHistory = (
-    embedded: readonly PersistedInstructionsRevision[] | undefined,
-    legacy: readonly PersistedInstructionsRevision[],
-  ): PersistedInstructionsRevision[] => {
-    const byVersion = new Map<number, PersistedInstructionsRevision>();
-    for (const revision of legacy) byVersion.set(revision.version, revision);
-    for (const revision of embedded ?? []) byVersion.set(revision.version, revision);
-    return [...byVersion.values()].sort((a, b) => b.version - a.version);
-  };
-  const historyIncludingCurrent = (
-    current: PersistedInstructions,
-    legacy: readonly PersistedInstructionsRevision[],
-  ): PersistedInstructionsRevision[] => {
-    const history = mergeInstructionsHistory(current.history, legacy);
-    if (!history.some((revision) => revision.version === current.version)) {
-      history.push({
-        scopeId: current.scopeId,
-        content: current.content,
-        version: current.version,
-        updatedAt: current.updatedAt ?? 0,
-        ...(current.updatedBy ? { updatedBy: current.updatedBy } : {}),
-      });
-      history.sort((a, b) => b.version - a.version);
-    }
-    return history;
-  };
-
+function settingsApi(org: ScopeId, settings: ReturnType<typeof createScopeSettings>) {
   type Access = {
     get(id: ScopeId): unknown;
     durable(id: ScopeId): Promise<unknown>;
     set(id: ScopeId, value: unknown): Promise<void>;
   };
-  const access = (name: ScopeSettingName) => (settings as unknown as Record<string, Access>)[SCOPE_SETTINGS[name].map]!;
+  const access = (name: ScopeSettingName) =>
+    (settings as unknown as Record<string, Access>)[SCOPE_SETTINGS[name].table]!;
   const resolve = (name: ScopeSettingName, id: ScopeId, own: unknown, orgValue: () => unknown): unknown => {
     const { inherit, orgDefault } = SCOPE_SETTINGS[name];
     if (inherit === "any") return Boolean(orgValue()) || Boolean(own);
@@ -498,7 +349,8 @@ export function createConfigStore(
     if (id === org) return orgDefault ?? null;
     return inherit === "fallback" ? (orgValue() ?? orgDefault ?? null) : null;
   };
-
+  const headerPin = notifier("channel-header-pin");
+  const modelAuth = settings.individualModelAuth;
   return {
     setting: <K extends ScopeSettingName>(name: K, id: ScopeId = org) =>
       resolve(name, id, access(name).get(id), () => access(name).get(org)) as ScopeSettingValues[K],
@@ -513,306 +365,209 @@ export function createConfigStore(
     },
     settingOwnDurable: async <K extends ScopeSettingName>(name: K, id: ScopeId) =>
       ((await access(name).durable(id)) ?? null) as ScopeSettingValue<K> | null,
-    async setSetting(name, value, id = org) {
+    async setSetting<K extends ScopeSettingName>(name: K, value: ScopeSettingValue<K> | null, id: ScopeId = org) {
       const { normalize } = SCOPE_SETTINGS[name];
       await access(name).set(id, value !== null && normalize ? normalize(value as never) : value);
-      if (name === "channelHeaderPin") noteChannelHeaderPinChanged(id);
+      if (name === "channelHeaderPin") headerPin.note(id);
     },
+    getApprovalGrantModes(id: ScopeId) {
+      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
+      if (id === org) return { ...orgModes };
+      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
+    },
+    async getApprovalGrantModesDurable(id: ScopeId) {
+      const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
+      if (id === org) return { ...orgModes };
+      return composeApprovalGrantModes(orgModes, await settings.approvalGrantModes.durable(id));
+    },
+    setApprovalGrantModes: (id: ScopeId, modes: ApprovalGrantModes) =>
+      settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
+    onChannelHeaderPinChanged: headerPin.add,
+    async getIndividualModelAuthDurable(principalId?: string) {
+      if (await modelAuth.durable(org)) return true;
+      return principalId ? ((await modelAuth.durable(scopeId("personal", principalId))) ?? false) : false;
+    },
+    async getModelAccountDurable(principalId: string): Promise<ModelAccount> {
+      const row = await modelAuth.rows.get(scopeId("personal", principalId));
+      if (row?.on) return row.provider ?? "personal";
+      return (await modelAuth.durable(org)) ? "personal" : "company";
+    },
+    async setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai") {
+      const id = scopeId("personal", principalId);
+      await modelAuth.rows.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
+    },
+  };
+}
+
+const runtimeSelection = (row: PersistedBaseModel | null | undefined): ScopedRuntimeSelection | null => {
+  if (row?.orgRevision === undefined || !row.modelId) return null;
+  return {
+    modelId: row.modelId,
+    orgRevision: row.orgRevision,
+    ...(row.revision !== undefined ? { revision: row.revision } : {}),
+    ...(row.effortLevel !== undefined ? { effortLevel: row.effortLevel } : {}),
+    ...(row.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
+  };
+};
+
+function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>, queue: Queue) {
+  const cache = new Map<ScopeId, PersistedBaseModel>();
+  const changed = notifier("runtime-selection");
+  const cacheRow = (id: ScopeId, row: PersistedBaseModel | null): void => {
+    if (row) cache.set(id, row);
+    else cache.delete(id);
+  };
+  const purposeFields = (row: PersistedBaseModel | null) => ({
+    ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
+    ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
+    ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
+    ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
+  });
+  const setOrgField = <K extends keyof PersistedBaseModel>(key: K, value: PersistedBaseModel[K] | undefined) =>
+    queue(`model:${org}`, async () => {
+      const saved = await rows.update(org, (current) => {
+        const row: PersistedBaseModel = { ...current, scopeId: org };
+        if (value) row[key] = value;
+        else delete row[key];
+        return Object.keys(row).length > 1 ? row : null;
+      });
+      cacheRow(org, saved);
+    });
+  const setPurposeRuntime = (purpose: RuntimePurpose, selection?: RuntimeSelection) =>
+    setOrgField(`${purpose}Runtime`, selection ? { ...selection } : undefined);
+  const api = {
+    getPurposeRuntime: (purpose: RuntimePurpose) => {
+      const selection = cache.get(org)?.[`${purpose}Runtime`];
+      return selection ? { ...selection } : undefined;
+    },
+    getPurposeRuntimeDurable: async (purpose: RuntimePurpose) => {
+      const selection = (await rows.get(org))?.[`${purpose}Runtime`];
+      return selection ? { ...selection } : undefined;
+    },
+    setPurposeRuntime,
+    clearPurposeRuntime: (purpose: RuntimePurpose) => setPurposeRuntime(purpose),
+    getRuntimeSelection: (id: ScopeId) => runtimeSelection(cache.get(id)),
+    async setRuntimeSelection(id: ScopeId, selection: RuntimeSelection | null) {
+      await queue(`model:${id}`, async () => {
+        const orgRevision = id === org || selection === null ? 0 : ((await rows.get(org))?.revision ?? 0);
+        const saved = await rows.update(id, (row) => {
+          const kept = { scopeId: id, ...(id === org ? purposeFields(row) : {}) };
+          if (selection === null) return Object.keys(kept).length > 1 ? kept : null;
+          if (id !== org) return { ...kept, ...selection, orgRevision };
+          const revision = (row?.revision ?? 0) + 1;
+          return { ...kept, ...selection, revision, orgRevision: revision };
+        });
+        cacheRow(id, saved);
+      });
+      changed.note(id);
+    },
+    async acknowledgeRuntimeSelection(id: ScopeId) {
+      if (id === org) return;
+      await queue(`model:${id}`, async () => {
+        const orgRevision = (await rows.get(org))?.revision ?? 0;
+        const saved = await rows.update(id, (row) => (row ? { ...row, orgRevision } : null));
+        if (saved) cache.set(id, saved);
+      });
+    },
+    onRuntimeSelectionChanged: changed.add,
+    getRuntimeSelectionDurable: async (id: ScopeId) => runtimeSelection(await rows.get(id)),
+    getEmbeddingModelDurable: async () => (await rows.get(org))?.embeddingModelId ?? null,
+    setEmbeddingModel: (modelId: string | null) => setOrgField("embeddingModelId", modelId ?? undefined),
+  };
+  return {
+    api,
+    hydrate: async () => {
+      for (const r of await rows.all()) cache.set(r.scopeId, r);
+    },
+    refresh: async (id: ScopeId) => cacheRow(id, await rows.get(id)),
+  };
+}
+
+function connectorClientsApi(rows: KeyedTable<StoredConnectorClient>, secretKey: Buffer | string | undefined) {
+  const connectorKey = deriveConnectorKey(secretKey ?? randomBytes(32), "connector-clients");
+  const key = (id: ScopeId, provider: string) => `${id}|${provider}`;
+  const optional = (rec: Omit<ConnectorClientInput, "clientId" | "clientSecret">) => ({
+    ...(rec.scopes ? { scopes: rec.scopes } : {}),
+    ...(rec.redirectAllowlist ? { redirectAllowlist: rec.redirectAllowlist } : {}),
+    ...(rec.consentMode ? { consentMode: rec.consentMode } : {}),
+    ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
+  });
+  return {
+    async setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput) {
+      await rows.put(key(id, provider), {
+        scopeId: id,
+        provider,
+        clientId: input.clientId,
+        secretEnc: encryptSecret(input.clientSecret, connectorKey),
+        ...optional(input),
+        enabled: input.enabled !== false,
+        ...(input.updatedBy ? { updatedBy: input.updatedBy } : {}),
+        updatedAt: Date.now(),
+      });
+    },
+    listConnectorClients: async (id: ScopeId) => (await rows.where("scopeId", id)).map(toPublicConnectorClient),
+    deleteConnectorClient: (id: ScopeId, provider: string) => rows.delete(key(id, provider)),
+    async getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null> {
+      const rec = await rows.get(key(id, provider));
+      if (!rec) return null;
+      return {
+        clientId: rec.clientId,
+        clientSecret: decryptSecret(rec.secretEnc, connectorKey),
+        ...optional(rec),
+        enabled: rec.enabled,
+      };
+    },
+  };
+}
+
+export function createConfigStore(
+  orgId: string,
+  opts: { databaseUrl: string; connectorSecretKey?: Buffer | string },
+): ScopedConfigStore {
+  const org = scopeId("org", orgId);
+  const tables = openConfigTables<ConfigRecords>(opts.databaseUrl);
+  const queue = createKeyedQueue();
+  const settings = createScopeSettings(org, tables, queue);
+  const allSettings = Object.values(settings);
+  const instructions = createInstructions(org, tables.instructions, tables.instructionsHistory, queue);
+  const runtime = createRuntimeConfig(org, tables.baseModels, queue);
+  let hydrated: Promise<void> | null = null;
+  return {
+    ...settingsApi(org, settings),
+    ...instructions.api,
+    ...runtime.api,
+    ...connectorClientsApi(tables.connectorClients, opts.connectorSecretKey),
     async refreshSecurity(ids) {
       await Promise.all(
         ids.flatMap((id) => [
-          writeQueue(`instructions:${id}`, async () => {
-            const instructions = await instructionsStore.get(id);
-            if (instructions)
-              instructionsCache.set(id, { content: instructions.content, version: instructions.version });
-            else if (id !== org) instructionsCache.delete(id);
-          }),
+          instructions.refreshSecurity(id),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
         ]),
       );
     },
-    hydrate() {
-      if (!hydrated) {
-        hydrated = (async () => {
-          const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId });
-          if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
-          for (const r of await instructionsStore.all()) {
-            instructionsCache.set(r.scopeId, { content: r.content, version: r.version });
-            if (r.history?.length) instructionsHistory.set(r.scopeId, r.history);
-          }
-          for (const r of await instructionsHistoryStore.all()) {
-            const legacyRevisions = legacyInstructionsHistory.get(r.scopeId) ?? [];
-            if (!legacyRevisions.some((revision) => revision.version === r.version)) legacyRevisions.push(r);
-            legacyInstructionsHistory.set(r.scopeId, legacyRevisions);
-            const revisions = instructionsHistory.get(r.scopeId) ?? [];
-            if (!revisions.some((revision) => revision.version === r.version)) revisions.push(r);
-            instructionsHistory.set(r.scopeId, revisions);
-          }
-          for (const revisions of legacyInstructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
-          for (const revisions of instructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
-          for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
-          await Promise.all(allSettings.map((setting) => setting.hydrate()));
-        })();
-      }
-      return hydrated;
-    },
-    getInstructions: (id) => instructionsCache.get(id)?.content ?? null,
-    getInstructionsDurable(id) {
-      return writeQueue(`instructions:${id}`, async () => {
-        loadInstructionsCache(id, await instructionsStore.get(id));
-        return instructionsCache.get(id)?.content ?? null;
-      });
-    },
-    async setInstructions(id, content, updatedBy) {
-      assertInstructionsSize(content);
-      return writeQueue(`instructions:${id}`, async () => {
-        const legacy = legacyInstructionsHistory.get(id) ?? [];
-        const append = (current: PersistedInstructions): PersistedInstructions => {
-          const revision: PersistedInstructionsRevision = {
-            scopeId: id,
-            content,
-            version: current.version + 1,
-            updatedAt: Date.now(),
-            ...(updatedBy ? { updatedBy } : {}),
-          };
-          return {
-            ...revision,
-            history: [revision, ...historyIncludingCurrent(current, current.history === undefined ? legacy : [])],
-            mutationId: randomBytes(12).toString("hex"),
-          };
-        };
-        let saved = await instructionsStore.update(id, append);
-        if (!saved) {
-          const baseVersion = instructionsCache.get(id)?.version ?? 0;
-          const revision: PersistedInstructionsRevision = {
-            scopeId: id,
-            content,
-            version: baseVersion + 1,
-            updatedAt: Date.now(),
-            ...(updatedBy ? { updatedBy } : {}),
-          };
-          const mutationId = randomBytes(12).toString("hex");
-          const candidate: PersistedInstructions = { ...revision, history: [revision], mutationId };
-          const canonical = await instructionsStore.putIfAbsent(id, candidate);
-          saved = canonical.mutationId === mutationId ? canonical : await instructionsStore.update(id, append);
-        }
-        if (!saved) throw new Error("instructions disappeared during atomic update");
-        legacyInstructionsHistory.delete(id);
-        loadInstructionsCache(id, saved);
-        return saved.version;
-      });
-    },
-    async setInstructionsIfVersion(id, expectedVersion, content, updatedBy) {
-      assertInstructionsSize(content);
-      return writeQueue(`instructions:${id}`, async () => {
-        const version = expectedVersion + 1;
-        const revision: PersistedInstructionsRevision = {
-          scopeId: id,
-          content,
-          version,
-          updatedAt: Date.now(),
-          ...(updatedBy ? { updatedBy } : {}),
-        };
-        const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
-        const mutationId = randomBytes(12).toString("hex");
-        const candidate: PersistedInstructions = { ...revision, history: [revision], mutationId };
-        const durable = await instructionsStore.get(id);
-        let saved: PersistedInstructions;
-        if (!durable) {
-          if ((instructionsCache.get(id)?.version ?? 0) !== expectedVersion) return null;
-          const canonical = await instructionsStore.putIfAbsent(id, candidate);
-          if (canonical.mutationId !== mutationId) return null;
-          saved = canonical;
-        } else {
-          let accepted = false;
-          const updated = await instructionsStore.update(id, (current) => {
-            if (current.version !== expectedVersion) return current;
-            accepted = true;
-            return {
-              ...candidate,
-              history: [
-                revision,
-                ...historyIncludingCurrent(current, current.history === undefined ? legacyHistory : []),
-              ],
-            };
-          });
-          if (!accepted || !updated) return null;
-          saved = updated;
-        }
-        instructionsCache.set(id, { content: saved.content, version: saved.version });
-        instructionsHistory.set(id, saved.history ?? [revision]);
-        legacyInstructionsHistory.delete(id);
-        return saved.version;
-      });
-    },
-    instructionsVersion: (id) => instructionsCache.get(id)?.version ?? 0,
-    instructionsHistory: (id) => (instructionsHistory.get(id) ?? []).slice(0, 25),
-    captureInstructionsSnapshot(id) {
-      return writeQueue(`instructions:${id}`, async () => cloneInstructions(await instructionsStore.get(id)));
-    },
-    restoreInstructionsSnapshot(id, snapshot) {
-      return writeQueue(`instructions:${id}`, async () => {
-        try {
-          if (snapshot) await instructionsStore.put(id, cloneInstructions(snapshot)!);
-          else await instructionsStore.delete(id);
-          const restored = await instructionsStore.get(id);
-          loadInstructionsCache(id, restored);
-          return sameInstructions(restored, snapshot);
-        } catch (error) {
-          loadInstructionsCache(id, await instructionsStore.get(id));
-          throw error;
-        }
-      });
-    },
-    restoreInstructionsCacheSnapshot(id, snapshot) {
-      loadInstructionsCache(id, cloneInstructions(snapshot));
-    },
-    getApprovalGrantModes(id) {
-      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
-    },
-    async getApprovalGrantModesDurable(id) {
-      const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, await settings.approvalGrantModes.durable(id));
-    },
-    setApprovalGrantModes: (id, modes) =>
-      settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    onChannelHeaderPinChanged(listener) {
-      channelHeaderPinListeners.add(listener);
-    },
-    getPurposeRuntime: (purpose) => {
-      const selection = baseModels.get(org)?.[`${purpose}Runtime`];
-      return selection ? { ...selection } : undefined;
-    },
-    getPurposeRuntimeDurable: async (purpose) => {
-      const selection = (await baseModelStore.get(org))?.[`${purpose}Runtime`];
-      return selection ? { ...selection } : undefined;
-    },
-    setPurposeRuntime,
-    clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
-    getRuntimeSelection: (id) => runtimeSelection(baseModels.get(id)),
-    async setRuntimeSelection(id, selection) {
-      await writeQueue(`model:${id}`, async () => {
-        if (selection === null) {
-          cacheBaseModel(id, await updateBaseModelRow(id, (row) => withoutRuntime(id, row)));
-          return;
-        }
-        const orgRevision = id === org ? 0 : ((await baseModelStore.get(org))?.revision ?? 0);
-        const saved = await updateBaseModelRow(id, (row) => {
-          if (id !== org) return { scopeId: id, ...selection, orgRevision };
-          const revision = (row?.revision ?? 0) + 1;
-          return { scopeId: id, ...purposeFields(id, row), ...selection, revision, orgRevision: revision };
-        });
-        cacheBaseModel(id, saved);
-      });
-      noteRuntimeSelectionChanged(id);
-    },
-    async acknowledgeRuntimeSelection(id) {
-      if (id === org) return;
-      await writeQueue(`model:${id}`, async () => {
-        const orgRevision = (await baseModelStore.get(org))?.revision ?? 0;
-        const saved = await baseModelStore.merge(id, { orgRevision });
-        if (saved) baseModels.set(id, saved);
-      });
-    },
-    onRuntimeSelectionChanged(listener) {
-      runtimeSelectionListeners.add(listener);
-    },
-    getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
-    async getIndividualModelAuthDurable(principalId) {
-      if (await settings.individualModelAuth.durable(org)) return true;
-      return principalId
-        ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
-        : false;
-    },
-    async getModelAccountDurable(principalId) {
-      const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
-      if (row?.on) return row.provider ?? "personal";
-      return (await settings.individualModelAuth.durable(org)) ? "personal" : "company";
-    },
-    async setPersonalModelAuth(principalId, on, provider) {
-      const id = scopeId("personal", principalId);
-      await settings.individualModelAuth.store.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
-    },
     async setSlackEmojiCatalog(id, emoji) {
-      await writeQueue(`slackEmojiCatalog:${id}`, () =>
-        slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
+      await queue(`slackEmojiCatalog:${id}`, () =>
+        tables.slackEmojiCatalog.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
       );
     },
-    getSlackEmojiCatalogDurable: async (id) => (await slackEmojiCatalogStore.get(id)) ?? null,
-    getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
-    setEmbeddingModel: async (modelId) => {
-      await writeQueue(`model:${org}`, async () => {
-        const saved = await updateBaseModelRow(org, (current) => {
-          const row: PersistedBaseModel = { ...current, scopeId: org };
-          if (modelId) row.embeddingModelId = modelId;
-          else delete row.embeddingModelId;
-          return row;
-        });
-        cacheBaseModel(org, saved);
-      });
-    },
-    async setConnectorClient(id, provider, input) {
-      const rec: StoredConnectorClient = {
-        scopeId: id,
-        provider,
-        clientId: input.clientId,
-        secretEnc: encryptSecret(input.clientSecret, connectorKey),
-        ...(input.scopes ? { scopes: input.scopes } : {}),
-        ...(input.redirectAllowlist ? { redirectAllowlist: input.redirectAllowlist } : {}),
-        ...(input.consentMode ? { consentMode: input.consentMode } : {}),
-        ...(input.hostedDomain ? { hostedDomain: input.hostedDomain } : {}),
-        enabled: input.enabled !== false,
-        ...(input.updatedBy ? { updatedBy: input.updatedBy } : {}),
-        updatedAt: Date.now(),
-      };
-      await connectorClients.put(connectorMapKey(id, provider), rec);
-    },
-    listConnectorClients: async (id) =>
-      (await connectorClients.all()).filter((r) => r.scopeId === id).map(toPublicConnectorClient),
-    deleteConnectorClient: (id, provider) => connectorClients.delete(connectorMapKey(id, provider)),
-    async getConnectorClientSecret(id, provider) {
-      const rec = await connectorClients.get(connectorMapKey(id, provider));
-      if (!rec) return null;
-      return {
-        clientId: rec.clientId,
-        clientSecret: decryptSecret(rec.secretEnc, connectorKey),
-        ...(rec.scopes ? { scopes: rec.scopes } : {}),
-        ...(rec.redirectAllowlist ? { redirectAllowlist: rec.redirectAllowlist } : {}),
-        ...(rec.consentMode ? { consentMode: rec.consentMode } : {}),
-        ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
-        enabled: rec.enabled,
-      };
+    getSlackEmojiCatalogDurable: (id) => tables.slackEmojiCatalog.get(id),
+    hydrate() {
+      hydrated ??= (async () => {
+        const identity = await tables.deploymentIdentity.insertOrGet("singleton", { orgId });
+        if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
+        await instructions.hydrate();
+        await runtime.hydrate();
+        await Promise.all(allSettings.map((setting) => setting.hydrate()));
+      })();
+      return hydrated;
     },
     async refreshScope(id) {
-      const [instructions, baseModel] = await Promise.all([
-        instructionsStore.get(id),
-        baseModelStore.get(id),
+      await Promise.all([
+        instructions.refresh(id),
+        runtime.refresh(id),
         ...allSettings.map((setting) => setting.refresh(id)),
       ]);
-      let refreshedInstructions = instructions;
-      const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
-      if (instructions && instructions.history === undefined && legacyHistory.length) {
-        const mergedHistory = mergeInstructionsHistory(instructions.history, legacyHistory);
-        if (!isDeepStrictEqual(mergedHistory, instructions.history ?? [])) {
-          refreshedInstructions = instructionsStore.update
-            ? await instructionsStore.update(id, (current) =>
-                current.history !== undefined
-                  ? current
-                  : { ...current, history: mergeInstructionsHistory(current.history, legacyHistory) },
-              )
-            : { ...instructions, history: mergedHistory };
-        }
-        legacyInstructionsHistory.delete(id);
-      } else if (instructions?.history !== undefined) {
-        legacyInstructionsHistory.delete(id);
-      }
-      loadInstructionsCache(id, refreshedInstructions);
-      if (baseModel) baseModels.set(id, baseModel);
-      else baseModels.delete(id);
     },
   };
 }

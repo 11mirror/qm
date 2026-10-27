@@ -10,7 +10,7 @@ import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } fro
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { InstructionsUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
-import { InstructionsTooLargeError } from "../../resolution/config-store.ts";
+import { InstructionsTooLargeError } from "../../resolution/config-instructions.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";

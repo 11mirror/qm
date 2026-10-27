@@ -1,14 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/runtime-choice.ts";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import { storedItem } from "../src/sessions/items.ts";
-import { testConfigStore } from "./support/test-database.ts";
-import { testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
@@ -70,9 +68,9 @@ test("each purpose ignores conversation overrides and explicit fields including 
 });
 
 test("durable purpose defaults refresh between child followups", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const writer = testConfigStore("default-org", { baseModels });
-  const reader = testConfigStore("default-org", { baseModels });
+  const databaseUrl = testDatabaseUrl();
+  const writer = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore("default-org", { databaseUrl });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
     await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),

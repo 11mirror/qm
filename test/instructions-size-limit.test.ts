@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { postInstructions } from "../src/api/routes/surface.ts";
-import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../src/resolution/config-store.ts";
+import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../src/resolution/config-instructions.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 
 test("every instructions write path refuses content over the limit with payload_too_large", async () => {

@@ -5,7 +5,7 @@ import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "..
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
-import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
+import { createConfigStore } from "../../src/resolution/config-store.ts";
 import { tenant } from "../../src/tenant.ts";
 import { scopeId } from "../../src/types.ts";
 
@@ -77,7 +77,15 @@ export function testAdvisoryLock(): AdvisoryLock {
 }
 
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
-  return createConfigStore(orgId, { ...configStoreMaps(() => testMap<never>()), ...opts });
+  return createConfigStore(orgId, { databaseUrl: opts.databaseUrl ?? testDatabaseUrl(), ...opts });
+}
+
+export async function failTableWrites(url: string, table: string): Promise<void> {
+  const db = createPgPool(url);
+  await db.q(`CREATE OR REPLACE FUNCTION qm_test_forced_failure() RETURNS trigger LANGUAGE plpgsql AS $f$
+    BEGIN RAISE EXCEPTION 'forced durable write failure'; END $f$`);
+  await db.q(`CREATE TRIGGER ${table}_forced_failure BEFORE INSERT OR UPDATE OR DELETE ON ${table}
+    FOR EACH ROW EXECUTE FUNCTION qm_test_forced_failure()`);
 }
 
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";

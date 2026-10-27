@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 
 test("interactive fast mode defaults off and persists across instances", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const first = testConfigStore("org", { interactiveFastMode });
+  const databaseUrl = testDatabaseUrl();
+  const first = testConfigStore("org", { databaseUrl });
   await first.hydrate!();
   assert.equal(first.setting("interactiveFastMode"), false);
   assert.equal(await first.settingDurable("interactiveFastMode"), false);
@@ -15,7 +15,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setSetting("interactiveFastMode", true);
   assert.equal(first.setting("interactiveFastMode"), true);
 
-  const second = testConfigStore("org", { interactiveFastMode });
+  const second = testConfigStore("org", { databaseUrl });
   await second.hydrate!();
   assert.equal(second.setting("interactiveFastMode"), true);
   assert.equal(await second.settingDurable("interactiveFastMode"), true);
@@ -30,11 +30,11 @@ test("the org default reaches only human turns that expressed no preference", ()
 });
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const store = testConfigStore("org", { interactiveFastMode });
+  const databaseUrl = testDatabaseUrl();
+  const store = testConfigStore("org", { databaseUrl });
   await store.hydrate!();
   const org = scopeId("org", "org");
-  await interactiveFastMode.put(org, { scopeId: org, on: true });
+  await createPgPool(databaseUrl).q(`INSERT INTO interactive_fast_mode_flag (scope_id, "on") VALUES ($1, true)`, [org]);
   await store.refreshScope(org);
   assert.equal(store.setting("interactiveFastMode"), true);
 });

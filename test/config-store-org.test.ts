@@ -1,20 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedDeploymentIdentity } from "../src/resolution/config-store.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 
 test("a durable database is pinned to one organization", async () => {
-  const deploymentIdentity = testMap<PersistedDeploymentIdentity>();
-  await testConfigStore("default-org", { deploymentIdentity }).hydrate!();
-  await assert.rejects(
-    testConfigStore("other", { deploymentIdentity }).hydrate!(),
-    /database belongs to org default-org/,
-  );
+  const databaseUrl = testDatabaseUrl();
+  await testConfigStore("default-org", { databaseUrl }).hydrate!();
+  await assert.rejects(testConfigStore("other", { databaseUrl }).hydrate!(), /database belongs to org default-org/);
 });
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
-  const baseModels = testMap<import("../src/resolution/config-store.ts").PersistedBaseModel>();
-  const store = testConfigStore("default-org", { baseModels });
+  const databaseUrl = testDatabaseUrl();
+  const store = testConfigStore("default-org", { databaseUrl });
   const org = "org:default-org";
   const cron = { modelId: "gpt-5.5", fastMode: false };
   const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
@@ -23,7 +20,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getRuntimeSelection(org)?.modelId ?? null, null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = testConfigStore("default-org", { baseModels });
+  const reader = testConfigStore("default-org", { databaseUrl });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
@@ -42,5 +39,5 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.equal(await reader.getPurposeRuntimeDurable("cron"), undefined);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   await store.clearPurposeRuntime("subagent");
-  assert.equal(await baseModels.get(org), null);
+  assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM base_model_configs"), []);
 });

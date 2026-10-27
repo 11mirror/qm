@@ -2,14 +2,13 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp as buildProductionApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
@@ -17,9 +16,9 @@ const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(b
 const SECRET = "personal-account-test-signing-secret";
 
 test("personal account choice persists across instances without changing anyone else's choice", async () => {
-  const individualModelAuth = testMap<PersistedScopedFlag>();
-  const first = testConfigStore("default-org", { individualModelAuth });
-  const second = testConfigStore("default-org", { individualModelAuth });
+  const databaseUrl = testDatabaseUrl();
+  const first = testConfigStore("default-org", { databaseUrl });
+  const second = testConfigStore("default-org", { databaseUrl });
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
   await first.setPersonalModelAuth("alice", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
