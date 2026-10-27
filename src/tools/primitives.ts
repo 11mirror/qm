@@ -172,7 +172,7 @@ interface ReachedProvenance {
 
 export interface CommandCredential {
   handle: string;
-  scope?: "scoped" | "owner";
+  scratchOnly?: boolean;
   env?: Array<{ key: string; value: string; secret?: boolean }>;
   resolve?: () => Promise<{
     commit?: () => Promise<void>;
@@ -209,12 +209,11 @@ export interface ToolContext extends SurfaceToolDeps {
       timeoutSeconds?: number;
       sandboxId?: string;
       scratch?: boolean;
-      ownerAuth?: boolean;
       reachTarget?: string;
       signal?: AbortSignal;
       credentials?: string[];
     },
-  ): Promise<ExecResult & { reached?: ReachedProvenance }>;
+  ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
     input?: { backend?: string; name?: string; sandboxId?: string | null },
@@ -257,7 +256,7 @@ export interface ToolContext extends SurfaceToolDeps {
   backgroundStart(
     command: string,
     opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
-  ): Promise<BackgroundStartResult>;
+  ): Promise<BackgroundStartResult & { jobComputer?: boolean }>;
   backgroundPoll(
     processId: string,
     opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },
@@ -476,13 +475,12 @@ export interface ToolContextDeps {
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
+  provisionJobComputer?: () => Promise<SandboxHandle>;
   provisionResource?: (
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  provisionOwnerAuth?: () => Promise<SandboxHandle>;
-  ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
   reach?: {
@@ -545,6 +543,12 @@ export interface ToolContextDeps {
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
+
+const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =>
+  credentials
+    .filter((credential) => credential.scratchOnly)
+    .map((credential) => credential.handle)
+    .join(", ");
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
   const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
@@ -705,7 +709,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return cache ? once(call, cache) : call();
   }
 
-  const selectCredentials = async (handles: readonly string[], ownerAuth: boolean) => {
+  const selectCredentials = async (handles: readonly string[]) => {
     const available = new Map(
       (
         (handles.length ? await deps.resolveCommandCredentials?.(handles) : undefined) ??
@@ -716,8 +720,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return handles.map((handle) => {
       const credential = available.get(handle);
       if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
-      if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped"))
-        throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
       return credential;
     });
   };
@@ -877,32 +879,27 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         timeoutSeconds?: number;
         sandboxId?: string;
         scratch?: boolean;
-        ownerAuth?: boolean;
         reachTarget?: string;
         signal?: AbortSignal;
         credentials?: string[];
       },
-    ): Promise<ExecResult & { reached?: ReachedProvenance }> {
+    ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }> {
       return once(async () => {
         const scratch = execOpts?.scratch === true;
-        const ownerAuth = execOpts?.ownerAuth === true;
         const requestedCredentials = execOpts?.credentials ?? [];
         if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
-          throw new Error("command credentials are available only on scoped, scratch, or owner computers");
+          throw new Error("command credentials are available only on scoped or scratch computers");
         }
-        const requested = await selectCredentials(requestedCredentials, ownerAuth);
+        const requested = await selectCredentials(requestedCredentials);
+        const scratchOnly = scratchOnlyHandles(requested);
         const reachTarget = execOpts?.reachTarget;
-        if (
-          [scratch, ownerAuth, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1
-        ) {
-          throw new Error("a command runs on one computer — choose scoped, scratch, owner, or a reached room");
+        if ([scratch, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1) {
+          throw new Error("a command runs on one computer — choose scoped, scratch, or a reached room");
         }
-        if (scratch && !deps.provisionScratch) {
+        if ((scratch || scratchOnly) && !deps.provisionScratch) {
           throw new Error('scratch execution is not available on this computer — run without scope:"scratch"');
         }
-        if (ownerAuth && !deps.provisionOwnerAuth) {
-          throw new Error('an owner-auth box is not available on this turn — use scope:"scoped"');
-        }
+        const scratchReroute = Boolean(scratchOnly) && !scratch;
         let reached: ReachedProvenance | undefined;
         if (reachTarget !== undefined) {
           if (!deps.reach) {
@@ -914,12 +911,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           if (target.kind === "error") throw new Error(target.message);
           reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
         }
-        const handle = await provisionForCommand(command, execOpts?.sandboxId, requestedCredentials.length > 0, () => {
-          if (reached) return deps.reach!.provisionFor(reached.scopeId);
-          if (scratch) return deps.provisionScratch!();
-          if (ownerAuth) return deps.provisionOwnerAuth!();
-          return deps.provision();
-        });
+        const handle = await provisionForCommand(
+          command,
+          scratchOnly ? undefined : execOpts?.sandboxId,
+          requestedCredentials.length > 0,
+          () => {
+            if (reached) return deps.reach!.provisionFor(reached.scopeId);
+            if (scratch || scratchOnly) return deps.provisionScratch!();
+            return deps.provision();
+          },
+        );
         const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
         const timeoutMs =
           resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -941,7 +942,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             scopeLabel: reached.scopeId,
           });
         }
-        return timed("exec", async () => {
+        const executed = timed("exec", async () => {
           execOpts?.signal?.throwIfAborted();
           const { commandEnv, secretValues, fileExecution } = await stageCredentials(
             requested,
@@ -951,14 +952,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           );
           const r = await withCleanup(
             async (): Promise<ExecResult> => {
-              const sandboxCommand = ownerAuth ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command) : command;
               const commandHandle = Object.keys(commandEnv).length
                 ? { ...handle, env: { ...handle.env, ...commandEnv } }
                 : handle;
               const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
               const mask = createExactSecretValueMasker(Object.values(secretEnv));
               try {
-                const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+                const result = await deps.sandbox.run(commandHandle, command, opts);
                 return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
               } catch (error) {
                 const message = errMessage(error);
@@ -971,8 +971,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               await fileExecution?.finish();
             },
           );
-          return reached ? { ...r, reached } : r;
+          return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
         });
+        return executed;
       });
     },
 
@@ -1261,15 +1262,24 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async backgroundStart(
       command: string,
       opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
-    ): Promise<BackgroundStartResult> {
+    ): Promise<BackgroundStartResult & { jobComputer?: boolean }> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const requestedCredentials = opts.credentials ?? [];
       if (requestedCredentials.length && !writableScopeId)
         throw new Error("command credentials are available only on scoped computers");
-      const requested = await selectCredentials(requestedCredentials, false);
-      const handle = await provisionForCommand(command, opts?.sandboxId, requestedCredentials.length > 0, () =>
-        deps.provision(),
-      );
+      const requested = await selectCredentials(requestedCredentials);
+      const scratchOnly = scratchOnlyHandles(requested);
+      if (scratchOnly && !deps.provisionJobComputer)
+        throw new Error(`background jobs here cannot use ${scratchOnly}; run the command in the foreground`);
+      let handle: SandboxHandle;
+      if (scratchOnly) {
+        authorizeExecution(command, undefined, deps.commandPolicy());
+        handle = await deps.provisionJobComputer!();
+      } else {
+        handle = await provisionForCommand(command, opts?.sandboxId, requestedCredentials.length > 0, () =>
+          deps.provision(),
+        );
+      }
       return once(
         async () => {
           const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
@@ -1289,13 +1299,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           } catch (error) {
             return withCleanup(() => Promise.reject(error), release);
           }
-          return deps.backgroundBroker!.start(
+          const started = await deps.backgroundBroker!.start(
             handle,
             command,
             opts.purpose,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
             credentials,
           );
+          return scratchOnly ? { ...started, jobComputer: true } : started;
         },
         () => true,
       );
@@ -1330,6 +1341,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async backgroundWrite(processId: string, data: string): Promise<BackgroundWriteResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
+      if (handle.resourceId && (await deps.sandboxResources?.get(handle.resourceId))?.jobOnly)
+        throw new Error("a background job that uses private credentials does not accept input");
       return once(
         () => deps.backgroundBroker!.write(handle, processId, data),
         () => true,

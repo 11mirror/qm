@@ -78,14 +78,15 @@ export async function buildTurnTools(
     actorIsOrgAdmin,
     controlClaims,
     registerServiceCredentials,
+    placeCredential,
   } = turn.catalog;
   const {
-    ownerAuthCommand,
     provision,
     provisionScratch,
+    provisionJobComputer,
+    provisionJobSandbox,
     accessResource,
     provisionResource,
-    provisionOwnerAuth,
     useSkill,
     provisionForReach,
     invalidateProvision,
@@ -96,7 +97,7 @@ export async function buildTurnTools(
       ? createBackgroundBroker({
           sandbox: deps.sandbox,
           registry: deps.processes,
-          provisionSandbox: provisionResource,
+          provisionSandbox: provisionJobSandbox,
           onExit: (handle, processId) =>
             finishProcessCredentials(
               {
@@ -293,10 +294,9 @@ export async function buildTurnTools(
     invalidateProvision,
     provision,
     provisionScratch,
+    provisionJobComputer,
     provisionResource,
     accessSandboxResource: accessResource,
-    ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
-    ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
     useSkill,
     listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
     ...(reachAvailable
@@ -335,7 +335,7 @@ export async function buildTurnTools(
           return;
         }
         identities.set(credential.handle, identity);
-        refreshed.set(credential.handle, credential);
+        refreshed.set(credential.handle, placeCredential(credential));
       };
       const broker = credentialBroker(handles);
       await registerKeychainCredentials(add, broker);

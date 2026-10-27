@@ -52,15 +52,8 @@ export function goalTools(kit: ToolKit) {
     name: "create",
     label: "create",
     description:
-      "Register a goal for this session when the user explicitly asks for sustained, self-directed work " +
-      '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
-      "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
-      "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
-      "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
-      "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
-      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
-      'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
-      "Fails if an unfinished goal exists.",
+      'Register a goal only when the user explicitly asks for sustained work ("grind on X for 30 minutes", "keep going until the tests pass"); never infer one. Create it first, before any work, with the floor set to exactly the amount named (20 minutes = minMs 1200000; never subtract time already spent), even if the task looks hard or impossible. ' +
+      "The harness then answers any attempt to end a reply with a keep-going prompt while the goal is active or the floor unmet (token_cap or a governor pause also ends it); only the user can cancel it. Fails if an unfinished goal exists.",
     parameters: GoalCreateParams,
     async execute(callId, params) {
       const p = params as GoalCreateInput;
@@ -113,7 +106,7 @@ export function goalTools(kit: ToolKit) {
   const getGoal = defineTool({
     name: "get",
     label: "get",
-    description: "Read this session's goal: objective, status, work floor, token cap and usage.",
+    description: "Read this session's goal: objective, status, floor, cap and usage.",
     parameters: Type.Object({}),
     async execute(callId) {
       await recordCall(callId, { tool: "goal", action: "get" });
@@ -130,25 +123,17 @@ export function goalTools(kit: ToolKit) {
     name: "update",
     label: "update",
     description:
-      'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
-      "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
-      "you are stopping work. An independent fresh-context governor reads the objective, your recent work, your note, and any " +
-      "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
-      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
-      'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
-      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap. " +
-      'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
-      "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
+      "complete: only when the objective is actually achieved, never because budget is low or you are stopping; an independent governor reads the objective, your recent work, note and named files, and may reject (the goal stays active with its reasons) or pause it for the user. " +
+      "resume/cancel: only when the person in this turn explicitly asks; never to escape unfinished work.",
     parameters: Type.Object({
       status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
       note: Type.String({
-        description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request.",
+        description: "complete: concrete evidence. resume/cancel: quote the user's request.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: GOAL_EVIDENCE_FILES,
-          description: "Workspace paths of the deliverables; the governor reads them directly.",
+          description: "Workspace paths of deliverables for the governor to read.",
         }),
       ),
       sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),

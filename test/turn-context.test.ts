@@ -10,6 +10,8 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
+import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
@@ -236,4 +238,33 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
   await context.listSkills(["personal:stranger"]);
   assert.deepEqual(seen[2], { scopes: [], grants: [] });
+});
+
+test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", async () => {
+  const { input, memory } = await fixture();
+  await memory.capture("org:test", ["ORG_FACT"], Date.now());
+  const loads: string[] = [];
+  const counted = {
+    ...memory,
+    facts: async (scope: string) => {
+      loads.push(scope);
+      return memory.facts!(scope);
+    },
+  };
+  const embedder = { id: "test", embed: async (texts: string[]) => texts.map(() => [1, 0]) };
+  input.memory = createSemanticMemoryService(
+    counted,
+    async () => embedder,
+    scoredMemoryIndex(memory, (text) => (text === "LAST_FACT" ? 1 : 0)),
+  );
+  const context = await resolveTurnContext(input);
+  const snapshot = await context.memorySnapshot();
+  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
+  loads.length = 0;
+  const recalled = await context.recallMemory("anything", snapshot.loaded);
+  assert.deepEqual(
+    recalled.map((fact) => fact.text),
+    ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],
+  );
+  assert.deepEqual(loads, []);
 });

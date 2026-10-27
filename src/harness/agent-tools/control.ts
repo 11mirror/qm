@@ -17,26 +17,19 @@ export function controlPlaneTools(kit: ToolKit) {
     name: "instructions",
     label: "instructions",
     description:
-      "Read or change your standing instructions for this conversation's scope: tone, defaults, recurring " +
-      "preferences, and ongoing 'whenever X, do Y' orders. Each scope has one text, and it is the " +
-      "conversation instructions in your prompt. In a channel it is that channel's instructions and is " +
-      "checked against every new message automatically, so never build a poll or timer for these; in a " +
-      "personal context it is shared by ALL of that person's sessions, not tied to the session that wrote it. " +
-      "Never store session pins or 'for this session' notes here: ALL pinning goes through the pins self-API " +
-      "(POST /v1/pins), which routes by context — the session's own pins in the web UI, native pinning in Slack. " +
-      "`edit` swaps one exact passage `old` for `new` and fails unless `old` appears exactly once; prefer it for " +
-      "small changes. `replace` REPLACES the whole text with `content` — include everything that should remain. " +
-      "Organization instructions are always layered above and cannot be changed here. Don't store one-off facts " +
-      "here — that's what memory is for.",
+      "Read or change your standing instructions for this conversation's scope: tone, defaults, preferences and 'whenever X, do Y' orders; they are the conversation instructions in your prompt. " +
+      "In a channel they are checked against every message, so never build a poll or timer for them; in a personal context all of that person's sessions share them. " +
+      "Not for session pins (POST /v1/pins) or one-off facts (memory). " +
+      "edit swaps one exact passage `old` for `new`; replace overwrites the whole text with `content`. Organization instructions sit above and cannot be changed here.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
-      content: optionalString("replace: the full new instructions."),
-      old: optionalString("edit: an exact passage that appears once in the current instructions."),
-      new: optionalString("edit: the text that takes the place of `old`."),
+      content: optionalString("replace: the full instructions."),
+      old: optionalString("edit: exact passage appearing once."),
+      new: optionalString("edit: replacement for `old`."),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
-            "Channels only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
+            "Channel only. true: judge every message for a reply; false: only when addressed; null: default.",
         }),
       ),
       bots: Type.Optional(
@@ -48,9 +41,7 @@ export function controlPlaneTools(kit: ToolKit) {
           }),
           {
             description:
-              "Channels only. Per-bot handling for automated posters in this channel, keyed by bot author name: " +
-              "ignore (never wakes you), rollup (batch; judge at most every rollupHours), action " +
-              "(their posts are triggers to act on), user (treat like a person).",
+              "Channel only, per bot author name: ignore, rollup (judge at most every rollupHours), action (posts are triggers), user (treat like a person).",
           },
         ),
       ),
@@ -131,52 +122,47 @@ export function controlPlaneTools(kit: ToolKit) {
     },
   });
 
+  const ARTIFACT_ID_DESCRIPTIONS = {
+    file: "Artifact ID.",
+    skill: "Skill id from skills list or search.",
+    deploy: "App ID or handle.",
+    cron: "Artifact ID.",
+  };
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
-    let description =
-      "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
-      description =
-        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
+      description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
     if (move)
       description =
-        "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
+        "Move to another context; moving an app transfers ownership; shares survive. Moving a skill to the org needs an org admin on a user-started turn.";
     else if (type === "deploy")
       description =
-        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only). Only the owner can share; grantees cannot reshare.";
+        "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";
     return defineTool({
       name: action,
       label: action,
       description,
       parameters: Type.Object({
-        id: Type.String({
-          description:
-            "Artifact ID (for a skill, the id from skills list or search); an app may also be named by its handle.",
-        }),
+        id: Type.String({ description: ARTIFACT_ID_DESCRIPTIONS[type] }),
         toScope:
           type === "deploy" && !move
-            ? optionalString(
-                'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
-              )
+            ? optionalString('"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.')
             : Type.String({
-                description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
+                description: '"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
               }),
         ...(type === "deploy" && !move
           ? {
-              email: optionalString(
-                "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
-              ),
-              public: optionalBoolean(
-                "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
-              ),
+              email: optionalString("Email granted view access; alternative to toScope."),
+              public: optionalBoolean("true: anyone with the link; false: restricted."),
             }
           : {}),
         ...(!move
           ? {
               permission: Type.Optional(
                 Type.Union([Type.Literal("read"), Type.Literal("write")], {
-                  description: "read = view/use (default); write = view/manage.",
+                  description: "read (default) or write (manage).",
                 }),
               ),
             }
@@ -246,6 +232,12 @@ export function controlPlaneTools(kit: ToolKit) {
     });
   }
 
+  function requiredSuffix(operation: ToolDefinition): string {
+    const required = ((operation.parameters as { required?: string[] }).required ?? []).filter(
+      (key) => key !== "action",
+    );
+    return required.length ? ` Requires ${required.join(", ")}.` : "";
+  }
   function resourceTool(name: string, actions: Record<string, ToolDefinition>): ToolDefinition {
     const groups = [...new Set(Object.values(actions))].map((operation) => ({
       operation,
@@ -270,10 +262,7 @@ export function controlPlaneTools(kit: ToolKit) {
       name,
       label: name,
       description: groups
-        .map(
-          ({ actions, operation }) =>
-            `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
-        )
+        .map(({ actions, operation }) => `${actions.join("/")}: ${operation.description}${requiredSuffix(operation)}`)
         .join("\n\n"),
       parameters: Type.Object(properties, { additionalProperties: true }),
       async execute(callId, params, signal, onUpdate, ctx) {
@@ -326,6 +315,6 @@ export function controlPlaneTools(kit: ToolKit) {
   );
 
   const adminPreamble =
-    "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or on a turn they started; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n";
+    "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or on a turn they started; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n";
   return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
 }

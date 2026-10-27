@@ -306,6 +306,15 @@ test("teardown checkpoints a changed home, throttles repeats, and destroy delete
   assert.ok(!fake.names().includes(h.id));
 });
 
+test("a job computer's home is never checkpointed, on teardown or rotation", async () => {
+  const s = make({ snapshotIntervalSec: 0 });
+  const h = await s.provision([{ scopeId: "job-1234", mode: "rw", mountPath: "" }]);
+  await s.run(h, 'printf secret > "$HOME/notes.txt"');
+  await s.teardown(h, { keepWarm: true });
+  await s.teardown(await s.provision([{ scopeId: "job-1234", mode: "rw", mountPath: "" }]));
+  assert.deepEqual(fake.checkpoints(h.id), [], "a job computer's home holds private credentials and is never saved");
+});
+
 test("an unchanged home is not checkpointed once its state is known", async () => {
   const s = make({ snapshotIntervalSec: 0 });
   const h = await s.provision(layers);

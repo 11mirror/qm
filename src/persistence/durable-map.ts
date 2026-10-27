@@ -1,6 +1,5 @@
-import { createPgPool, type PgPool, type PoolClient, tenantCols } from "./pg-pool.ts";
+import { createPgPool, type PgPool, type PoolClient, tenantCols, withPgTransaction } from "./pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { swallowAs } from "../util/errors.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -148,19 +147,10 @@ export function createPostgresMap<T>(
      ON CONFLICT (${tenantCols("tbl")}) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
-    const client = await (await pg.pool()).connect();
-    try {
-      await client.query("BEGIN");
+    return withPgTransaction(await pg.pool(), async (client) => {
       await client.query(bumpSql);
-      const result = await fn(client);
-      await client.query("COMMIT");
-      return result;
-    } catch (e) {
-      await client.query("ROLLBACK").catch(swallowAs(`durable-map ${table}: rollback`, undefined));
-      throw e;
-    } finally {
-      client.release();
-    }
+      return fn(client);
+    });
   }
   const CACHE_MAX_AGE_MS = 15_000;
   let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;

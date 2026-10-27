@@ -149,6 +149,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (document.visibilityState === "visible") void reloadRuntime();
   };
   document.addEventListener("visibilitychange", revalidateRuntime);
+  window.addEventListener("online", revalidateRuntime);
   let runtimeRequest = 0;
   let runtimeIdentity = "";
   let unsubscribeRuntime: (() => void) | undefined;
@@ -1243,6 +1244,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (!pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", refreshAccount);
     document.removeEventListener("visibilitychange", revalidateRuntime);
+    window.removeEventListener("online", revalidateRuntime);
     modelPicker.dispose();
     unsubscribeRuntime?.();
     ++runtimeRequest;

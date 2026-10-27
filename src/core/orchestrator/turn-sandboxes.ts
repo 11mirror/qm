@@ -33,14 +33,7 @@ export function openTurnSandboxes(
   const { memoryScopeId } = turn.context;
   const { turnContextBlocks, scopeProfile, visibleSkillsForTurn, transferId, turnSessionDir, turnFilesDir } =
     turn.framed;
-  const {
-    openSpeakerKeychain,
-    ownerAuthAvailable,
-    connectorEnv,
-    egressTokenForPolicy,
-    egressTokenForTurn,
-    openAutomationKeychain,
-  } = turn.catalog;
+  const { connectorEnv, egressTokenForPolicy, egressTokenForTurn, openAutomationKeychain } = turn.catalog;
   const turnSandboxResources = external
     ? deps.sandboxResources?.forTurn({
         actorId: actor.id,
@@ -83,9 +76,7 @@ export function openTurnSandboxes(
     connectorEnv,
     egressTokenForTurn,
     egressTokenForPolicy,
-    openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
     openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
-    ownerAuthAvailable,
     visibleSkillsForTurn,
     emitGapWork,
   });

@@ -31,7 +31,7 @@ export function externalSlackRequestAllowed(
     );
   }
   if (ref.includes("external-slack:")) return false;
-  const source = request.surface === "slack" ? turnSource(request) : undefined;
+  const source = request.surface === "slack" || historicalSlack ? turnSource(request) : undefined;
   if (source) {
     const policy = policies[source.account];
     return (

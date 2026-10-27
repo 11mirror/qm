@@ -104,7 +104,6 @@ function buildOrchestrator(
   sandbox: Sandbox,
   errors?: ErrorLog,
   harness = createMockHarness(),
-  eagerProvision = false,
   surfaceCache?: SurfaceCache,
 ) {
   const config = testConfigStore(ORG);
@@ -135,7 +134,6 @@ function buildOrchestrator(
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
-    eagerProvision,
     ...(errors ? { errors } : {}),
     ...(surfaceCache ? { surfaceCache } : {}),
   });
@@ -210,7 +208,7 @@ test("spine-routed titles use visible text instead of the internal wake envelope
 
 test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
   assert.equal(first.status, "ok");
@@ -235,7 +233,7 @@ test("background: a turn that never used its eagerly provisioned box returns bef
 
 test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
   assert.equal(first.status, "ok");
@@ -274,7 +272,7 @@ test("background: the message edit catch-up still runs before the lease is relea
           }
         : async () => [],
   }) as unknown as SurfaceCache;
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), false, surfaceCache);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), surfaceCache);
   const result = await orch.handleTurn({
     ...dm("ch:C1:t1", "!run echo hi"),
     surface: "slack",

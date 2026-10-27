@@ -92,7 +92,6 @@ export interface ToolContextRef {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  scratchExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -114,7 +113,6 @@ export type CoreToolOptions = Omit<
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    scratchExec: config.scratchExecEnabled,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
   };

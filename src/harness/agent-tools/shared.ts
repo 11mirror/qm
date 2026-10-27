@@ -232,9 +232,9 @@ export const outboundFilesSchema = Type.Array(
 export const outboundSandboxSchema = Type.Optional(
   Type.String({
     minLength: 1,
-    description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+    description: "Sandbox for workspace paths.",
   }),
 );
 export const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
 export const FILE_SEND_GUIDANCE =
-  "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+  "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";

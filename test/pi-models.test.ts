@@ -105,6 +105,7 @@ test("the curated catalog contains only current model families", () => {
       "gpt-6-astra-ultrafast",
       "gpt-6.1-sol",
       "gpt-6.1-sol-ultrafast",
+      "gpt-6.1-terra",
       "gpt-6-sol",
       "gpt-6-luna",
       "openrouter/auto",
@@ -253,7 +254,7 @@ test("context token budget is half of each model's real input room", () => {
 });
 
 test("registered OpenAI clones retain exact model identity on the Codex subscription transport", () => {
-  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"]) {
+  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) {
     const api = getRequiredModel(id);
     const subscription = getRequiredModel(codexSubscriptionModelId(id));
     assert.equal(subscription.id, `codex/${id}`);
@@ -266,4 +267,20 @@ test("registered OpenAI clones retain exact model identity on the Codex subscrip
   }
   assert.equal(resolveModel("codex/claude-opus-5"), undefined);
   assert.equal(resolveModel("codex/unregistered-model"), undefined);
+});
+
+test("gpt-6.1-terra pricing, context and fast mode match OpenAI's model page", () => {
+  const terra = getRequiredModel("gpt-6.1-terra");
+  assert.equal(terra.contextWindow, 1_050_000);
+  assert.equal(terra.maxTokens, 128_000);
+  assert.equal(modelSupportsFastMode("gpt-6.1-terra"), true);
+  assert.deepEqual(
+    {
+      input: terra.cost.input,
+      output: terra.cost.output,
+      cacheRead: terra.cost.cacheRead,
+      cacheWrite: terra.cost.cacheWrite,
+    },
+    { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+  );
 });

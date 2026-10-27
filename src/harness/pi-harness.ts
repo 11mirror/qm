@@ -163,7 +163,6 @@ export interface PiHarnessOptions extends CoreToolOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  systemCacheSplit?: boolean;
   turnWallClockMs?: number;
   signals?: RunSignalStore;
 }
@@ -180,7 +179,6 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
     ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
     ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
     ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
-    systemCacheSplit: config.piSystemCacheSplit,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
@@ -1212,12 +1210,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const systemCacheSplit = opts?.systemCacheSplit ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
     return createAgentTools(ref, {
-      scratchExec: opts?.scratchExec,
       reachExec: opts?.reachExec,
       controlTools: opts?.controlTools,
       execTimeoutMs: opts?.execTimeoutMs,
@@ -1257,7 +1253,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
-      systemCacheSplit ? "long" : undefined,
+      "long",
     );
     const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
       model,

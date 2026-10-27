@@ -23,7 +23,6 @@ mock.module("./support/mock-harness.ts", {
         if (!match) return run(turn);
         const command = JSON.parse(match[1]!) as {
           id?: string;
-          ownerAuth?: boolean;
           command: string;
           credentials?: string[];
         };
@@ -32,7 +31,6 @@ mock.module("./support/mock-harness.ts", {
         try {
           const out = await turn.tools.execute(command.command, {
             ...(command.id ? { sandboxId: command.id } : {}),
-            ...(command.ownerAuth ? { ownerAuth: true } : {}),
             ...(command.credentials ? { credentials: command.credentials } : {}),
           });
           reply = out.stdout.trim() || out.stderr.trim();
@@ -207,7 +205,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const id = await b.createCron(
     owner,
     "Owner keychain proof",
-    `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
+    `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
   );
   assert.ok((await b.control.runCron(id, owner)).ok);
   const log = await b.awaitFire(id, owner);

@@ -107,9 +107,10 @@ import type {
   Session,
   SurfaceContextRequest,
   TurnRequest,
+  TurnResult,
   Webhook,
 } from "./types.ts";
-import { personalScope, scopeId } from "./types.ts";
+import { personalScope, scopeId, turnSource } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -305,6 +306,7 @@ import {
   PROCESS_REAPER_INTERVAL_MS,
   type ProcessReaper,
 } from "./processes/process-reaper.ts";
+import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, MONITOR_POLL_MS, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
@@ -1784,14 +1786,12 @@ export function buildApp(
     crons,
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
-    ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -2083,11 +2083,19 @@ export function buildApp(
         : null,
   });
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
+  const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
+    const recorded = await runs.latestForThread(req.conversation.threadRef);
+    const source =
+      !turnSource(req) && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack" && recorded
+        ? turnSource(recorded.request)
+        : undefined;
+    return app.turn(source ? { ...req, source } : req);
+  };
   const triggerDeps = {
     outbound,
     idempotency,
     identity,
-    run: (req: TurnRequest) => app.turn(req),
+    run: runTriggered,
     directory,
     resolveRecipient,
     currentScopeMembers,
@@ -2259,7 +2267,25 @@ export function buildApp(
     ? createProcessReaper(processes, {
         intervalMs: PROCESS_REAPER_INTERVAL_MS,
         ...(supportsProcessSessions(sandbox)
-          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          ? {
+              kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              afterSweep: createJobComputerSweep({
+                resources: sandboxResources,
+                sandbox,
+                processes: processes!,
+                finish: finishCredentials,
+                onError: (error, scopeId) =>
+                  errors.record(
+                    {
+                      category: "process_session",
+                      code: "job_computer_retire_failed",
+                      message: errMessage(error),
+                      scopeLabel: scopeId,
+                    },
+                    error,
+                  ),
+              }),
+            }
           : {}),
         leaderLease,
       })
@@ -2704,7 +2730,6 @@ export function serverDeps(
     workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,

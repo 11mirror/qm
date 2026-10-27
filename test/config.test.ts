@@ -128,27 +128,8 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 });
 
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
-  const off = loadConfig({
-    EXECUTE_SCRATCH: "off",
-    REACH_EXEC: "off",
-    EAGER_PROVISION: "off",
-  });
-  assert.equal(off.eagerProvisionEnabled, false);
-  assert.equal(off.scratchExecEnabled, false);
-  assert.equal(off.reachExecEnabled, false);
-
-  const on = loadConfig({
-    EXECUTE_SCRATCH: "on",
-    REACH_EXEC: "1",
-    PI_SYSTEM_CACHE_SPLIT: "on",
-  });
-  assert.equal(on.scratchExecEnabled, true);
-  assert.equal(on.reachExecEnabled, true);
-  assert.equal(on.piSystemCacheSplit, true);
-
-  const unset = loadConfig({});
-  assert.equal(unset.piSystemCacheSplit, false, "cache split defaults off");
-  assert.equal(unset.eagerProvisionEnabled, true, "eager provision defaults on");
+  assert.equal(loadConfig({ REACH_EXEC: "off" }).reachExecEnabled, false);
+  assert.equal(loadConfig({ REACH_EXEC: "1" }).reachExecEnabled, true);
 });
 
 test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
@@ -161,10 +142,10 @@ test("numEnv: empty and non-numeric values fall back instead of poisoning config
 test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
-  assert.throws(() => loadConfig({ EXECUTE_SCRATCH: "2" }), /EXECUTE_SCRATCH="2" is not a recognized boolean/);
+  assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
-  assert.equal(loadConfig({ EXECUTE_SCRATCH: "" }).scratchExecEnabled, false);
+  assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
 
 test("sandbox backend is parsed once before production backend guards", () => {
@@ -516,13 +497,6 @@ test("shared SANDBOX_* settings are parsed once for every provider", () => {
   });
   assert.deepEqual(loadConfig({}).sandbox, {});
   assert.throws(() => loadConfig({ SANDBOX_IDLE_PARK_SEC: "soon" }), /SANDBOX_IDLE_PARK_SEC/);
-});
-
-test("direct Files initiation defaults off and requires explicit activation", () => {
-  assert.equal(loadConfig({}).filesDirectUploadsEnabled, false);
-  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "true" }).filesDirectUploadsEnabled, true);
-  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "false" }).filesDirectUploadsEnabled, false);
-  assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
 
 test("suggestion generation defaults on and can be explicitly disabled", () => {

@@ -90,7 +90,8 @@ export async function loadRuntimeConfig(
       while (entry.write) await entry.write;
       return getRuntimeConfig(entry.key);
     }
-    if (config) publish(scopeId, entry, config);
+    if (!config) return getRuntimeConfig(entry.key) ?? null;
+    publish(scopeId, entry, config);
     return config;
   });
   entry.load = load;

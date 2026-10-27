@@ -224,7 +224,6 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       buildApp(
         testConfig({
           modelGateway: config,
-          piSystemCacheSplit: true,
           modelId: "gateway/acme/future",
         }),
       ),

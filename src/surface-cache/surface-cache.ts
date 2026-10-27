@@ -1,4 +1,4 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
 import { tenant } from "../tenant.ts";
 
@@ -78,12 +78,10 @@ export function createPostgresSurfaceCache(
     async ingest(events) {
       if (!events.length) return { upserted: 0 };
       const now = Date.now();
-      const client = await (await pool()).connect();
       let upserted = 0;
       const files = new Map<string, { container: string; ts: string; rows: Array<Record<string, unknown>> }>();
       const states: Array<Record<string, unknown>> = [];
-      try {
-        await client.query("BEGIN");
+      await withPgTransaction(await pool(), async (client) => {
         for (const event of events) {
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
@@ -206,13 +204,7 @@ export function createPostgresSurfaceCache(
             [tenant().orgId, JSON.stringify(states.map((state, ord) => ({ ord, ...state }))), now],
           );
         }
-        await client.query("COMMIT");
-      } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-      } finally {
-        client.release();
-      }
+      });
       return { upserted };
     },
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { configurePgCaTrust, configurePgTenancy, createPgPool, pgCaOptions } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgTenancy, createPgPool } from "./persistence/pg-pool.ts";
 import { errMessage } from "./util/errors.ts";
 import { importTenant, migrateWithBuild } from "./tenants/import.ts";
 import { tenantSecretsKey, upsertTenant } from "./tenants/registry.ts";
@@ -75,7 +75,7 @@ function urlFromEnv(name: string, flag: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${flag}: ${name} is not set`);
   parseUrl(value, name);
-  return trustedUrl(value);
+  return value;
 }
 
 function parseUrl(url: string, label: string): URL {
@@ -86,17 +86,10 @@ function parseUrl(url: string, label: string): URL {
   }
 }
 
-function trustedUrl(url: string): string {
-  if (!pgCaOptions().ssl) return url;
-  const parsed = parseUrl(url, "a database URL");
-  for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
-  return parsed.toString();
-}
-
 function withDatabase(url: string, database: string): string {
   const parsed = parseUrl(url, "the admin database URL");
   parsed.pathname = `/${encodeURIComponent(database)}`;
-  return trustedUrl(parsed.toString());
+  return parsed.toString();
 }
 
 function describeEnv(env: ServiceEnv): string {
@@ -144,13 +137,13 @@ async function main(): Promise<void> {
   const adminUrlEnv = values["admin-url-env"];
   const adminUrl = adminUrlEnv ? urlFromEnv(adminUrlEnv, "--admin-url-env") : undefined;
   const sourceUrl =
-    (values["source-url"] && trustedUrl(values["source-url"])) ??
+    (values["source-url"] && values["source-url"]) ??
     (adminUrl && values["source-db"] ? withDatabase(adminUrl, values["source-db"]) : undefined);
   const stagingUrl =
-    (values["staging-url"] && trustedUrl(values["staging-url"])) ??
+    (values["staging-url"] && values["staging-url"]) ??
     (adminUrl && values["staging-db"] ? withDatabase(adminUrl, values["staging-db"]) : undefined);
   const targetUrl =
-    (values["target-url"] && trustedUrl(values["target-url"])) ??
+    (values["target-url"] && values["target-url"]) ??
     urlFromEnv(values["target-url-env"] ?? "DATABASE_URL", "--target-url-env");
   if (!sourceUrl) usageError("no source database");
   if (!stagingUrl) usageError("no staging database");
