@@ -1,46 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
-import pg from "pg";
-import { tableCodec } from "../src/persistence/typed-table.ts";
+import type pg from "pg";
 import type { PersistedInstructions } from "../src/resolution/config-store.ts";
 import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
-
-const databaseUrl = process.env.DATABASE_URL;
-const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the instructions migration test";
-const exec = promisify(execFile);
-
-async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `instructions_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
-  try {
-    await run(url.toString(), admin);
-  } finally {
-    await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
-  }
-}
-
-const migrate = (url: string) =>
-  exec(process.execPath, ["src/migrate-main.ts"], {
-    cwd: new URL("..", import.meta.url),
-    timeout: 120_000,
-    env: {
-      PATH: process.env.PATH,
-      NODE_ENV: "test",
-      DATABASE_URL: url,
-      SANDBOX_BACKEND: "local",
-      ORG_ID: "o",
-      CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
-    },
-  });
+import { migrate, skip, typedRows, withMigratedDatabase } from "./support/migrated-database.ts";
 
 const legacy = async (admin: pg.Pool, tenant: string | null) => {
   const tenantColumn = tenant ? "tenant_id UUID NOT NULL, " : "";
@@ -95,19 +58,11 @@ const legacy = async (admin: pg.Pool, tenant: string | null) => {
   await insert("channel_state", "org_id, container, kind, updated_at", ["o", "C1", "channel", 1]);
 };
 
-const soul = tableCodec<PersistedInstructions>(CONFIG_TABLES.instructions);
-const instructions = async (admin: pg.Pool) =>
-  Object.fromEntries(
-    soul.rows((await admin.query(`SELECT ${soul.columns} FROM soul_configs`)).rows).map((r) => [r.scopeId, r]),
-  );
+const instructions = (admin: pg.Pool) => typedRows<PersistedInstructions>(admin, CONFIG_TABLES.instructions);
 
 for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
   test(`channel guidance moves into the channel's instructions${tenant ? " per tenant" : ""}`, { skip }, async () => {
-    await withDatabase(async (url, admin) => {
-      // A fresh database gets the schema baseline; then put the three tables back in their pre-move shape and
-      // rerun the move alone, as on a database that booted before it existed. The ledger also keeps a row for
-      // the retired 0002, as on a database that ran it; boot must not trip over it.
-      await migrate(url);
+    await withMigratedDatabase(async (url, admin) => {
       await admin.query(
         "DELETE FROM qm_schema_migrations WHERE id IN ('surface-cache/channel-policy/0003-orders-into-instructions', 'typed/config/soul_configs/0001')",
       );

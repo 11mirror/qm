@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PersistedInstructions, PersistedInstructionsRevision } from "../src/resolution/config-store.ts";
-import { CONFIG_TABLES, keyedTable } from "../src/resolution/config-tables.ts";
+import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
+import { typedTable } from "../src/persistence/typed-table.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
@@ -12,8 +13,8 @@ function tables() {
   const db = createPgPool(databaseUrl);
   return {
     open: () => testConfigStore("default-org", { databaseUrl }),
-    instructions: keyedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
-    legacyHistory: keyedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
+    instructions: typedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
+    legacyHistory: typedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
   };
 }
 

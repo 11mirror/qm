@@ -14,7 +14,8 @@ import {
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { openConfigTables, type ConfigTables, type KeyedTable } from "./config-tables.ts";
+import { openConfigTables, type ConfigTables } from "./config-tables.ts";
+import type { TypedTable } from "../persistence/typed-table.ts";
 import { createInstructions } from "./config-instructions.ts";
 
 export interface PersistedInstructions {
@@ -90,17 +91,12 @@ interface PersistedDeploymentIdentity {
   orgId: string;
 }
 export interface ScopedConfigStore {
-  /** A per-scope setting as it applies at `id` (default: the org), read from the in-process cache. */
   setting<K extends ScopeSettingName>(name: K, id?: ScopeId): ScopeSettingValues[K];
-  /** The same, read from the database. */
   settingDurable<K extends ScopeSettingName>(name: K, id?: ScopeId): Promise<ScopeSettingValues[K]>;
-  /** What `id` itself stores, without inheritance or defaults. */
   settingOwnDurable<K extends ScopeSettingName>(name: K, id: ScopeId): Promise<ScopeSettingValue<K> | null>;
-  /** Store a setting at `id` (default: the org); null clears it so `id` inherits again. */
   setSetting<K extends ScopeSettingName>(name: K, value: ScopeSettingValue<K> | null, id?: ScopeId): Promise<void>;
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getInstructions(id: ScopeId): string | null;
-  /** Read a scope's instructions from the store (another instance may have written them) and refresh the cache. */
   getInstructionsDurable(id: ScopeId): Promise<string | null>;
   setInstructions(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
   setInstructionsIfVersion(
@@ -136,7 +132,7 @@ export interface ScopedConfigStore {
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
-  deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
+  deleteConnectorClient(id: ScopeId, provider: string): Promise<boolean>;
   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
   refreshScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
@@ -165,7 +161,6 @@ interface ConfigRecords {
   autoFlaggerConfigs: PersistedAutoFlaggerConfig;
   deploymentIdentity: PersistedDeploymentIdentity;
 }
-type ConfigStoreTables = ConfigTables<ConfigRecords>;
 type SettingTable = Exclude<
   keyof ConfigRecords,
   | "connectorClients"
@@ -177,7 +172,6 @@ type SettingTable = Exclude<
   | "deploymentIdentity"
 >;
 
-/** What each per-scope setting reads as; null means "not set here". */
 export interface ScopeSettingValues {
   commandPolicy: CommandPolicy | null;
   egress: EgressPolicy | null;
@@ -199,21 +193,15 @@ export type ScopeSettingValue<K extends ScopeSettingName> = NonNullable<ScopeSet
 
 interface ScopeSettingSpec<V> {
   table: SettingTable;
-  /** Where admins may set it: "org" settings are set on the org scope only. */
   target: "org" | "any";
-  /** Stored once for the whole org, whatever scope is named. */
   orgOnly?: true;
-  /** How a scope combines with the org: unset reads only the scope; "fallback" falls back to the org; "any" is on if either is. */
   inherit?: "fallback" | "any";
-  /** The value at the org scope (with "fallback", everywhere) when nothing is stored. */
   orgDefault?: V;
-  /** Rewrite a value before storing it; null clears the row. */
   normalize?: (value: V) => V | null;
 }
 
 const emptyAsNull = (items: string[]): string[] | null => (items.length ? items : null);
 
-/** Every per-scope setting, declared once: the store's get/set and the admin resources come from here. */
 export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSettingValue<K>> } = {
   commandPolicy: { table: "commandPolicies", target: "any", orgDefault: defaultOrgPolicy() },
   egress: { table: "egressPolicies", target: "any", orgDefault: { allowedHosts: [], deniedHosts: [] } },
@@ -253,7 +241,7 @@ function scopeSetting<R extends { scopeId: ScopeId }, T>(
   org: ScopeId,
   queue: Queue,
   name: string,
-  rows: KeyedTable<R>,
+  rows: TypedTable<R>,
   read: (row: R) => T,
   toRow: (id: ScopeId, value: T) => R,
   orgOnly = false,
@@ -286,7 +274,7 @@ function scopeSetting<R extends { scopeId: ScopeId }, T>(
   };
 }
 
-function createScopeSettings(org: ScopeId, tables: ConfigStoreTables, queue: Queue) {
+function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, queue: Queue) {
   const field = <N extends SettingTable | "approvalGrantModes", K extends Exclude<keyof ConfigRecords[N], "scopeId">>(
     name: N,
     key: K,
@@ -296,7 +284,7 @@ function createScopeSettings(org: ScopeId, tables: ConfigStoreTables, queue: Que
       org,
       queue,
       name,
-      tables[name] as KeyedTable<ConfigRecords[N]>,
+      tables[name] as TypedTable<ConfigRecords[N]>,
       (row) => row[key],
       (id, value: ConfigRecords[N][K]) => ({ scopeId: id, [key]: value }) as ConfigRecords[N],
       orgOnly,
@@ -410,7 +398,7 @@ const runtimeSelection = (row: PersistedBaseModel | null | undefined): ScopedRun
   };
 };
 
-function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>, queue: Queue) {
+function createRuntimeConfig(org: ScopeId, rows: TypedTable<PersistedBaseModel>, queue: Queue) {
   const cache = new Map<ScopeId, PersistedBaseModel>();
   const changed = notifier("runtime-selection");
   const cacheRow = (id: ScopeId, row: PersistedBaseModel | null): void => {
@@ -425,7 +413,7 @@ function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>,
   });
   const setOrgField = <K extends keyof PersistedBaseModel>(key: K, value: PersistedBaseModel[K] | undefined) =>
     queue(`model:${org}`, async () => {
-      const saved = await rows.update(org, (current) => {
+      const saved = await rows.modify(org, (current) => {
         const row: PersistedBaseModel = { ...current, scopeId: org };
         if (value) row[key] = value;
         else delete row[key];
@@ -450,7 +438,7 @@ function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>,
     async setRuntimeSelection(id: ScopeId, selection: RuntimeSelection | null) {
       await queue(`model:${id}`, async () => {
         const orgRevision = id === org || selection === null ? 0 : ((await rows.get(org))?.revision ?? 0);
-        const saved = await rows.update(id, (row) => {
+        const saved = await rows.modify(id, (row) => {
           const kept = { scopeId: id, ...(id === org ? purposeFields(row) : {}) };
           if (selection === null) return Object.keys(kept).length > 1 ? kept : null;
           if (id !== org) return { ...kept, ...selection, orgRevision };
@@ -465,7 +453,7 @@ function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>,
       if (id === org) return;
       await queue(`model:${id}`, async () => {
         const orgRevision = (await rows.get(org))?.revision ?? 0;
-        const saved = await rows.update(id, (row) => (row ? { ...row, orgRevision } : null));
+        const saved = await rows.modify(id, (row) => (row ? { ...row, orgRevision } : null));
         if (saved) cache.set(id, saved);
       });
     },
@@ -483,7 +471,7 @@ function createRuntimeConfig(org: ScopeId, rows: KeyedTable<PersistedBaseModel>,
   };
 }
 
-function connectorClientsApi(rows: KeyedTable<StoredConnectorClient>, secretKey: Buffer | string | undefined) {
+function connectorClientsApi(rows: TypedTable<StoredConnectorClient>, secretKey: Buffer | string | undefined) {
   const connectorKey = deriveConnectorKey(secretKey ?? randomBytes(32), "connector-clients");
   const key = (id: ScopeId, provider: string) => `${id}|${provider}`;
   const optional = (rec: Omit<ConnectorClientInput, "clientId" | "clientSecret">) => ({
