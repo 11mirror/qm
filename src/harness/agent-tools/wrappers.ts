@@ -15,7 +15,6 @@ const RETRY_SAFE_FIELD = "retrySafe";
 const RETRY_SAFE_SCHEMA = optionalBoolean(
   "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect like sending, charging or creating.",
 );
-const RERUN_INPUT_MAX_CHARS = 4_000;
 
 export interface RetryMark {
   safe: boolean;
@@ -44,10 +43,9 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
     async execute(callId: string, params: unknown, ...rest: unknown[]) {
       const stripped = stripRetrySafeField(params);
       if (stripped.retrySafe !== undefined && isObj(stripped.params)) {
-        const replayable = stripped.retrySafe && JSON.stringify(stripped.params).length <= RERUN_INPUT_MAX_CHARS;
         marks.set(callId, {
           safe: stripped.retrySafe,
-          ...(replayable ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
+          ...(stripped.retrySafe ? { rerun: { tool: tool.name, input: stripped.params } } : {}),
         });
       }
       try {
@@ -62,7 +60,6 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
-const APPROVAL_ARGS_MAX_CHARS = 16_000;
 
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
@@ -116,16 +113,6 @@ export function withToolApprovalGate(
         );
       }
       const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
-      if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
-        const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
-        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });
-        return rec.recordResult(
-          callId,
-          { tool: tool.name, blocked: "approval_args_too_long" },
-          text(`[blocked] ${reason}`),
-          true,
-        );
-      }
       if (callKey && !ref.toolApprovalGate?.(callKey)) {
         const reason = declaredReason!;
         ref.pendingApprovals?.push({
