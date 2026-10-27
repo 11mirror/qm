@@ -1,4 +1,5 @@
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
+import { cols } from "../persistence/typed-table.ts";
 import type { MapConversion } from "../persistence/typed-table.ts";
 import { tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
@@ -50,13 +51,10 @@ const RETIRED_KEYS = [
   "lastSnapshotAttemptMs",
 ].map((k) => `'${k}'`);
 
-const typed = sandboxBodiesMigration("modal_sandbox_bodies", {
-  sandboxId: { type: "text" },
-  createdAtMs: { type: "bigint" },
-  expiresAtMs: { type: "bigint" },
-  lastActivityMs: { type: "bigint" },
-  orgId: { type: "text" },
-});
+const typed = sandboxBodiesMigration(
+  "modal_sandbox_bodies",
+  cols(`sandboxId text, createdAtMs bigint, expiresAtMs bigint, lastActivityMs bigint, orgId text`),
+);
 
 export const MODAL_BODIES: MapConversion = {
   ...typed,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -99,16 +99,8 @@ const PROJECTS: TableSpec = {
   table: "projects",
   key: "id",
   keyIsField: true,
-  columns: {
-    orgId: { type: "text", required: true },
-    name: { type: "text", required: true },
-    ownerId: { type: "text", required: true },
-    memberIds: { type: "text[]", required: true },
-    channelMemberIds: { type: "text[]" },
-    slackChannel: { type: "jsonb" },
-    createdAt: { type: "bigint", required: true },
-    updatedAt: { type: "bigint", required: true },
-  },
+  columns: cols(`orgId text!, name text!, ownerId text!, memberIds text[]!, channelMemberIds text[],
+    slackChannel jsonb, createdAt bigint!, updatedAt bigint!`),
 };
 
 export const PROJECTS_MIGRATION = mapToTableMigration("projects/store/0001-typed", PROJECTS, {

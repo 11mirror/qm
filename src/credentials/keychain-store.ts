@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols, withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
-import { columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 
@@ -9,75 +9,29 @@ const CREDENTIALS: TableSpec = {
   table: "keychain_credentials",
   key: "id",
   keyIsField: true,
-  columns: {
-    ownerId: { type: "text", required: true },
-    orgId: { type: "text" },
-    service: { type: "text", required: true },
-    kind: { type: "text", required: true },
-    envKey: { type: "text" },
-    targets: { type: "text[]" },
-    host: { type: "text" },
-    accountLabel: { type: "text" },
-    fields: { type: "jsonb" },
-    broker: { type: "jsonb" },
-    refresh: { type: "jsonb" },
-    managed: { type: "text" },
-    secretEnc: { type: "text", required: true },
-    fingerprint: { type: "text", required: true },
-    origin: { type: "text" },
-    expiresAt: { type: "bigint" },
-    createdAt: { type: "bigint", required: true },
-    updatedAt: { type: "bigint", required: true },
-    target: { type: "text" },
-    username: { type: "text" },
-  },
+  columns: cols(`ownerId text!, orgId text, service text!, kind text!, envKey text, targets text[], host text,
+    accountLabel text, fields jsonb, broker jsonb, refresh jsonb, managed text, secretEnc text!,
+    fingerprint text!, origin text, expiresAt bigint, createdAt bigint!, updatedAt bigint!,
+    target text, username text`),
 };
 
 const GRANTS: TableSpec = {
   table: "keychain_grants",
   key: "id",
   keyIsField: true,
-  columns: {
-    credentialId: { type: "text", required: true },
-    ownerId: { type: "text", required: true },
-    orgId: { type: "text" },
-    audienceScopeId: { type: "text", required: true },
-    mode: { type: "text", required: true },
-    purpose: { type: "text", required: true },
-    status: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    expiresAt: { type: "bigint" },
-    revokedAt: { type: "bigint" },
-    usedAt: { type: "bigint" },
-    usedBy: { type: "text" },
-    askId: { type: "text" },
-  },
+  columns: cols(`credentialId text!, ownerId text!, orgId text, audienceScopeId text!, mode text!,
+    purpose text!, status text!, createdAt bigint!, expiresAt bigint, revokedAt bigint,
+    usedAt bigint, usedBy text, askId text`),
 };
 
 const ASKS: TableSpec = {
   table: "keychain_asks",
   key: "id",
   keyIsField: true,
-  columns: {
-    credentialId: { type: "text", required: true },
-    ownerId: { type: "text", required: true },
-    requesterId: { type: "text", required: true },
-    orgId: { type: "text" },
-    requesterScopeId: { type: "text", required: true },
-    requesterDestination: { type: "jsonb" },
-    requesterThreadRef: { type: "text" },
-    requesterSeq: { type: "bigint" },
-    requesterMessageTs: { type: "text" },
-    purpose: { type: "text", required: true },
-    requestedMode: { type: "text" },
-    status: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    expiresAt: { type: "bigint", required: true },
-    resolvedAt: { type: "bigint" },
-    grantId: { type: "text" },
-    note: { type: "text" },
-    notifiedAt: { type: "bigint" },
-  },
+  columns: cols(`credentialId text!, ownerId text!, requesterId text!, orgId text, requesterScopeId text!,
+    requesterDestination jsonb, requesterThreadRef text, requesterSeq bigint,
+    requesterMessageTs text, purpose text!, requestedMode text, status text!, createdAt bigint!,
+    expiresAt bigint!, resolvedAt bigint, grantId text, note text, notifiedAt bigint`),
 };
 
 export const KEYCHAIN_CREDENTIALS_MIGRATION = mapToTableMigration(

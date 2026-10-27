@@ -1,6 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { lockedRow } from "../persistence/locked-row.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -30,14 +30,7 @@ const retire = (state: TaskAckState): string[] => [...new Set([...state.previous
 const TASK_ACKS: TableSpec = {
   table: "slack_task_acknowledgements",
   key: "id",
-  columns: {
-    channel: { type: "text", required: true },
-    emoji: { type: "text", required: true },
-    target: { type: "text", required: true },
-    previous: { type: "text[]", required: true },
-    finished: { type: "boolean", required: true },
-    synced: { type: "boolean" },
-  },
+  columns: cols(`channel text!, emoji text!, target text!, previous text[]!, finished boolean!, synced boolean`),
 };
 
 export const TASK_ACKS_MIGRATION = mapToTableMigration("slack/task-acks/0001-typed", TASK_ACKS);

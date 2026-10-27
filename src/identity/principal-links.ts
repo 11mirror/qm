@@ -1,6 +1,6 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -40,13 +40,7 @@ const REFRESH_TTL_MS = 10_000;
 const PRINCIPAL_LINKS: TableSpec = {
   table: "principal_links",
   key: "id",
-  columns: {
-    principalId: { type: "text", required: true },
-    canonicalId: { type: "text", required: true },
-    evidence: { type: "text", required: true },
-    linkedBy: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-  },
+  columns: cols(`principalId text!, canonicalId text!, evidence text!, linkedBy text!, createdAt bigint!`),
 };
 
 export const PRINCIPAL_LINKS_MIGRATION = mapToTableMigration("identity/principal-links/0001-typed", PRINCIPAL_LINKS);

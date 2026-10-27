@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cols } from "../persistence/typed-table.ts";
 import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
@@ -59,13 +60,10 @@ export interface StoredPorterDeployBody {
   createdAtMs: number;
 }
 
-export const PORTER_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("porter_deploy_bodies", {
-  sandboxId: { type: "text", required: true },
-  name: { type: "text", required: true },
-  host: { type: "text", required: true },
-  port: { type: "bigint" },
-  createdAtMs: { type: "bigint", required: true },
-});
+export const PORTER_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable(
+  "porter_deploy_bodies",
+  cols(`sandboxId text!, name text!, host text!, port bigint, createdAtMs bigint!`),
+);
 
 export interface PorterDeployProviderOptions {
   appsDomain?: string;

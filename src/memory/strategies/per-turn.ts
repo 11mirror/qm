@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
 import { jsonbStringify } from "../../util/text.ts";
 import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
@@ -100,18 +100,8 @@ type TurnEndCtx = MemoryCaptureMetadata & {
 const MEMORY_CAPTURE_PENDING: TableSpec = {
   table: "memory_capture_pending",
   key: "id",
-  columns: {
-    scopeId: { type: "text", required: true },
-    actorId: { type: "text" },
-    conversationScopeId: { type: "text", required: true },
-    sessionId: { type: "text" },
-    idempotencyKey: { type: "text" },
-    sensitivity: { type: "text" },
-    inheritedFacts: { type: "jsonb" },
-    turns: { type: "jsonb", required: true },
-    token: { type: "text", required: true },
-    at: { type: "bigint", required: true },
-  },
+  columns: cols(`scopeId text!, actorId text, conversationScopeId text!, sessionId text, idempotencyKey text,
+    sensitivity text, inheritedFacts jsonb, turns jsonb!, token text!, at bigint!`),
 };
 
 export const MEMORY_CAPTURE_PENDING_MIGRATION = mapToTableMigration(

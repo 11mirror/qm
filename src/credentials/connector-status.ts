@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
   ACCOUNT_TYPES,
@@ -35,7 +35,7 @@ const CONNECTOR_STATUS: TableSpec = {
   table: "connector_status",
   key: "principalId",
   keyIsField: true,
-  columns: { checkedAt: { type: "bigint", required: true }, providers: { type: "jsonb", required: true } },
+  columns: cols(`checkedAt bigint!, providers jsonb!`),
 };
 
 export const CONNECTOR_STATUS_MIGRATION = mapToTableMigration(

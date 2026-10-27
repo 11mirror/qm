@@ -1,6 +1,6 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
@@ -40,26 +40,14 @@ export interface IdentityService extends IdentityProvider {
 const DEACTIVATED_PRINCIPALS: TableSpec = {
   table: "deactivated_principals",
   key: "id",
-  columns: {
-    principalId: { type: "text", required: true },
-    source: { type: "text", required: true },
-    at: { type: "bigint", required: true },
-  },
+  columns: cols(`principalId text!, source text!, at bigint!`),
 };
 
 const EXTERNAL_MEMBERS: TableSpec = {
   table: "external_members",
   key: "id",
-  columns: {
-    email: { type: "text", required: true },
-    role: { type: "text", required: true },
-    expiresAt: { type: "bigint" },
-    kind: { type: "text" },
-    inviteId: { type: "text" },
-    invitedBy: { type: "text", required: true },
-    createdAt: { type: "bigint", required: true },
-    updatedAt: { type: "bigint", required: true },
-  },
+  columns: cols(`email text!, role text!, expiresAt bigint, kind text, inviteId text, invitedBy text!,
+    createdAt bigint!, updatedAt bigint!`),
 };
 
 export const DEACTIVATED_PRINCIPALS_MIGRATION = mapToTableMigration(

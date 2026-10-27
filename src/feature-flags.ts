@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "./persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "./persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "./persistence/typed-table.ts";
 import type { ScopeId } from "./types.ts";
 import { tenant } from "./tenant.ts";
 
@@ -53,11 +53,7 @@ const FEATURE_FLAGS: TableSpec = {
   table: "feature_flags",
   key: "featureName",
   keyIsField: true,
-  columns: {
-    enabledScopes: { type: "text[]", required: true },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-  },
+  columns: cols(`enabledScopes text[]!, updatedAt bigint!, updatedBy text!`),
 };
 
 export const FEATURE_FLAGS_MIGRATION = mapToTableMigration("feature-flags/store/0001-typed", FEATURE_FLAGS);

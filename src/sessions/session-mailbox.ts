@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
 export interface SessionMessage {
@@ -18,16 +18,8 @@ const SESSION_MAILBOX: TableSpec = {
   table: "session_mailbox",
   key: "id",
   keyIsField: true,
-  columns: {
-    recipientId: { type: "text", required: true },
-    senderId: { type: "text", required: true },
-    actor: { type: "jsonb", required: true },
-    text: { type: "text", required: true },
-    sourceEntrySeq: { type: "bigint" },
-    audience: { type: "jsonb", required: true },
-    createdAt: { type: "bigint", required: true },
-    consumed: { type: "boolean" },
-  },
+  columns: cols(`recipientId text!, senderId text!, actor jsonb!, text text!, sourceEntrySeq bigint,
+    audience jsonb!, createdAt bigint!, consumed boolean`),
 };
 
 export const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX, {

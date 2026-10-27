@@ -3,7 +3,7 @@ import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
 
@@ -19,21 +19,9 @@ export function approvalDeliveryRecipient(actor: { externalId?: string } | undef
 const APPROVALS: TableSpec = {
   table: "approvals",
   key: "id",
-  columns: {
-    sessionId: { type: "text", required: true },
-    command: { type: "text", required: true },
-    createdAt: { type: "bigint" },
-    reason: { type: "text" },
-    matched: { type: "text" },
-    purpose: { type: "text" },
-    summary: { type: "text" },
-    summaryDetail: { type: "text" },
-    approvalKey: { type: "text" },
-    grantModes: { type: "jsonb" },
-    request: { type: "jsonb" },
-    blocksInput: { type: "boolean" },
-    kind: { type: "text" },
-  },
+  columns: cols(`sessionId text!, command text!, createdAt bigint, reason text, matched text, purpose text,
+    summary text, summaryDetail text, approvalKey text, grantModes jsonb, request jsonb,
+    blocksInput boolean, kind text`),
 };
 
 export const APPROVALS_MIGRATION = mapToTableMigration("core/approvals/0001-typed", APPROVALS, {

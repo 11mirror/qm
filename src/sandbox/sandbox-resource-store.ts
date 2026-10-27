@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
 
 export interface SandboxResourceStore {
@@ -17,21 +17,9 @@ const SANDBOX_RESOURCES: TableSpec = {
   table: "sandbox_resources",
   key: "id",
   keyIsField: true,
-  columns: {
-    backend: { type: "text", required: true },
-    ownerScopeId: { type: "text", required: true },
-    backingScopeId: { type: "text", required: true },
-    name: { type: "text", required: true },
-    createdBy: { type: "text", required: true },
-    createdAt: { type: "text", required: true },
-    legacy: { type: "boolean", required: true },
-    state: { type: "text", required: true },
-    machineId: { type: "text" },
-    cleanupPending: { type: "boolean" },
-    holders: { type: "text[]" },
-    spec: { type: "jsonb" },
-    error: { type: "text" },
-  },
+  columns: cols(`backend text!, ownerScopeId text!, backingScopeId text!, name text!, createdBy text!,
+    createdAt text!, legacy boolean!, state text!, machineId text, cleanupPending boolean,
+    holders text[], spec jsonb, error text`),
 };
 
 const SANDBOX_DEFAULTS: TableSpec = {

@@ -1,5 +1,5 @@
 import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface BackgroundOwnership {
   ownerDeploymentId: string | null;
@@ -18,7 +18,7 @@ export class BackgroundOwnershipConflict extends Error {}
 const BACKGROUND_OWNERSHIP: TableSpec = {
   table: "background_ownership",
   key: "id",
-  columns: { ownerDeploymentId: { type: "text" }, setAt: { type: "text" }, setBy: { type: "text" } },
+  columns: cols(`ownerDeploymentId text, setAt text, setBy text`),
 };
 
 const MEMBER_PROTOCOL_KEYS = [

@@ -1,4 +1,5 @@
 import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { cols } from "../persistence/typed-table.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import { LRUCache } from "lru-cache";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
@@ -69,16 +70,11 @@ export interface StoredDeployBody {
   orgId?: string;
 }
 
-export const AWS_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("aws_deploy_bodies", {
-  microvmId: { type: "text", required: true },
-  endpoint: { type: "text", required: true },
-  createdAtMs: { type: "bigint", required: true },
-  lastSnapshotMs: { type: "bigint" },
-  dataCredsAtMs: { type: "bigint" },
-  rotateNotBeforeMs: { type: "bigint" },
-  replacementMicrovmId: { type: "text" },
-  orgId: { type: "text" },
-});
+export const AWS_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable(
+  "aws_deploy_bodies",
+  cols(`microvmId text!, endpoint text!, createdAtMs bigint!, lastSnapshotMs bigint,
+    dataCredsAtMs bigint, rotateNotBeforeMs bigint, replacementMicrovmId text, orgId text`),
+);
 
 export interface AwsDeployProviderOptions {
   region: string;

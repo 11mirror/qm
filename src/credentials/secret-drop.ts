@@ -1,6 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { createOneTimeStore, type OneTimeResult } from "../persistence/one-time-store.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { GrantMode } from "./keychain.ts";
 
@@ -42,23 +42,9 @@ export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
 const SECRET_DROPS: TableSpec = {
   table: "secret_drops",
   key: "id",
-  columns: {
-    ownerId: { type: "text", required: true },
-    orgId: { type: "text" },
-    service: { type: "text", required: true },
-    envKey: { type: "text" },
-    host: { type: "text" },
-    fields: { type: "jsonb" },
-    purpose: { type: "text", required: true },
-    requestedBy: { type: "text", required: true },
-    audienceScopeId: { type: "text" },
-    scopeVersion: { type: "text" },
-    grantMode: { type: "text" },
-    destination: { type: "jsonb" },
-    threadRef: { type: "text" },
-    requiresToken: { type: "boolean" },
-    createdAt: { type: "bigint", required: true },
-  },
+  columns: cols(`ownerId text!, orgId text, service text!, envKey text, host text, fields jsonb, purpose text!,
+    requestedBy text!, audienceScopeId text, scopeVersion text, grantMode text, destination jsonb,
+    threadRef text, requiresToken boolean, createdAt bigint!`),
 };
 
 export const SECRET_DROPS_MIGRATION = mapToTableMigration("credentials/secret-drops/0001-typed", SECRET_DROPS);

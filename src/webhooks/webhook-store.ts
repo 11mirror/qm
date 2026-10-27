@@ -1,6 +1,12 @@
 import type { Webhook } from "../types.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, ownerIndexMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import {
+  cols,
+  mapToTableMigration,
+  ownerIndexMigration,
+  tableCodec,
+  type TableSpec,
+} from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -45,11 +51,7 @@ const WEBHOOKS: TableSpec = {
   keyIsField: true,
   columns: {
     ...TRIGGER_COLUMNS,
-    action: { type: "text", required: true },
-    verification: { type: "jsonb", required: true },
-    filters: { type: "jsonb" },
-    lastDeliveryId: { type: "text" },
-    lastError: { type: "text" },
+    ...cols(`action text!, verification jsonb!, filters jsonb, lastDeliveryId text, lastError text`),
   },
 };
 

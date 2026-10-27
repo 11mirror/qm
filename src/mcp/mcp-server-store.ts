@@ -6,7 +6,7 @@
 // connector credentials — reachable only through core, never injected into sandboxes.
 
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
@@ -59,28 +59,11 @@ const MCP_SERVERS: TableSpec = {
   table: "mcp_servers",
   key: "id",
   keyIsField: true,
-  columns: {
-    name: { type: "text", required: true },
-    url: { type: "text", required: true },
-    auth: { type: "text", required: true },
-    credentialScope: { type: "text" },
-    credentialHost: { type: "text" },
-    credentialAccountType: { type: "text" },
-    bearerToken: { type: "text" },
-    clientId: { type: "text" },
-    clientSecret: { type: "text" },
-    oauthAuthorizeUrl: { type: "text" },
-    oauthTokenUrl: { type: "text" },
-    oauthScopes: { type: "text[]" },
-    tools: { type: "jsonb" },
-    approval: { type: "text" },
-    catalog: { type: "boolean" },
-    attestActor: { type: "boolean" },
-    readOnly: { type: "boolean", required: true },
-    enabled: { type: "boolean", required: true },
-    updatedAt: { type: "bigint", required: true },
-    updatedBy: { type: "text", required: true },
-  },
+  columns: cols(`name text!, url text!, auth text!, credentialScope text, credentialHost text,
+    credentialAccountType text, bearerToken text, clientId text, clientSecret text,
+    oauthAuthorizeUrl text, oauthTokenUrl text, oauthScopes text[], tools jsonb, approval text,
+    catalog boolean, attestActor boolean, readOnly boolean!, enabled boolean!, updatedAt bigint!,
+    updatedBy text!`),
 };
 
 export const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
