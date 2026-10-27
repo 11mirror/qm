@@ -80,7 +80,7 @@ export function parseFrontmatter(raw: string): Frontmatter {
     attrs[key] = items;
   }
 
-  return { attrs, body: source.slice(end + closing[0].length).replace(/^\s+/, "") };
+  return { attrs, body: source.slice(end + closing[0].length).trimStart() };
 }
 
 export function parseSeedSkillFrontmatter(raw: string): {

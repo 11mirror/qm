@@ -95,12 +95,13 @@ export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string):
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = header.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
-  if (!m) return null;
+  const pair = header
+    ?.split(";")
+    .map((part) => part.trimStart())
+    .find((part) => part.startsWith(`${name}=`) && part.length > name.length + 1);
+  if (!pair) return null;
   try {
-    return decodeURIComponent(m[1] ?? "");
+    return decodeURIComponent(pair.slice(name.length + 1));
   } catch {
     return null;
   }

@@ -71,7 +71,7 @@ function handlePath(path: string): string {
   return path
     .split(/[\\/]+/)
     .filter((part) => part && part !== "." && part !== "..")
-    .map((part) => part.replace(/[^A-Za-z0-9._-]+/g, "-"))
+    .map(handleSource)
     .join("/");
 }
 

@@ -223,13 +223,13 @@ export function createPorterExec(client: PorterClientLike, resolveId: (id: strin
     if (!Number.isFinite(declared)) throw new Error(`porter read ${absPath}: bad size (${r.stdout.slice(0, 40)})`);
     const parts: Buffer[] = [];
     if (declared <= READ_CHUNK) {
-      parts.push(Buffer.from(r.stdout.slice(nl + 1).replace(/\s+/g, ""), "base64"));
+      parts.push(Buffer.from(r.stdout.slice(nl + 1), "base64"));
     } else {
       for (let i = 0; i < Math.ceil(declared / READ_CHUNK); i++) {
         const chunk = `dd if=${shq(absPath)} bs=${READ_CHUNK} skip=${i} count=1 2>/dev/null | base64`;
         const c = await execRaw(id, chunk, 120);
         if (c.code !== 0) throw new Error(`porter read ${absPath} chunk ${i} failed (${c.code})`);
-        parts.push(Buffer.from(c.stdout.replace(/\s+/g, ""), "base64"));
+        parts.push(Buffer.from(c.stdout, "base64"));
       }
     }
     const out = Buffer.concat(parts);
