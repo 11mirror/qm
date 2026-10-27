@@ -82,7 +82,6 @@ async function fixture(t: TestContext) {
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
-    b.scheduler.stop();
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });

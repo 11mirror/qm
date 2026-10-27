@@ -20,7 +20,8 @@ type RetryStrategy =
 
 export interface SpawnOptions {
   idempotencyKey?: string;
-  maxAttempts: number;
+  /** null retries without limit. */
+  maxAttempts: number | null;
   retryStrategy?: RetryStrategy;
 }
 

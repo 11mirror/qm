@@ -57,36 +57,32 @@ test(
 );
 
 test(
-  "cron job queue resumes polling without terminating a prior generation callback",
+  "the job worker resumes polling without terminating a prior generation's job",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
-    const { cronJobQueue } = await import("../src/cron/job-queue.ts");
     const { createJobWorker } = await import("../src/jobs/job-worker.ts");
-    const queue = cronJobQueue(createJobWorker(databaseUrl!), 1);
+    const queue = createJobWorker(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
     const newEntered = Promise.withResolvers<void>();
     let oldFinished = false;
+    const run = `${Date.now()}`;
+    queue.handle("generation-test", async (params) => {
+      if ((params as { old: boolean }).old) {
+        oldEntered.resolve();
+        await oldFinish.promise;
+        oldFinished = true;
+      } else newEntered.resolve();
+      return "done";
+    });
     try {
-      await queue.start({
-        onFire: async () => {
-          oldEntered.resolve();
-          await oldFinish.promise;
-          oldFinished = true;
-          return "done";
-        },
-      });
-      await queue.enqueueFire({ cronId: "old", scheduledAt: Date.now() });
+      await queue.start();
+      await queue.spawn("generation-test", { old: true }, `old-${run}`);
       await oldEntered.promise;
-      await queue.stopClaims!();
+      await queue.stopClaims();
       assert.equal(oldFinished, false);
-      await queue.start({
-        onFire: async () => {
-          newEntered.resolve();
-          return "done";
-        },
-      });
-      await queue.enqueueFire({ cronId: "new", scheduledAt: Date.now() });
+      await queue.start();
+      await queue.spawn("generation-test", { old: false }, `new-${run}`);
       await newEntered.promise;
       assert.equal(oldFinished, false);
       oldFinish.resolve();
