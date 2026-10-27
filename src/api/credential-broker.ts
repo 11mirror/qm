@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -230,7 +230,7 @@ export async function brokerCredentialCall(
       if (!opts.usage) throw new Error("no usage ledger");
       admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
     } catch (err) {
-      console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
+      reportFailure("credential-broker: daily cap check", err, slug);
       return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
     }
     if (!admitted)

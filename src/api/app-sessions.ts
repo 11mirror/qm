@@ -680,7 +680,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
         };
         let match = await findChannel();
         if (!match) {
-          await h.refreshSurfaceDirectory().catch(() => undefined);
+          await h.refreshSurfaceDirectory().catch(swallowAs("api: directory refresh", undefined));
           match = await findChannel();
         }
         if (!match) return { status: "invalid_channel" };
