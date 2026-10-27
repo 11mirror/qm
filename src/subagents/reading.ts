@@ -6,10 +6,10 @@ import type { Session } from "../types.ts";
 import { itemVisibleToAll, assertAudienceCompatible } from "./audience.ts";
 import type { SessionReadInput, SessionChildSummary, SessionReadResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
+import { sessionTreeRoot } from "./tree.ts";
 
 const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
-const LAST_SAID_PAGE = 40;
 
 function itemText(item: Item): string | undefined {
   const text = proseText(item);
@@ -17,6 +17,18 @@ function itemText(item: Item): string | undefined {
   if (item.tool) return `[${item.tool}]`;
   return undefined;
 }
+
+async function* newestFirst(ctx: TurnContext, target: Session): AsyncGenerator<Item[]> {
+  let beforeSeq: number | undefined;
+  for (let size = 1; ; size *= 2) {
+    const page = await ctx.visibleHistory(target, size, beforeSeq);
+    if (!page.length) return;
+    yield page;
+    beforeSeq = page[0]!.seq;
+  }
+}
+
+const LAST_SAID_PAGE = 40;
 
 async function lastAssistantText(ctx: TurnContext, child: Session): Promise<string | undefined> {
   let newer: Item | undefined;
@@ -40,11 +52,46 @@ async function lastAssistantText(ctx: TurnContext, child: Session): Promise<stri
   }
 }
 
-export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<SessionMessage[]> {
+async function readableLines(ctx: TurnContext, target: Session, limit: number, maxChars: number): Promise<string[]> {
+  const lines: string[] = [];
+  let entries = 0;
+  let chars = 0;
+  for await (const page of newestFirst(ctx, target)) {
+    for (let i = page.length - 1; i >= 0 && entries < limit && chars <= maxChars; i--) {
+      const entry = page[i]!;
+      entries++;
+      const text = itemText(entry);
+      if (!text) continue;
+      const line = `${entry.kind}#${entry.seq} ${text}`;
+      lines.unshift(line);
+      chars += line.length + 1;
+    }
+    if (entries >= limit || chars > maxChars) break;
+  }
+  return lines;
+}
+
+async function othersWorkingInTree(ctx: TurnContext): Promise<boolean> {
+  const { deps, binding } = ctx;
+  const root = await sessionTreeRoot(deps.sessions, binding.session);
+  for (const session of [root, ...(await deps.sessions.descendantsOf([root.id]))]) {
+    if (session.scopeId !== binding.scopeId) continue;
+    for (const run of await deps.runs.inFlightForThread(session.threadRef))
+      if (run.id !== binding.request.runId) return true;
+  }
+  return false;
+}
+
+export async function receiveMessages(
+  ctx: TurnContext,
+  timeoutMs = 0,
+  signal?: AbortSignal,
+): Promise<SessionMessage[]> {
   const { deps, binding, currentCaller } = ctx;
   const deadline = Date.now() + Math.max(0, timeoutMs);
   do {
     binding.request.cancel?.throwIfAborted();
+    if (signal?.aborted) return [];
     const caller = await currentCaller();
     const messages = await deps.mailbox.pending(binding.session.id);
     const visible: SessionMessage[] = [];
@@ -70,7 +117,7 @@ export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<
         continue;
       visible.push(message);
     }
-    if (visible.length || Date.now() >= deadline) return visible;
+    if (visible.length || Date.now() >= deadline || !(await othersWorkingInTree(ctx))) return visible;
     await sleep(Math.min(250, deadline - Date.now()));
   } while (Date.now() <= deadline);
   return [];
@@ -82,7 +129,7 @@ export async function acknowledgeMessages(ctx: TurnContext, ids: string[]): Prom
 }
 
 export async function readSession(ctx: TurnContext, input: SessionReadInput): Promise<SessionReadResult> {
-  const { deps, binding, resolveTarget, peerRefusal, statusOf, visibleTitle, visibleHistory, currentCaller } = ctx;
+  const { deps, binding, resolveTarget, peerRefusal, statusOf, visibleTitle, currentCaller } = ctx;
   await currentCaller();
   if (!input.target?.trim()) {
     const children = await deps.sessions.childrenOf(binding.session.id);
@@ -117,14 +164,7 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
   const maxChars = Math.max(1, input.maxChars ?? READ_DEFAULT_MAX_CHARS);
   if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
     return { ok: false, message: "you are not a participant in that session." };
-  const entries = await visibleHistory(target, limit);
-  const lines: string[] = [];
-  for (const entry of entries) {
-    const text = itemText(entry);
-    if (!text) continue;
-    lines.push(`${entry.kind}#${entry.seq} ${text}`);
-  }
-  let rendered = lines.join("\n");
+  let rendered = (await readableLines(ctx, target, limit, maxChars)).join("\n");
   if (rendered.length > maxChars)
     rendered = `…[${rendered.length - maxChars} earlier chars not shown; raise maxChars or lower limit to see them]\n${rendered.slice(rendered.length - maxChars)}`;
   return {

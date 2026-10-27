@@ -208,6 +208,18 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
     scopeId: scope,
     request: { actor, conversation, cancel: abort.signal },
   });
+  const idle = Date.now();
+  assert.deepEqual(
+    await api.receive!(60_000),
+    [],
+    "with nothing else working in the tree there is nothing to wait for",
+  );
+  assert.ok(Date.now() - idle < 5_000, "the wait returns at once instead of running out its timeout");
+  assert.ok((await api.open({ task: "work" })).ok);
+  const toolAbort = new AbortController();
+  const bounded = api.receive!(60_000, toolAbort.signal);
+  toolAbort.abort();
+  assert.deepEqual(await bounded, [], "the turn's own abort ends the wait without an error");
   const waiting = api.receive!(60_000);
   abort.abort();
   await assert.rejects(waiting, { name: "AbortError" });
