@@ -7,12 +7,7 @@ import type {
 } from "../../src/resolution/config-store.ts";
 import { CONFIG_TABLES } from "../../src/resolution/config-tables.ts";
 import { typedTable } from "../../src/persistence/typed-table.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { type ApiCtx, respond } from "../../src/api/routes/route.ts";
-import { postInstructions } from "../../src/api/routes/surface-config.ts";
 import { createServer } from "../../src/api/server.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
@@ -20,7 +15,6 @@ import { signRequest } from "../../src/auth/source-auth.ts";
 import { resolveTurnFastMode } from "../../src/core/turn-options.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";
-import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../src/resolution/config-instructions.ts";
 import { scopeId, type ScopeId } from "../../src/types.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
@@ -67,7 +61,7 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
     30,
     "the canonical row retains the full durable history",
   );
-  assert.equal(left.instructionsHistory(channel).length, 25, "the operator view remains bounded");
+  assert.equal(left.instructionsHistory(channel).length, 30, "the operator view shows the full history");
   const fresh = open();
   await fresh.hydrate?.();
   assert.equal(fresh.instructionsHistory(channel)[0]?.content, fresh.getInstructions(channel));
@@ -513,42 +507,6 @@ test("shared chat messages queue instead of borrowing another person's account",
   assert.notEqual(other.steered, true);
   assert.equal((await built.runs.get(other.runId!))?.request.modelAccount, "company");
   assert.equal((await built.signals.takePending(first.runId!)).length, 0);
-});
-
-test("every instructions write path refuses content over the limit with payload_too_large", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "instructions-size-")) }));
-  const scope = "personal:U1" as const;
-  const tooLong = "x".repeat(MAX_INSTRUCTIONS_CHARS + 1);
-
-  await assert.rejects(built.config.setInstructions(scope, tooLong, "U1"), InstructionsTooLargeError);
-  await assert.rejects(built.config.setInstructionsIfVersion(scope, 0, tooLong, "U1"), InstructionsTooLargeError);
-  await assert.rejects(built.app.updateInstructions(scope, tooLong, "U1"), InstructionsTooLargeError);
-
-  const out: { status?: number; body?: { error?: string; message?: string } } = {};
-  const res = {
-    getHeader() {},
-    writeHead(status: number) {
-      out.status = status;
-    },
-    end(data?: string) {
-      out.body = data ? JSON.parse(data) : undefined;
-    },
-  };
-  await respond(postInstructions, {
-    res,
-    app: built.app,
-    body: { content: tooLong },
-    capability: { actorId: "U1", scopeId: scope },
-  } as unknown as ApiCtx);
-  assert.equal(out.status, 413);
-  assert.equal(out.body?.error, "payload_too_large");
-  assert.equal(out.body?.message, "instructions must be at most 100000 characters");
-
-  assert.equal(
-    await built.app.updateInstructions(scope, "x".repeat(MAX_INSTRUCTIONS_CHARS), "U1"),
-    1,
-    "the limit itself is allowed",
-  );
 });
 
 const org = scopeId("org", "default-org");

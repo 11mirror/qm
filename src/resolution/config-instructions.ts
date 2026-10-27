@@ -4,18 +4,6 @@ import type { createKeyedQueue } from "../util/async.ts";
 import type { TypedTable } from "../persistence/typed-table.ts";
 import type { PersistedInstructions, PersistedInstructionsRevision, ScopedConfigStore } from "./config-store.ts";
 
-export const MAX_INSTRUCTIONS_CHARS = 100_000;
-
-export class InstructionsTooLargeError extends Error {
-  constructor() {
-    super(`instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters`);
-  }
-}
-
-function assertInstructionsSize(content: string): void {
-  if (content.length > MAX_INSTRUCTIONS_CHARS) throw new InstructionsTooLargeError();
-}
-
 type Snapshot = PersistedInstructions | null;
 type Queue = ReturnType<typeof createKeyedQueue<string>>;
 
@@ -109,7 +97,6 @@ export function createInstructions(
         return cache.get(id)?.content ?? null;
       }),
     async setInstructions(id, content, updatedBy) {
-      assertInstructionsSize(content);
       return queue(`instructions:${id}`, async () => {
         const row = await rows.modify(id, (current) =>
           withRevision(id, current, revisionOf(id, content, baseVersion(id, current) + 1, updatedBy)),
@@ -118,7 +105,6 @@ export function createInstructions(
       });
     },
     async setInstructionsIfVersion(id, expectedVersion, content, updatedBy) {
-      assertInstructionsSize(content);
       return queue(`instructions:${id}`, async () => {
         let accepted = false;
         const row = await rows.modify(id, (current) => {
@@ -130,7 +116,7 @@ export function createInstructions(
       });
     },
     instructionsVersion: (id) => cache.get(id)?.version ?? 0,
-    instructionsHistory: (id) => (history.get(id) ?? []).slice(0, 25),
+    instructionsHistory: (id) => history.get(id) ?? [],
     captureInstructionsSnapshot: (id) => queue(`instructions:${id}`, () => rows.get(id)),
     restoreInstructionsSnapshot: (id, snapshot) =>
       queue(`instructions:${id}`, async () => {
