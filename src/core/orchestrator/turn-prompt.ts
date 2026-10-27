@@ -2,7 +2,7 @@ import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { requiresDelegation } from "../../subagents/delegation.ts";
-import { type Destination, type ScopeId, turnSource } from "../../types.ts";
+import { type Destination, turnSource } from "../../types.ts";
 import { renderGatewayContext } from "../gateway-context.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../../resolution/branding.ts";
