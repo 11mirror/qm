@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { countTokens } from "../../../src/util/tokens.ts";
 import { renderComputerBlock } from "../../../src/core/environment-facts.ts";
 import { renderGatewayContext } from "../../../src/core/gateway-context.ts";
 import { sharedManifest } from "../../../src/core/attachments.ts";
@@ -20,15 +21,17 @@ function checkOrder<T>(items: T[], render: (items: T[]) => string | null): void 
   assert.deepEqual(items, before);
 }
 
-test("prompt inventories keep identical bytes across permutations, including capped subsets", () => {
+const BUDGET = 400;
+
+test("prompt inventories keep identical bytes across permutations, including budgeted subsets", () => {
   const ids = Array.from({ length: 105 }, (_, i) => `id-${String(i).padStart(3, "0")}`);
   checkOrder<DirectoryMember>(
     ids.map((id) => ({ principalId: id, displayName: "Same name", type: "internal" })),
-    renderConversationRoster,
+    (items) => renderConversationRoster(items, BUDGET),
   );
   checkOrder<DirectoryChannel>(
     ids.map((id) => ({ channelId: id, name: id })),
-    (items) => renderReachRoster(items, "Alex"),
+    (items) => renderReachRoster(items, "Alex", BUDGET),
   );
   checkOrder<CandidateDestination>(
     ids.map((id) => ({ key: id, label: id, type: "slack", target: id })),
@@ -41,7 +44,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
       fileId: id,
       permission: "read",
     })),
-    sharedManifest,
+    (items) => sharedManifest(items, BUDGET),
   );
   const base = ids.map((id) => ({
     id,
@@ -53,15 +56,15 @@ test("prompt inventories keep identical bytes across permutations, including cap
   }));
   checkOrder<Cron>(
     base.map((b) => ({ ...b, schedule: { everyMs: 60_000 }, action: b.id })),
-    (items) => renderStandingObligations(items, [], []),
+    (items) => renderStandingObligations(items, [], [], BUDGET),
   );
   checkOrder<Webhook>(
     base.map((b) => ({ ...b, action: b.id, verification: { scheme: "github" } })),
-    (items) => renderStandingObligations([], items, []),
+    (items) => renderStandingObligations([], items, [], BUDGET),
   );
   checkOrder<Monitor>(
     base.map((b) => ({ ...b, processId: b.id, command: b.id, threadRef: "t", cursor: 0, expiresAt: 100 })),
-    (items) => renderStandingObligations([], [], items),
+    (items) => renderStandingObligations([], [], items, BUDGET),
   );
   assert.match(deliveryMenu([{ key: "x", label: "X", type: "slack", target: "x" }], "x"), /X \(default/);
 });
@@ -83,18 +86,68 @@ test("environment and location facts are independent of discovery order", () => 
   );
 });
 
-test("scheduled work in the prompt is capped with a pointer to the full inventories", () => {
-  const crons = Array.from(
-    { length: 32 },
+const cronsOf = (count: number) =>
+  Array.from(
+    { length: count },
     (_, i) =>
       ({
-        id: `c${String(i).padStart(2, "0")}`,
+        id: `c${String(i).padStart(3, "0")}`,
         title: `Job ${i}`,
         schedule: { everyMs: 60_000 },
         createdAt: 0,
       }) as unknown as Cron,
   );
-  const block = renderStandingObligations(crons, [], []);
-  assert.equal(block.split("\n").filter((line) => line.startsWith("- ")).length, 30);
-  assert.match(block, /…and 2 more — list crons, webhooks or job watches to see them all\.$/);
+
+test("scheduled work in the prompt fills its token budget, then points at the full inventories", () => {
+  const block = renderStandingObligations(cronsOf(400), [], [], BUDGET);
+  const listed = block.split("\n").filter((line) => line.startsWith("- "));
+  assert.ok(listed.length > 10 && listed.length < 400, `budgeted prefix, got ${listed.length}`);
+  assert.ok(listed.reduce((n, line) => n + countTokens(line), 0) <= BUDGET);
+  assert.match(
+    block,
+    new RegExp(`…and ${400 - listed.length} more — list crons, webhooks or job watches to see them all\\.$`),
+  );
+  const all = renderStandingObligations(cronsOf(400), [], [], 1_000_000);
+  assert.equal(all.split("\n").filter((line) => line.startsWith("- ")).length, 400);
+  assert.doesNotMatch(all, /…and \d+ more/);
+});
+
+test("webhook and job-watch obligations are named by their first line", () => {
+  const webhook = {
+    id: "w1",
+    action: "Triage the issue\nThen label it",
+    verification: { scheme: "github" },
+  } as Webhook;
+  const monitor = { id: "m1", processId: "p", command: "npm test", purpose: `${"a".repeat(300)}\nmore` } as Monitor;
+  const block = renderStandingObligations([], [webhook], [monitor], 10_000);
+  assert.match(block, /^- Webhook: Triage the issue$/m);
+  assert.match(block, new RegExp(`^- Job watch: ${"a".repeat(300)}$`, "m"));
+});
+
+test("conversation and reach rosters fill their token budget and count the rest", () => {
+  const members = Array.from({ length: 800 }, (_, i) => ({
+    principalId: `U${String(i).padStart(4, "0")}`,
+    displayName: `Person ${i}`,
+    type: "internal" as const,
+  }));
+  const roster = renderConversationRoster(members, BUDGET)!;
+  const listed = roster.split("\n").filter((line) => line.startsWith("- "));
+  assert.ok(listed.length > 10 && listed.length < 800, `budgeted prefix, got ${listed.length}`);
+  assert.ok(listed.reduce((n, line) => n + countTokens(line), 0) <= BUDGET);
+  assert.match(roster, new RegExp(`…and ${800 - listed.length} more in this conversation\\.$`));
+  assert.equal(
+    renderConversationRoster(members, 1_000_000)!
+      .split("\n")
+      .filter((l) => l.startsWith("- ")).length,
+    800,
+  );
+  const channels = Array.from({ length: 300 }, (_, i) => ({
+    channelId: `C${String(i).padStart(3, "0")}`,
+    name: `room-${i}`,
+  }));
+  const reach = renderReachRoster(channels, "Alex", BUDGET)!;
+  const shown = (reach.match(/#room-/g) ?? []).length;
+  assert.ok(shown > 10 && shown < 300, `budgeted prefix, got ${shown}`);
+  assert.match(reach, new RegExp(` …and ${300 - shown} more — name one to check`));
+  assert.equal((renderReachRoster(channels, "Alex", 1_000_000)!.match(/#room-/g) ?? []).length, 300);
 });

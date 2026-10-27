@@ -11,6 +11,7 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { linesWithinTokenBudget } from "../util/tokens.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
@@ -121,8 +122,6 @@ export function mimeFromName(name: string): string {
 export const MAX_OUTBOUND_FILES = 20;
 
 export const MAX_INBOUND_FILES = 10;
-
-export const MAX_SHARED_FILES_LISTED = 25;
 
 export interface ArtifactRegistration {
   store: FileArtifactStore;
@@ -241,7 +240,7 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-export function sharedManifest(handles: readonly GrantedHandle[]): string {
+export function sharedManifest(handles: readonly GrantedHandle[], budgetTokens: number): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const h of handles) {
@@ -251,17 +250,14 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
   }
   if (!lines.length) return "";
   const total = lines.length;
-  const shown = lines.sort().slice(0, MAX_SHARED_FILES_LISTED);
-  const omitted = total - shown.length;
-  if (omitted > 0) {
-    shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
-  }
+  const { kept, omitted } = linesWithinTokenBudget(lines.sort(), budgetTokens);
+  if (omitted > 0) kept.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   const noun = total === 1 ? "file" : "files";
-  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
+  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${kept.join("\n")}`;
 }
 
-export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
-  const body = sharedManifest(handles);
+export function sharedFilesSystemSection(handles: readonly GrantedHandle[], budgetTokens: number): string {
+  const body = sharedManifest(handles, budgetTokens);
   if (!body) return "";
   return `## Files shared with you\n${body}`;
 }
