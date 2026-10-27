@@ -133,7 +133,13 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
 });
 
 test("the one portal and web UI learn every active tenant's settings and serve each by host", async (t) => {
-  const config = loadConfig(deployment);
+  const config = loadConfig({
+    ...deployment,
+    CAPABILITY_SECRET: "home-capability-secret",
+    PORTAL_IDENTITY_SECRET: "home-portal-identity-secret",
+    MODEL_GATEWAY_URL: "https://gateway.example.test",
+    MODEL_GATEWAY_API_KEY_HEADER: "authorization",
+  });
   registerTenantSettings([record]);
   t.after(() => {
     registerTenantSettings([]);
