@@ -115,72 +115,129 @@ export async function admitTurn(
       },
     };
   }
-  const subagentThread = isSubagentThreadRef(conversation.threadRef);
-  const delegatedSession = subagentThread ? await deps.sessions.getByThread(conversation.threadRef) : null;
-  if (subagentThread) {
-    const canWrite = createCanWriteScope({
-      managedGroups: deps.managedGroups
-        ? {
-            recognizes: (ref) => deps.managedGroups!.recognizes(ref),
-            members: (ref) => deps.managedGroups!.members(ref),
-            membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
-          }
-        : undefined,
-      directory: deps.directory,
-      identity: deps.identity,
-    });
-    if (
-      !delegatedSession?.spawnMeta ||
-      delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
-      !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
-      !(await canWrite(actor.id, delegatedSession.scopeId))
-    )
-      return { refused: { status: "refused", reason: "subagent session access is no longer current" } };
-  }
+  const delegatedSession = isSubagentThreadRef(conversation.threadRef)
+    ? await deps.sessions.getByThread(conversation.threadRef)
+    : null;
+  const subagentRefusal = await subagentSessionRefusal(deps, input, delegatedSession);
+  if (subagentRefusal) return { refused: subagentRefusal };
   const managedGroupRef =
     conversation.kind === "group" && conversation.channelRef && deps.managedGroups?.recognizes(conversation.channelRef)
       ? conversation.channelRef
       : undefined;
-  const managedRosterIsCurrent = async (): Promise<boolean> => {
-    if (!managedGroupRef) return true;
-    const expected = new Set(input.sessionParticipantIds ?? []);
-    const [current, version] = await Promise.all([
-      deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
-      deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
-    ]);
-    return (
-      !!current &&
-      version === input.scopeVersion &&
-      rosterAdmits(current, actor.id, toScopeId("group", managedGroupRef)) &&
-      current.length === expected.size &&
-      current.every((id) => expected.has(id))
-    );
+  if (!(await managedRosterIsCurrent(deps, input, managedGroupRef))) return { refused: rosterChangedRefusal() };
+  const limitRefusal = await turnLimitRefusal(deps, input, external);
+  if (limitRefusal) return limitRefusal;
+
+  return {
+    admitted: {
+      input,
+      actor,
+      conversation,
+      external,
+      serviceAllowed,
+      automatedTurn,
+      ambientTurn,
+      sessionTurn,
+      humanInput,
+      allInternal,
+      delegationEnabled,
+      authorizationOrigin,
+      liveTurn,
+      liveAuthorTurn,
+      messageTs,
+      entryTs,
+      coreReceivedAt,
+      turnTimezone,
+      delegatedSession,
+      withManagedRosterVersion: (fn) => withManagedRosterVersion(deps, input, managedGroupRef, fn),
+      mirrorRunActivity: (appended) => mirrorRunActivity(deps, input, appended),
+    },
   };
-  const withManagedRosterVersion = async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (!managedGroupRef) return fn();
-    const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
-    if (result === undefined) throw new ProjectRosterChanged();
-    return result;
-  };
-  const mirrorRunActivity = async (appended: Item): Promise<void> => {
-    if (!input.runId || !deps.runActivity) return;
-    const append = (item: Item) =>
-      deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
-    if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
-      await append(appended);
-    } else if (appended.kind === "Reasoning") {
-      const id = stepMessage(appended)?.id;
-      const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
-      if (appended.body.redacted !== true && appended.text?.trim())
-        await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
-      if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
-    }
-  };
-  if (!(await managedRosterIsCurrent())) return { refused: rosterChangedRefusal() };
+}
+
+async function subagentSessionRefusal(
+  deps: OrchestratorDeps,
+  { actor, conversation }: OrchestratorInput,
+  delegatedSession: Session | null,
+): Promise<TurnResult | undefined> {
+  if (!isSubagentThreadRef(conversation.threadRef)) return undefined;
+  const canWrite = createCanWriteScope({
+    managedGroups: deps.managedGroups
+      ? {
+          recognizes: (ref) => deps.managedGroups!.recognizes(ref),
+          members: (ref) => deps.managedGroups!.members(ref),
+          membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
+        }
+      : undefined,
+    directory: deps.directory,
+    identity: deps.identity,
+  });
+  if (
+    !delegatedSession?.spawnMeta ||
+    delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
+    !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
+    !(await canWrite(actor.id, delegatedSession.scopeId))
+  )
+    return { status: "refused", reason: "subagent session access is no longer current" };
+  return undefined;
+}
+
+async function managedRosterIsCurrent(
+  deps: OrchestratorDeps,
+  input: OrchestratorInput,
+  managedGroupRef: string | undefined,
+): Promise<boolean> {
+  if (!managedGroupRef) return true;
+  const expected = new Set(input.sessionParticipantIds ?? []);
+  const [current, version] = await Promise.all([
+    deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
+    deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
+  ]);
+  return (
+    !!current &&
+    version === input.scopeVersion &&
+    rosterAdmits(current, input.actor.id, toScopeId("group", managedGroupRef)) &&
+    current.length === expected.size &&
+    current.every((id) => expected.has(id))
+  );
+}
+
+async function withManagedRosterVersion<T>(
+  deps: OrchestratorDeps,
+  input: OrchestratorInput,
+  managedGroupRef: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!managedGroupRef) return fn();
+  const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
+  if (result === undefined) throw new ProjectRosterChanged();
+  return result;
+}
+
+async function mirrorRunActivity(deps: OrchestratorDeps, input: OrchestratorInput, appended: Item): Promise<void> {
+  if (!input.runId || !deps.runActivity) return;
+  const append = (item: Item) =>
+    deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
+  if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
+    await append(appended);
+  } else if (appended.kind === "Reasoning") {
+    const id = stepMessage(appended)?.id;
+    const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
+    if (appended.body.redacted !== true && appended.text?.trim())
+      await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
+    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+  }
+}
+
+async function turnLimitRefusal(
+  deps: OrchestratorDeps,
+  { actor, conversation, surface }: OrchestratorInput,
+  external: boolean,
+): Promise<{ refused: TurnResult } | undefined> {
   if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
     const externalAllowed =
       external ||
-      (input.surface === "slack" &&
+      (surface === "slack" &&
         (deps.config ? await deps.config.settingDurable("externalSlackParticipants", tenant().orgScope) : false));
     if (!externalAllowed) {
       return {
@@ -214,30 +271,5 @@ export async function admitTurn(
       };
     }
   }
-
-  return {
-    admitted: {
-      input,
-      actor,
-      conversation,
-      external,
-      serviceAllowed,
-      automatedTurn,
-      ambientTurn,
-      sessionTurn,
-      humanInput,
-      allInternal,
-      delegationEnabled,
-      authorizationOrigin,
-      liveTurn,
-      liveAuthorTurn,
-      messageTs,
-      entryTs,
-      coreReceivedAt,
-      turnTimezone,
-      delegatedSession,
-      withManagedRosterVersion,
-      mirrorRunActivity,
-    },
-  };
+  return undefined;
 }
