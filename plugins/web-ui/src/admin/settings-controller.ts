@@ -1,4 +1,4 @@
-import { errMessage } from "../../../chassis/src/errors";
+import { swallowAs } from "../../../chassis/src/errors";
 import { type Api, scopeUrl, viewUrl } from "./api.ts";
 import * as governanceUI from "./admin.ts";
 import { initCustomDropdowns } from "./dropdown.ts";
@@ -273,7 +273,7 @@ export function startSettings({
           settings.updateCatalog(r.data);
           initCustomDropdowns($("view-governance"));
         })
-        .catch((error) => console.warn("[swallowed] admin: model catalog refresh", errMessage(error)));
+        .catch(swallowAs("admin: model catalog refresh", undefined));
     }
   }
   async function refreshInstructionsConflict() {

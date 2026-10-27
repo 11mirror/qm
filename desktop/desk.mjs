@@ -108,7 +108,7 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
     });
   };
   const result = queue.then(run);
-  queue = result.catch(() => {});
+  queue = result.catch(() => {}); // the caller gets result's failure; the queue only orders work
   return result;
 }
 
