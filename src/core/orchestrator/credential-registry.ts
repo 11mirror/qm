@@ -86,7 +86,6 @@ async function authorizeOwnerCredentials(c: CatalogState): Promise<void> {
   });
 }
 
-/** In a shared scope, a credential that is not a brokered org service runs only on the turn's scratch computer. */
 export function placeCredential(
   c: Pick<CatalogState, "sharedScope">,
   credential: CommandCredential,
@@ -240,17 +239,13 @@ export async function registerConnectorCredentials(
   const { deps, actor, external, strictReadOnly, brokerAvailable, ownCredentialsAllowed } = c;
   if (!external && !strictReadOnly && brokerAvailable && deps.connectorTokens && ownCredentialsAllowed) {
     const tokens = deps.connectorTokens;
-    const inventory = tokens.listConnectorsByOwners
-      ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
-      : undefined;
+    const inventory = (await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [];
     for (const host of CONNECTOR_HOSTS) {
       for (const accountType of ["personal", undefined, "company"]) {
-        const status = inventory
-          ? inventory.find(
-              (credential) =>
-                credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
-            )
-          : await tokens.connectorTokenStatus(host, actor.id, accountType);
+        const status = inventory.find(
+          (credential) =>
+            credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
+        );
         if (!status?.connected || status.needsReconnect) continue;
         const handle = `connector:${host}:${accountType ?? "default"}`;
         broker.connector({ handle, host, ownerId: actor.id, ...(accountType ? { accountType } : {}) });
@@ -265,9 +260,9 @@ export async function registerConnectorCredentials(
             },
           },
           `${host} connector, account ${accountType ?? "default"}; ${connectorTokenNote(host)}`,
-          "credentialId" in status ? status.credentialId : undefined,
+          status.credentialId,
           actor.id,
-          "credentialId" in status ? status.credentialId : undefined,
+          status.credentialId,
         );
       }
     }
@@ -331,21 +326,31 @@ function mintBrokerToken(c: CatalogState, credentials: string[], connectors: Bro
       exp: sandboxTokenExpiry,
     },
     (deps.capabilitySecret ?? deps.signingSecret)!,
-    deps.capabilityTokenCompression,
   );
+}
+
+export interface ServiceCredentialInventory {
+  records: PublicServiceCredential[];
+  granted: Set<string>;
+}
+
+export async function serviceCredentialInventory(c: CatalogState): Promise<ServiceCredentialInventory> {
+  const { deps, strictReadOnly, resolution, serviceAllowed } = c;
+  if (strictReadOnly || !deps.serviceCreds) return { records: [], granted: new Set() };
+  const records = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
+    serviceAllowed(record.slug),
+  );
+  return { records, granted: records.length ? await grantedServiceCredSlugs(c, records) : new Set() };
 }
 
 export async function registerServiceCredentials(
   c: CatalogState,
   addCredential: AddCredential,
   broker: CredentialBroker,
+  inventory?: ServiceCredentialInventory,
 ): Promise<void> {
-  const { deps, strictReadOnly, resolution, serviceAllowed, allInternal, external, brokerAvailable } = c;
-  if (strictReadOnly || !deps.serviceCreds) return;
-  const records = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-    serviceAllowed(record.slug),
-  );
-  const granted = await grantedServiceCredSlugs(c, records);
+  const { deps, resolution, allInternal, external, brokerAvailable } = c;
+  const { records, granted } = inventory ?? (await serviceCredentialInventory(c));
   const available = records.filter(
     (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
   );

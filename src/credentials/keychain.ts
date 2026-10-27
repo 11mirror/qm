@@ -343,7 +343,7 @@ interface ConnectorMeta {
 }
 
 export interface ConnectorTokenStore {
-  listConnectorsByOwners?(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
+  listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
@@ -466,7 +466,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
-  listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
