@@ -38,6 +38,7 @@ interface Running {
   edge?: HostRoute<HostTarget>;
   workers: TenantWorker[];
   servers: Server[];
+  version: string;
 }
 
 function drop<T>(list: T[], item: T | undefined): void {
@@ -154,7 +155,7 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
   const failed = new Map<string, string>();
 
   async function add(t: Tenant, tenantEnv: NodeJS.ProcessEnv, rec: TenantSettings): Promise<void> {
-    const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts };
+    const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts, version: JSON.stringify(rec) };
     own.booted = await withTenant(t, () =>
       boot(tenantEnv, async (server, config) => {
         const target = tenantTarget(t, server);
@@ -191,8 +192,9 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     }
     for (const rec of active) {
       const version = JSON.stringify(rec);
-      if (running.has(rec.id) || failed.get(rec.id) === version) continue;
+      if (running.get(rec.id)?.version === version || failed.get(rec.id) === version) continue;
       try {
+        if (running.has(rec.id)) await retire(state, rec.id);
         await add(tenantFor(rec.orgId, rec.id, rec.slug), tenantServiceEnv(env, rec, "core"), rec);
         failed.delete(rec.id);
       } catch (error) {
