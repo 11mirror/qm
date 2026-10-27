@@ -156,19 +156,12 @@ export async function recordMessageRevisions(
   }
 }
 
-const ANCHOR_WALK_BACK = 8;
-
 export async function revisionAnchorAt(
-  sessions: Pick<SessionStore, "latestItemSeq" | "getItem">,
+  sessions: Pick<SessionStore, "getContextWindow">,
   sessionId: string,
 ): Promise<number | undefined> {
-  let seq = await sessions.latestItemSeq(sessionId);
-  for (let steps = 0; seq >= 0 && steps < ANCHOR_WALK_BACK; steps++, seq--) {
-    const item = await sessions.getItem(sessionId, seq);
-    if (!item) return undefined;
-    if (isUserMessage(item) || isReply(item)) return item.createdAt;
-  }
-  return undefined;
+  const { items } = await sessions.getContextWindow(sessionId);
+  return items.findLast((item) => isUserMessage(item) || isReply(item))?.createdAt;
 }
 
 export function slackTsToMs(ts: string | undefined): number | undefined {
