@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { crc32, deflateRawSync } from "node:zlib";
+import { zipSync, type ZipOptions } from "fflate";
 import { awsErrorCode, withAwsLease } from "../aws-lease.ts";
 import { updateConfigCoreEnv, type QmConfig } from "../config.ts";
 import { CliError, ok, step } from "../log.ts";
@@ -45,57 +45,14 @@ interface ImageOperation extends ImageSummary {
   imageVersion?: string;
 }
 
-function zipFiles(files: Array<{ name: string; body: Buffer }>): Buffer {
-  const locals: Buffer[] = [];
-  const central: Buffer[] = [];
-  let offset = 0;
-  for (const file of files) {
-    const name = Buffer.from(file.name);
-    const compressed = deflateRawSync(file.body, { level: 9 });
-    const checksum = crc32(file.body);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(8, 8);
-    local.writeUInt16LE(0x21, 12);
-    local.writeUInt32LE(checksum, 14);
-    local.writeUInt32LE(compressed.length, 18);
-    local.writeUInt32LE(file.body.length, 22);
-    local.writeUInt16LE(name.length, 26);
-    locals.push(local, name, compressed);
-    const entry = Buffer.alloc(46);
-    entry.writeUInt32LE(0x02014b50, 0);
-    entry.writeUInt16LE(20, 4);
-    entry.writeUInt16LE(20, 6);
-    entry.writeUInt16LE(8, 10);
-    entry.writeUInt16LE(0x21, 14);
-    entry.writeUInt32LE(checksum, 16);
-    entry.writeUInt32LE(compressed.length, 20);
-    entry.writeUInt32LE(file.body.length, 24);
-    entry.writeUInt16LE(name.length, 28);
-    entry.writeUInt32LE(offset, 42);
-    central.push(entry, name);
-    offset += local.length + name.length + compressed.length;
-  }
-  const directory = Buffer.concat(central);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
-}
-
 function asset(name: string): Buffer {
   return readFileSync(templateUrl(`aws/microvm-agent/${name}`));
 }
 
 export function microvmBuildArchive(): Buffer {
-  return zipFiles([
-    { name: "Dockerfile", body: asset("Dockerfile") },
-    { name: "agent.mjs", body: asset("agent.mjs") },
-  ]);
+  // A fixed timestamp keeps the archive, and so its content-addressed S3 key, deterministic.
+  const entry = (name: string): [Uint8Array, ZipOptions] => [asset(name), { level: 9, mtime: new Date(1980, 0, 1) }];
+  return Buffer.from(zipSync({ Dockerfile: entry("Dockerfile"), "agent.mjs": entry("agent.mjs") }));
 }
 
 function imageList(awsBin: string, region: string, name: string): ImageSummary[] {

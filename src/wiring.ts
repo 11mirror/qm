@@ -115,7 +115,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter, RATE_LIMIT } from "./ratelimit/postgres-rate-limiter.ts";
-import { estimateCostUsd } from "./ratelimit/budget.ts";
+import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
@@ -435,7 +435,7 @@ export interface BuiltApp {
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
-  browserModelGateway?: ModelGatewayTransportConfig;
+  modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
@@ -456,6 +456,7 @@ export interface BuiltApp {
   jobs: JobWorker;
   admin: AdminService;
   rateLimiter: RateLimiter;
+  budget?: BudgetTracker;
   errors: ErrorLog;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
@@ -1758,6 +1759,7 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
@@ -2541,7 +2543,8 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
-    browserModelGateway: gatewayTransport,
+    modelGatewayTransport: gatewayTransport,
+    ...(budget ? { budget } : {}),
     resolveBrowserCompanyKeys,
     modelGateway,
     modelCredentials,
@@ -2623,7 +2626,7 @@ export function serverDeps(
   const subscriptionAuth = companySubscriptionAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
-    browserModelGateway: built.browserModelGateway,
+    modelGatewayTransport: built.modelGatewayTransport,
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
@@ -2677,6 +2680,7 @@ export function serverDeps(
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     rateLimiter: built.rateLimiter,
+    ...(built.budget ? { budget: built.budget } : {}),
     acl: built.acl,
     credentialUsage: built.credentialUsage,
     featureFlags: built.featureFlags,
