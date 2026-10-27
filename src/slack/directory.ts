@@ -111,7 +111,7 @@ export function createUserDirectory(deps: UserDirectoryDeps) {
         });
       inFlight.catch(swallowAs("slack: user snapshot refresh", undefined));
     }
-    return snap ?? inFlight?.catch(() => undefined);
+    return snap ?? inFlight?.catch(() => undefined); // reported by the swallowAs above
   }
 
   async function classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }> {
