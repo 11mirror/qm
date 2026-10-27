@@ -6,6 +6,6 @@ Notification subscriptions share one direct connection per database URL per proc
 
 Session advisory locks and leader leases continue to use direct session connections. Query pool sizes, PgBouncer backend limits, and database placement are unchanged. Multiple processes and separate company databases still have separate listeners and pools.
 
-Validate notification delivery, reconnection, and teardown with test/postgres-listener.test.ts against a disposable DATABASE_URL. The race and queue lifecycle tests run with the standard module-mocking test command. scripts/test-pgbouncer.sh exercises queue startup, execution, shutdown, and restart through a one-backend transaction pool.
+Validate notification delivery, reconnection, and teardown with test/persistence/postgres-listener.test.ts against a disposable DATABASE_URL. The race and queue lifecycle tests run with the standard module-mocking test command. scripts/test-pgbouncer.sh exercises queue startup, execution, shutdown, and restart through a one-backend transaction pool.
 
 This removes three notification connections when all four channels are in use. It does not promise a fixed total connection count: active queries, session locks, deployment overlap, and pooler replicas still determine server usage.
