@@ -1,7 +1,7 @@
 // The cron and webhook tools: scheduled and inbound-event work.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../../api/control-service.ts";
 import { utcMinute } from "../../util/time.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
@@ -23,8 +23,16 @@ import {
   WEBHOOK_ACTION_PREVIEW_CHARS,
 } from "./shared.ts";
 
+type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
+
 export function schedulingTools(kit: ToolKit) {
-  const { ref, recordCall, recordResult, recordText, recordFail, refused, unavailable, isUnavailable } = kit;
+  const { cron } = cronTool(kit);
+  const { webhook } = webhookTool(kit);
+  return { cron, webhook };
+}
+
+/** The cron tool: create, inspect and manage scheduled work. */
+function cronTool(kit: ToolKit) {
   const cron = defineTool({
     name: "cron",
     label: "cron",
@@ -54,265 +62,295 @@ export function schedulingTools(kit: ToolKit) {
       "state can live in the note itself, never credentials.\n" +
       "note (inside a fire): a one- or two-sentence shift-change note " +
       `(max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; it overwrites the previous one.`,
-    parameters: Type.Object({
-      action: Type.Union(
+    parameters: cronParams(),
+    execute: (callId, params) => runCronAction(kit, callId, params),
+  });
+  return { cron };
+}
+
+function cronParams() {
+  return Type.Object({
+    action: Type.Union(
+      [
+        Type.Literal("create"),
+        Type.Literal("list"),
+        Type.Literal("get"),
+        Type.Literal("runs"),
+        Type.Literal("patch"),
+        Type.Literal("delete"),
+        Type.Literal("run"),
+        Type.Literal("disable"),
+        Type.Literal("note"),
+      ],
+      {
+        description:
+          "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, or note — leave a short shift-change note for its next fire.",
+      },
+    ),
+    id: optionalString("get/runs/patch/delete/run/disable/note only: the cron id."),
+    title: optionalString(
+      'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
+    ),
+    schedule: Type.Optional(
+      Type.Object(
+        {
+          cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
+          timezone: optionalString('IANA timezone for a cron schedule, e.g. "America/Los_Angeles".'),
+          everyMs: optionalInteger(
+            "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
+          ),
+          firstFireAt: optionalInteger(
+            "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
+          ),
+        },
+        { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
+      ),
+    ),
+    task: optionalString("create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text."),
+    text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
+    recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
+    channel: optionalString("create: a channel name to post to (core resolves it)."),
+    session: optionalBoolean(
+      "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
+    ),
+    unfurlLinks: optionalBoolean(
+      "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
+    ),
+    note: Type.Optional(
+      Type.String({
+        maxLength: CRON_FIRE_NOTE_MAX_CHARS,
+        description:
+          `note only: the shift-change note for the cron's next fire — one or two sentences (max ${CRON_FIRE_NOTE_MAX_CHARS} chars): ` +
+          "outcome + anything the next fire must know. Overwrites the previous note.",
+      }),
+    ),
+    runtime: Type.Optional(
+      Type.Union(
         [
-          Type.Literal("create"),
-          Type.Literal("list"),
-          Type.Literal("get"),
-          Type.Literal("runs"),
-          Type.Literal("patch"),
-          Type.Literal("delete"),
-          Type.Literal("run"),
-          Type.Literal("disable"),
-          Type.Literal("note"),
+          Type.Null(),
+          Type.Object({
+            modelId: Type.String(),
+            effortLevel: Type.Optional(Type.String()),
+            fastMode: Type.Optional(Type.Boolean()),
+          }),
         ],
         {
           description:
-            "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, or note — leave a short shift-change note for its next fire.",
+            "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
         },
       ),
-      id: optionalString("get/runs/patch/delete/run/disable/note only: the cron id."),
-      title: optionalString(
-        'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
-      ),
-      schedule: Type.Optional(
-        Type.Object(
-          {
-            cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
-            timezone: optionalString('IANA timezone for a cron schedule, e.g. "America/Los_Angeles".'),
-            everyMs: optionalInteger(
-              "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
-            ),
-            firstFireAt: optionalInteger(
-              "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
-            ),
-          },
-          { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
-        ),
-      ),
-      task: optionalString("create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text."),
-      text: optionalString("create/patch: exact words to send verbatim (a reminder/relay). Use this OR task."),
-      recipient: optionalString("create: a teammate's name to DM (core resolves it; you can't author a raw address)."),
-      channel: optionalString("create: a channel name to post to (core resolves it)."),
-      session: optionalBoolean(
-        "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
-      ),
-      unfurlLinks: optionalBoolean(
-        "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-      ),
-      note: Type.Optional(
-        Type.String({
-          maxLength: CRON_FIRE_NOTE_MAX_CHARS,
-          description:
-            `note only: the shift-change note for the cron's next fire — one or two sentences (max ${CRON_FIRE_NOTE_MAX_CHARS} chars): ` +
-            "outcome + anything the next fire must know. Overwrites the previous note.",
-        }),
-      ),
-      runtime: Type.Optional(
-        Type.Union(
-          [
-            Type.Null(),
-            Type.Object({
-              modelId: Type.String(),
-              effortLevel: Type.Optional(Type.String()),
-              fastMode: Type.Optional(Type.Boolean()),
-            }),
-          ],
-          {
-            description:
-              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
-          },
-        ),
-      ),
-      unattendedGrants: Type.Optional(
-        Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
-          description:
-            "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
-        }),
-      ),
-      inbox: optionalBoolean(
-        "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
-      ),
-      enabled: optionalBoolean("patch only: false pauses the cron, true resumes it."),
-      archived: optionalBoolean("patch only: true archives the cron."),
-      limit: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          description:
-            "list: page size (default 25, max 100). runs: return only the latest N retained fire log entries; omit for all retained entries.",
-        }),
-      ),
-      offset: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
-        }),
-      ),
-    }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
-      const id = typeof params.id === "string" ? params.id : "";
-      const fail = (error: string, message: string) =>
-        recordFail(callId, { tool: "cron", error }, `[error] ${message}`);
-      if (CRON_ID_ACTIONS.has(params.action) && !id)
-        return fail("id required", `cron ${params.action} requires \`id\`.`);
-      switch (params.action) {
-        case "create": {
-          if (!params.schedule)
-            return fail(
-              "schedule required",
-              "cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt}).",
-            );
-          if (params.task === undefined && params.text === undefined) {
-            return fail("task or text required", "cron create requires `task` (a prompt) or `text` (exact words).");
-          }
-          const r = await tc.cronCreate({
-            schedule: params.schedule,
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-            ...(params.title !== undefined ? { title: params.title } : {}),
-            ...(params.task !== undefined ? { action: params.task } : {}),
-            ...(params.text !== undefined ? { text: params.text } : {}),
-            ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
-            ...(params.channel !== undefined ? { channel: params.channel } : {}),
-            ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
-            ...(params.inbox === true ? { inbox: true } : {}),
-          });
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          if (!r.ok) {
-            const cand = r.candidates?.length
-              ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
-              : "";
-            return fail(r.code, `${r.message}${cand}`);
-          }
-          return recordText(
-            callId,
-            {
-              tool: "cron",
-              id: r.cron.id,
-              created: true,
-              ...(r.recipient ? { recipient: r.recipient } : {}),
-              ...(r.channel ? { channel: r.channel } : {}),
-            },
-            fmtCronCreated(r),
-          );
-        }
-        case "list": {
-          const r = await tc.cronList();
-          if (isUnavailable(r)) return unavailable(callId, "cron");
-          const items = [
-            ...r.crons.map((c) => ({ c, prefix: "" })),
-            ...r.visible.map((c) => ({ c, prefix: `(read-only, ${c.scopeName ?? c.ownerScopeId}) ` })),
-          ].sort((a, b) => listOrder(a.c, b.c));
-          if (!items.length)
-            return recordText(callId, { tool: "cron", count: 0, visible: 0 }, "(no crons scheduled here)");
-          const { page, offset, note } = pageOf(items, params);
-          const trimmed = page.some(({ c }) => previewTrims(c.action || c.message));
-          const lines = page.map(({ c, prefix }) => `- ${prefix}${fmtCronLine(c, true)}`);
-          const footer = [note, trimmed ? "task text is trimmed — action=get shows a cron in full" : null]
-            .filter(Boolean)
-            .join("; ");
-          return recordResult(
-            callId,
-            {
-              tool: "cron",
-              count: r.crons.length,
-              visible: r.visible.length,
-              shown: page.length,
-              ...(offset > 0 ? { offset } : {}),
-            },
-            text([...lines, ...(footer ? [`(${footer})`] : [])].join("\n")),
-            false,
-            { screenAs: r.visible.length ? { provenance: "external", source: "shared crons" } : undefined },
-          );
-        }
-        case "get": {
-          const r = await tc.cronGet(id);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)), false, {
-            screenAs: {
-              provenance: "external",
-              source: "shared crons",
-            },
-          });
-        }
-        case "runs": {
-          const r = await tc.cronRuns(id, params.limit !== undefined ? { limit: params.limit } : undefined);
-          if (!r.ok) return refused(callId, "cron", r);
-          const lines = r.runs.map(fmtCronRunLine);
-          const suffix =
-            r.runs.length === r.total
-              ? ""
-              : `\n(showing ${r.runs.length} of ${r.total}; omit limit for all retained entries)`;
-          const noteLine =
-            r.cron.lastFireNote && Number.isFinite(r.cron.lastFireNote.at)
-              ? `\n(shift-change note (${utcMinute(r.cron.lastFireNote.at)}${r.cron.lastFireNote.by ? `, by ${r.cron.lastFireNote.by}` : ""}): ${r.cron.lastFireNote.text})`
-              : "";
-          return recordResult(
-            callId,
-            { tool: "cron", id, count: r.runs.length, total: r.total },
-            text(lines.length ? `${lines.join("\n")}${suffix}${noteLine}` : "(no recorded fires for this cron)"),
-            false,
-            { screenAs: { provenance: "external", source: "shared crons" } },
-          );
-        }
-        case "patch": {
-          const r = await tc.cronPatch(id, {
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-            ...(params.title !== undefined ? { title: params.title } : {}),
-            ...(params.task !== undefined ? { action: params.task } : {}),
-            ...(params.text !== undefined ? { text: params.text } : {}),
-            ...(params.schedule !== undefined ? { schedule: params.schedule } : {}),
-            ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
-            ...(params.archived !== undefined ? { archived: params.archived } : {}),
-            ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
-          });
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(callId, { tool: "cron", id }, `Updated cron ${fmtCronLine(r.cron)}`);
-        }
-        case "delete": {
-          const r = await tc.cronDelete(id);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(callId, { tool: "cron", id, deleted: true }, `Deleted cron ${id}.`);
-        }
-        case "disable": {
-          const r = await tc.cronSetEnabled(id, false);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(callId, { tool: "cron", id, enabled: false }, `Paused cron ${id}.`);
-        }
-        case "run": {
-          const r = await tc.cronRun(id);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(
-            callId,
-            { tool: "cron", id, ran: true },
-            `Fired cron ${id} — the run is starting now and delivers on its own when it finishes.`,
-          );
-        }
-        case "note": {
-          if (typeof params.note !== "string" || !params.note.trim()) {
-            return fail("note required", "cron note requires `note` (the short message the next fire reads).");
-          }
-          const r = await tc.cronNote(id, params.note);
-          if (!r.ok) return refused(callId, "cron", r);
-          return recordText(
-            callId,
-            { tool: "cron", id, noted: r.applied },
-            r.applied
-              ? `Noted — the next fire of ${id} will see it.`
-              : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
-          );
-        }
-      }
-    },
+    ),
+    unattendedGrants: Type.Optional(
+      Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
+        description:
+          "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
+      }),
+    ),
+    inbox: optionalBoolean(
+      "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
+    ),
+    enabled: optionalBoolean("patch only: false pauses the cron, true resumes it."),
+    archived: optionalBoolean("patch only: true archives the cron."),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "list: page size (default 25, max 100). runs: return only the latest N retained fire log entries; omit for all retained entries.",
+      }),
+    ),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
+      }),
+    ),
   });
+}
 
+/** Runs one cron-tool action against the turn's tool context. */
+async function runCronAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof cronParams>>) {
+  const { ref, recordCall, recordResult, recordText, recordFail, refused } = kit;
+  const tc = ref.current;
+  if (!tc) return text("[error] no active tool context");
+  await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
+  const id = typeof params.id === "string" ? params.id : "";
+  const fail = (error: string, message: string) => recordFail(callId, { tool: "cron", error }, `[error] ${message}`);
+  if (CRON_ID_ACTIONS.has(params.action) && !id) return fail("id required", `cron ${params.action} requires \`id\`.`);
+  switch (params.action) {
+    case "create": {
+      return cronCreateAction(kit, tc, callId, params, fail);
+    }
+    case "list": {
+      return cronListAction(kit, tc, callId, params);
+    }
+    case "get": {
+      const r = await tc.cronGet(id);
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)), false, {
+        screenAs: {
+          provenance: "external",
+          source: "shared crons",
+        },
+      });
+    }
+    case "runs": {
+      const r = await tc.cronRuns(id, params.limit !== undefined ? { limit: params.limit } : undefined);
+      if (!r.ok) return refused(callId, "cron", r);
+      const lines = r.runs.map(fmtCronRunLine);
+      const suffix =
+        r.runs.length === r.total
+          ? ""
+          : `\n(showing ${r.runs.length} of ${r.total}; omit limit for all retained entries)`;
+      const noteLine =
+        r.cron.lastFireNote && Number.isFinite(r.cron.lastFireNote.at)
+          ? `\n(shift-change note (${utcMinute(r.cron.lastFireNote.at)}${r.cron.lastFireNote.by ? `, by ${r.cron.lastFireNote.by}` : ""}): ${r.cron.lastFireNote.text})`
+          : "";
+      return recordResult(
+        callId,
+        { tool: "cron", id, count: r.runs.length, total: r.total },
+        text(lines.length ? `${lines.join("\n")}${suffix}${noteLine}` : "(no recorded fires for this cron)"),
+        false,
+        { screenAs: { provenance: "external", source: "shared crons" } },
+      );
+    }
+    case "patch": {
+      const r = await tc.cronPatch(id, {
+        ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+        ...(params.title !== undefined ? { title: params.title } : {}),
+        ...(params.task !== undefined ? { action: params.task } : {}),
+        ...(params.text !== undefined ? { text: params.text } : {}),
+        ...(params.schedule !== undefined ? { schedule: params.schedule } : {}),
+        ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
+        ...(params.archived !== undefined ? { archived: params.archived } : {}),
+        ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+        ...(params.session !== undefined ? { session: params.session } : {}),
+        ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+      });
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordText(callId, { tool: "cron", id }, `Updated cron ${fmtCronLine(r.cron)}`);
+    }
+    case "delete": {
+      const r = await tc.cronDelete(id);
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordText(callId, { tool: "cron", id, deleted: true }, `Deleted cron ${id}.`);
+    }
+    case "disable": {
+      const r = await tc.cronSetEnabled(id, false);
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordText(callId, { tool: "cron", id, enabled: false }, `Paused cron ${id}.`);
+    }
+    case "run": {
+      const r = await tc.cronRun(id);
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordText(
+        callId,
+        { tool: "cron", id, ran: true },
+        `Fired cron ${id} — the run is starting now and delivers on its own when it finishes.`,
+      );
+    }
+    case "note": {
+      if (typeof params.note !== "string" || !params.note.trim()) {
+        return fail("note required", "cron note requires `note` (the short message the next fire reads).");
+      }
+      const r = await tc.cronNote(id, params.note);
+      if (!r.ok) return refused(callId, "cron", r);
+      return recordText(
+        callId,
+        { tool: "cron", id, noted: r.applied },
+        r.applied
+          ? `Noted — the next fire of ${id} will see it.`
+          : `[not stored] a newer shift-change note for ${id} already exists — the next fire will see that one instead.`,
+      );
+    }
+  }
+}
+
+/** cron list: this scope's crons plus the read-only ones visible here, one page at a time. */
+async function cronListAction(
+  kit: ToolKit,
+  tc: ToolContext,
+  callId: string,
+  params: Static<ReturnType<typeof cronParams>>,
+) {
+  const { recordResult, recordText, unavailable, isUnavailable } = kit;
+  const r = await tc.cronList();
+  if (isUnavailable(r)) return unavailable(callId, "cron");
+  const items = [
+    ...r.crons.map((c) => ({ c, prefix: "" })),
+    ...r.visible.map((c) => ({ c, prefix: `(read-only, ${c.scopeName ?? c.ownerScopeId}) ` })),
+  ].sort((a, b) => listOrder(a.c, b.c));
+  if (!items.length) return recordText(callId, { tool: "cron", count: 0, visible: 0 }, "(no crons scheduled here)");
+  const { page, offset, note } = pageOf(items, params);
+  const trimmed = page.some(({ c }) => previewTrims(c.action || c.message));
+  const lines = page.map(({ c, prefix }) => `- ${prefix}${fmtCronLine(c, true)}`);
+  const footer = [note, trimmed ? "task text is trimmed — action=get shows a cron in full" : null]
+    .filter(Boolean)
+    .join("; ");
+  return recordResult(
+    callId,
+    {
+      tool: "cron",
+      count: r.crons.length,
+      visible: r.visible.length,
+      shown: page.length,
+      ...(offset > 0 ? { offset } : {}),
+    },
+    text([...lines, ...(footer ? [`(${footer})`] : [])].join("\n")),
+    false,
+    { screenAs: r.visible.length ? { provenance: "external", source: "shared crons" } : undefined },
+  );
+}
+
+/** cron create: validates the request and schedules the job. */
+async function cronCreateAction(
+  kit: ToolKit,
+  tc: ToolContext,
+  callId: string,
+  params: Static<ReturnType<typeof cronParams>>,
+  fail: (error: string, message: string) => ReturnType<ToolKit["recordFail"]>,
+) {
+  const { recordText, unavailable, isUnavailable } = kit;
+  if (!params.schedule)
+    return fail("schedule required", "cron create requires `schedule` ({cron,timezone} | {everyMs} | {firstFireAt}).");
+  if (params.task === undefined && params.text === undefined) {
+    return fail("task or text required", "cron create requires `task` (a prompt) or `text` (exact words).");
+  }
+  const r = await tc.cronCreate({
+    schedule: params.schedule,
+    ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+    ...(params.title !== undefined ? { title: params.title } : {}),
+    ...(params.task !== undefined ? { action: params.task } : {}),
+    ...(params.text !== undefined ? { text: params.text } : {}),
+    ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
+    ...(params.channel !== undefined ? { channel: params.channel } : {}),
+    ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+    ...(params.session !== undefined ? { session: params.session } : {}),
+    ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+    ...(params.inbox === true ? { inbox: true } : {}),
+  });
+  if (isUnavailable(r)) return unavailable(callId, "cron");
+  if (!r.ok) {
+    const cand = r.candidates?.length
+      ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
+      : "";
+    return fail(r.code, `${r.message}${cand}`);
+  }
+  return recordText(
+    callId,
+    {
+      tool: "cron",
+      id: r.cron.id,
+      created: true,
+      ...(r.recipient ? { recipient: r.recipient } : {}),
+      ...(r.channel ? { channel: r.channel } : {}),
+    },
+    fmtCronCreated(r),
+  );
+}
+
+/** The webhook tool: create, list, update and disable inbound webhooks. */
+function webhookTool(kit: ToolKit) {
+  const { ref, recordCall, recordText, recordFail, refused, unavailable, isUnavailable } = kit;
   const webhook = defineTool({
     name: "webhook",
     label: "webhook",
@@ -450,5 +488,5 @@ export function schedulingTools(kit: ToolKit) {
       }
     },
   });
-  return { cron, webhook };
+  return { webhook };
 }
