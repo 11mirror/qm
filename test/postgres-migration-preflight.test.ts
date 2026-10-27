@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
 import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
-import { MEMORY_FACT_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
+import { MEMORY_FACTS_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
 import { CONTRACT_MIGRATIONS } from "../src/persistence/contract-migrations.ts";
 
 // A refused migration run must leave the database exactly as it found it: no baseline adoption, no pending migration.
@@ -117,7 +117,7 @@ test(
   { skip },
   async () => {
     const url = await createDatabase();
-    const migrations = MEMORY_FACT_MIGRATIONS.map((m) =>
+    const migrations = MEMORY_FACTS_MIGRATIONS.map((m) =>
       definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
     );
     const current = migrations.find((m) => m.id === "memory/facts/0002-text-hash")!;
@@ -169,7 +169,7 @@ test(
 
 test("memory text_hash: a fresh database and a database on the current 0002 both end NOT NULL", { skip }, async () => {
   const url = await createDatabase();
-  const migrations = MEMORY_FACT_MIGRATIONS.map((m) =>
+  const migrations = MEMORY_FACTS_MIGRATIONS.map((m) =>
     definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
   );
   await withPool(url, async (pool) => {

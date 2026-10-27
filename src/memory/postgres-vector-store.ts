@@ -1,6 +1,6 @@
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
-import { MEMORY_FACT_MIGRATIONS } from "./postgres-memory-service.ts";
+import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -62,7 +62,7 @@ function vectorWidth(dimensions: number | undefined): number | null {
 
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
   const db = createPgPool(connectionString, [
-    ...MEMORY_FACT_MIGRATIONS,
+    ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
   ]);

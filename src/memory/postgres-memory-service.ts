@@ -8,7 +8,7 @@ import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
  * Also registered by the vector store, which reads text_hash: the pool that runs first adds the
  * column either way.
  */
-export const MEMORY_FACT_MIGRATIONS = [
+export const MEMORY_FACTS_MIGRATIONS = [
   {
     // The embedding index keys vectors by this hash; a trigger keeps it in step with text on every write path.
     id: "memory/facts/0002-text-hash",
@@ -59,7 +59,7 @@ const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, cre
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, MEMORY_FACT_MIGRATIONS);
+  const { q, pool } = createPgPool(connectionString, MEMORY_FACTS_MIGRATIONS);
 
   function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
     return {

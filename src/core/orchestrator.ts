@@ -353,9 +353,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const { spine, surfaceToolDeps, attachStaging } = turnTools;
         const prepared = await prepareTurnInput(ctx, {
           screenTrace,
-          disclosedFacts: memoryView.loaded,
           strictReadOnly,
           context,
+          memoryView,
           framed,
           session,
           isRetry,
