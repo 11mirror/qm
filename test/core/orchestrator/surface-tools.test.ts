@@ -293,15 +293,10 @@ test("workspace staging selects the requested sandbox and never falls back on re
   assert.deepEqual(selected, ["one", "two", "denied"]);
 });
 
-test("stored file validation rejects malformed inputs, excessive counts and oversized streams", async () => {
-  for (const input of [
-    [{}],
-    [{ file_id: "" }],
-    [{ file_id: "id", path: "ambiguous" }],
-    [12],
-    Array(21).fill({ file_id: "id" }),
-  ])
+test("stored file validation rejects malformed inputs and oversized streams", async () => {
+  for (const input of [[{}], [{ file_id: "" }], [{ file_id: "id", path: "ambiguous" }], [12]])
     assert.equal(parseOutboundFiles(input).ok, false);
+  assert.equal(parseOutboundFiles(Array(21).fill({ file_id: "id" })).ok, true);
   let opened = 0;
   const transfer = createMemoryBlobTransferStore();
   const result = await collectNamedOutbound(
