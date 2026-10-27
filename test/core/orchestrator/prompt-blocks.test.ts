@@ -20,7 +20,7 @@ function checkOrder<T>(items: T[], render: (items: T[]) => string | null): void 
   assert.deepEqual(items, before);
 }
 
-test("prompt inventories keep identical bytes across permutations, including capped subsets", () => {
+test("prompt inventories keep identical bytes across permutations", () => {
   const ids = Array.from({ length: 105 }, (_, i) => `id-${String(i).padStart(3, "0")}`);
   checkOrder<DirectoryMember>(
     ids.map((id) => ({ principalId: id, displayName: "Same name", type: "internal" })),
@@ -83,7 +83,7 @@ test("environment and location facts are independent of discovery order", () => 
   );
 });
 
-test("scheduled work in the prompt is capped with a pointer to the full inventories", () => {
+test("scheduled work in the prompt lists every obligation, naming webhooks and watches by their first line", () => {
   const crons = Array.from(
     { length: 32 },
     (_, i) =>
@@ -94,7 +94,30 @@ test("scheduled work in the prompt is capped with a pointer to the full inventor
         createdAt: 0,
       }) as unknown as Cron,
   );
-  const block = renderStandingObligations(crons, [], []);
-  assert.equal(block.split("\n").filter((line) => line.startsWith("- ")).length, 30);
-  assert.match(block, /…and 2 more — list crons, webhooks or job watches to see them all\.$/);
+  const webhook = {
+    id: "w1",
+    action: "Triage the issue\nThen label it",
+    verification: { scheme: "github" },
+  } as Webhook;
+  const monitor = { id: "m1", processId: "p", command: "npm test", purpose: `${"a".repeat(300)}\nmore` } as Monitor;
+  const block = renderStandingObligations(crons, [webhook], [monitor]);
+  assert.equal(block.split("\n").filter((line) => line.startsWith("- ")).length, 34);
+  assert.doesNotMatch(block, /…and \d+ more/);
+  assert.match(block, /^- Webhook: Triage the issue$/m);
+  assert.match(block, new RegExp(`^- Job watch: ${"a".repeat(300)}$`, "m"));
+});
+
+test("conversation and reach rosters name every member and room", () => {
+  const members = Array.from({ length: 45 }, (_, i) => ({
+    principalId: `U${i}`,
+    displayName: `Person ${i}`,
+    type: "internal" as const,
+  }));
+  const roster = renderConversationRoster(members)!;
+  assert.equal(roster.split("\n").filter((line) => line.startsWith("- ")).length, 45);
+  assert.doesNotMatch(roster, /more in this conversation/);
+  const channels = Array.from({ length: 45 }, (_, i) => ({ channelId: `C${i}`, name: `room-${i}` }));
+  const reach = renderReachRoster(channels, "Alex")!;
+  assert.equal((reach.match(/#room-/g) ?? []).length, 45);
+  assert.doesNotMatch(reach, /name one to check/);
 });

@@ -381,7 +381,7 @@ test("identity grounding: the roster lists this conversation's participants by t
   assert.doesNotMatch(sp, /Outsider Olive/);
 });
 
-test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports the overflow)", async () => {
+test("identity grounding: the roster names every member of a large conversation", async () => {
   const { app, directory } = freshApp();
   const many = Array.from({ length: 30 }, (_, i) => ({
     principalId: `U${i}`,
@@ -403,8 +403,8 @@ test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports 
   });
   const sp = prompt.reply ?? "";
   const listed = (sp.match(/- Person \d+ \(U\d+\)/g) ?? []).length;
-  assert.equal(listed, 20, "the roster caps the number of people listed");
-  assert.match(sp, /…and 10 more in this conversation\./);
+  assert.equal(listed, 30, "every member is listed");
+  assert.doesNotMatch(sp, /more in this conversation\./);
 });
 
 test("identity grounding: a participant who hasn't synced into the directory still grounds from the surface name", async () => {
