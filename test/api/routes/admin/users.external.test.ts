@@ -5,7 +5,6 @@ import "../../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../../../../src/api/server.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../../src/admin/invite-email.ts";
@@ -15,6 +14,7 @@ import { coreEmailAdmission, coreEmailAllowed } from "../../../../plugins/chassi
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../../../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../../../../src/types.ts";
 import { testConfig } from "../../../support/test-config.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -64,8 +64,7 @@ function start(
         signingSecret: SECRET,
       })
     : createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

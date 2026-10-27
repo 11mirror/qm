@@ -1,6 +1,5 @@
 import "../../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   cacheHitRatio,
@@ -15,6 +14,7 @@ import type { SpendRow } from "../../../../src/sessions/session-store.ts";
 import type { TurnRequest } from "../../../../src/types.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import { testConfig } from "../../../support/test-config.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 const DAY = 86_400_000;
 const MON = 20353;
@@ -601,8 +601,7 @@ function start() {
     auditLog: built.auditLog,
     runs: built.runs,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

@@ -8,36 +8,14 @@ import {
   credentialHandle,
   renderKeychainManifest,
   KeychainError,
-  type Keychain,
 } from "../../src/credentials/keychain.ts";
-import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { type TurnRequest } from "../../src/types.ts";
 import { fakeSprites } from "../support/auto-fake-sprites.ts";
 import { testConfig } from "../support/test-config.ts";
 import { selectDefaultSandbox } from "../support/default-sandbox.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testMap } from "../support/test-database.ts";
-
-const KEY = deriveConnectorKey("keychain-test-key");
-
-function kc(now?: () => number): Keychain {
-  return createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-    ...(now ? { now } : {}),
-  });
-}
-
-const GH = {
-  ownerId: "U1",
-  service: "github",
-  secret: "ghp_secret",
-  envKey: "GITHUB_TOKEN",
-  accountLabel: "AliceBell",
-};
+import { KEY, kc, GH } from "../support/keychain-store.ts";
 
 const SECRET = "keychain-route-secret".repeat(3);
 

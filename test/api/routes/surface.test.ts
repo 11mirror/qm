@@ -18,6 +18,7 @@ import { type BuiltApp, buildApp as buildWiredApp } from "../../../src/wiring.ts
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -322,8 +323,7 @@ async function withServer<T>(
 ): Promise<T> {
   const built = buildWiredApp(testConfig());
   const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     return await fn(built, async (path) => {
       const res = await fetch(base + path);

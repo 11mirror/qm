@@ -1,6 +1,5 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { renderAgentApis } from "../../src/api/agent-api-catalog.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "../../src/api/control-service.ts";
@@ -13,6 +12,7 @@ import { scopeId } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + 60_000 };
 
@@ -57,8 +57,7 @@ async function start() {
     auditLog: built.auditLog,
     signingSecret: SECRET,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

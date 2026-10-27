@@ -4,7 +4,6 @@ import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../../../src/api/server.ts";
 import { type BuiltApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";
@@ -23,6 +22,7 @@ import type { AclStore } from "../../../src/acl/acl-store.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
 import { recorded } from "../../support/recorded.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -38,8 +38,7 @@ function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Bu
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -55,8 +54,7 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
     auditLog: built.auditLog,
     brokerFetch,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -76,8 +74,7 @@ function startGitBroker(credentialHttpFetch: CredentialHttpFetch): {
     auditLog: built.auditLog,
     credentialHttpFetch,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

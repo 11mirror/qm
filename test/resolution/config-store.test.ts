@@ -1,7 +1,6 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, before } from "node:test";
@@ -33,6 +32,7 @@ import { stopAtEnd } from "../support/build-app.ts";
 import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const URL = process.env.DATABASE_URL!;
 
@@ -522,8 +522,7 @@ test("account API binds choice to the signed-in person, preserves connections, a
     userModelCredentials: built.userModelCredentials,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   async function request(account: unknown, principalId = "alice@default-org", signedIn = "alice@default-org") {
     const path = "/v1/user-model-auth/account";
     const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });

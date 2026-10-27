@@ -2,10 +2,10 @@ import "../../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../../../../src/api/server.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import { testConfig } from "../../../support/test-config.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 function start() {
   const built = buildApp(testConfig());
@@ -15,8 +15,7 @@ function start() {
     sessions: built.sessions,
     errors: built.errors,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

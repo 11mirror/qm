@@ -24,6 +24,7 @@ import { withTraceCarrier } from "../../src/runs/run-store.ts";
 import { serverDeps } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
@@ -219,8 +220,7 @@ async function settle(predicate: () => boolean): Promise<void> {
 test("core requests are named by route template and carry no URL, query or header values", async () => {
   const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     await fetch(`${base}/healthz`);
     await fetch(`${base}/v1/sessions/private-session-id?token=private-token`, {
@@ -496,8 +496,7 @@ test("domain refusals keep their 4xx while backend failures surface as 500", asy
     throw next;
   };
   const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const webhook = JSON.stringify({
     ownerScopeId: "personal:alice",
     owner: "alice",

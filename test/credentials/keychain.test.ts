@@ -10,31 +10,10 @@ import {
   type KeychainGrant,
 } from "../../src/credentials/keychain.ts";
 import { type DurableMap, type DurableMapSelect } from "../../src/persistence/durable-map.ts";
-import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testMap } from "../support/test-database.ts";
-
-const KEY = deriveConnectorKey("keychain-test-key");
-
-function kc(now?: () => number): Keychain {
-  return createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-    ...(now ? { now } : {}),
-  });
-}
-
-const GH = {
-  ownerId: "U1",
-  service: "github",
-  secret: "ghp_secret",
-  envKey: "GITHUB_TOKEN",
-  accountLabel: "AliceBell",
-};
+import { KEY, kc, GH } from "../support/keychain-store.ts";
 
 test("save → list returns metadata only (no secret material), and re-save upserts the same slot", async () => {
   const k = kc();

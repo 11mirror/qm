@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,6 +21,7 @@ import {
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 function svc(
   opts: {
@@ -676,8 +676,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
   const post = (path: string, body: unknown) =>
     fetch(base + path, {

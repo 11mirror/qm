@@ -30,6 +30,7 @@ import {
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
   for (const m of SELECTABLE_BASE_MODELS) {
@@ -514,8 +515,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: 
     baseModelDefault: defaultModel(configuredModel(config), baseModelProviders(config)),
     providerKeys: providerKeysPresent(config),
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
