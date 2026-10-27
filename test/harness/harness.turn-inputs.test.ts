@@ -10,7 +10,6 @@ import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId, type TurnRequest } from "../../src/types.ts";
 import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { actor, fakeSandbox, readSandbox, buildOrchestrator, dm, slackDm } from "../support/system-prompt.ts";
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
@@ -317,7 +316,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl());
   const sandbox = fakeSandbox();
   const seen: HarnessTurnInput[] = [];
   const harness = createMockHarness();

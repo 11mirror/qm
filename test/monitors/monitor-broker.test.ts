@@ -16,8 +16,9 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
 }
 
 async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
-  const store = createMonitorStore(testDatabaseUrl());
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const store = createMonitorStore(url);
+  const registry = createPostgresProcessRegistry(url);
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,

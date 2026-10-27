@@ -3,7 +3,6 @@ import { test, before, after, beforeEach } from "node:test";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { credentialHandle, createKeychain, KeychainError, ASK_TTL_MS } from "../../src/credentials/keychain.ts";
 import { createCronStore } from "../../src/cron/cron-store.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../../src/triggers/keychain-ask.ts";
@@ -108,7 +107,6 @@ function keychain(now = Date.now) {
 }
 
 async function fixture(scope: ScopeId = "channel:C_SHARED") {
-  const databaseUrl = testDatabaseUrl();
   const clock = { t: Date.now() };
   const k = keychain(() => clock.t);
   const credential = await k.save({
@@ -117,7 +115,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const crons = createCronStore(testDatabaseUrl());
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,
@@ -136,8 +134,8 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const outbound = recordingOutbound();
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    identity: createIdentityService(testDatabaseUrl()),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

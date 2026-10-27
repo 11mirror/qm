@@ -4,14 +4,13 @@ import {
   cols,
   mapToTableMigration,
   ownerIndexMigration,
-  tableCodec,
   type TableSpec,
+  typedTable,
 } from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
-  createDeduped,
   TRIGGER_COLUMNS,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
@@ -70,16 +69,17 @@ export const WEBHOOKS_MIGRATION = mapToTableMigration("triggers/webhooks/0001-ty
 
 export const WEBHOOK_HISTORY_MIGRATION = mapToTableMigration("triggers/webhook-history/0001-typed", WEBHOOK_HISTORY);
 
-const codec = tableCodec<Webhook>(WEBHOOKS);
-
 const NEWEST_FIRST = `(e->>'receivedAt')::float8 DESC, e->>'deliveryId'`;
 
 export function createWebhookStore(databaseUrl: string): WebhookStore {
-  const { q } = createPgPool(databaseUrl, [
+  const db = createPgPool(databaseUrl, [
     WEBHOOKS_MIGRATION,
     WEBHOOK_HISTORY_MIGRATION,
     ownerIndexMigration("webhooks"),
   ]);
+  const { q } = db;
+  const table = typedTable<Webhook>(db, WEBHOOKS);
+  const history = typedTable<{ events: WebhookEvent[] }>(db, WEBHOOK_HISTORY);
   const setEnabled = async (id: string, enabled: boolean) => {
     await q(`UPDATE webhooks SET enabled = $2 WHERE id = $1`, [id, enabled]);
   };
@@ -95,10 +95,7 @@ export function createWebhookStore(databaseUrl: string): WebhookStore {
         [id, jsonbStringify(event), HISTORY_EVENTS, event.deliveryId],
       );
     },
-    async listEvents(id) {
-      const rows = await q(`SELECT events FROM webhook_history WHERE id = $1`, [id]);
-      return (rows[0]?.events as WebhookEvent[] | undefined) ?? [];
-    },
+    listEvents: async (id) => (await history.get(id))?.events ?? [],
     async create(input) {
       assertNoEscalation(input);
       if (!getVerifier(input.verification.scheme) || !input.verification.secret) {
@@ -120,7 +117,7 @@ export function createWebhookStore(databaseUrl: string): WebhookStore {
         contentPart(filters),
         contentPart(input.destination),
       ]);
-      const webhook = await createDeduped<Webhook>(q, WEBHOOKS, {
+      const webhook = await table.insertOrGet(contentId, {
         ...buildTriggerBase(input, contentId, Date.now()),
         action: input.action,
         verification: input.verification,
@@ -130,17 +127,16 @@ export function createWebhookStore(databaseUrl: string): WebhookStore {
       await setEnabled(webhook.id, true);
       return { ...webhook, enabled: true };
     },
-    get: async (id) => codec.rows(await q(`SELECT ${codec.columns} FROM webhooks WHERE id = $1`, [id]))[0] ?? null,
-    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM webhooks ORDER BY id`)),
-    byOwner: async (scopeId) =>
-      codec.rows(await q(`SELECT ${codec.columns} FROM webhooks WHERE owner_scope_id = $1 ORDER BY id`, [scopeId])),
+    get: table.get,
+    list: table.all,
+    byOwner: (scopeId) => table.where("ownerScopeId", scopeId),
     setEnabled,
     async update(id, patch) {
-      const rows = await q(`UPDATE webhooks SET action = $2 WHERE id = $1 RETURNING ${codec.columns}`, [
+      const rows = await q(`UPDATE webhooks SET action = $2 WHERE id = $1 RETURNING ${table.codec.columns}`, [
         id,
         patch.action,
       ]);
-      return codec.rows(rows)[0] ?? null;
+      return table.codec.rows(rows)[0] ?? null;
     },
     async recordFire(id, info) {
       await q(

@@ -7,8 +7,8 @@ import {
   columnName,
   mapToTableMigration,
   ownerIndexMigration,
-  tableCodec,
   type TableSpec,
+  typedTable,
 } from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
@@ -57,12 +57,10 @@ const MONITORS: TableSpec = {
 
 export const MONITORS_MIGRATION = mapToTableMigration("triggers/monitors/0001-typed", MONITORS);
 
-const codec = tableCodec<Monitor>(MONITORS);
-
 export function createMonitorStore(databaseUrl: string): MonitorStore {
-  const { q } = createPgPool(databaseUrl, [MONITORS_MIGRATION, ownerIndexMigration("monitors")]);
-  const select = async (where: string, params: unknown[] = []) =>
-    codec.rows(await q(`SELECT ${codec.columns} FROM monitors ${where} ORDER BY id`, params));
+  const db = createPgPool(databaseUrl, [MONITORS_MIGRATION, ownerIndexMigration("monitors")]);
+  const { q } = db;
+  const table = typedTable<Monitor>(db, MONITORS);
   const set = async (id: string, fields: Partial<Monitor>) => {
     const entries = Object.entries(fields);
     if (!entries.length) return;
@@ -85,19 +83,16 @@ export function createMonitorStore(databaseUrl: string): MonitorStore {
         cursor: input.cursor ?? 0,
         expiresAt: input.expiresAt,
       };
-      await q(
-        `INSERT INTO monitors (${codec.columns}) VALUES (${codec.placeholders})`,
-        codec.values(monitor.id, monitor),
-      );
+      await table.insert(monitor.id, monitor);
       return monitor;
     },
-    get: async (id) => (await select(`WHERE id = $1`, [id]))[0] ?? null,
-    list: () => select(""),
-    byOwner: (scopeId) => select(`WHERE owner_scope_id = $1`, [scopeId]),
-    enabled: () => select(`WHERE enabled`),
+    get: table.get,
+    list: table.all,
+    byOwner: (scopeId) => table.where("ownerScopeId", scopeId),
+    enabled: () => table.where("enabled", true),
     setEnabled: (id, enabled) => set(id, { enabled }),
     async delete(id) {
-      await q(`DELETE FROM monitors WHERE id = $1`, [id]);
+      await table.delete(id);
     },
     async deleteDefunct(now) {
       const result = await q(

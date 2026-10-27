@@ -11,15 +11,14 @@ import type { MemoryFact } from "../../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { idleJobs } from "../support/cron-slots.ts";
 
 function fixture() {
-  const databaseUrl = testDatabaseUrl();
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
-  const store = createMemoryTidyProfileStore(databaseUrl);
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const url = testDatabaseUrl();
+  const store = createMemoryTidyProfileStore(url);
+  const crons = createCronStore(url);
   const calls: TurnRequest[] = [];
   const fact = (updatedAt: number): MemoryFact => ({
     id: String(updatedAt),
@@ -40,11 +39,11 @@ function fixture() {
   const service = createMemoryTidyService(deps);
   const scheduler = createScheduler({
     jobs: idleJobs(),
-    ...singleProcessDeps(),
+    ...singleProcessDeps(url),
     crons,
     outbound: recordingOutbound(),
-    identity: createIdentityService(databaseUrl),
-    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(url),
+    idempotency: createIdempotencyStore(url),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);

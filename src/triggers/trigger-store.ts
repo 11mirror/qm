@@ -1,6 +1,5 @@
 import type { Destination, ScopeId, TriggerBase } from "../types.ts";
-import { tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { cols, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols } from "../persistence/typed-table.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 
@@ -18,16 +17,6 @@ export const TRIGGER_COLUMNS =
 
 export function contentPart(value: unknown): string {
   return canonicalJson(value);
-}
-
-export async function createDeduped<T extends { id: string }>(q: PgPool["q"], spec: TableSpec, record: T): Promise<T> {
-  const codec = tableCodec<T>(spec);
-  const rows = await q(
-    `INSERT INTO ${spec.table} (${codec.columns}) VALUES (${codec.placeholders})
-     ON CONFLICT (${tenantCols("id")}) DO UPDATE SET id = ${spec.table}.id RETURNING ${codec.columns}`,
-    codec.values(record.id, record),
-  );
-  return codec.row(rows[0]!);
 }
 
 export function assertNoEscalation(input: { owner: string; createdBy: string; ownerConsentedAt?: number }): void {

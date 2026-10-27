@@ -11,8 +11,9 @@ import { testDatabaseUrl } from "../../support/test-database.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const { crons, app } = inboxApp();
-  const items = createInboxLedger(testDatabaseUrl());
-  const uiState = createUiStateStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const items = createInboxLedger(url);
+  const uiState = createUiStateStore(url);
   const defaults = async (owner = "alice") => [
     await ensureInboxCron(crons, owner, "gmail"),
     await ensureInboxCron(crons, owner, "slack"),

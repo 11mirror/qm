@@ -5,7 +5,14 @@ import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThre
 import { isResolved } from "./view.ts";
 import { adapterForItem, conversationKeyOf, inboxMetadataKeys, sourceAdapters } from "./sources/index.ts";
 import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
+import {
+  cols,
+  mapToTableMigration,
+  tableCodec,
+  typedTable,
+  updateRow,
+  type TableSpec,
+} from "../persistence/typed-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -261,8 +268,6 @@ export const CRON_ITEMS_MIGRATION = mapToTableMigration("triggers/cron-items/000
   ],
 });
 
-const codec = tableCodec<InboxItem>(CRON_ITEMS);
-
 const HEAVY_FIELDS = new Set(["proposal", "agentDrafts", "thread", "sourcePayload"]);
 
 const summary = tableCodec<Omit<InboxItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>({
@@ -271,7 +276,10 @@ const summary = tableCodec<Omit<InboxItem, "proposal" | "agentDrafts" | "thread"
 });
 
 function itemRows(databaseUrl: string) {
-  const { q, pool } = createPgPool(databaseUrl, [CRON_ITEMS_MIGRATION]);
+  const db = createPgPool(databaseUrl, [CRON_ITEMS_MIGRATION]);
+  const { q, pool } = db;
+  const table = typedTable<InboxItem>(db, CRON_ITEMS);
+  const { codec } = table;
   const forCrons = async (cronIds: readonly string[]): Promise<InboxItem[]> => {
     if (!cronIds.length) return [];
     return codec.rows(
@@ -280,11 +288,11 @@ function itemRows(databaseUrl: string) {
   };
   return {
     q,
+    table,
+    get: table.get,
     forCrons,
     update: async (id: string, fn: (item: InboxItem) => InboxItem): Promise<InboxItem | null> =>
       updateRow(await pool(), CRON_ITEMS, id, fn),
-    get: async (id: string): Promise<InboxItem | null> =>
-      codec.rows(await q(`SELECT ${codec.columns} FROM cron_items WHERE id = $1`, [id]))[0] ?? null,
     summaries: async (cronIds: readonly string[]) =>
       summary.rows(
         await q(`SELECT ${summary.columns} FROM cron_items WHERE cron_id = ANY($1::text[]) ORDER BY id`, [
@@ -298,14 +306,8 @@ function itemRows(databaseUrl: string) {
           [updates.map(({ id }) => id)],
         );
         const pending = new Map(codec.rows(found.rows).map((item) => [item.id, item]));
-        const written = new Map<string, InboxItem>();
-        for (const { id, apply } of updates) {
-          const before = pending.get(id) ?? null;
-          const next = apply(before ? structuredClone(before) : null);
-          pending.set(id, next);
-          written.set(id, next);
-        }
-        for (const [id, item] of written)
+        for (const { id, apply } of updates) pending.set(id, apply(pending.get(id) ?? null));
+        for (const [id, item] of pending)
           await client.query(
             `INSERT INTO cron_items (${codec.columns}) VALUES (${codec.placeholders})
              ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
@@ -323,13 +325,21 @@ type ItemEdits = Pick<
 >;
 
 function itemEdits({ update, get }: ItemRows, emit: (item: InboxItem | null, op: LedgerEventOp) => void): ItemEdits {
+  const edit = async (id: string, op: LedgerEventOp, fn: (item: InboxItem) => InboxItem | null) => {
+    let applied = false;
+    const after = await update(id, (item) => {
+      const next = fn(item);
+      applied = next !== null;
+      return next ?? item;
+    });
+    if (applied) emit(after, op);
+    return applied ? after : null;
+  };
   return {
-    async setProposal(id, proposal, opts) {
-      let applied = false;
-      const after = await update(id, (item) => {
-        if (item.status === "shipped") return item;
-        if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return item;
-        applied = true;
+    setProposal: (id, proposal, opts) =>
+      edit(id, "proposal", (item) => {
+        if (item.status === "shipped") return null;
+        if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return null;
         const now = Date.now();
         const stamped = { ...proposal, at: now };
         return {
@@ -339,51 +349,33 @@ function itemEdits({ update, get }: ItemRows, emit: (item: InboxItem | null, op:
           status: item.status === "queued" ? "ready" : item.status,
           updatedAt: now,
         };
-      });
-      if (applied) emit(after, "proposal");
-      return applied ? after : null;
-    },
-    async annotate(id, patch, opts) {
-      let applied = false;
-      const after = await update(id, (item) => {
+      }),
+    annotate: (id, patch, opts) =>
+      edit(id, "annotate", (item) => {
         if (
           (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts.expectedSourceAt) ||
           (opts?.expectedSourcePayload !== undefined &&
             !isDeepStrictEqual(item.sourcePayload, opts.expectedSourcePayload))
         )
-          return item;
-        applied = true;
+          return null;
         return withConversationKey({
           ...item,
           sourcePayload: { ...item.sourcePayload, ...patch },
           ...(opts?.summary !== undefined ? { sourceSummary: opts.summary } : {}),
           updatedAt: Date.now(),
         });
-      });
-      if (applied) emit(after, "annotate");
-      return applied ? after : null;
-    },
+      }),
     async appendThread(id, messages) {
       if (messages.length === 0) return get(id);
-      let applied = false;
-      const after = await update(id, (item) => {
-        applied = true;
+      return edit(id, "thread", (item) => {
         const now = Date.now();
         const added = messages.map((message) => ({ ...message, id: randomUUID(), at: now }));
-        return {
-          ...item,
-          thread: [...(item.thread ?? []), ...added],
-          updatedAt: now,
-        };
+        return { ...item, thread: [...(item.thread ?? []), ...added], updatedAt: now };
       });
-      if (applied) emit(after, "thread");
-      return applied ? after : null;
     },
-    async recordAction(id, input) {
-      let applied = false;
-      const after = await update(id, (item) => {
-        if (item.status === "shipped") return item;
-        applied = true;
+    recordAction: (id, input) =>
+      edit(id, "action", (item) => {
+        if (item.status === "shipped") return null;
         const now = Date.now();
         const status = ACTION_STATUS[input.outcome];
         return {
@@ -395,17 +387,12 @@ function itemEdits({ update, get }: ItemRows, emit: (item: InboxItem | null, op:
           parkedReason: status === "failed" ? input.result : undefined,
           ...(input.result !== undefined && status !== "failed" ? { actionResult: input.result } : {}),
         };
-      });
-      if (applied) emit(after, "action");
-      return applied ? after : null;
-    },
-    async reopen(id, opts) {
-      let applied = false;
-      const after = await update(id, (item) => {
+      }),
+    reopen: (id, opts) =>
+      edit(id, "reopen", (item) => {
         const sentReply = opts?.sentReply === true && item.sourcePayload?.sentChat === true;
         if (item.status !== "skipped" && item.status !== "failed" && !(sentReply && item.status === "shipped"))
-          return item;
-        applied = true;
+          return null;
         const now = Date.now();
         return {
           ...item,
@@ -421,10 +408,7 @@ function itemEdits({ update, get }: ItemRows, emit: (item: InboxItem | null, op:
           parkedReason: undefined,
           updatedAt: now,
         };
-      });
-      if (applied) emit(after, "reopen");
-      return applied ? after : null;
-    },
+      }),
     async acquireDecision(id, decisionAt = Date.now()) {
       let token: string | null = null;
       await update(id, (item) => {
@@ -556,11 +540,7 @@ export function createInboxLedger(databaseUrl: string, onEvent?: (event: LedgerE
     get,
     byCron: (cronId) => forCrons([cronId]),
     byCrons: forCrons,
-    async byConversation(conversationKey) {
-      return codec.rows(
-        await q(`SELECT ${codec.columns} FROM cron_items WHERE conversation_key = $1 ORDER BY id`, [conversationKey]),
-      );
-    },
+    byConversation: (conversationKey) => rows.table.where("conversationKey", conversationKey),
     async deleteByCron(cronId) {
       await q(`DELETE FROM cron_items WHERE cron_id = $1`, [cronId]);
     },

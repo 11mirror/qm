@@ -4,16 +4,20 @@ import {
   cols,
   mapToTableMigration,
   ownerIndexMigration,
-  tableCodec,
   type TableSpec,
+  typedTable,
   updateRow,
 } from "../persistence/typed-table.ts";
-import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
+import {
+  type BeginFireResult,
+  createPostgresCronFireStore,
+  type CronFireRecord,
+  type CronFireStore,
+} from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
-  createDeduped,
   TRIGGER_COLUMNS,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
@@ -116,17 +120,16 @@ export const CRONS_MIGRATION = mapToTableMigration("triggers/crons/0001-typed", 
   ],
 });
 
-const codec = tableCodec<Cron>(CRONS);
-
 export function createCronStore(
   databaseUrl: string,
-  opts: { staleRunningMs?: number; fires: CronFireStore },
+  opts: { staleRunningMs?: number; fires?: CronFireStore } = {},
 ): CronStore {
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
-  const fires = opts.fires;
-  const { q, pool } = createPgPool(databaseUrl, [CRONS_MIGRATION, ownerIndexMigration("crons")]);
-  const get = async (id: string): Promise<Cron | null> =>
-    codec.rows(await q(`SELECT ${codec.columns} FROM crons WHERE id = $1`, [id]))[0] ?? null;
+  const fires = opts.fires ?? createPostgresCronFireStore(databaseUrl);
+  const db = createPgPool(databaseUrl, [CRONS_MIGRATION, ownerIndexMigration("crons")]);
+  const { q, pool } = db;
+  const table = typedTable<Cron>(db, CRONS);
+  const { get } = table;
   const update = async (id: string, fn: (cron: Cron) => Cron): Promise<Cron | null> =>
     updateRow(await pool(), CRONS, id, fn);
   return {
@@ -148,7 +151,7 @@ export function createCronStore(
         ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
-      return createDeduped(q, CRONS, {
+      return table.insertOrGet(contentId, {
         ...buildTriggerBase(input, contentId, now),
         enabled: input.enabled !== false,
         schedule,
@@ -163,9 +166,8 @@ export function createCronStore(
       });
     },
     get,
-    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM crons ORDER BY id`)),
-    byOwner: async (scopeId) =>
-      codec.rows(await q(`SELECT ${codec.columns} FROM crons WHERE owner_scope_id = $1 ORDER BY id`, [scopeId])),
+    list: table.all,
+    byOwner: (scopeId) => table.where("ownerScopeId", scopeId),
     async update(id, patch) {
       const before = await get(id);
       if (!before) return null;
@@ -189,7 +191,7 @@ export function createCronStore(
       return update(id, (cron) => ({ ...cron, ...fields }));
     },
     async delete(id) {
-      await q(`DELETE FROM crons WHERE id = $1`, [id]);
+      await table.delete(id);
     },
     async setEnabled(id, enabled) {
       await q(`UPDATE crons SET enabled = $2, archived = CASE WHEN $2 THEN false ELSE archived END WHERE id = $1`, [

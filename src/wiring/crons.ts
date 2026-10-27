@@ -3,7 +3,6 @@ import { createMonitorStore } from "../monitors/monitor-store.ts";
 import type { LedgerEvent } from "../inbox/events.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createInboxLedger, type InboxEventSink } from "../inbox/ledger.ts";
-import { createPostgresCronFireStore } from "../cron/fire-store.ts";
 import { createCronStore, type CronStore } from "../cron/cron-store.ts";
 import { RUN_MAX_AGE_MS } from "../runs/run-store.ts";
 import { createWebhookStore } from "../webhooks/webhook-store.ts";
@@ -32,11 +31,7 @@ export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule)
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await late.scheduler.runNow(item.cronId);
   };
-  const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(databaseUrl, {
-    staleRunningMs: RUN_MAX_AGE_MS,
-    fires: cronFires,
-  });
+  const cronsBase = createCronStore(databaseUrl, { staleRunningMs: RUN_MAX_AGE_MS });
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {

@@ -6,7 +6,6 @@ import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSkillStore, type SkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId } from "../../src/types.ts";
 import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { ORG, actor, fakeSandbox, readSandbox, buildOrchestrator, dm, slackDm } from "../support/system-prompt.ts";
 
 test("system prompt is ordered cached-prefix → volatile tail, with memory LAST (after every other block)", async () => {
@@ -381,7 +380,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl());
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,
