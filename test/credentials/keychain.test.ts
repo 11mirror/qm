@@ -1,12 +1,12 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
+import { type BuiltApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createServer } from "../../src/api/server.ts";
 import {
   createKeychain,
   credentialHandle,
@@ -15,17 +15,17 @@ import {
   KeychainError,
   type Keychain,
   type KeychainGrant,
-} from "../src/credentials/keychain.ts";
-import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import { deriveConnectorKey, encryptSecret } from "../src/connectors/connector-client-store.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { fakeSprites } from "./support/auto-fake-sprites.ts";
-import { testConfig } from "./support/test-config.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+} from "../../src/credentials/keychain.ts";
+import { type DurableMap, type DurableMapSelect } from "../../src/persistence/durable-map.ts";
+import { deriveConnectorKey, encryptSecret } from "../../src/connectors/connector-client-store.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../../src/auth/capability-token.ts";
+import { scopeId, type TurnRequest } from "../../src/types.ts";
+import { fakeSprites } from "../support/auto-fake-sprites.ts";
+import { testConfig } from "../support/test-config.ts";
+import { selectDefaultSandbox } from "../support/default-sandbox.ts";
+import { materializeGrant } from "../support/materialize-grant.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -84,7 +84,7 @@ test("listAllMetadata returns person-facing metadata only", async () => {
 });
 
 test("listing and per-owner reads use the store's projected select and never a full all() scan", async () => {
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
+  type Rec = import("../../src/credentials/keychain.ts").KeychainCredential;
   const backing = testMap<Rec>();
   const calls: string[] = [];
   const creds: DurableMap<Rec> = {
@@ -284,8 +284,8 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../../src/credentials/keychain.ts").KeychainGrant>();
   const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
@@ -314,7 +314,7 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
   const G1 = scopeId("group", "G1");
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
+  type Rec = import("../../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
       lock: testAdvisoryLock(),
@@ -640,7 +640,7 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 });
 
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
     lock: testAdvisoryLock(),
@@ -669,8 +669,8 @@ test("materializeOwn skips a row that doesn't decrypt under the current key inst
 });
 
 test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../../src/credentials/keychain.ts").KeychainGrant>();
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
     lock: testAdvisoryLock(),
@@ -790,7 +790,7 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
 });
 
 test("legacy rows are rewritten once to the current shape and materialize as before", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
   const k = createKeychain({
     lock: testAdvisoryLock(),
     creds,

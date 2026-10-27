@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps, type SkillResult } from "../src/tools/primitives.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { createToolContext, type ToolContextDeps, type SkillResult } from "../../src/tools/primitives.ts";
+import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import { scopeId } from "../../src/types.ts";
 
 function ctx(useSkill: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>) {
   const calls: string[] = [];

@@ -1,10 +1,102 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createToolContext, type CommandCredential, type ToolContextDeps } from "../src/tools/primitives.ts";
-import type { ExecOptions, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { setImmediate } from "node:timers/promises";
+import type { ExecOptions, ExecResult, Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import { createToolContext, type ToolContextDeps, type CommandCredential } from "../../src/tools/primitives.ts";
+import { scopeId, type WorkspaceLayer } from "../../src/types.ts";
 
-const handle: SandboxHandle = { id: "credential-preparation", rootDir: "/workspace" };
+const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
+
+function recordingSandbox(): { sandbox: Sandbox; lastOpts: () => ExecOptions | undefined } {
+  let captured: ExecOptions | undefined;
+  const sandbox = {
+    async run(_handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult> {
+      captured = opts;
+      return { stdout: `ran ${command}`, stderr: "", code: 0, timedOut: false };
+    },
+  } as unknown as Sandbox;
+  return { sandbox, lastOpts: () => captured };
+}
+
+function ctxFor(sandbox: Sandbox, extra: Partial<ToolContextDeps> = {}) {
+  const scope = scopeId("personal", "U1");
+  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
+  return createToolContext({
+    sandbox,
+    provision: async () => handle,
+    layers,
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+    ...extra,
+  });
+}
+
+test("the agent's timeout_seconds is converted to ms and passed to sandbox.run", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000, execTimeoutCeilingMs: 300_000 });
+  await ctx.execute("npm ci", { timeoutSeconds: 200 });
+  assert.deepEqual(lastOpts(), { timeoutMs: 200_000 });
+});
+
+test("an over-ceiling timeout_seconds is CLAMPED to the ceiling (G4: one session can't starve others)", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000, execTimeoutCeilingMs: 300_000 });
+  await ctx.execute("sleep 9999", { timeoutSeconds: 100_000 });
+  assert.deepEqual(lastOpts(), { timeoutMs: 300_000 });
+});
+
+test("no agent param → the configured default is used (and still clamped)", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000, execTimeoutCeilingMs: 300_000 });
+  await ctx.execute("echo hi");
+  assert.deepEqual(lastOpts(), { timeoutMs: 120_000 });
+});
+
+test("a misconfigured default ABOVE the ceiling is itself clamped (the ceiling is the hard cap)", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutMs: 500_000, execTimeoutCeilingMs: 300_000 });
+  await ctx.execute("echo hi");
+  assert.deepEqual(lastOpts(), { timeoutMs: 300_000 });
+});
+
+test("nothing configured (no agent param, no default) → no timeoutMs override leaks (sandbox backstop)", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox);
+  await ctx.execute("echo hi");
+  assert.equal(lastOpts(), undefined);
+});
+
+test("with a ceiling but no default, an under-ceiling agent param passes through unclamped", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutCeilingMs: 300_000 });
+  await ctx.execute("npm test", { timeoutSeconds: 90 });
+  assert.deepEqual(lastOpts(), { timeoutMs: 90_000 });
+});
+
+test("the per-turn abort signal plumbs through execute() into sandbox.run (alongside timeoutMs)", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000 });
+  const signal = new AbortController().signal;
+  await ctx.execute("sleep 9999", { signal });
+  assert.deepEqual(lastOpts(), { timeoutMs: 120_000, signal });
+});
+
+test("no timeout and no signal → no opts override leaks; a signal alone still plumbs through", async () => {
+  const { sandbox, lastOpts } = recordingSandbox();
+  const ctx = ctxFor(sandbox);
+  await ctx.execute("echo hi");
+  assert.equal(lastOpts(), undefined);
+  const signal = new AbortController().signal;
+  await ctx.execute("echo hi", { signal });
+  assert.deepEqual(lastOpts(), { signal });
+});
+
+const executeCredentialPreparationHandle: SandboxHandle = { id: "credential-preparation", rootDir: "/workspace" };
 type Materialized = Awaited<ReturnType<NonNullable<CommandCredential["resolve"]>>>;
 
 function context(events: string[], credentials: CommandCredential[], extra: Partial<ToolContextDeps> = {}) {
@@ -20,7 +112,7 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
     sandbox,
     async provision() {
       events.push("provision");
-      return handle;
+      return executeCredentialPreparationHandle;
     },
     layers: [{ scopeId: scopeId("personal", "credential-tester"), mountPath: "", mode: "rw" }],
     commandPolicy() {
@@ -189,7 +281,9 @@ test("newly available handles are resolved from the current catalog and revocati
 test("owner credentials cannot be requested on scoped or scratch workspaces", async () => {
   const events: string[] = [];
   const selected = { ...credential(events, "owner"), scope: "owner" as const };
-  const { ctx, runs } = context(events, [selected], { provisionOwnerAuth: async () => handle });
+  const { ctx, runs } = context(events, [selected], {
+    provisionOwnerAuth: async () => executeCredentialPreparationHandle,
+  });
   await assert.rejects(ctx.execute("true", { credentials: ["owner"] }), /requires scope:owner/);
   await assert.rejects(ctx.execute("true", { credentials: ["owner"], scratch: true }), /requires scope:owner/);
   assert.deepEqual(events, []);
@@ -240,4 +334,120 @@ test("replay returns cached masked bytes without resolving a consumed single-use
   assert.deepEqual(replay, first);
   assert.equal(resolutions, 1);
   assert.deepEqual(events, []);
+});
+
+const healthy = { machine: "healthy", listed: "warm", provisioned: true, guestResponsive: true };
+
+function computerStatusProbeCtxFor(sandbox: Partial<Sandbox>, provision: ToolContextDeps["provision"]) {
+  const scope = scopeId("channel", "C1");
+  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
+  return createToolContext({
+    sandbox: { profile: { backend: "sprites" }, ...sandbox } as unknown as Sandbox,
+    provision,
+    layers,
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+  });
+}
+
+test("computerStatus reports the guest as answering only when a command survives the real provision path", async () => {
+  const ctx = computerStatusProbeCtxFor(
+    {
+      computerStatus: async () => healthy,
+      run: async () => ({ stdout: "", stderr: "", code: 0, timedOut: false }),
+    },
+    async () => handle,
+  );
+  assert.deepEqual(await ctx.computerStatus(), healthy);
+});
+
+test("a provision failure turns a healthy-looking machine into NOT answering and names the cause", async () => {
+  const ctx = computerStatusProbeCtxFor({ computerStatus: async () => healthy }, async () => {
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("New streams cannot be created after receiving a GOAWAY"), {
+        code: "ERR_HTTP2_GOAWAY_SESSION",
+      }),
+    });
+  });
+  const status = await ctx.computerStatus();
+  assert.equal(status.guestResponsive, false);
+  assert.equal(status.machine, "healthy");
+  assert.match(status.probeError ?? "", /fetch failed <- Error ERR_HTTP2_GOAWAY_SESSION: New streams/);
+});
+
+test("a command that exits non-zero on the provisioned box is NOT answering without a probe error", async () => {
+  const ctx = computerStatusProbeCtxFor(
+    {
+      computerStatus: async () => healthy,
+      run: async () => ({ stdout: "", stderr: "", code: 127, timedOut: false }),
+    },
+    async () => handle,
+  );
+  const status = await ctx.computerStatus();
+  assert.equal(status.guestResponsive, false);
+  assert.equal(status.probeError, undefined);
+});
+
+test("computerStatus never provisions when the backend reports no machine", async () => {
+  let provisions = 0;
+  const none = { machine: "no sandbox provisioned yet", provisioned: false, guestResponsive: false };
+  const ctx = computerStatusProbeCtxFor({ computerStatus: async () => none }, async () => {
+    provisions += 1;
+    return handle;
+  });
+  assert.deepEqual(await ctx.computerStatus(), none);
+  assert.equal(provisions, 0, "a status check must not cold-start a box");
+});
+
+test("a probe that hangs on the real exec path reports NOT answering within the probe bound", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = computerStatusProbeCtxFor(
+    {
+      computerStatus: async () => healthy,
+      run: () => new Promise(() => {}),
+    },
+    async () => handle,
+  );
+  const pending = ctx.computerStatus();
+  await setImmediate();
+  t.mock.timers.tick(20_000);
+  const status = await pending;
+  assert.equal(status.guestResponsive, false);
+  assert.match(status.probeError ?? "", /timed out/);
+});
+
+test("status for an explicit sandbox probes its exec path instead of trusting the provider", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const scope = scopeId("channel", "C1");
+  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
+  const access = { resource: { id: "sb1", ownerScopeId: scope }, crossScope: false } as never;
+  const ctx = createToolContext({
+    sandbox: {
+      profile: { backend: "sprites" },
+      run: () => new Promise(() => {}),
+    } as unknown as Sandbox,
+    provision: async () => handle,
+    provisionResource: async () => handle,
+    accessSandboxResource: async () => access,
+    sandboxResources: { status: async () => healthy } as never,
+    layers,
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+  });
+  const pending = ctx.computerStatus("sb1");
+  await setImmediate();
+  t.mock.timers.tick(20_000);
+  const status = await pending;
+  assert.equal(status.guestResponsive, false);
+  assert.match(status.probeError ?? "", /timed out/);
 });

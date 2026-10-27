@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId } from "../src/types.ts";
-import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "../src/credentials/keychain.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { scopeId } from "../../src/types.ts";
+import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "../../src/credentials/keychain.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");

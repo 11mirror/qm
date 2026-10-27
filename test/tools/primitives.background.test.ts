@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
-import type { CommandPolicy } from "../src/types.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
-import type { SandboxHandle, Sandbox } from "../src/sandbox/sandbox.ts";
-import type { BackgroundExecBroker, BackgroundPollResult } from "../src/connectors/background-exec-broker.ts";
+import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../../src/tools/primitives.ts";
+import { scopeId, type WorkspaceLayer } from "../../src/types.ts";
+import type { CommandPolicy } from "../../src/types.ts";
+import type { ToolLedger } from "../../src/runs/tool-ledger.ts";
+import type { SandboxHandle, Sandbox } from "../../src/sandbox/sandbox.ts";
+import type { BackgroundExecBroker, BackgroundPollResult } from "../../src/connectors/background-exec-broker.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 

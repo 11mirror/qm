@@ -1,28 +1,28 @@
-import "./support/auto-fake-sprites.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import "../../support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { type TurnRequest } from "../src/types.ts";
+import { createInsecureTestServer, createServer } from "../../../src/api/server.ts";
+import { type BuiltApp } from "../../../src/wiring.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { type TurnRequest } from "../../../src/types.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
   CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
-} from "../src/auth/capability-token.ts";
-import type { BrokerFetch } from "../src/api/credential-broker.ts";
-import type { CredentialHttpFetch } from "../src/api/credential-http-broker.ts";
-import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import type { AclStore } from "../src/acl/acl-store.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { recorded } from "./support/recorded.ts";
+} from "../../../src/auth/capability-token.ts";
+import type { BrokerFetch } from "../../../src/api/credential-broker.ts";
+import type { CredentialHttpFetch } from "../../../src/api/credential-http-broker.ts";
+import { TEST_CAPABILITY_SECRET, testConfig } from "../../support/test-config.ts";
+import type { AclStore } from "../../../src/acl/acl-store.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
+import { recorded } from "../../support/recorded.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
