@@ -1,3 +1,4 @@
+import { DEFAULT_INLINE_TOKENS } from "../../src/sessions/tool-output.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
@@ -302,7 +303,7 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   );
 });
 
-test("a giant tool result is capped for the model, keeping the tail and matching the persisted replay record", async () => {
+test("without a parking store a giant tool result is cut to the inline budget, keeping the tail and matching the persisted replay record", async () => {
   const emitted: Emitted[] = [];
   const tc = {
     ...fakeToolContext(),
@@ -321,8 +322,12 @@ test("a giant tool result is capped for the model, keeping the tail and matching
     content: Array<{ type: string; text: string }>;
   };
   const seen = ret.content.map((c) => c.text).join("\n");
-  assert.ok(seen.length <= 100_000, `model-facing text stays within the declared cap (got ${seen.length} chars)`);
-  assert.ok(seen.includes("…[truncated — full result was"), "truncation notice names the full size");
+  assert.ok(
+    seen.length <= DEFAULT_INLINE_TOKENS * 4 + 400,
+    `model-facing text stays within the inline budget (got ${seen.length} chars)`,
+  );
+  assert.ok(seen.includes("[output cut: showing the first"), "the cut marker names what was shown");
+  assert.ok(seen.includes("the full output was not kept"), "the marker says the full text was not parked");
   assert.ok(seen.endsWith("[exit 1]"), "the tail — stderr and exit marker — survives the cut");
   assert.ok(seen.includes("[stderr]\nboom"), "stderr survives the cut");
   const payload = emitted.find((e) => e.kind === "ToolResult")!.fields;

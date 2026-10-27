@@ -4,13 +4,13 @@ import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { toolResultProvenance, type ToolResultProvenance } from "../../security/security-screen.ts";
-import { parkIfOverCap } from "../../sessions/tool-output.ts";
+import { cutUnparkedToolOutput, parkIfOverCap } from "../../sessions/tool-output.ts";
 import type { ScopeId } from "../../types.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import { reportFailureAs } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { type AgentToolsOptions, type ToolContextRef } from "../agent-tools.ts";
-import { capPayloadStrings, capResultText, isPolicyNotice, text } from "./shared.ts";
+import { cutPayloadStrings, isPolicyNotice, text } from "./shared.ts";
 import { type RetryMark } from "./wrappers.ts";
 
 export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
@@ -170,9 +170,9 @@ function kitRecorders(ref: ToolContextRef, { log }: Pick<ReturnType<typeof kitLo
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
-      const parked = ref.current?.toolOutput ? await parkIfOverCap(ref.current.toolOutput, t, callId) : null;
-      const output = parked?.output;
-      let result = parked?.text ?? capResultText(t);
+      const parked = await parkIfOverCap(ref.current?.toolOutput, t, callId);
+      const { output, inlineTokens } = parked;
+      let result = parked.text;
       const resultTruncated = result !== t;
       if (result !== t) {
         const firstText = ret.content.findIndex((c) => c.type === "text");
@@ -220,7 +220,10 @@ function kitRecorders(ref: ToolContextRef, { log }: Pick<ReturnType<typeof kitLo
         delivered.push(message.id);
       }
       await log("ToolResult", {
-        ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
+        ...(cutPayloadStrings(persistedSummary, (s) => cutUnparkedToolOutput(s, inlineTokens)) as Record<
+          string,
+          unknown
+        >),
         callId,
         isError,
         ...(resultTruncated ? { resultTruncated: true } : {}),

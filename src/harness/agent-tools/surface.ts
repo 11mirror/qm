@@ -6,7 +6,6 @@ import { Type, type Static } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
 import { type ToolKit } from "./kit.ts";
 import {
-  capText,
   optionalBoolean,
   optionalString,
   outboundFilesSchema,
@@ -168,7 +167,7 @@ async function runSurfaceAction(
         tool: surfaceName,
         action: "post",
         ...opts,
-        text: capText(params.text),
+        text: params.text,
         ...(params.files?.length ? { files: params.files } : {}),
       });
       const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
@@ -207,7 +206,7 @@ async function runSurfaceAction(
         tool: surfaceName,
         action: "edit",
         ref: params.ref,
-        text: capText(params.text),
+        text: params.text,
         ...routing,
       });
       const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });
