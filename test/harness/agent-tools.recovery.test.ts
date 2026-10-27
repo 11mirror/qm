@@ -625,12 +625,8 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   await call(del, { id: 1 });
   assert.deepEqual(calls, [{ id: 1 }, { id: 1 }]);
   const cards = ref.pendingApprovals!.length;
-  assert.match(textOut(await call(del, { id: 3, note: "x".repeat(20_000) })), /too long to show on an approval card/);
-  assert.equal(
-    ref.pendingApprovals!.length,
-    cards,
-    "an argument set the card cannot show is never offered for approval",
-  );
+  assert.match(textOut(await call(del, { id: 3, note: "x".repeat(20_000) })), /blocked: needs human approval/);
+  assert.equal(ref.pendingApprovals!.length, cards + 1, "long arguments are offered for approval in full");
 });
 
 function catalogTools(ref: ToolContextRef, name = "records") {
