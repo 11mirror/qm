@@ -317,7 +317,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: HarnessTurnInput[] = [];
   const harness = createMockHarness();

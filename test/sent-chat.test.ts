@@ -5,11 +5,11 @@ import { buildGmailReplyMime } from "../src/inbox/sources/gmail.ts";
 import { type ApiCtx, findRoute, respond, run } from "../src/api/routes/route.ts";
 import { createInboxLedger } from "../src/inbox/ledger.ts";
 import { inboxApp } from "./support/inbox-app.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("sent chats are durable, idempotent, and isolated to the signed-in owner", async () => {
   const { crons, app } = inboxApp();
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   let previewEnabled = false;
   let status = 0;
   let response: { item: { id: string; cronId: string; state: string; thread: { text: string }[] } };
@@ -75,7 +75,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
 
 test("a sent email draft saves and sends into the original Gmail thread exactly once", async () => {
   const { app } = inboxApp();
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   let response: { item: { id: string; cronId: string; proposal?: { at: number; data: { body: string } } } };
   let status = 0;
   const ctx = {
@@ -155,7 +155,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
 
 test("sent chat preserves long quoted recipient headers and rejects oversized input", async () => {
   const { app } = inboxApp();
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   let status = 0;
   let id = "";
   const to = [

@@ -3,6 +3,7 @@ import {
   tenantLockKey,
   withPgTransaction,
   type PgMigrationDefinition,
+  type Pool,
   type PgPool,
   type Rows,
 } from "./pg-pool.ts";
@@ -238,3 +239,30 @@ export function typedTable<T>(db: Pick<PgPool, "q" | "pool">, spec: TableSpec) {
 }
 
 export type TypedTable<T> = ReturnType<typeof typedTable<T>>;
+
+export async function updateRow<T>(pool: Pool, spec: TableSpec, key: string, fn: (value: T) => T): Promise<T | null> {
+  const codec = tableCodec<T>(spec);
+  const keyCol = columnName(spec.key);
+  return withPgTransaction(pool, async (client) => {
+    const found = await client.query(`SELECT ${codec.columns} FROM ${spec.table} WHERE ${keyCol} = $1 FOR UPDATE`, [
+      key,
+    ]);
+    if (!found.rows[0]) return null;
+    const before = codec.row(found.rows[0]);
+    const next = fn(before);
+    if (next !== before)
+      await client.query(
+        `INSERT INTO ${spec.table} (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols(keyCol)}) DO UPDATE SET ${codec.updates}`,
+        codec.values(key, next),
+      );
+    return next;
+  });
+}
+
+export function ownerIndexMigration(table: string): PgMigrationDefinition {
+  return {
+    id: `triggers/${table}/0002-owner-index`,
+    statements: [`CREATE INDEX IF NOT EXISTS ${table}_owner_scope_id ON ${table} (owner_scope_id)`],
+  };
+}

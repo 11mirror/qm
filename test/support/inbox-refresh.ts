@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createInboxSourceRefresh as createRefresh } from "../../src/inbox/source-refresh.ts";
 import { createInboxLedger } from "../../src/inbox/ledger.ts";
-import { testMap } from "./test-database.ts";
+import { testDatabaseUrl } from "./test-database.ts";
 
 export async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     {
       cronId: "inbox",

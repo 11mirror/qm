@@ -73,7 +73,7 @@ const threadRef = "monitor-smoke-thread";
 const destination = { type: "smoke", target: "smoke-dm", audienceScopeId: scope };
 
 const registry = createPostgresProcessRegistry(databaseUrl);
-const monitors = createMonitorStore(smokeMap("monitors"));
+const monitors = createMonitorStore(databaseUrl);
 const posted: OutboundPost[] = [];
 const outbound = createOutbound({});
 outbound.register(["smoke"], async (post) => void posted.push(post));

@@ -1,9 +1,5 @@
 import type { Head } from "./late.ts";
-import {
-  type BackgroundOwnershipControl,
-  createBackgroundOwnershipStore,
-  type BackgroundOwnership,
-} from "../runs/background-ownership.ts";
+import { type BackgroundOwnershipControl, createBackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import { randomUUID } from "node:crypto";
 import {
   type InstanceRegistry,
@@ -56,7 +52,7 @@ export function buildWorkers(
 
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        store: createBackgroundOwnershipStore(databaseUrl),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
         active: () => gates.backgroundActive(),

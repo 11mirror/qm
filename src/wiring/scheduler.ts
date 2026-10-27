@@ -1,6 +1,6 @@
 import type { Head } from "./late.ts";
-import { type SuggestedActivityProfile, createSuggestedActivityService } from "../suggestions/activities.ts";
-import { createMemoryTidyService, type MemoryTidyProfile } from "../memory/tidy.ts";
+import { createSuggestedActivityProfileStore, createSuggestedActivityService } from "../suggestions/activities.ts";
+import { createMemoryTidyProfileStore, createMemoryTidyService } from "../memory/tidy.ts";
 import { createJobWorker } from "../jobs/job-worker.ts";
 import { createScheduler } from "../cron/scheduler.ts";
 import { createControlService } from "../api/control-service.ts";
@@ -30,7 +30,6 @@ export function buildScheduler(
     ModelKeysModule,
 ) {
   const {
-    artifactMap,
     baseMemory,
     crons,
     late,
@@ -50,9 +49,9 @@ export function buildScheduler(
     refreshModels,
   } = w;
 
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const suggestedActivityProfiles = createSuggestedActivityProfileStore(databaseUrl);
   const memoryTidy = createMemoryTidyService({
-    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    store: createMemoryTidyProfileStore(databaseUrl),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
     crons,

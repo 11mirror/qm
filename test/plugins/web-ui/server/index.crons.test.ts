@@ -248,5 +248,5 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   assert.equal((await patch({ modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch(null)).status, 200);
-  assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+  assert.equal((await built.app.getCron(cron.id))?.runtime, undefined);
 });

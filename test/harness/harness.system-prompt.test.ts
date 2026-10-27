@@ -381,7 +381,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,

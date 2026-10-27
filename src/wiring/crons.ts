@@ -1,13 +1,13 @@
 import type { Head } from "./late.ts";
 import { createMonitorStore } from "../monitors/monitor-store.ts";
-import type { Monitor, InboxItem, Cron, Webhook, PendingApprovalRecord } from "../types.ts";
+import type { PendingApprovalRecord } from "../types.ts";
 import type { LedgerEvent } from "../inbox/events.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createInboxLedger, type InboxEventSink } from "../inbox/ledger.ts";
 import { createPostgresCronFireStore } from "../cron/fire-store.ts";
 import { createCronStore, type CronStore } from "../cron/cron-store.ts";
 import { RUN_MAX_AGE_MS } from "../runs/run-store.ts";
-import { createWebhookStore, type WebhookHistory } from "../webhooks/webhook-store.ts";
+import { createWebhookStore } from "../webhooks/webhook-store.ts";
 import { createApprovalStore } from "../core/approval-store.ts";
 import { createSecurityScreenProxy } from "../security/security-screener.ts";
 import type { StoresModule } from "./stores.ts";
@@ -17,7 +17,7 @@ import type { OutboundModule } from "./outbound.ts";
 export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule) {
   const { artifactMap, ledgerEventBus, late, databaseUrl, config, outbound, chatSurfaces, overrides } = w;
 
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
+  const monitors = createMonitorStore(databaseUrl);
   const cronOwnerCache = new Map<string, string>();
   const publishInboxEvent = (event: LedgerEvent): void => {
     void (async () => {
@@ -29,15 +29,12 @@ export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule)
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(swallowAs("inbox: publish ledger event", undefined));
   };
-  const inboxItems = createInboxLedger(
-    artifactMap<InboxItem>("cron_items", ["cronId", "conversationKey"]),
-    publishInboxEvent,
-  );
+  const inboxItems = createInboxLedger(databaseUrl, publishInboxEvent);
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await late.scheduler.runNow(item.cronId);
   };
   const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
+  const cronsBase = createCronStore(databaseUrl, {
     staleRunningMs: RUN_MAX_AGE_MS,
     fires: cronFires,
   });
@@ -62,10 +59,7 @@ export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule)
       await inboxItems.deleteByCron(id);
     },
   };
-  const webhooks = createWebhookStore(
-    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
-    artifactMap<WebhookHistory>("webhook_history"),
-  );
+  const webhooks = createWebhookStore(databaseUrl);
   const webUiBase = config.slack?.webUiPublicUrl ?? config.publicWebUrl;
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
     surfaces: chatSurfaces,
