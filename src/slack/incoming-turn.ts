@@ -560,7 +560,7 @@ async function runCoreTurn(
       if (!run.accepted) inc.ackGate?.failed(errMessage(err));
       reportFailure("slack: unprompted turn (staying quiet)", err, `ch=${inc.channel} ts=${inc.ts}`);
     } else {
-      console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
+      reportFailure("slack: turn", err, `ch=${inc.channel} ts=${inc.ts}`);
       const note = `⚠️ ${slackFailureText(err)}`;
       if (acks.ack?.postedAck()) await postReply(note);
       else await ephemeralOrSay(note);
