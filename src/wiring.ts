@@ -749,8 +749,6 @@ export function buildApp(
     databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
-    leaderLease,
-    createSweeper,
   });
   const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
@@ -1451,7 +1449,6 @@ export function buildApp(
     deployDir: join(config.dataDir, "deployments"),
     auditLog,
     acl,
-    leaderLease,
     advisoryLock,
     canReadScope,
     canWriteScope,
@@ -2191,7 +2188,6 @@ export function buildApp(
           processes,
           sandbox,
           ...triggerDeps,
-          leaderLease,
           onProcessExit: finishCredentials,
         })
       : null;
@@ -2199,7 +2195,6 @@ export function buildApp(
     packs: skillPacks,
     fetcher: skillFetcher,
     reconcile: (id) => app.syncSkillPack(id),
-    leaderLease,
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
@@ -2265,11 +2260,9 @@ export function buildApp(
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
-        intervalMs: PROCESS_REAPER_INTERVAL_MS,
         ...(supportsProcessSessions(sandbox)
           ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
           : {}),
-        leaderLease,
       })
     : null;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
@@ -2288,6 +2281,10 @@ export function buildApp(
     const pruned = await crons.pruneFires(Date.now());
     if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
   });
+  if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
+  if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
+  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep());
+  every("memory-vector-index", 30_000, () => semanticMemory.index());
   every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()));
   every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup());
@@ -2322,17 +2319,10 @@ export function buildApp(
     every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
   }
   // Started together once background work is admitted, and stopped together.
-  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [
-    reaper,
-    ...(processReaper ? [processReaper] : []),
-    semanticMemory,
-    ...(fileUploads ? [fileUploads] : []),
-    wakeSweep,
-  ];
+  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [reaper, wakeSweep];
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
-  let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
   function startBackground(): void {
     if (backgroundRunning) return;
@@ -2353,12 +2343,6 @@ export function buildApp(
     turnRunner?.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      monitorPoller?.start(MONITOR_POLL_MS);
-      void monitorDrained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(MONITOR_POLL_MS);
-        })
-        .catch(swallowAs("wiring: monitor resume failed", undefined));
       for (const service of periodicServices) service.start();
       void jobs
         .start()
@@ -2373,8 +2357,7 @@ export function buildApp(
     backgroundRunning = false;
     const previous = backgroundStopping;
     backgroundGeneration++;
-    const monitorStopping = monitorPoller?.stop();
-    monitorDrained = monitorStopping ?? Promise.resolve();
+    void semanticMemory.stop();
     const stopping = [
       ...periodicServices.map((service) => service.stop()),
       jobs.stopClaims(),
@@ -2383,7 +2366,7 @@ export function buildApp(
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
+    const draining = Promise.all([previous, backgroundClaimsStopping])
       .then(() => {})
       .finally(() => {
         if (backgroundStopping === draining) backgroundStopping = null;
