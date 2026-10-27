@@ -34,7 +34,7 @@ import { createPostgresDecisionStore } from "../decisions/store.ts";
 import { createConnectorStatusCache } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
 import { mkdirSync } from "node:fs";
-import { createJobWorker } from "../jobs/job-worker.ts";
+import { createJobWorker, type EveryOptions } from "../jobs/job-worker.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 
 type StoresInputs = Pick<Head, "databaseUrl" | "config" | "connectorSecretKey" | "admittedWork">;
@@ -105,7 +105,7 @@ export function buildStores(deps: StoresInputs) {
     () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
   );
   const jobs = createJobWorker(databaseUrl);
-  const every = (name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }) =>
+  const every = (name: string, everyMs: number, fn: () => unknown, opts?: EveryOptions) =>
     jobs.every(name, everyMs, () => admittedWork.run(fn), opts);
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup(), { immediate: true });
   every("llm-capture:retention", 5 * 60_000, async () => {

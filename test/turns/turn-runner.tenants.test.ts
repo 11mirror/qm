@@ -8,7 +8,7 @@ import { configurePgTenancy, createPgPool, migrateRegisteredPgSchemas } from "..
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { RunPriority } from "../../src/runs/run-store.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../../src/tenant.ts";
+import { registerTenantSettings, scopedTenant, tenant, tenantFor, withTenant, type Tenant } from "../../src/tenant.ts";
 import { upsertTenant, type TenantRecord, type TenantSettings } from "../../src/tenants/registry.ts";
 import { createTenantDirectory, useTenantDirectory, type TenantDirectory } from "../../src/tenants/directory.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
@@ -178,37 +178,46 @@ test("a person's turn in one tenant is claimed before background work in another
   );
 });
 
-test("one job worker runs keyed jobs in their tenant and periodic work once per tenant", { skip }, async () => {
-  const jobs = createJobWorker(appUrl);
-  const fired: Array<{ job: string; tenant: string | undefined }> = [];
-  jobs.handle("probe", async (params) => {
-    fired.push({ job: String((params as { name: string }).name), tenant: tenant().id });
-    return "done";
-  });
-  const visits: Array<string | undefined> = [];
-  jobs.every("tenant-visits", 60_000, () => visits.push(tenant().id));
-  await withTenant(acme, () => jobs.spawn("probe", { name: "acme" }, "probe:1"));
-  await withTenant(beta, () => jobs.spawn("probe", { name: "beta" }, "probe:1"));
-  await jobs.start();
-  try {
-    await eventually(() => fired.length === 2 && visits.length === 2, { label: "jobs ran" });
-  } finally {
-    await jobs.stop();
-  }
-  assert.deepEqual(
-    fired.toSorted((x, y) => x.job.localeCompare(y.job)),
-    [
-      { job: "acme", tenant: acme.id },
-      { job: "beta", tenant: beta.id },
-    ],
-  );
-  assert.deepEqual(visits, [acme.id, beta.id]);
-  const keys = await rls.q("SELECT idempotency_key FROM absurd.t_jobs WHERE task_name = 'probe' ORDER BY 1");
-  assert.deepEqual(
-    keys.map((row) => row.idempotency_key),
-    [`tenant:${acme.id}:probe:1`, `tenant:${beta.id}:probe:1`].sort(),
-  );
-});
+test(
+  "one job worker runs keyed jobs in their tenant, periodic work once per tenant, and shared periodic work once",
+  { skip },
+  async () => {
+    const jobs = createJobWorker(appUrl);
+    const fired: Array<{ job: string; tenant: string | undefined }> = [];
+    jobs.handle("probe", async (params) => {
+      fired.push({ job: String((params as { name: string }).name), tenant: tenant().id });
+      return "done";
+    });
+    const visits: Array<string | undefined> = [];
+    jobs.every("tenant-visits", 60_000, () => visits.push(tenant().id));
+    const sharedVisits: Array<string | undefined> = [];
+    jobs.every("shared-visits", 60_000, () => sharedVisits.push(scopedTenant()?.id), { shared: true });
+    await withTenant(acme, () => jobs.spawn("probe", { name: "acme" }, "probe:1"));
+    await withTenant(beta, () => jobs.spawn("probe", { name: "beta" }, "probe:1"));
+    await jobs.start();
+    try {
+      await eventually(() => fired.length === 2 && visits.length === 2 && sharedVisits.length === 1, {
+        label: "jobs ran",
+      });
+    } finally {
+      await jobs.stop();
+    }
+    assert.deepEqual(
+      fired.toSorted((x, y) => x.job.localeCompare(y.job)),
+      [
+        { job: "acme", tenant: acme.id },
+        { job: "beta", tenant: beta.id },
+      ],
+    );
+    assert.deepEqual(visits, [acme.id, beta.id]);
+    assert.deepEqual(sharedVisits, [undefined]);
+    const keys = await rls.q("SELECT idempotency_key FROM absurd.t_jobs WHERE task_name = 'probe' ORDER BY 1");
+    assert.deepEqual(
+      keys.map((row) => row.idempotency_key),
+      [`tenant:${acme.id}:probe:1`, `tenant:${beta.id}:probe:1`].sort(),
+    );
+  },
+);
 
 test(
   "a job for a tenant the directory does not know waits, and a failing tenant list does not spin",
