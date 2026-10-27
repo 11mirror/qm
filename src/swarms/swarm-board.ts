@@ -209,7 +209,7 @@ export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
     async stranded(after, before, limit) {
       const rows = await pg.q(
         `SELECT ${POST_COLUMNS}, notice_actor, notice_audience FROM swarm_board_posts
-          WHERE notify_pending AND created_at < $1 AND (created_at > $2 OR (created_at = $2 AND id > $3))
+          WHERE notify_pending AND notice_actor IS NOT NULL AND created_at < $1 AND (created_at > $2 OR (created_at = $2 AND id > $3))
           ORDER BY created_at, id LIMIT $4`,
         [before, after.createdAt, after.id, limit],
       );

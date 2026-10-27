@@ -1,4 +1,4 @@
-import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
+import type { RunSignal } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored } from "../core/turn-origin.ts";
