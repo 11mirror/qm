@@ -6,7 +6,6 @@ import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { createSessionMailbox } from "../sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../subagents/session-tools.ts";
 import { createPostgresSwarmBoard } from "../swarms/swarm-board.ts";
-import { scopeId } from "../types.ts";
 import { startSession } from "../api/start-session.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import { createUiStateStore } from "../surfaces/ui-state.ts";
@@ -24,7 +23,6 @@ export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & Runs
     projects,
     currentScopeMembers,
     databaseUrl,
-    featureFlags,
     sessions,
     runs,
     runSignals,
@@ -82,9 +80,6 @@ export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & Runs
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: createPostgresSwarmBoard(databaseUrl),
-    enabled: async (actorId) =>
-      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
     sessions,
     runs,
     signals: runSignals,

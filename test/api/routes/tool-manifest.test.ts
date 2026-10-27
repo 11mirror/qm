@@ -124,7 +124,6 @@ test("GET /v1/tool-manifest lists the signed-in person's web tools with their co
     mcpToolService: {
       toolDefsFor: async (principalId?: string) => (principalId === "alice@default-org" ? connectors : []),
     } as never,
-    featureFlags: { enabled: async (name: string) => name === "persistent_subagents" } as never,
   });
   server.listen(0);
   const get = async (principalId: string) => {

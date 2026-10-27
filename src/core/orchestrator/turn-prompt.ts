@@ -112,13 +112,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   }
   const surfaceName =
     input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-  const sessionSyscalls =
-    !external &&
-    deps.sessionSyscalls &&
-    (delegationEnabled ||
-      (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
-      ? deps.sessionSyscalls
-      : undefined;
+  const sessionSyscalls = external ? undefined : deps.sessionSyscalls;
   const delegateWork = requiresDelegation(input, delegationEnabled);
   let modeFrame = applyPromptVars(frameMd, frameVars);
   if (delegateWork) modeFrame += `\n\n${DELEGATE_WORK_MD}`;

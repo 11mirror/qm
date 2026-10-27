@@ -93,6 +93,7 @@ export interface SpawnMeta {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  swarm?: true;
 }
 
 export interface Session {
@@ -541,6 +542,7 @@ export interface TurnRequest {
   };
   sessionSenderId?: string;
   delegatingRunId?: string;
+  swarm?: true;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
   surface: string;
