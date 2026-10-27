@@ -8,13 +8,14 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, access } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKeychain, type CredentialFile, type Keychain } from "../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { reconcileProcesses } from "../../src/processes/reconcile.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { createToolContext, type ToolContextDeps } from "../../src/tools/tool-context.ts";
 import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 import { scopeId } from "../../src/types.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";
@@ -29,9 +30,7 @@ async function fixture(t: TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("synthetic-test-key"),
   });
   const credential = await keychain.save({

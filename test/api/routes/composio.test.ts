@@ -6,23 +6,20 @@ import { composioRoutes, composioUserId } from "../../../src/api/routes/composio
 import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import type { ServerDeps } from "../../../src/api/deps.ts";
 import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../../../src/acl/acl-store.ts";
 import { scopeId } from "../../../src/types.ts";
 import { tenant } from "../../../src/tenant.ts";
 import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
 import { createPostgresGrantStore } from "../../../src/acl/postgres-grant-store.ts";
-import { testAdvisoryLock } from "../../support/test-database.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
-import { testMap } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "../../support/test-database.ts";
 import { createPostgresSessionStore } from "../../../src/sessions/postgres-session-store.ts";
 
 function fixture() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));

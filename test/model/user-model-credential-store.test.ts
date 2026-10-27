@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
-import { createUserModelCredentialStore } from "../../src/model/user-model-credential-store.ts";
+import {
+  createUserModelCredentialStore,
+  type UserModelCredential,
+} from "../../src/model/user-model-credential-store.ts";
 import { resolveIndividualAuthRouting } from "../../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../../src/model/pi-models.ts";
-import type { UserModelCredential } from "../../src/model/user-model-credential-store.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -31,9 +34,7 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 function testStore() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey(KEY_MATERIAL),
   });
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
@@ -103,9 +104,7 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   let refreshCalls = 0;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey(KEY_MATERIAL),
     refreshConnector: async (host, token) => {
       refreshCalls += 1;

@@ -12,13 +12,14 @@ import {
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../../src/connectors/oauth.ts";
-import { createKeychain, type KeychainCredential } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/keychain.ts";
 import { createMcpClient, mcpResultText } from "../../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../../src/mcp/mcp-server-store.ts";
 import { createMcpToolService, mcpPublicOAuthClients } from "../../src/mcp/mcp-tool-service.ts";
-import { startMcpTestServer } from "../support/mcp-test-server.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { settle } from "../support/settle.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { startMcpTestServer } from "../support/mcp-test-server.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "../support/test-database.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -285,9 +286,7 @@ test("unknown tool call rejects", async () => {
 function tokenStore() {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("mcp-test-encryption-key"),
   });
 }

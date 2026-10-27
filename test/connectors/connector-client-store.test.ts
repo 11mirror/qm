@@ -8,10 +8,11 @@ import {
   deriveConnectorKey,
   type SecretKey,
 } from "../../src/connectors/connector-client-store.ts";
-import { createKeychain, type KeychainCredential } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { createEnvSecretSource } from "../../src/credentials/secret-source.ts";
 import { scopeId } from "../../src/types.ts";
-import { testConfigStore, testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testConfigStore, testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 const orgScope = (o: string) => scopeId("org", o);
 const envWithSlack = {
@@ -125,9 +126,7 @@ const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 function makeKeychain() {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
   });
 }

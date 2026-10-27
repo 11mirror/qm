@@ -32,7 +32,7 @@ import {
   type CanManageScope,
 } from "../resolution/scope-membership.ts";
 import { createPostgresDecisionStore } from "../decisions/store.ts";
-import { createConnectorStatusCache, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
+import { createConnectorStatusCache } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
 
 export function buildStores(w: Head) {
@@ -84,7 +84,7 @@ export function buildStores(w: Head) {
     identity.isInternal(identity.classify(actorId)) &&
     ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
   const decisions = createPostgresDecisionStore(databaseUrl);
-  const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
+  const connectorStatusCache = createConnectorStatusCache(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),

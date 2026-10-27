@@ -1,17 +1,9 @@
-/**
- * Durable, encrypted storage for custom model providers.
- *
- * Mirrors model-credential-store: specs live in a DurableMap, API keys
- * are encrypted at rest with a key derived from the connector secret,
- * and the store never hands the plaintext key to anything but the
- * per-call resolver.
- */
-
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
-export interface StoredCustomProvider extends CustomProviderSpec {
+interface StoredCustomProvider extends CustomProviderSpec {
   apiKeyEnc?: string;
   disabled?: boolean;
   updatedAt: number;
@@ -26,15 +18,32 @@ interface CustomProviderStatus extends CustomProviderSpec {
 }
 
 export interface CustomProviderStore {
-  /** Enabled specs only — what the runtime registry should serve. */
   enabled(): Promise<CustomProviderSpec[]>;
-  /** Everything, for the admin surface (no secrets). */
   statuses(): Promise<CustomProviderStatus[]>;
-  /** Plaintext key for one provider, or null when absent/disabled. */
   resolveKey(id: string): Promise<string | null>;
   upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void>;
   delete(id: string, updatedBy: string): Promise<boolean>;
 }
+
+const CUSTOM_PROVIDERS: TableSpec = {
+  table: "custom_model_providers",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    name: { type: "text", required: true },
+    protocol: { type: "text", required: true },
+    baseUrl: { type: "text", required: true },
+    models: { type: "jsonb", required: true },
+    apiKeyEnc: { type: "text" },
+    disabled: { type: "boolean" },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+  },
+};
+
+export const CUSTOM_PROVIDERS_MIGRATION = mapToTableMigration("model/custom-providers/0001-typed", CUSTOM_PROVIDERS);
+
+const codec = tableCodec<StoredCustomProvider>(CUSTOM_PROVIDERS);
 
 function strip(saved: StoredCustomProvider): CustomProviderSpec {
   return {
@@ -47,22 +56,30 @@ function strip(saved: StoredCustomProvider): CustomProviderSpec {
 }
 
 export function createCustomProviderStore(input: {
-  backing: DurableMap<StoredCustomProvider>;
+  databaseUrl: string;
   keyMaterial: string | Buffer;
   write?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): CustomProviderStore {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
   const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+  const { q } = createPgPool(input.databaseUrl, [CUSTOM_PROVIDERS_MIGRATION]);
+  const select = async (where: string, params: unknown[] = []) =>
+    codec.rows(await q(`SELECT ${codec.columns} FROM custom_model_providers ${where} ORDER BY id`, params));
+  const save = async (rec: StoredCustomProvider) => {
+    await q(
+      `INSERT INTO custom_model_providers (${codec.columns}) VALUES (${codec.placeholders})
+       ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+      codec.values(rec.id, rec),
+    );
+  };
 
   return {
     async enabled() {
-      const all = await input.backing.all();
-      return all.filter((p) => !p.disabled).map(strip);
+      return (await select(`WHERE disabled IS NOT TRUE`)).map(strip);
     },
 
     async statuses() {
-      const all = await input.backing.all();
-      return all
+      return (await select(``))
         .map((p) => ({
           ...strip(p),
           disabled: p.disabled ?? false,
@@ -74,7 +91,7 @@ export function createCustomProviderStore(input: {
     },
 
     async resolveKey(id) {
-      const saved = await input.backing.get(id);
+      const [saved] = await select(`WHERE id = $1`, [id]);
       if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
       return decryptSecret(saved.apiKeyEnc, key);
     },
@@ -84,10 +101,10 @@ export function createCustomProviderStore(input: {
         validateCustomProviderSpec(spec);
         const actor = updatedBy.trim();
         if (!actor) throw new Error("updatedBy is required");
-        const existing = await input.backing.get(spec.id);
+        const [existing] = await select(`WHERE id = $1`, [spec.id]);
         const trimmedKey = apiKey?.trim();
         const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
-        await input.backing.put(spec.id, {
+        await save({
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
           disabled: false,
@@ -99,15 +116,12 @@ export function createCustomProviderStore(input: {
 
     async delete(id, updatedBy) {
       return write(async () => {
-        const existing = await input.backing.get(id);
-        if (!existing || existing.disabled) return false;
-        await input.backing.put(id, {
-          ...existing,
-          disabled: true,
-          updatedAt: Date.now(),
-          updatedBy,
-        });
-        return true;
+        const rows = await q(
+          `UPDATE custom_model_providers SET disabled = true, updated_at = $2, updated_by = $3
+           WHERE id = $1 AND disabled IS NOT TRUE RETURNING id`,
+          [id, Date.now(), updatedBy],
+        );
+        return rows.length > 0;
       });
     },
   };

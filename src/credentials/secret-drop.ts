@@ -1,8 +1,8 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { createOneTimeStore, type OneTimeResult } from "../persistence/one-time-store.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { GrantMode } from "./keychain.ts";
-import { swallowAs } from "../util/errors.ts";
 
 export interface SecretDropField {
   key: string;
@@ -39,33 +39,55 @@ export interface SecretDropStore {
 
 export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
 
+const SECRET_DROPS: TableSpec = {
+  table: "secret_drops",
+  key: "id",
+  columns: {
+    ownerId: { type: "text", required: true },
+    orgId: { type: "text" },
+    service: { type: "text", required: true },
+    envKey: { type: "text" },
+    host: { type: "text" },
+    fields: { type: "jsonb" },
+    purpose: { type: "text", required: true },
+    requestedBy: { type: "text", required: true },
+    audienceScopeId: { type: "text" },
+    scopeVersion: { type: "text" },
+    grantMode: { type: "text" },
+    destination: { type: "jsonb" },
+    threadRef: { type: "text" },
+    requiresToken: { type: "boolean" },
+    createdAt: { type: "bigint", required: true },
+  },
+};
+
+export const SECRET_DROPS_MIGRATION = mapToTableMigration("credentials/secret-drops/0001-typed", SECRET_DROPS);
+
+const codec = tableCodec<SecretDropRecord>(SECRET_DROPS);
+
 export function createSecretDropStore(
-  backing: DurableMap<SecretDropRecord>,
+  databaseUrl: string,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): SecretDropStore {
   const ttl = opts.ttlMs ?? SECRET_DROP_TTL_MS;
   const clock = opts.now ?? (() => Date.now());
-  const drops = createOneTimeStore(backing, ttl, clock);
+  const drops = createOneTimeStore<SecretDropRecord>(databaseUrl, SECRET_DROPS_MIGRATION, ttl, clock);
+  const { q } = createPgPool(databaseUrl, [SECRET_DROPS_MIGRATION]);
   return {
     ...drops,
     mint: async (rec, now) => ({ dropId: await drops.mint(rec, now) }),
     async siblings(rec, now) {
-      const at = now ?? clock();
-      const out: SecretDropRecord[] = [];
-      for (const [id, r] of await backing.entries()) {
-        if (at - r.createdAt > ttl) {
-          void backing.delete(id).catch(swallowAs("secret drop: delete expired drop", undefined));
-          continue;
-        }
-        if (
-          r.orgId === rec.orgId &&
-          r.audienceScopeId === rec.audienceScopeId &&
-          r.threadRef === rec.threadRef &&
-          r.service !== rec.service
-        )
-          out.push(r);
-      }
-      return out;
+      const cutoff = (now ?? clock()) - ttl;
+      await q(`DELETE FROM secret_drops WHERE created_at < $1`, [cutoff]);
+      return codec.rows(
+        await q(
+          `SELECT ${codec.columns} FROM secret_drops
+           WHERE org_id IS NOT DISTINCT FROM $1 AND audience_scope_id IS NOT DISTINCT FROM $2
+             AND thread_ref IS NOT DISTINCT FROM $3 AND service <> $4
+           ORDER BY id`,
+          [rec.orgId ?? null, rec.audienceScopeId ?? null, rec.threadRef ?? null, rec.service],
+        ),
+      );
     },
   };
 }

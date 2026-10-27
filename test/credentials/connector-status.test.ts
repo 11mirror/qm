@@ -10,7 +10,7 @@ import {
 } from "../../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../../src/credentials/keychain.ts";
 import { ConnectorNotConfiguredError, setPublicOAuthClients } from "../../src/connectors/oauth.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {
@@ -19,7 +19,7 @@ function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenSt
 }
 
 test("connector status cache: put/get round-trips per principal", async () => {
-  const cache = createConnectorStatusCache(testMap<ConnectorStatusRecord>());
+  const cache = createConnectorStatusCache(testDatabaseUrl());
   assert.equal(await cache.get("U1"), null);
   const rec: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { slack: { connected: true } } };
   await cache.put(rec);

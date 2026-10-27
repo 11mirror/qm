@@ -14,7 +14,7 @@ import type { CredentialsModule } from "./credentials.ts";
 export function buildModelKeys(w: Head & StoresModule & ModelCredentialsModule & CredentialsModule) {
   const {
     advisoryLock,
-    artifactMap,
+    databaseUrl,
     connectorSecretKey,
     gatewayCatalog,
     modelCredentials,
@@ -31,7 +31,7 @@ export function buildModelKeys(w: Head & StoresModule & ModelCredentialsModule &
     });
   const customProviders = createCustomProviderStore({
     write: writeModelRegistry,
-    backing: artifactMap("custom_model_providers"),
+    databaseUrl,
     keyMaterial: connectorSecretKey,
   });
   const refreshCustomProviders = async () => {

@@ -7,10 +7,10 @@ import { composioTwitterMediaRoutes } from "../../../src/api/routes/composio-twi
 import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import type { ServerDeps } from "../../../src/api/deps.ts";
 import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { tenant } from "../../../src/tenant.ts";
-import { testAdvisoryLock } from "../../support/test-database.ts";
-import { testMap } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../../support/test-database.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -43,9 +43,7 @@ const proxied = (data: unknown, status = 200) => ({ data, status, headers: { "se
 
 async function fixture() {
   const keychain = createKeychain({
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     lock: testAdvisoryLock(),
     key: deriveConnectorKey("composio-test"),
   });

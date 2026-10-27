@@ -12,6 +12,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../../../src/api/server.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { scopeId, type TurnRequest } from "../../../src/types.ts";
 import {
@@ -22,7 +23,7 @@ import {
 } from "../../../src/auth/capability-token.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { mintSignedPayload } from "../../../src/auth/signed-token.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../../support/test-database.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
@@ -45,9 +46,7 @@ async function start(withConfig = true) {
   );
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {

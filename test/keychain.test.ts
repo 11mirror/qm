@@ -14,9 +14,8 @@ import {
   fileCredentialEnvironment,
   KeychainError,
   type Keychain,
-  type KeychainGrant,
 } from "../src/credentials/keychain.ts";
-import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey, encryptSecret } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -24,7 +23,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
@@ -32,9 +31,7 @@ const KEY = deriveConnectorKey("keychain-test-key");
 function kc(now?: () => number): Keychain {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     ...(now ? { now } : {}),
   });
@@ -83,28 +80,8 @@ test("listAllMetadata returns person-facing metadata only", async () => {
   assert.ok(!JSON.stringify(all).includes("s3"));
 });
 
-test("listing and per-owner reads use the store's projected select and never a full all() scan", async () => {
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
-  const backing = testMap<Rec>();
-  const calls: string[] = [];
-  const creds: DurableMap<Rec> = {
-    ...backing,
-    async all() {
-      calls.push("all");
-      return backing.all();
-    },
-    async select<K extends Extract<keyof Rec, string> = never>(query: DurableMapSelect<Rec, K>) {
-      calls.push(`select:${(query.omit ?? []).join(",") || "full"}:${query.where ? "byOwner" : "unfiltered"}`);
-      return backing.select(query);
-    },
-  };
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+test("listing and per-owner reads match owners across email casing and never return secret material", async () => {
+  const k = kc();
   const org = scopeId("org", "default-org");
   await k.save({ ...GH, ownerId: "Alice@X.com" });
   await k.save(GH);
@@ -136,10 +113,6 @@ test("listing and per-owner reads use the store's projected select and never a f
     [{ key: "GITHUB_TOKEN", value: "ghp_secret" }],
   );
   await k.materializeOwnFiles("U1");
-
-  assert.ok(!calls.includes("all"), `no listing path may scan the whole table (calls: ${calls.join(" ")})`);
-  assert.ok(calls.includes("select:secretEnc:byOwner"));
-  assert.ok(calls.includes("select:secretEnc:unfiltered"), "listAllMetadata projects the secret away");
 });
 
 test("envKey defaults from the service name (github → GITHUB_TOKEN)", async () => {
@@ -219,14 +192,8 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 });
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
-  const grants = testMap<KeychainGrant>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants,
-    asks: testMap(),
-    key: KEY,
-  });
+  const store = createKeychainStore(testDatabaseUrl());
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const credential = await k.save(GH);
   const grant = await k.createGrant({
     credentialId: credential.id,
@@ -236,7 +203,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
     purpose: "one use",
   });
   const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
+  await store.grants.put({ ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
   assert.equal((await k.grantsForScope("channel:C1")).length, 0);
   for (const actor of ["U2", "U3"])
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
@@ -284,13 +251,12 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const store = createKeychainStore(testDatabaseUrl());
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
-  const broker = (await creds.all()).find((c) => c.kind === "broker")!;
-  await grants.put("g-broker", {
+  const broker = (await store.creds.all()).find((c) => c.kind === "broker")!;
+  await store.grants.put({
     id: "g-broker",
     credentialId: broker.id,
     ownerId: ORG,
@@ -314,13 +280,10 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
   const G1 = scopeId("group", "G1");
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
       lock: testAdvisoryLock(),
-      creds: testMap<Rec>(),
-      grants: testMap(),
-      asks: testMap(),
+      store: createKeychainStore(testDatabaseUrl()),
       key: KEY,
       refreshConnector: async () => ({ accessToken: freshToken, expiresAt: Date.now() + 3_600_000 }),
     });
@@ -640,24 +603,12 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 });
 
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const store = createKeychainStore(testDatabaseUrl());
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: OTHER,
-  });
+  const writer = createKeychain({ lock: testAdvisoryLock(), store, key: OTHER });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+  const reader = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   await reader.save(GH);
 
   const own = await reader.materializeOwn("U1");
@@ -669,19 +620,12 @@ test("materializeOwn skips a row that doesn't decrypt under the current key inst
 });
 
 test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const store = createKeychainStore(testDatabaseUrl());
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants,
-    asks: testMap(),
-    key: OTHER,
-  });
+  const writer = createKeychain({ lock: testAdvisoryLock(), store, key: OTHER });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const reader = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -790,39 +734,30 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
 });
 
 test("legacy rows are rewritten once to the current shape and materialize as before", async () => {
-  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+  const store = createKeychainStore(testDatabaseUrl());
+  const { creds } = store;
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const password = await k.save({
     ownerId: "U1",
     service: "acme-portal",
     secret: "hunter2",
     envKey: "ACME_PORTAL_PASSWORD",
   });
-  await creds.merge(password.id, { username: "alice@acme.co" } as never);
+  await creds.update(password.id, (current) => ({ ...current, username: "alice@acme.co" }));
   const file = await k.save({ ownerId: "U1", service: "netrc", target: ".netrc", secret: "machine x" });
   const stored = (await creds.get(file.id))!;
   const { targets: _targets, ...withoutTargets } = stored;
-  await creds.put(file.id, {
-    ...withoutTargets,
-    target: ".netrc",
-    secretEnc: encryptSecret("machine x", KEY),
-  } as never);
+  await creds.put({ ...withoutTargets, target: ".netrc", secretEnc: encryptSecret("machine x", KEY) });
 
   assert.equal(await k.rewriteTargetUsernameCredentials(), 2);
   assert.equal(await k.rewriteTargetUsernameCredentials(), 0, "a second pass finds nothing to rewrite");
   const rewritten = (await creds.get(password.id))!;
-  assert.equal((rewritten as { username?: string }).username, undefined);
+  assert.equal(rewritten.username, undefined);
   assert.deepEqual(rewritten.fields, [
     { envKey: "ACME_PORTAL_PASSWORD", secret: true },
     { envKey: "ACME_PORTAL_USERNAME", secret: false },
   ]);
-  assert.equal(((await creds.get(file.id)) as { target?: string }).target, undefined);
+  assert.equal((await creds.get(file.id))!.target, undefined);
 
   const own = await k.materializeOwn("U1");
   const env = own.find((c) => c.credentialId === password.id) as { env: unknown };
@@ -1364,9 +1299,7 @@ test("connector refresh during preparation binds the refreshed version and later
   let refreshes = 0;
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     refreshConnector: async () => {
       refreshes++;
@@ -1430,9 +1363,7 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
   let now = Date.parse("2030-01-01T00:00:00Z");
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     now: () => now,
   });
