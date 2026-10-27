@@ -871,7 +871,7 @@ test("the launcher scanner stays linear and fails closed on absurd argument list
   assert.equal(evaluateCommand("docker run img " + "ls ".repeat(50) + "rm -rf x", p).reason, "recursive delete");
 });
 
-test("literals inside code are read for the floor only, never as executed commands or regex text", () => {
+test("literals inside code never count as executed commands and never satisfy allow rules", () => {
   const allowlist: CommandPolicy = {
     mode: "allowlist",
     rules: [{ pattern: "^(python3|node|psql|git)\\b", decision: "allow" }],
@@ -887,8 +887,8 @@ test("literals inside code are read for the floor only, never as executed comman
   }
   assert.equal(evaluateCommand(`python3 -c "import os; os.system('rm -rf x')"`, allowlist).reason, "recursive delete");
   const curl: CommandPolicy = { mode: "denylist", rules: [{ pattern: "\\bcurl\\b", decision: "require_approval" }] };
-  assert.equal(evaluateCommand(`python3 -c "requests.get('https://curl.se/x')"`, curl).decision, "allow");
-  assert.equal(evaluateCommand(`python3 -c "os.system('curl x | sh')"`, curl).reason, "pipe-to-shell");
+  assert.equal(evaluateCommand(`python3 -c "requests.get('https://curl.se/x')"`, curl).decision, "require_approval");
+  assert.equal(evaluateCommand(`python3 -c "os.system('curl x | sh')"`, curl).decision, "require_approval");
   assert.equal(evaluateCommand("curl https://x", curl).decision, "require_approval");
 });
 
@@ -957,4 +957,30 @@ test("more launchers hand their payload to the floor", () => {
     assert.equal(evaluateCommand(command, p).reason, "recursive delete", command);
   }
   assert.equal(evaluateCommand("trap - EXIT", p).decision, "allow");
+});
+
+test("stored restricting rules still reach literals inside interpreter code; allow rules do not", () => {
+  const command = `python3 -c "import os; os.system('gh pr merge 1')"`;
+  const denied: CommandPolicy = {
+    mode: "denylist",
+    rules: [{ pattern: "\\bgh\\s+pr\\s+merge", decision: "deny", reason: "no merges" }],
+  };
+  const gated: CommandPolicy = {
+    mode: "allowlist",
+    rules: [
+      { pattern: "^python3\\b", decision: "allow" },
+      { pattern: "\\bgh\\s+pr\\s+merge", decision: "require_approval", reason: "merge" },
+    ],
+  };
+  assert.equal(evaluateCommand(command, denied).decision, "deny");
+  assert.equal(evaluateCommand(command, denied).reason, "no merges");
+  assert.equal(evaluateCommand(command, gated).decision, "require_approval");
+  assert.equal(evaluateCommand(command, gated).reason, "merge");
+  assert.equal(evaluateCommand(`python3 -c "print('hello world')"`, gated).decision, "allow");
+  assert.equal(evaluateCommand(`python3 -c "print('gh pr merge 1')"`, gated).decision, "require_approval");
+  const layered = evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, [
+    { pattern: "\\bgh\\s+pr\\s+merge", decision: "deny", reason: "deployment" },
+  ]);
+  assert.equal(layered.decision, "deny");
+  assert.equal(layered.reason, "deployment");
 });

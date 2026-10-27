@@ -255,7 +255,10 @@ function decideUnit(
   scope: readonly CompiledRule[],
   layer: readonly CompiledRule[],
 ): CommandEvaluation | undefined {
-  if (speculative(unit)) return firstHit(floor, unit);
+  if (speculative(unit)) {
+    const restricting = [...scope, ...layer].filter((entry) => entry.rule.decision !== "allow");
+    return firstHit([...floor, ...restricting], unit);
+  }
   const own = firstHit([...floor, ...scope], unit);
   if (own) return own;
   if (policy.mode === "allowlist") {
