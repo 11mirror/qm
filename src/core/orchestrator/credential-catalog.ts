@@ -17,6 +17,7 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   BROWSER_MODEL_AUD,
+  SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -33,6 +34,7 @@ import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import { tenant } from "../../tenant.ts";
 
 import type { TurnCtx } from "./turn-context.ts";
+import { SANDBOX_MODEL_PREFIX } from "../../api/contract.ts";
 
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -343,6 +345,7 @@ export async function buildCredentialCatalog(
     connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
   }
   let actorIsOrgAdmin = false;
+  let sandboxModelGateway = false;
   let controlClaims: CapabilityClaims | undefined;
   const sandboxTokenExpiry = Date.now() + SANDBOX_CAPABILITY_TTL_MS;
   const scopeAttestation = {
@@ -413,6 +416,15 @@ export async function buildCredentialCatalog(
         },
         deps.capabilitySecret ?? deps.signingSecret,
       );
+    }
+    if (deps.sandboxModels && allInternal) {
+      connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+      connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
+        { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
+        deps.capabilitySecret ?? deps.signingSecret,
+        deps.capabilityTokenCompression,
+      );
+      sandboxModelGateway = true;
     }
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {
@@ -588,5 +600,6 @@ export async function buildCredentialCatalog(
     egressTokenForTurn,
     registerServiceCredentials,
     openAutomationKeychain,
+    sandboxModelGateway,
   };
 }

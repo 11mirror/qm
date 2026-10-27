@@ -9,6 +9,7 @@ export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 export const SANDBOX_CAPABILITY_TTL_MS = 48 * 3_600_000;
 
 export const BROWSER_MODEL_AUD = "browser-model";
+export const SANDBOX_MODEL_AUD = "sandbox-model";
 
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
