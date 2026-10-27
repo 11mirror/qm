@@ -41,8 +41,7 @@ import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
-import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import {
   createSandboxResources,
   type SandboxResource,
@@ -70,13 +69,10 @@ import { type PrincipalLinkService } from "./identity/principal-links.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { type ScopedConfigStore } from "./resolution/config-store.ts";
-import { createResolutionService } from "./resolution/resolution-service.ts";
-import { createAclStore, type AclStore } from "./acl/acl-store.ts";
-import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
+import { type AclStore } from "./acl/acl-store.ts";
 import { type SkillStore } from "./skills/skill-store.ts";
 import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
-import { installSeedSkills } from "./skills/seed.ts";
 import { type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -97,13 +93,10 @@ import type {
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
-import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter, RATE_LIMIT } from "./ratelimit/postgres-rate-limiter.ts";
 import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
-import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
 import { LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
@@ -145,23 +138,14 @@ import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import { createCurrentScopeMembers, rosterAdmits } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
-import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
+import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
+import { type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
-import {
-  createLocalBlobTransferStore,
-  createS3BlobTransferStore,
-  type BlobTransferStore,
-} from "./persistence/blob-transfer.ts";
-import {
-  createLocalDurableByteStore,
-  createS3DurableByteStore,
-  type DurableByteStore,
-} from "./files/durable-byte-store.ts";
+import { type BlobTransferStore } from "./persistence/blob-transfer.ts";
+import { type DurableByteStore } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
-import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
@@ -312,22 +296,10 @@ import {
 } from "./model/pi-models.ts";
 import { type AdminService } from "./admin/admin-service.ts";
 import { type ProjectStore } from "./projects/project-store.ts";
-import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
+import { type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
-import {
-  emptyDeploymentLayer,
-  loadDeploymentLayer,
-  type BrokeredLayerTool,
-  type DeploymentLayerRuntime,
-} from "./deployment/load-layer.ts";
-import {
-  createDeploymentLayerStore,
-  LAYER_CREATED_BY,
-  LAYER_REVIEWER,
-  type DeploymentLayerStore,
-  type StoredDeploymentLayer,
-} from "./deployment/deployment-layer-store.ts";
-import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
+import { type BrokeredLayerTool, type DeploymentLayerRuntime } from "./deployment/load-layer.ts";
+import { type DeploymentLayerStore } from "./deployment/deployment-layer-store.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { type SlackInstallationStore } from "./surfaces/slack-installation.ts";
@@ -336,6 +308,10 @@ import type { ContextRequestEvent } from "./api/app-types.ts";
 import { buildStores } from "./wiring/stores.ts";
 
 import { buildModelCredentials } from "./wiring/model-credentials.ts";
+
+import { buildDeploymentLayer } from "./wiring/deployment-layer.ts";
+
+import { buildFiles } from "./wiring/files.ts";
 
 export interface Runtime {
   start(): void;
@@ -541,60 +517,22 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     artifactMap,
     connectorSecretKey,
   });
-  const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
-    manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
-    resolveFiles: (refs) => files.resolveByIds(refs),
-  });
-  const deploymentLayer = config.deploymentLayerDir
-    ? loadDeploymentLayer(config.deploymentLayerDir)
-    : emptyDeploymentLayer();
-  const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const brokeredTools = deploymentLayer.brokeredTools;
-  const orgScope = scopeId("org", config.orgId);
-  const auditLog = createPostgresAuditLog(databaseUrl);
-  const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
-    runtime: deploymentLayer,
-    skills,
-    skillBundles,
-    scopeId: orgScope,
-    advisoryLock,
-    auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
-        at: record.updatedAt,
-        principalId: record.updatedBy,
-        action: "deployment_layer.updated",
-        resource: record.contentHash,
-        scopeLabel: orgScope,
-      }),
-    ...(config.seedSkills && layerSkillsDir
-      ? {
-          seedFallback: () =>
-            installSeedSkills(skills, {
-              dir: layerSkillsDir,
-              scopeId: orgScope,
-              createdBy: LAYER_CREATED_BY,
-              reviewer: LAYER_REVIEWER,
-            }),
-        }
-      : {}),
-  });
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
-  const installCatalogs = async (): Promise<void> => {
-    await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });
-    for (const dir of config.pluginSkillDirs) {
-      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-      await installSeedSkills(skills, {
-        dir,
-        scopeId: orgScope,
-        createdBy: "system:plugin-skills",
-        reviewer: "system:plugin-skills-reviewer",
-        respectArchived: true,
-      });
-    }
-  };
+  const {
+    errors,
+    blobTransfer,
+    workspace,
+    mcpServers,
+    byteStore,
+    s3Bytes,
+    acl,
+    resolution,
+    files,
+    rateLimiter,
+    budget,
+    fileUploads,
+  } = buildFiles({ databaseUrl, managesArtifactHome, config, configStore, artifactMap });
+  const { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerRefresh } =
+    buildDeploymentLayer({ config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock });
   let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
   // Startup I/O: hydrate stores, load the deployment layer, seed skill catalogs. Runs once, on the first call.
   const startOnce = () => {
@@ -621,45 +559,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     return started;
   };
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, RATE_LIMIT);
-  const budgetOpts = {
-    ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
-    ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
-  };
-  const budget =
-    config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
-      ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
-      : undefined;
-  const resolution = createResolutionService(config.orgId, configStore, acl);
-
-  const workspace = createLocalWorkspaceStore(config.dataDir);
-  const blobTransfer: BlobTransferStore = config.s3Bucket
-    ? createS3BlobTransferStore({
-        bucket: config.s3Bucket,
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-      })
-    : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const s3Bytes = (bucket: string, prefix: string): DurableByteStore =>
-    createS3DurableByteStore({
-      bucket,
-      ...(config.s3Region ? { region: config.s3Region } : {}),
-      prefix: `${config.s3Prefix ?? ""}${prefix}`,
-    });
-  // S3 under `prefix` when a bucket is configured, else local disk under dataDir/localDir.
-  const byteStore = (prefix: string, localDir: string): DurableByteStore =>
-    config.s3Bucket ? s3Bytes(config.s3Bucket, prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
-  const fileBytes = byteStore("", "docstore");
-  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
-  const fileUploads = config.s3Bucket
-    ? createDirectFileUploads({
-        bucket: config.s3Bucket,
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        store: createPostgresFileUploadStore(databaseUrl),
-        files,
-      })
-    : undefined;
   const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
     notebook: notebookMemory,
@@ -670,8 +569,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     createSweeper,
   });
   const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
-  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
     error?: unknown,
