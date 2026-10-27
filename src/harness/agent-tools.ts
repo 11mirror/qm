@@ -61,6 +61,7 @@ export interface ToolContextRef {
   modelDispatch?: Array<{
     start: number;
     first?: number;
+    gateway?: Record<string, string>;
     streamStart?: number;
     prepareNextTurn?: number;
     transformContext?: number;

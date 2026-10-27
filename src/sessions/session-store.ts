@@ -176,6 +176,7 @@ export interface LlmCallUsage {
 export interface LlmTransportMeta {
   modelId?: string;
   headers?: Record<string, string>;
+  gateway?: Record<string, string>;
 }
 
 export type GapPhase =

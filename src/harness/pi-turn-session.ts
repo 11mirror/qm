@@ -12,6 +12,7 @@ import { reportFailure, swallow } from "../util/errors.ts";
 import { type ToolContextRef } from "./agent-tools.ts";
 import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
+import { gatewayAttemptHeaders } from "./call-telemetry.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Api, type Model } from "@earendil-works/pi-ai";
@@ -287,7 +288,11 @@ export async function createTurnSession(
     const priorResponse = agent.onResponse;
     agent.onResponse = async (response, model) => {
       const last = ref.modelDispatch?.at(-1);
-      if (last && last.first === undefined) last.first = Date.now();
+      if (last && last.first === undefined) {
+        last.first = Date.now();
+        const gateway = gatewayAttemptHeaders(response.headers);
+        if (gateway) last.gateway = gateway;
+      }
       if (priorResponse) await priorResponse(response, model);
     };
     const priorTransform = agent.transformContext;

@@ -49,6 +49,33 @@ function unionMs(
   return total;
 }
 
+const GATEWAY_ATTEMPT_HEADERS = [
+  "x-litellm-attempted-retries",
+  "x-litellm-attempted-fallbacks",
+  "x-litellm-response-duration-ms",
+  "x-litellm-overhead-duration-ms",
+  "x-litellm-model-group",
+  "x-litellm-model-api-base",
+  "x-litellm-call-id",
+  "llm_provider-openai-processing-ms",
+  "llm_provider-x-request-id",
+  "llm_provider-request-id",
+  "openai-processing-ms",
+  "x-request-id",
+  "request-id",
+];
+
+export function gatewayAttemptHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const lower = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+  const out: Record<string, string> = {};
+  for (const name of GATEWAY_ATTEMPT_HEADERS) {
+    const value = lower.get(name);
+    if (typeof value === "string" && value) out[name] = value.slice(0, 200);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export interface DispatchMarks {
   onPayload?: number;
   onResponse?: number;
@@ -306,7 +333,9 @@ export function createCallTelemetry(
           model: captured[step]!.transport?.modelId ?? effectiveModel,
           promptEnvelope: captured[step]!.envelope,
           truncated: captured[step]!.truncated,
-          transport: captured[step]!.transport ?? null,
+          transport: d?.gateway
+            ? { ...captured[step]!.transport, gateway: d.gateway }
+            : (captured[step]!.transport ?? null),
           ttftMs: stat?.ttftMs ?? null,
           durationMs: stat?.durationMs ?? null,
           stepGapMs: stat?.stepGapMs ?? null,
