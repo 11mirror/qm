@@ -28,7 +28,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(testMap());
+  const idempotency = createIdempotencyStore(testDatabaseUrl());
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",

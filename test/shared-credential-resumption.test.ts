@@ -52,7 +52,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const outbound = recordingOutbound();
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),

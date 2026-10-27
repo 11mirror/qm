@@ -1,6 +1,8 @@
 import { createPgPool, type PgPool, type PoolClient, tenantCols } from "./pg-pool.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { swallowAs } from "../util/errors.ts";
+
+export { jsonbStringify };
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -30,30 +32,6 @@ export interface DurableMap<T> {
   delete(id: string): Promise<void>;
   deleteMany(ids: readonly string[]): Promise<number>;
   take(id: string): Promise<T | null>;
-}
-
-/**
- * Serialize for a Postgres jsonb column. jsonb rejects two things a JS string
- * happily carries: NUL (\u0000) and unpaired surrogate halves — and qm's own
- * truncation helpers can manufacture the latter by slicing mid-emoji. The
- * memory map accepts those values, so production diverged from every
- * in-memory test. Sanitize at the serialization boundary: drop NULs and
- * replace lone surrogates with U+FFFD, recursively, only when a string
- * actually needs it.
- */
-function jsonbSafe(value: unknown): unknown {
-  if (typeof value === "string") return pgTextSafe(value);
-  if (Array.isArray(value)) return value.map(jsonbSafe);
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = Object.create(null);
-    for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
-    return out;
-  }
-  return value;
-}
-
-export function jsonbStringify(value: unknown): string {
-  return JSON.stringify(jsonbSafe(value));
 }
 
 function fieldText(value: unknown): string | null {

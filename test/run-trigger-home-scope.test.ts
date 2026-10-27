@@ -6,7 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
 import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 
 const OWNER = "pat@example.com";
 const CHAN = "C0PRIVATE";
@@ -33,7 +33,7 @@ function deps(
   };
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
     directory: dir,
@@ -161,7 +161,7 @@ describe("runTrigger home-scope gate for group homes", () => {
     };
     const d: TriggerDeps = {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testMap()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => {
         ranTurn = true;

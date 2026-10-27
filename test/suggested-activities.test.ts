@@ -36,7 +36,7 @@ function fixture() {
     crons,
     outbound,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);

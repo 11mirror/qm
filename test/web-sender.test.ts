@@ -8,7 +8,6 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, ScopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testMap } from "./support/test-database.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -34,7 +33,7 @@ function wired(leaseWaitMs?: number) {
   const bus = createMemorySessionStateBus();
   const states: SessionStateEvent[] = [];
   bus.subscribe((event) => void states.push(event));
-  const outbound = createOutbound({ idempotency: createIdempotencyStore(testMap()) });
+  const outbound = createOutbound({ idempotency: createIdempotencyStore(testDatabaseUrl()) });
   outbound.register(
     ["web"],
     createWebSender({ sessions, sessionStates: bus, ...(leaseWaitMs !== undefined ? { leaseWaitMs } : {}) }),

@@ -23,7 +23,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
-import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
+import { createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
@@ -139,7 +139,7 @@ import { adminSessionUrl } from "./util/admin-links.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
@@ -226,12 +226,7 @@ import {
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
-import {
-  createFeatureFlagStore,
-  externalAppSharingAllowed,
-  type FeatureFlagRecord,
-  type FeatureFlagStore,
-} from "./feature-flags.ts";
+import { createFeatureFlagStore, externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
@@ -594,7 +589,7 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const featureFlags = createFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
@@ -1396,7 +1391,7 @@ export function buildApp(
   });
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const idempotency = createIdempotencyStore(databaseUrl);
   const transcripts = { sessions, sessionStates: sessionStateBus };
   const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
   const outbound = createOutbound({
@@ -1625,7 +1620,7 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const sessionMailbox = createSessionMailbox(databaseUrl);
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: createPostgresSwarmBoard(databaseUrl),

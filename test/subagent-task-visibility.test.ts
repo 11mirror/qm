@@ -5,11 +5,10 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { isUserMessage } from "../src/sessions/items.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
-import { testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -36,7 +35,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     maxAttempts: 1,
   }).forTurn({
     session: parentSession,

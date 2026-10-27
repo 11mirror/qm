@@ -1,4 +1,4 @@
-import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createSessionMailbox, type SessionMailbox } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
@@ -10,7 +10,7 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -30,7 +30,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testDatabaseUrl());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,

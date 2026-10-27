@@ -15,7 +15,7 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -94,7 +94,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     createdInScope: scopeId("channel", "CBUILT"),
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
-  const featureFlags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
+  const featureFlags = createFeatureFlagStore(testDatabaseUrl());
   const server = createInsecureTestServer(app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",
