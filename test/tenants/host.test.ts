@@ -7,13 +7,13 @@ import pg from "pg";
 import {
   createHostFront,
   normalizeHost,
-  proxyTarget,
+  onEdgeTenants,
   requestHost,
   routeForHost,
   type HostRoute,
   type HostTarget,
 } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { relocateEmbeddedAuth, tenantServiceEnv } from "../../plugins/chassis/src/tenant-workers.ts";
+import { deriveTenantSecret, type TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
 import { configurePgTenancy, createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { loadConfig } from "../../src/config.ts";
 import { registerTenantSettings, tenant, tenantFor, tenantSettings, withTenant } from "../../src/tenant.ts";
@@ -24,7 +24,7 @@ import {
   useTenantDirectory,
   type TenantDirectory,
 } from "../../src/tenants/directory.ts";
-import { createTenantFront } from "../../src/tenants/host.ts";
+import { createTenantFront, publishEdgeTenants } from "../../src/tenants/host.ts";
 import { type TenantRecord, upsertTenant } from "../../src/tenants/registry.ts";
 import { tenantQueue } from "../../src/turns/absurd-schema.ts";
 
@@ -133,21 +133,6 @@ test("the front dispatches by host and sends unknown hosts to home only for heal
   assert.equal((await get(port, "/v1/x", { host: "stranger.test" })).status, 404);
 });
 
-test("the proxy target keeps the original host for the tenant worker", async (t) => {
-  const upstream = createServer((req, res) => res.end(String(req.headers.host)));
-  const upstreamPort = await listen(upstream);
-  const front = createHostFront(
-    () => [{ hosts: ["acme.example.test"], target: proxyTarget(upstreamPort) }],
-    () => undefined,
-  );
-  const port = await listen(front);
-  t.after(() => {
-    front.close();
-    upstream.close();
-  });
-  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme.example.test" });
-});
-
 test("core verifies each tenant with the derived secrets its surfaces sign with, distinct per tenant", () => {
   const config = loadConfig({
     ...deployment,
@@ -159,11 +144,9 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   const other = { ...record, id: "0f8e2c4a-1b2c-4d3e-8f90-000000000002", slug: "other", orgId: "other" };
   registerTenantSettings([record, other]);
   const coreFor = (t: TenantRecord) => withTenant(tenantFor(t.orgId, t.id, t.slug), () => tenantConfig(config));
-  const portal = tenantServiceEnv(deployment, record);
-  assert.equal(coreFor(record).signingSecret, portal.CORE_SIGNING_SECRET);
+  assert.equal(coreFor(record).signingSecret, deriveTenantSecret(deployment.CORE_SIGNING_SECRET, ACME_ID));
   assert.notEqual(coreFor(record).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.notEqual(coreFor(other).signingSecret, coreFor(record).signingSecret);
-  assert.equal(portal.AUTH_CLIENT_SECRET, portal.OIDC_CLIENT_SECRET);
   assert.equal(tenantConfig(config).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.equal(coreFor(record).publicUrl, "https://acme.example.test");
   assert.equal(coreFor(record).sandboxNamePrefix, "qm-acme-sbx");
@@ -172,49 +155,6 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   assert.equal(coreFor(record).adminGrants, undefined);
   assert.equal(tenantConfig(config).adminGrants, deployment.ADMIN_GRANTS);
   registerTenantSettings([]);
-});
-
-test("surface env names the tenant to core and points trusted sign-in at the tenant's client", () => {
-  const env = tenantServiceEnv(deployment, record);
-  assert.equal(env.CORE_ORG_ID, "acme");
-  assert.equal(env.CORE_TENANT_HOST, "acme.example.test");
-  assert.equal(env.PORTAL_PUBLIC_URL, "https://acme.example.test");
-  assert.deepEqual(JSON.parse(env.PORTAL_TRUSTED_OIDC!), { issuer: "https://auth.example.test", clientId: "acme" });
-  assert.equal(env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET, "acme-trusted-client-secret");
-  assert.equal(env.PORTAL_TRUSTED_OIDC_LABEL, "Example SSO");
-  assert.equal(env.PORTAL_TRUSTED_OIDC_ADMIN, "1");
-  const plain = tenantServiceEnv(deployment, { ...record, oidcClientId: undefined, secrets: {} });
-  assert.equal(plain.PORTAL_TRUSTED_OIDC, undefined);
-  assert.equal(plain.PORTAL_TRUSTED_OIDC_CLIENT_SECRET, undefined);
-  assert.equal(plain.MODEL_GATEWAY_API_KEY, "home-gateway-key");
-});
-
-test("the home tenant's surface env is the deployment env", () => {
-  const home = tenantServiceEnv(deployment, {
-    slug: "home",
-    orgId: "home",
-    hosts: ["home.example.test"],
-    status: "active",
-    oidcAdmin: false,
-    secrets: {},
-  });
-  assert.deepEqual(home, { ...deployment, CORE_TENANT_HOST: "home.example.test" });
-});
-
-test("embedded auth moves to its own loopback port, rewriting endpoints that pointed at it", async () => {
-  const env = await relocateEmbeddedAuth({
-    AUTH_EMBEDDED: "1",
-    AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
-    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/idp/token",
-    OIDC_ISSUER: "https://acme.example.test/idp",
-  });
-  const moved = new URL(env.AUTH_BROKER_UPSTREAM!);
-  assert.equal(moved.hostname, "127.0.0.1");
-  assert.notEqual(moved.port, "8099");
-  assert.equal(env.OIDC_TOKEN_ENDPOINT, `${env.AUTH_BROKER_UPSTREAM}/idp/token`);
-  assert.equal(env.OIDC_ISSUER, "https://acme.example.test/idp");
-  const plain = { AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099" };
-  assert.equal(await relocateEmbeddedAuth(plain), plain);
 });
 
 test("Absurd queues are tenant-scoped except for the home tenant", () => {
@@ -340,6 +280,27 @@ test("a tenant's changed settings are live on its next request without a restart
   assert.equal(await prefix(), "none");
   await upsertTenant(registry, { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2" }, undefined);
   await eventually(prefix, "a2");
+});
+
+test("the web edge serves the tenants the app serves, with their live settings", async () => {
+  let edge: readonly TenantSettings[] = [];
+  onEdgeTenants((tenants) => (edge = tenants));
+  await publishEdgeTenants(["home.example.test"]);
+  assert.deepEqual(
+    edge.map((t) => [t.id ?? null, t.hosts[0]]),
+    [
+      [null, "home.example.test"],
+      [ACME, "acme.example.test"],
+      [GAMMA, "gamma.example.test"],
+    ],
+  );
+  assert.equal(edge.find((t) => t.id === ACME)?.sandboxNamePrefix, "a2");
+  await upsertTenant(
+    registry,
+    { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2", faviconSvg: "<svg/>" },
+    undefined,
+  );
+  await eventually(async () => edge.find((t) => t.id === ACME)?.faviconSvg, "<svg/>");
 });
 
 test("a tenant reusing another tenant's org id is not served", async () => {
