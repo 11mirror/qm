@@ -72,19 +72,17 @@ import { activityOf } from "./session-list";
 import { replaceChildrenPreservingFocus } from "./pane-focus";
 import {
   openSession,
-  closeOpenSessionMenu,
   refreshSessions,
-  renderChatsPage,
   renderList,
   resetSessionsState,
   sessionTitle,
   sessionsState,
-  sessionSelectionBar,
   revealSessionSurface,
   startNewChatInLastScope,
   startNewChat,
-  menuOption,
 } from "./sessions";
+import { closeOpenSessionMenu, sessionSelectionBar, menuOption } from "./session-actions";
+import { renderChatsPage } from "./session-rows";
 import { openCronById, renderCronsPage, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";

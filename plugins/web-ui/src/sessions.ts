@@ -1,47 +1,12 @@
-import { openSessionShare } from "./session-share";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { live } from "lit/directives/live.js";
-import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import {
-  Archive,
-  Ban,
-  Binoculars,
-  Bot,
-  Target,
-  ArchiveRestore,
-  ChevronDown,
-  ChevronRight,
-  Clock3,
-  Cog,
-  CornerLeftUp,
-  EllipsisVertical,
-  Folder,
-  Hash,
-  Link,
-  Lock,
-  Mail,
-  MailOpen,
-  Palette,
-  Pencil,
-  Pin,
-  PinOff,
-  Plus,
-  RefreshCw,
-  SquareTerminal,
-  Users,
-  X,
-  type IconNode,
-} from "lucide";
+import { ChevronDown, ChevronRight, Pin } from "lucide";
 import {
   fetchSessionApprovals,
   fetchSessionChildren,
   fetchSessionPage,
   fetchSessionRow,
   fetchTranscript,
-  detachSession,
-  regenerateTitle,
-  sharedContextLabel,
   slackThreadUrl,
   TAIL_TURNS,
   type TranscriptPage,
@@ -50,11 +15,9 @@ import {
   type CoreSession,
 } from "./core-bridge";
 import { currentEarlierCount, inheritedTranscript, itemsToMessages } from "./transcript-messages";
-import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
   activityOf,
   automationRunLabel,
-  chatBrowseStatusMatches,
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
@@ -62,31 +25,18 @@ import {
   recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
-  rowIndicators,
   surfaceOf,
   splitPinned,
   upsertSessions,
   withPendingSession,
   withoutUnsentPending,
-  type BackgroundCounts,
-  type ChatBrowseStatus,
-  type RecentGroupKind,
   type RecentItem,
 } from "./session-list";
 import { tip } from "./tooltip";
-import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
-import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
-import { slackMark } from "./slack-mark";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { sheenLabel } from "./ui";
 import { icon } from "./icons";
-import { listPageTpl, listTabs } from "./list-page";
-import {
-  contextsState,
-  ensureContexts,
-  openProjectDetail,
-  personalScopeId,
-  renameProject,
-  scopeChip,
-} from "./contexts";
+import { contextsState, ensureContexts, personalScopeId } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
 import { quietly } from "./shell-state";
@@ -97,27 +47,23 @@ import {
   startNewChatInCanvas,
   mountRestoredCanvas,
   focusedPaneConversation,
-  openBackgroundInCanvas,
-  beginSessionDrag,
-  endPaneDrag,
-  canvasToast,
   notifyPanesChanged,
   drawCanvas,
-  closeSessionSurfaces,
-  sessionInCanvas,
   splitInterceptsOpen,
   splitState,
 } from "./split";
-import { liveTurnThreadRef } from "./working-dot";
+import { bumpSessionPatchEpoch, resetSessionPatches, sessionPatchEpoch } from "./session-patches";
+import { emptySelection, pruneSelection, type SessionSelection } from "./session-select";
+import { markOpenSessionsRead, placeSessionMenu, refreshingTitleIds } from "./session-actions";
 import {
-  bumpSessionPatchEpoch,
-  queueSessionPatch,
-  resetSessionPatches,
-  sessionPatchEpoch,
-  sessionPatchGeneration,
-  type SessionPatch,
-} from "./session-patches";
-import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
+  chatsPageShowing,
+  detachDropZone,
+  drawChatsPage,
+  moreButton,
+  recentItem,
+  resetChatsPage,
+  sessionRow,
+} from "./session-rows";
 
 const WEB_ONLY_KEY = "web-ui:web-only";
 
@@ -129,33 +75,19 @@ const freshSessionsState = () => ({
   openingKey: null as string | null,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
+  selection: emptySelection() as SessionSelection,
+  selectColorOpen: false,
+  renameDraft: "",
 });
 
 export const sessionsState = {
   ...freshSessionsState(),
   webOnly: quietly(() => localStorage.getItem(WEB_ONLY_KEY) === "1", false),
+  keptUnreadId: null as string | null,
+  notice: "",
 };
 
-let selection: SessionSelection = emptySelection();
-let keptUnreadId: string | null = null;
-const SAVE_FAILED_NOTICE = "Couldn't save that change.";
-
-export function clearSessionSelection(): boolean {
-  if (!selection.ids.size && !selection.anchor) return false;
-  selection = emptySelection();
-  selectColorOpen = false;
-  redrawSelection();
-  return true;
-}
-
-let selectColorOpen = false;
-
-function redrawSelection(): void {
-  renderList();
-  renderSidebarTop();
-}
-
-function visibleRowOrder(): string[] {
+export function visibleRowOrder(): string[] {
   const el = appState.listEl;
   if (!el) return [];
   return [...el.querySelectorAll<HTMLElement>("[data-session-id]")]
@@ -165,14 +97,11 @@ function visibleRowOrder(): string[] {
 }
 
 let sessionsLoading = false;
-let sessionsNotice = "";
 let sessionRefreshSeq = 0;
 let recentContextsRequest: Promise<void> | null = null;
 const RECENT_CONTEXT_MAX_AGE_MS = 30_000;
-let renameDraft = "";
-const refreshingTitleIds = new Set<string>();
 let showArchived = false;
-const SESSION_BATCH_SIZE = 50;
+export const SESSION_BATCH_SIZE = 50;
 const freshPaging = () => ({
   activeCursor: null as string | null,
   activePaged: false,
@@ -181,23 +110,8 @@ const freshPaging = () => ({
   loading: null as "active" | "archived" | null,
 });
 let paging = freshPaging();
-let chatsPageSeq = 0;
-const freshChatsPage = () => ({
-  rows: [] as CoreSession[],
-  cursor: null as string | null,
-  loading: false,
-  queryTimer: null as ReturnType<typeof setTimeout> | null,
-  scope: null as string | null,
-  query: "",
-  status: "active" as ChatBrowseStatus,
-  surface: "all" as "all" | "web" | "slack",
-  host: null as HTMLElement | null,
-});
-let chatsPage = freshChatsPage();
 
 export function resetSessionsState(): void {
-  selection = emptySelection();
-  selectColorOpen = false;
   resetSessionPatches();
   Object.assign(sessionsState, freshSessionsState());
   listCurrent = false;
@@ -205,13 +119,10 @@ export function resetSessionsState(): void {
   sessionsRefreshRunning = false;
   queuedSessionsRefresh = null;
   sessionRefreshSeq++;
-  renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
   paging = freshPaging();
-  chatsPageSeq++;
-  if (chatsPage.queryTimer) clearTimeout(chatsPage.queryTimer);
-  chatsPage = freshChatsPage();
+  resetChatsPage();
   recentContextsRequest = null;
 }
 
@@ -240,11 +151,6 @@ function loadRecentContexts(force = false): void {
   });
 }
 
-function listWhen(ms: number): string {
-  if (Date.now() - ms < 6 * 86_400_000) return relTime(ms);
-  return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
 export function sessionSlackUrl(s: Pick<CoreSession, "threadRef">): string | null {
   return slackThreadUrl(appState.me?.slackWorkspaceUrl ?? null, s.threadRef);
 }
@@ -253,11 +159,11 @@ function projectName(scopeId: string): string | null {
   return projectOf(scopeId)?.name ?? null;
 }
 
-function projectOf(scopeId: string): CoreProject | null {
+export function projectOf(scopeId: string): CoreProject | null {
   return contextsState.list.find((context) => context.scopeId === scopeId)?.project ?? null;
 }
 
-function projectMenuKey(scopeId: string): string {
+export function projectMenuKey(scopeId: string): string {
   return `project:${scopeId}`;
 }
 
@@ -273,7 +179,7 @@ export function defaultSessionTitle(s: CoreSession): string {
   return surface === "slack" ? "Direct message" : "Untitled chat";
 }
 
-function channelLabel(s: CoreSession): string | null {
+export function channelLabel(s: CoreSession): string | null {
   return s.channelName && s.channelName.trim() ? `#${s.channelName.replace(/^#/, "")}` : null;
 }
 
@@ -355,10 +261,10 @@ export function renderList(): void {
             `
           : nothing
       }
-      ${sessionsNotice ? html`<div class="empty" style="padding:16px">${sessionsNotice}</div>` : ""}
+      ${sessionsState.notice ? html`<div class="empty" style="padding:16px">${sessionsState.notice}</div>` : ""}
       ${sessionsLoading ? html`<div class="empty" style="padding:16px">Loading conversations...</div>` : ""}
       ${
-        !sessionsLoading && !sessionsNotice && visible.length === 0
+        !sessionsLoading && !sessionsState.notice && visible.length === 0
           ? html`<div class="empty" style="padding:16px">
               ${sessionsState.list.length ? "Slack conversations hidden." : "No conversations yet."}
             </div>`
@@ -367,117 +273,17 @@ export function renderList(): void {
     `,
     appState.listEl,
   );
-  const beforePrune = selection.ids.size;
-  selection = pruneSelection(selection, new Set(visibleRowOrder()));
-  if (selection.ids.size !== beforePrune) renderSidebarTop();
+  const beforePrune = sessionsState.selection.ids.size;
+  sessionsState.selection = pruneSelection(sessionsState.selection, new Set(visibleRowOrder()));
+  if (sessionsState.selection.ids.size !== beforePrune) renderSidebarTop();
   if (sessionsState.openMenuId) {
     requestAnimationFrame(() => placeSessionMenu(appState.listEl?.querySelector(".session-menu-popover") ?? undefined));
   }
   notifyPanesChanged();
 }
 
-function moreButton(cls: string, label: string, loading: boolean, run: () => void): TemplateResult {
-  return html`<button
-    class=${cls}
-    type="button"
-    ?disabled=${loading}
-    aria-busy=${loading ? "true" : "false"}
-    @click=${run}
-  >
-    ${sheenLabel(label, loading)}
-  </button>`;
-}
-
 function moreSessionsButton(kind: "active" | "archived", label: string): TemplateResult {
   return moreButton("archived-toggle", label, paging.loading === kind, () => void loadMoreSessions(kind));
-}
-
-const NEW_CHAT_TOOLTIP = "Start a new chat";
-const PROJECT_OPTIONS_TOOLTIP = "Project options";
-const CHAT_OPTIONS_TOOLTIP = "Chat options";
-
-function newChatHint(name: string): string {
-  return `Start a new chat in ${name}`;
-}
-
-const GROUP_LOOK: Record<RecentGroupKind, [IconNode | null, string]> = {
-  personal: [null, "Project"],
-  project: [Folder, "Project"],
-  channel: [Hash, "Channel"],
-  group: [Users, "Group DM"],
-};
-
-function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
-  if (item.kind === "session") return sessionRow(item.session);
-  const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
-  const [glyph, fallbackName] = GROUP_LOOK[item.groupKind];
-  const name = item.name ?? fallbackName;
-  const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const menuKey = projectMenuKey(item.scopeId);
-  const menuOpen = sessionsState.openMenuId === menuKey;
-  return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
-      ${
-        sessionsState.renamingId === menuKey
-          ? projectRenameRow(item)
-          : html`<div class="recent-project-head">
-              <button
-                class="recent-project-toggle"
-                type="button"
-                aria-expanded=${collapsed ? "false" : "true"}
-                aria-controls=${childrenId}
-                @click=${() => toggleRecentProject(item.scopeId)}
-              >
-                <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, 14)}</span>` : nothing}
-                  <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
-                </span>
-                <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
-              </button>
-              <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
-                <button
-                  class="session-menu-btn"
-                  data-menu-id=${menuKey}
-                  type="button"
-                  aria-label=${`Options for ${name}`}
-                  aria-haspopup="menu"
-                  aria-expanded=${menuOpen ? "true" : "false"}
-                  ${tip(PROJECT_OPTIONS_TOOLTIP)}
-                  @click=${(e: Event) => toggleSessionMenu(e, menuKey)}
-                >
-                  ${icon(EllipsisVertical, 15)}
-                </button>
-                ${menuOpen ? projectMenuPopover(item) : nothing}
-              </div>
-              <button
-                class="recent-project-new-chat"
-                type="button"
-                aria-label=${newChatHint(name)}
-                ${tip(NEW_CHAT_TOOLTIP)}
-                @click=${(event: Event) => startProjectChat(event, item.scopeId, item.name)}
-              >
-                ${icon(Plus, 15)}
-              </button>
-            </div>`
-      }
-      <div class="recent-project-children" id=${childrenId} ?hidden=${collapsed}>
-        ${
-          collapsed
-            ? nothing
-            : repeat(
-                item.sessions.filter((session) => shownThreads.has(session.threadRef)),
-                (session) => session.threadRef,
-                (session) => sessionRow(session, true),
-              )
-        }
-      </div>
-    </section>
-  `;
-}
-
-function toggleRecentProject(scopeId: string): void {
-  if (!sessionsState.collapsedProjectScopes.delete(scopeId)) sessionsState.collapsedProjectScopes.add(scopeId);
-  renderList();
 }
 
 export function startNewChat(
@@ -501,264 +307,7 @@ export function startNewChatInLastScope(): void {
   startNewChat(scopeId, scopeId ? projectName(scopeId) : null);
 }
 
-function startProjectChat(event: Event, scopeId: string, name: string | null): void {
-  event.stopPropagation();
-  startNewChat(scopeId, name);
-}
-
-function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
-  const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
-  return html`
-    <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
-      ${menuOption(Folder, "View project", () => openProjectFromMenu(item.scopeId))}
-      ${owned ? menuOption(Pencil, "Rename", () => beginRename(projectMenuKey(item.scopeId), item.name ?? "")) : nothing}
-    </div>
-  `;
-}
-
-function openProjectFromMenu(scopeId: string): void {
-  sessionsState.openMenuId = null;
-  openProjectDetail(scopeId);
-}
-
-function projectRenameRow(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
-  const menuKey = projectMenuKey(item.scopeId);
-  return html`<div class="recent-project-head renaming">
-    ${renameInput(menuKey, "Rename project", (next) => commitProjectRename(item, next))}
-  </div>`;
-}
-
-async function commitProjectRename(item: Extract<RecentItem, { kind: "project" }>, next: string): Promise<void> {
-  const project = projectOf(item.scopeId);
-  if (!project || !next || next === project.name) return;
-  await renameProject(project, next);
-  renderList();
-}
-
-export async function renderChatsPage(): Promise<void> {
-  if (appState.currentView !== "chats") return;
-  await ensureContexts();
-  drawChatsPage();
-  await loadChatsPage(false);
-}
-
-function chatsPageShowing(): boolean {
-  return Boolean(chatsPage.host && appState.mainEl && chatsPage.host.parentElement === appState.mainEl);
-}
-
-async function loadChatsPage(append: boolean): Promise<void> {
-  if (append && !chatsPage.cursor) return;
-  const seq = ++chatsPageSeq;
-  chatsPage.loading = true;
-  if (!append) chatsPage.cursor = null;
-  drawChatsPage();
-  try {
-    const page = await fetchSessionPage({
-      limit: SESSION_BATCH_SIZE,
-      before: append ? chatsPage.cursor : null,
-      status: chatsPage.status,
-      scope: chatsPage.scope,
-      q: chatsPage.query,
-      ...(chatsPage.surface === "all" ? {} : { surface: chatsPage.surface }),
-    });
-    if (seq !== chatsPageSeq) return;
-    chatsPage.rows = append ? [...chatsPage.rows, ...page.sessions] : [...(page.pinned ?? []), ...page.sessions];
-    chatsPage.cursor = page.nextCursor;
-    sessionsState.list = upsertSessions(sessionsState.list, [...(page.pinned ?? []), ...page.sessions]);
-    sessionsNotice = "";
-  } catch (e) {
-    if (seq !== chatsPageSeq) return;
-    sessionsNotice = errMessage(e, "Failed to load conversations.");
-  } finally {
-    if (seq === chatsPageSeq) {
-      chatsPage.loading = false;
-      drawChatsPage();
-    }
-  }
-}
-
-function reloadChatsPage(filter: Partial<Pick<typeof chatsPage, "scope" | "status" | "surface">> = {}): void {
-  Object.assign(chatsPage, filter, { rows: [] });
-  void loadChatsPage(false);
-}
-
-export function drawChatsPage(): void {
-  if (appState.currentView !== "chats" || !appState.mainEl || splitState.active) return;
-  mainConversation().state.host = null;
-  if (!chatsPage.host || chatsPage.host.parentElement !== appState.mainEl) {
-    chatsPage.host = Object.assign(document.createElement("div"), { className: "pane chats-page" });
-    appState.mainEl.replaceChildren(chatsPage.host);
-  }
-  const cached = new Map(sessionsState.list.map((s) => [s.id, s]));
-  const rows = chatsPage.rows
-    .map((s) => cached.get(s.id) ?? s)
-    .filter((s) => chatBrowseStatusMatches(s, chatsPage.status))
-    .map((s) => chatPageRow(s));
-  if (chatsPage.cursor)
-    rows.push(
-      html`<div class="list-footer">
-        ${moreButton("btn", "Show more conversations", chatsPage.loading, () => void loadChatsPage(true))}
-      </div>`,
-    );
-  let empty = "No conversations yet. Start a new chat.";
-  if (chatsPage.loading && chatsPage.rows.length === 0) empty = "Loading conversations…";
-  else if (chatsPage.scope || chatsPage.query.trim() || chatsPage.status !== "active" || chatsPage.surface !== "all") {
-    empty = "No conversations match.";
-  }
-  render(
-    listPageTpl({
-      title: "Chats",
-      scope: chatsPage.scope,
-      onScope: (scope) => reloadChatsPage({ scope }),
-      action: { label: "New chat", onClick: () => startNewChat() },
-      search: {
-        value: chatsPage.query,
-        placeholder: "Search chats…",
-        onInput: (v) => {
-          chatsPage.query = v;
-          if (chatsPage.queryTimer) clearTimeout(chatsPage.queryTimer);
-          chatsPage.queryTimer = setTimeout(() => {
-            chatsPage.queryTimer = null;
-            reloadChatsPage();
-          }, 250);
-          drawChatsPage();
-        },
-      },
-      filters: html`<div class="chat-filters">
-        ${listTabs(
-          "Conversation status",
-          [
-            { value: "active" as const, label: "Active" },
-            { value: "waiting" as const, label: "Waiting" },
-            { value: "archived" as const, label: "Archived" },
-          ],
-          chatsPage.status,
-          (status) => reloadChatsPage({ status }),
-        )}
-        <div class="list-select">
-          ${menuSelect({
-            value: chatsPage.surface,
-            ariaLabel: "Filter by surface",
-            onSelect: (value) => reloadChatsPage({ surface: (value ?? "all") as typeof chatsPage.surface }),
-            options: [
-              { value: "all", label: "All surfaces" },
-              { value: "web", label: "Web" },
-              { value: "slack", label: "Slack" },
-            ],
-          })}
-        </div>
-      </div>`,
-      rows,
-      empty,
-    }),
-    chatsPage.host,
-  );
-}
-
-export const syncWorkingPulse = (el?: Element): void => {
-  if (!(el instanceof Element)) return;
-  const running = (): Animation[] => el.getAnimations({ subtree: true });
-  const pin = (): void => {
-    for (const a of running()) a.startTime = 0;
-  };
-  if (running().length > 0) pin();
-  else requestAnimationFrame(pin);
-};
-
-function liveThreads(): ReadonlySet<string> {
-  const live = new Set<string>();
-  for (const conv of allConversations()) {
-    const ref = liveTurnThreadRef({
-      mountedThreadRef: conv.state.threadRef,
-      isStreaming: Boolean(conv.state.agent?.state.isStreaming),
-      pendingSend: conv.state.pendingSend,
-    });
-    if (ref) live.add(ref);
-  }
-  return live;
-}
-
-export function liveMarks(working: boolean, awaiting: boolean): TemplateResult {
-  return html`${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
-    awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
-  }`;
-}
-
-export function backgroundGlyphs(bg: BackgroundCounts): TemplateResult {
-  return html`${bg.jobs > 0 ? icon(Cog, 11) : nothing}${bg.watches > 0 ? icon(Binoculars, 11) : nothing}${
-    bg.crons > 0 ? icon(Clock3, 11) : nothing
-  }${bg.subagents > 0 ? icon(Bot, 11) : nothing}${bg.goal ? icon(Target, 11) : nothing}`;
-}
-
-function statusMarks(s: CoreSession): TemplateResult {
-  const { working, awaiting, background } = rowIndicators(s, liveThreads());
-  return html`${liveMarks(working, awaiting)}${
-    background
-      ? html`<span
-          class="bg-chip"
-          role="button"
-          tabindex="0"
-          aria-label="${background.label}. Click to inspect"
-          ${tip(`${background.label}. Click to inspect`)}
-          @click=${(e: Event) => openBackgroundInspector(e, s)}
-          @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${backgroundGlyphs(background)}</span
-        >`
-      : nothing
-  }`;
-}
-
-function openBackgroundInspector(e: Event, s: CoreSession): void {
-  e.stopPropagation();
-  e.preventDefault();
-  if (openBackgroundInCanvas(s)) return;
-  mainConversation().requestBackgroundPanel(s.id || null, s.threadRef);
-  void openSession(s);
-}
-
-function isActiveRow(s: CoreSession): boolean {
-  if (splitState.active) return Boolean(s.id) && sessionInCanvas(s.id);
-  if (sessionsState.openingKey) return Boolean(s.id) && s.id === sessionsState.openingKey;
-  const main = mainConversation().state;
-  return Boolean((main.sessionId && s.id === main.sessionId) || (main.threadRef && s.threadRef === main.threadRef));
-}
-
-function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
-  const color = displaySessionColor(s.color);
-  return html`
-    <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
-      <a
-        class="chat-row-open"
-        href=${deepLinkPath(UI_BASE, "chats", s.id)}
-        @click=${(e: MouseEvent) => {
-          if (!isPlainLeftClick(e)) return;
-          e.preventDefault();
-          void openSession(s);
-        }}
-      >
-        <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
-        <span class="list-row-meta">
-          ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
-          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
-          ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
-          <span class="list-row-date">${listWhen(activityOf(s))}</span>
-          <span class="chat-row-arrow" aria-hidden="true">${icon(ChevronRight, 16)}</span>
-        </span>
-      </a>
-      ${
-        s.id
-          ? html`<span class="chat-row-actions">
-              ${sessionAction("icon-btn", "pin", s)} ${sessionAction("icon-btn", "share", s)}
-              ${sessionAction("icon-btn", "archive", s)}
-            </span>`
-          : nothing
-      }
-    </div>
-  `;
-}
-
-const pendingForkThreads = new Set<string>();
+export const pendingForkThreads = new Set<string>();
 
 export function addPendingSession(
   threadRef: string,
@@ -848,368 +397,6 @@ function armMidnightRefresh(): void {
   );
 }
 
-function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
-  const surface = surfaceOf(s);
-  if (surface === "slack") return html`<span class="surface-glyph">${slackMark(12, true)}</span>`;
-  if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
-  return nothing;
-}
-
-function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
-  if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
-  return label && label !== sessionTitle(s) ? label : null;
-}
-
-function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
-  const saved = Boolean(s.id);
-  if (saved && sessionsState.renamingId === s.id) return renameRow(s);
-  const active = isActiveRow(s);
-  const menuOpen = saved && sessionsState.openMenuId === s.id;
-  const refreshingTitle = saved && refreshingTitleIds.has(s.id);
-  const untitledProjectChild = projectChild && !s.title?.trim();
-  let title = sessionTitle(s);
-  if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
-  const surface = surfaceOf(s);
-  const context = projectChild ? null : rowContext(s);
-  const working = rowIndicators(s, liveThreads()).working;
-  const color = displaySessionColor(s.color);
-  let titleContent: string | TemplateResult = groupDmTitle(s);
-  if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
-    titleContent = html`<span class="sheen-label title-sheen thinking-sheen" data-sheen=${title}>${title}</span>`;
-  } else if (untitledProjectChild) {
-    titleContent = title;
-  }
-  const ariaLabel = [
-    title,
-    surface !== "web" ? surface : null,
-    context,
-    working ? "agent is working" : null,
-    s.awaitingInput ? "waiting for your reply" : null,
-    readOnly ? "read-only" : null,
-    showsUnread(s) ? "unread" : null,
-    s.pinned ? "pinned" : null,
-    selection.ids.has(s.id) ? "selected" : null,
-    relTime(activityOf(s)),
-  ]
-    .filter(Boolean)
-    .join(", ");
-  return html`
-    <div
-      data-session-id=${saved ? s.id : nothing}
-      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
-      style=${color ? `--session-color:${color}` : nothing}
-    >
-      <a
-        class="session"
-        href=${saved ? deepLinkPath(UI_BASE, "chats", s.id) : nothing}
-        aria-busy=${refreshingTitle || pendingForkThreads.has(s.threadRef) ? "true" : "false"}
-        aria-disabled=${pendingForkThreads.has(s.threadRef) ? "true" : nothing}
-        aria-label=${ariaLabel}
-        aria-keyshortcuts="Space Shift+Space Control+Space Meta+Space"
-        draggable=${saved ? "true" : "false"}
-        @dragstart=${(e: DragEvent) => onSessionDragStart(e, s)}
-        @dragend=${() => endSessionDrag()}
-        @mousedown=${(e: MouseEvent) => {
-          if (saved && e.shiftKey) e.preventDefault();
-        }}
-        @click=${(e: MouseEvent) => {
-          if (saved && e.button === 0 && (e.shiftKey || e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            selection = selectionClick(selection, visibleRowOrder(), s.id, {
-              shift: e.shiftKey,
-              toggle: e.metaKey || e.ctrlKey,
-            });
-            redrawSelection();
-            return;
-          }
-          if (saved && !isPlainLeftClick(e)) return;
-          e.preventDefault();
-          const hadSelection = selection.ids.size > 0;
-          selection = { ids: new Set(), anchor: saved ? s.id : null, shiftRange: new Set() };
-          selectColorOpen = false;
-          if (hadSelection) redrawSelection();
-          void openSession(s);
-        }}
-        @keydown=${(e: KeyboardEvent) => {
-          if (!saved || e.key !== " ") return;
-          e.preventDefault();
-          selection = selectionClick(selection, visibleRowOrder(), s.id, {
-            shift: e.shiftKey,
-            toggle: !e.shiftKey || e.metaKey || e.ctrlKey,
-          });
-          redrawSelection();
-        }}
-        @dblclick=${(e: Event) => {
-          if (!saved) return;
-          e.preventDefault();
-          startRename(s);
-        }}
-        @contextmenu=${(e: MouseEvent) => {
-          if (!saved) return;
-          e.preventDefault();
-          e.stopPropagation();
-          sessionsState.openMenuId = s.id;
-          renderList();
-        }}
-      >
-        <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
-          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
-        </div>
-      </a>
-      ${
-        saved
-          ? html`<div class="session-menu">
-              ${sessionAction("session-menu-btn session-share-btn", "share", s, true)}
-              ${sessionAction("session-menu-btn session-archive-btn", "archive", s, true)}
-              <button
-                class="session-menu-btn"
-                data-menu-id=${s.id}
-                type="button"
-                ${tip(CHAT_OPTIONS_TOOLTIP)}
-                aria-label=${`Options for ${sessionTitle(s)}`}
-                aria-haspopup="menu"
-                aria-expanded=${menuOpen ? "true" : "false"}
-                @click=${(e: Event) => toggleSessionMenu(e, s.id)}
-              >
-                ${icon(EllipsisVertical, 15)}
-              </button>
-              ${menuOpen ? sessionMenuPopover(s) : nothing}
-            </div>`
-          : nothing
-      }
-    </div>
-  `;
-}
-
-let draggingChildId: string | null = null;
-
-export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
-  if (!s.id) {
-    e.preventDefault();
-    return;
-  }
-  e.dataTransfer?.setData("application/x-webui-session", s.id);
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  draggingChildId = s.parentSessionId ? s.id : null;
-  appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
-  if (!draggingChildId) beginSessionDrag(s);
-}
-
-export function endSessionDrag(): void {
-  draggingChildId = null;
-  appState.listEl?.classList.remove("detach-drop-target");
-  appState.listEl?.querySelector(".detach-drop-zone")?.classList.remove("over");
-  endPaneDrag();
-}
-
-async function promoteSession(id: string): Promise<void> {
-  sessionsState.openMenuId = null;
-  endSessionDrag();
-  try {
-    await detachSession(id);
-    await refreshSessions({ silent: true });
-  } catch (error) {
-    canvasToast(errMessage(error));
-    renderList();
-  }
-}
-
-function detachDropZone(): TemplateResult {
-  return html`<div
-    class="detach-drop-zone"
-    @dragenter=${(e: DragEvent) => {
-      if (!draggingChildId) return;
-      e.preventDefault();
-      (e.currentTarget as HTMLElement).classList.add("over");
-    }}
-    @dragover=${(e: DragEvent) => {
-      if (!draggingChildId) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    }}
-    @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("over")}
-    @drop=${(e: DragEvent) => {
-      const id = draggingChildId;
-      (e.currentTarget as HTMLElement).classList.remove("over");
-      if (!id) return;
-      e.preventDefault();
-      endSessionDrag();
-      void promoteSession(id);
-    }}
-  >
-    ${icon(CornerLeftUp, 13)}<span>Drop to make a top-level session</span>
-  </div>`;
-}
-
-const placeSessionMenu = (el?: Element): void => {
-  if (!(el instanceof HTMLElement)) return;
-  el.classList.remove("drop-up");
-  const margin = 8;
-  const scrollport = el.closest(".list")?.getBoundingClientRect();
-  const bottomLimit = Math.min(window.innerHeight, scrollport?.bottom ?? Infinity) - margin;
-  const topLimit = Math.max(0, scrollport?.top ?? 0) + margin;
-  const rect = el.getBoundingClientRect();
-  const anchorTop = el.parentElement?.getBoundingClientRect().top ?? rect.top;
-  if (rect.bottom > bottomLimit && anchorTop - 4 - rect.height >= topLimit) {
-    el.classList.add("drop-up");
-  }
-};
-
-const pinLabel = (s: Pick<CoreSession, "pinned">): string => (s.pinned ? "Unpin" : "Pin");
-const archiveLabel = (s: Pick<CoreSession, "archived">): string => (s.archived ? "Unarchive" : "Archive");
-const archiveGlyph = (s: Pick<CoreSession, "archived">): IconNode => (s.archived ? ArchiveRestore : Archive);
-
-function iconButton(
-  cls: string,
-  hint: string,
-  label: string,
-  glyph: IconNode,
-  run: (e: Event) => void,
-  size = 13.5,
-): TemplateResult {
-  return html`<button class=${cls} type="button" ${tip(hint)} aria-label=${label} @click=${run}>
-    ${icon(glyph, size)}
-  </button>`;
-}
-
-type SessionAction = "pin" | "share" | "archive";
-
-function sessionAction(cls: string, action: SessionAction, s: CoreSession, inSidebar = false): TemplateResult {
-  const looks: Record<SessionAction, [string, string, IconNode, () => void]> = {
-    pin: [pinLabel(s), pinLabel(s), s.pinned ? PinOff : Pin, () => setPinned(s, !s.pinned)],
-    share: ["Share conversation", "Share", Link, () => void openSessionShare(s.id)],
-    archive: [archiveLabel(s), archiveLabel(s), archiveGlyph(s), () => setArchived(s, !s.archived)],
-  };
-  const [hint, verb, glyph, run] = looks[action];
-  return iconButton(cls, hint, `${verb} ${sessionTitle(s)}`, glyph, (e) => {
-    if (inSidebar) e.stopPropagation();
-    run();
-    if (!inSidebar) drawChatsPage();
-  });
-}
-
-export function menuOption(glyph: IconNode, label: string, run: () => void, disabled = false): TemplateResult {
-  return html`<button class="session-menu-option" type="button" role="menuitem" ?disabled=${disabled} @click=${run}>
-    ${icon(glyph, 15)}<span>${label}</span>
-  </button>`;
-}
-
-function sessionMenuPopover(s: CoreSession): TemplateResult {
-  const refreshing = refreshingTitleIds.has(s.id);
-  return html`
-    <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
-      ${menuOption(Link, "Copy link", () => void copySessionLink(s))}
-      ${menuOption(s.unread ? MailOpen : Mail, s.unread ? "Mark as read" : "Mark as unread", () => setUnread(s, !s.unread))}
-      ${menuOption(s.pinned ? PinOff : Pin, pinLabel(s), () => setPinned(s, !s.pinned))}
-      ${menuOption(Pencil, "Rename", () => startRename(s))}
-      ${menuOption(RefreshCw, refreshing ? "Refreshing title" : "Refresh title", () => void refreshSessionTitle(s), refreshing)}
-      ${menuOption(archiveGlyph(s), archiveLabel(s), () => setArchived(s, !s.archived))} ${sessionColorRow(s)}
-    </div>
-  `;
-}
-
-const SESSION_COLORS = ["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"] as const;
-const LEGACY_SESSION_COLORS = new Map([
-  ["#ef4444", SESSION_COLORS[0]],
-  ["#f59e0b", SESSION_COLORS[1]],
-  ["#22c55e", SESSION_COLORS[2]],
-  ["#3b82f6", SESSION_COLORS[3]],
-  ["#a855f7", SESSION_COLORS[4]],
-  ["#ec4899", SESSION_COLORS[5]],
-]);
-
-function displaySessionColor(color: string | null | undefined): string | null {
-  if (!color) return null;
-  const normalized = color.toLowerCase();
-  return LEGACY_SESSION_COLORS.get(normalized) ?? normalized;
-}
-
-function sessionColorRow(s: CoreSession): TemplateResult {
-  const current = displaySessionColor(s.color);
-  const isPreset = SESSION_COLORS.includes(current as (typeof SESSION_COLORS)[number]);
-  return html`
-    <div class="session-menu-colors" role="group" aria-label="Row color">
-      ${SESSION_COLORS.map(
-        (c) => html`
-          <button
-            class="color-swatch ${current === c ? "selected" : ""}"
-            type="button"
-            style=${`--swatch:${c}`}
-            aria-label=${`Color row ${c}`}
-            aria-pressed=${current === c ? "true" : "false"}
-            @click=${() => setColor(s, current === c ? null : c)}
-          ></button>
-        `,
-      )}
-      <label class="color-swatch custom ${current && !isPreset ? "selected" : ""}" ${tip("Custom color (RGB picker)")}>
-        <input
-          type="color"
-          aria-label="Custom row color"
-          value=${current ?? SESSION_COLORS[3]}
-          @click=${(e: Event) => e.stopPropagation()}
-          @input=${(e: InputEvent) => previewColor(s, (e.currentTarget as HTMLInputElement).value)}
-          @change=${(e: Event) => setColor(s, (e.currentTarget as HTMLInputElement).value)}
-        />
-      </label>
-      ${
-        current
-          ? html`<button
-              class="color-swatch clear"
-              type="button"
-              ${tip("Clear color")}
-              aria-label="Clear row color"
-              @click=${() => setColor(s, null)}
-            >
-              ${icon(X, 12)}
-            </button>`
-          : nothing
-      }
-    </div>
-  `;
-}
-
-function renameRow(s: CoreSession): TemplateResult {
-  return html`<div class="session-row renaming">
-    ${renameInput(s.id, "Rename conversation", (next) => commitRename(s, next))}
-  </div>`;
-}
-
-function renameInput(menuKey: string, ariaLabel: string, commit: (next: string) => Promise<void>): TemplateResult {
-  const finish = (): void => {
-    if (sessionsState.renamingId !== menuKey) return;
-    const next = renameDraft.trim();
-    sessionsState.renamingId = null;
-    renameDraft = "";
-    renderList();
-    void commit(next);
-  };
-  return html`
-    <input
-      class="session-rename-input"
-      aria-label=${ariaLabel}
-      .value=${live(renameDraft)}
-      @input=${(e: InputEvent) => {
-        renameDraft = (e.currentTarget as HTMLInputElement).value;
-      }}
-      @keydown=${(e: KeyboardEvent) => {
-        if (e.isComposing || e.keyCode === 229) return;
-        if (e.key === "Enter") {
-          e.preventDefault();
-          finish();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          cancelRename(menuKey);
-        }
-      }}
-      @blur=${finish}
-      @click=${(e: Event) => e.stopPropagation()}
-    />
-  `;
-}
-
 function toggleShowArchived(): void {
   showArchived = !showArchived;
   if (showArchived && !paging.archivedLoaded) void loadMoreSessions("archived");
@@ -1240,7 +427,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
         : { activeCursor: page.nextCursor, activePaged: true },
     );
   } catch (e) {
-    sessionsNotice = errMessage(e, "Failed to load conversations.");
+    sessionsState.notice = errMessage(e, "Failed to load conversations.");
   } finally {
     paging.loading = null;
     renderList();
@@ -1262,288 +449,6 @@ export function revealSessionSurface(s: CoreSession): void {
   setWebOnly(false);
 }
 
-async function copySessionLink(s: CoreSession): Promise<void> {
-  sessionsState.openMenuId = null;
-  renderList();
-  await copyText(sessionLink(location.origin, UI_BASE, s.id));
-}
-
-function toggleSessionMenu(e: Event, id: string): void {
-  e.stopPropagation();
-  sessionsState.openMenuId = sessionsState.openMenuId === id ? null : id;
-  renderList();
-}
-
-function startRename(s: CoreSession): void {
-  beginRename(s.id, sessionTitle(s));
-}
-
-function beginRename(key: string, draft: string): void {
-  sessionsState.openMenuId = null;
-  sessionsState.renamingId = key;
-  renameDraft = draft;
-  renderList();
-  requestAnimationFrame(() => {
-    const input = appState.listEl?.querySelector<HTMLInputElement>(".session-rename-input");
-    if (!input) return;
-    input.focus();
-    input.select();
-  });
-}
-
-function focusSessionMenuButton(menuKey: string): void {
-  requestAnimationFrame(() => {
-    const buttons = appState.listEl?.querySelectorAll<HTMLButtonElement>(".session-menu-btn") ?? [];
-    [...buttons].find((button) => button.dataset.menuId === menuKey)?.focus();
-  });
-}
-
-function cancelRename(menuKey: string): void {
-  sessionsState.renamingId = null;
-  renameDraft = "";
-  renderList();
-  focusSessionMenuButton(menuKey);
-}
-
-export function closeOpenSessionMenu(): boolean {
-  const menuKey = sessionsState.openMenuId;
-  if (!menuKey) return false;
-  sessionsState.openMenuId = null;
-  renderList();
-  focusSessionMenuButton(menuKey);
-  return true;
-}
-
-async function commitRename(s: CoreSession, next: string): Promise<void> {
-  const resolved = (s.title ?? "").trim();
-  if (next === resolved) return;
-  const desired = !next || next === defaultSessionTitle(s) ? null : next;
-  if (desired === null && !resolved) return;
-  await persistSessionPatch(s.id, { title: desired });
-}
-
-export function archiveSessionById(sessionId: string): void {
-  const s = sessionsState.list.find((x) => x.id === sessionId);
-  if (s && !s.archived) {
-    setArchived(s, true);
-    return;
-  }
-  closeSessionSurfaces(sessionId);
-  if (!s) void persistSessionPatch(sessionId, { archived: true });
-}
-
-export function sessionSelectionBar(): TemplateResult | null {
-  const n = selection.ids.size;
-  if (!n) return null;
-  const rows = sessionsState.list.filter((s) => selection.ids.has(s.id));
-  const allArchived = rows.length > 0 && rows.every((s) => s.archived);
-  const allPinned = rows.length > 0 && rows.every((s) => s.pinned);
-  return html`
-    <div
-      class="section-label recents-label multi-select-bar"
-      role="toolbar"
-      aria-label=${`${n} conversations selected`}
-    >
-      <span class="multi-select-summary">
-        ${iconButton("icon-btn", "Clear selection (Esc)", "Clear selection", X, () => clearSessionSelection(), 14)}
-        <span class="multi-select-count">${n} selected</span>
-      </span>
-      <span class="multi-select-actions">
-        ${iconButton(
-          "icon-btn",
-          `${allPinned ? "Unpin" : "Pin"} selected`,
-          `${allPinned ? "Unpin" : "Pin"} selected conversations`,
-          allPinned ? PinOff : Pin,
-          () => void bulkPatch({ pinned: !allPinned }),
-          14,
-        )}
-        <span class="multi-select-color">
-          <button
-            class="icon-btn"
-            type="button"
-            ${tip("Color selected")}
-            aria-label="Color selected conversations"
-            aria-haspopup="true"
-            aria-expanded=${selectColorOpen ? "true" : "false"}
-            @click=${(e: Event) => {
-              e.stopPropagation();
-              selectColorOpen = !selectColorOpen;
-              renderSidebarTop();
-            }}
-          >
-            ${icon(Palette, 14)}
-          </button>
-        </span>
-        ${iconButton(
-          "icon-btn",
-          `${archiveLabel({ archived: allArchived })} selected`,
-          `${archiveLabel({ archived: allArchived })} selected conversations`,
-          archiveGlyph({ archived: allArchived }),
-          () => void bulkPatch({ archived: !allArchived }),
-          14,
-        )}
-      </span>
-      ${selectColorOpen ? colorPopover() : nothing}
-    </div>
-  `;
-}
-
-export function closeSessionSelectionColor(): boolean {
-  if (!selectColorOpen) return false;
-  selectColorOpen = false;
-  renderSidebarTop();
-  return true;
-}
-
-function colorPopover(): TemplateResult {
-  return html`
-    <div
-      class="session-menu-popover multi-select-color-popover"
-      role="menu"
-      @click=${(e: Event) => e.stopPropagation()}
-    >
-      <div class="session-menu-colors" role="group" aria-label="Color selected conversations">
-        ${SESSION_COLORS.map(
-          (c) => html`
-            <button
-              class="color-swatch"
-              type="button"
-              style=${`--swatch:${c}`}
-              ${tip(`Color selected ${c}`)}
-              aria-label=${`Color selected conversations ${c}`}
-              @click=${() => void bulkPatch({ color: c })}
-            ></button>
-          `,
-        )}
-        <button
-          class="color-swatch clear"
-          type="button"
-          ${tip("Clear color")}
-          aria-label="Clear color on selected conversations"
-          @click=${() => void bulkPatch({ color: null })}
-        >
-          ${icon(Ban, 10)}
-        </button>
-      </div>
-    </div>
-  `;
-}
-
-async function bulkPatch(patch: SessionPatch): Promise<void> {
-  const generation = sessionPatchGeneration();
-  const ids = [...selection.ids];
-  selectColorOpen = false;
-  if (patch.archived !== undefined) selection = emptySelection();
-  if (patch.archived) for (const id of ids) closeSessionSurfaces(id);
-  sessionsState.list = sessionsState.list.map((s) => (ids.includes(s.id) ? { ...s, ...patch } : s));
-  redrawSelection();
-  const patches = ids.map((id) => queueSessionPatch(id, patch, applyResolvedSession));
-  const results = await Promise.allSettled(patches);
-  if (sessionPatchGeneration() === generation && results.some((r) => r.status === "rejected")) {
-    canvasToast(SAVE_FAILED_NOTICE);
-    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch() });
-  }
-  redrawSelection();
-}
-
-function setArchived(s: CoreSession, archived: boolean): void {
-  sessionsState.openMenuId = null;
-  if (archived && s.id) closeSessionSurfaces(s.id);
-  void persistSessionPatch(s.id, { archived });
-}
-
-function setUnread(s: CoreSession, unread: boolean): void {
-  sessionsState.openMenuId = null;
-  keptUnreadId = unread && openConversationIds().includes(s.id) ? s.id : null;
-  void persistSessionPatch(s.id, { unread });
-}
-
-function showsUnread(s: CoreSession): boolean {
-  return Boolean(s.id && s.unread && (keptUnreadId === s.id || !openConversationIds().includes(s.id)));
-}
-
-function unreadDot(s: CoreSession): TemplateResult | typeof nothing {
-  return showsUnread(s) ? html`<span class="unread-dot" role="img" aria-label="Unread"></span>` : nothing;
-}
-
-function markOpenSessionsRead(): void {
-  const open = new Set(openConversationIds());
-  for (const s of sessionsState.list) {
-    if (s.unread && open.has(s.id) && s.id !== keptUnreadId) void persistSessionPatch(s.id, { unread: false });
-  }
-}
-
-function setPinned(s: CoreSession, pinned: boolean): void {
-  sessionsState.openMenuId = null;
-  void persistSessionPatch(s.id, { pinned });
-}
-
-function previewColor(s: CoreSession, color: string): void {
-  sessionsState.list = sessionsState.list.map((x) => (x.id === s.id ? { ...x, color } : x));
-  renderList();
-}
-
-function setColor(s: CoreSession, color: string | null): void {
-  void persistSessionPatch(s.id, { color });
-}
-
-function applyResolvedSession(updated: CoreSession): void {
-  sessionsState.list = sessionsState.list.map((s) =>
-    s.id === updated.id
-      ? {
-          ...s,
-          ...updated,
-          title: updated.title ?? null,
-          archived: Boolean(updated.archived),
-          pinned: Boolean(updated.pinned),
-          color: updated.color ?? null,
-          unread: Boolean(updated.unread),
-        }
-      : s,
-  );
-}
-
-async function refreshSessionTitle(s: CoreSession): Promise<void> {
-  sessionsState.openMenuId = null;
-  if (refreshingTitleIds.has(s.id)) {
-    renderList();
-    return;
-  }
-  refreshingTitleIds.add(s.id);
-  renderList();
-  try {
-    const refreshed = await regenerateTitle(s.id);
-    if (refreshed.title && !(s.title && s.title.trim())) {
-      sessionsState.list = sessionsState.list.map((row) =>
-        row.id === s.id ? { ...row, title: refreshed.title } : row,
-      );
-    }
-    renderList();
-  } catch (e) {
-    swallow("web-ui: regenerate session title", e);
-  } finally {
-    await refreshSessions({ silent: true });
-    refreshingTitleIds.delete(s.id);
-    renderList();
-  }
-}
-
-async function persistSessionPatch(id: string, patch: SessionPatch): Promise<void> {
-  const generation = sessionPatchGeneration();
-  sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
-  renderList();
-  const request = queueSessionPatch(id, patch, applyResolvedSession);
-  try {
-    await request;
-    renderList();
-  } catch (e) {
-    swallow("web-ui: save session change", e);
-    if (sessionPatchGeneration() !== generation) return;
-    canvasToast(SAVE_FAILED_NOTICE);
-    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch() });
-  }
-}
-
 let listSettled: (() => void) | null = null;
 const listReady = new Promise<void>((resolve) => (listSettled = resolve));
 
@@ -1551,7 +456,7 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-function openConversationIds(): string[] {
+export function openConversationIds(): string[] {
   const opening = sessionsState.openingKey ? [sessionsState.openingKey] : [];
   return [...opening, ...allConversations().flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []))];
 }
@@ -1628,7 +533,7 @@ async function runSessionsRefresh(
   const patchEpoch = opts.patchEpoch ?? sessionPatchEpoch();
   if (opts.showLoading) {
     sessionsLoading = true;
-    sessionsNotice = "";
+    sessionsState.notice = "";
     renderList();
   }
   listRequestedAt = Date.now();
@@ -1671,12 +576,12 @@ async function runSessionsRefresh(
     if (!paging.activePaged) paging.activeCursor = page.nextCursor;
     sessionsState.loaded = true;
     listCurrent = true;
-    sessionsNotice = "";
+    sessionsState.notice = "";
     return true;
   } catch (e) {
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     listCurrent = false;
-    if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
+    if (!opts.silent) sessionsState.notice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
     if (seq === sessionRefreshSeq) {
@@ -1720,7 +625,7 @@ export async function openSession(
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
-  if (keptUnreadId !== s.id) keptUnreadId = null;
+  if (sessionsState.keptUnreadId !== s.id) sessionsState.keptUnreadId = null;
   if (appState.currentView !== "chats") {
     appState.currentView = "chats";
     appState.viewRenderSeq++;
@@ -1744,7 +649,7 @@ export async function openSessionInto(
   tracked = conv === mainConversation(),
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
-  if (keptUnreadId !== s.id) keptUnreadId = null;
+  if (sessionsState.keptUnreadId !== s.id) sessionsState.keptUnreadId = null;
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);

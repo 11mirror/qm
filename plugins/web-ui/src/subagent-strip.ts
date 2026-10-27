@@ -13,7 +13,8 @@ import {
 } from "./core-bridge";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
-import { refreshSessions, sessionsState, syncWorkingPulse } from "./sessions";
+import { refreshSessions, sessionsState } from "./sessions";
+import { syncWorkingPulse } from "./session-rows";
 import { goalElapsedLabel } from "./goal-strip";
 import {
   ackKey,

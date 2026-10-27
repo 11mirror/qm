@@ -53,11 +53,9 @@ import {
   renderList,
   sessionsState,
   sessionTitle,
-  archiveSessionById,
-  backgroundGlyphs,
-  liveMarks,
-  menuOption,
 } from "./sessions";
+import { archiveSessionById, menuOption } from "./session-actions";
+import { backgroundGlyphs, liveMarks } from "./session-rows";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { scopeToolCount, SESSION_TOOLS, setScopedSession, type SessionTool } from "./session-scope";
 import {
