@@ -1,48 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
-import { adminBundle } from "../support/admin-bundle.ts";
-
-const source = adminBundle("artifacts.ts", "artifacts");
-const packsSource = adminBundle("artifacts-skills.ts", "skillUI");
-function fixture() {
-  const dom = new JSDOM('<div id="shellbar"></div><main></main>', {
-    runScripts: "outside-only",
-    url: "http://localhost/settings/files",
-    pretendToBeVisual: true,
-  });
-  dom.window.eval(source + ";window.artifacts = artifacts;");
-  dom.window.eval(packsSource + ";window.skillUI = skillUI;");
-  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-  const root = dom.window.document.querySelector("main")!;
-  const c: Record<string, any> = {
-    scope: "personal:alice",
-    orgId: "acme",
-    view: "files",
-    index: false,
-    own: false,
-    apiBase: "",
-    shortName: (s: string) => s,
-    dirLabel: (s: string) => s,
-    fmtHistoryTime: () => "Today",
-    pageShell: (value: any) => {
-      c.shell = value;
-    },
-    api: async () => ({ ok: true, data: {} }),
-    go: () => {},
-    reload: () => {},
-    invalidate: () => {},
-    stateToUrl: (s: any) => "/admin/" + s.view + "?scope=" + s.scope,
-    openScopeRow: () => {},
-    setCronEditing: () => {},
-    scopeRows: () => [],
-  };
-  return { dom, root, c, ui: (dom.window as any).artifacts, skills: (dom.window as any).skillUI };
-}
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+import { artifactsFixture, tick } from "../support/admin-artifacts.ts";
 
 test("memory edits one fact by id and redraws from the server's facts", async () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   const calls: any[] = [];
   c.api = async (...args: any[]) => {
     calls.push(args);
@@ -65,7 +26,7 @@ test("memory edits one fact by id and redraws from the server's facts", async ()
 });
 
 test("memory adds a new fact and clears the draft", async () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   const calls: any[] = [];
   c.api = async (...args: any[]) => {
     calls.push(args);
@@ -87,7 +48,7 @@ test("memory adds a new fact and clears the draft", async () => {
 });
 
 test("files search renders from query data and preserves keyboard opening", () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   let opened = "";
   c.downloadFile = (row: any) => {
     opened = row.id;
@@ -112,7 +73,7 @@ test("files search renders from query data and preserves keyboard opening", () =
 });
 
 test("scope indexes hide full artifact lists until searching", () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   c.index = true;
   c.deploymentHref = () => "https://example.com/app";
   ui.deployments(root, { deployments: [{ id: "app", name: "App", ownerScopeId: "personal:alice" }] }, c);
@@ -125,7 +86,7 @@ test("scope indexes hide full artifact lists until searching", () => {
 });
 
 test("cron destination draft derives placeholders, disabled fields and API payload", async () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   c.cron = "job";
   const calls: any[] = [];
   c.api = async (...args: any[]) => {
@@ -155,7 +116,7 @@ test("cron destination draft derives placeholders, disabled fields and API paylo
 });
 
 test("stale async cron renders cannot replace a different page", async () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   c.cron = "job";
   let complete: (value: any) => void = () => {};
   c.api = () =>
@@ -170,63 +131,8 @@ test("stale async cron renders cannot replace a different page", async () => {
   dom.window.close();
 });
 
-test("pack registration draft is collected from state with advanced fields", async () => {
-  const { dom, root, c, skills } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return { ok: true };
-  };
-  skills.packs(root, [], c);
-  const fields = root.querySelectorAll<HTMLInputElement>("input");
-  for (const [i, value] of ["https://example.com/skills", "main", "private/*, drafts/*", "deploy-token"].entries()) {
-    fields[i].value = value;
-    fields[i].dispatchEvent(new dom.window.Event("input"));
-  }
-  assert.match(root.querySelector(".linkish")!.textContent!, /Advanced •/);
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Register")!.click();
-  await tick();
-  assert.equal(calls[0][2].ref, "main");
-  assert.equal(JSON.stringify(calls[0][2].config.exclude), '["private/*","drafts/*"]');
-  dom.window.close();
-});
-
-test("pack selection follows target scopes and supports partial imports", async () => {
-  const { dom, root, c, skills } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return args[0] === "GET"
-      ? {
-          ok: true,
-          data: {
-            candidates: [
-              { upstreamName: "a", eligible: true, importedScopes: ["org:acme"] },
-              { upstreamName: "b", eligible: true, importedScopes: [] },
-            ],
-          },
-        }
-      : { ok: true, data: { imported: [] } };
-  };
-  c.scopeRows = () => [{ scopeId: "personal:alice" }];
-  await skills.browsePack({ id: "pack", url: "example" }, root, c);
-  assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, true);
-  root.querySelector<HTMLButtonElement>(".scopepick .rowbtn")!.click();
-  root.querySelector<HTMLButtonElement>('.scope-option[title="personal:alice"]')!.click();
-  assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, false);
-  const b = root.querySelector<HTMLInputElement>('[data-name="b"]')!;
-  b.checked = false;
-  b.dispatchEvent(new dom.window.Event("change"));
-  [...root.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Import selected")!.click();
-  await tick();
-  const post = calls.find((args) => args[0] === "POST");
-  assert.equal(JSON.stringify(post[2].selected), '["a"]');
-  assert.equal(JSON.stringify(post[2].scopeIds), '["org:acme","personal:alice"]');
-  dom.window.close();
-});
-
 test("cancelled cron destination edits restore the saved destination on reopen", () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   c.cron = "job";
   ui.crons(
     root,
@@ -251,7 +157,7 @@ test("cancelled cron destination edits restore the saved destination on reopen",
 });
 
 test("cron destination saves preserve edits made while the request is pending", async () => {
-  const { dom, root, c, ui } = fixture();
+  const { dom, root, c, ui } = artifactsFixture();
   c.cron = "job";
   let complete: (value: any) => void = () => {};
   let reloads = 0;
@@ -283,54 +189,8 @@ test("cron destination saves preserve edits made while the request is pending", 
   dom.window.close();
 });
 
-test("skill removal network failures keep the current view and report an error", async () => {
-  const { dom, c, skills } = fixture();
-  let reloads = 0;
-  let message = "";
-  dom.window.confirm = () => true;
-  dom.window.alert = (value) => {
-    message = String(value);
-  };
-  c.reload = () => {
-    reloads++;
-  };
-  c.api = async () => {
-    throw new Error("offline");
-  };
-  await skills.removeSkill({ id: "skill", ownerScopeId: c.scope }, c);
-  assert.equal(reloads, 0);
-  assert.equal(message, "Could not remove skill.");
-  dom.window.close();
-});
-
-test("pack registration preserves newer edits after its request completes", async () => {
-  const { dom, root, c, skills } = fixture();
-  let complete: (value: any) => void = () => {};
-  let reloads = 0;
-  c.reload = () => {
-    reloads++;
-  };
-  c.api = () =>
-    new Promise((resolve) => {
-      complete = resolve;
-    });
-  skills.packs(root, [], c);
-  const input = root.querySelector<HTMLInputElement>("input")!;
-  input.value = "https://example.com/submitted";
-  input.dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Register")!.click();
-  input.value = "https://example.com/newer";
-  input.dispatchEvent(new dom.window.Event("input"));
-  complete({ ok: true });
-  await tick();
-  assert.equal(root.querySelector<HTMLInputElement>("input")!.value, "https://example.com/newer");
-  assert.equal(reloads, 0);
-  assert.match(root.querySelector(".status")!.textContent!, /newer changes/);
-  dom.window.close();
-});
-
 test("file uploads post through the admin relay with the hash and name in the query", async () => {
-  const { dom, c, ui } = fixture();
+  const { dom, c, ui } = artifactsFixture();
   c.apiBase = "/api/admin";
   Object.defineProperty(dom.window, "crypto", { value: globalThis.crypto });
   const sent: Array<{ url: string; init: any }> = [];

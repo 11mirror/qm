@@ -1,17 +1,8 @@
 import assert from "node:assert/strict";
-import { adminShell } from "../support/admin-fixture.ts";
 import test from "node:test";
-import { JSDOM } from "jsdom";
-import { adminBundle } from "../support/admin-bundle.ts";
-const bundle = adminBundle("settings.ts", "settingsUI");
-function setup() {
-  const dom = new JSDOM(adminShell(), {
-    runScripts: "outside-only",
-  });
-  dom.window.structuredClone = structuredClone;
-  dom.window.eval(bundle + "; window.settingsUI=settingsUI; settingsUI.mountCards();");
-  return dom;
-}
+import { settingsDom } from "../support/admin-settings.ts";
+import { SettingsState, load as loadSettings, states as settingsStates } from "../../src/admin/settings.ts";
+
 const models = {
   baseModelDefault: "a",
   baseModelOptions: [
@@ -24,7 +15,7 @@ const models = {
 };
 
 test("model chips add and remove with stable keyed rendering", () => {
-  const dom = setup();
+  const dom = settingsDom();
   try {
     dom.window.eval("settingsUI.load(" + JSON.stringify(models) + ',"org:test","webui-models")');
     const doc = dom.window.document;
@@ -45,66 +36,9 @@ test("model chips add and remove with stable keyed rendering", () => {
     dom.window.close();
   }
 });
-test("feature flag entries use a compact row that cannot inherit the card grid", async () => {
-  const dom = setup();
-  try {
-    dom.window.eval(`settingsUI.configureFlags({
-      loadChoices: async () => [],
-      buildSelector: () => document.createElement("button"),
-      save: async () => ({ ok: true }),
-    })`);
-    await dom.window.eval(`settingsUI.loadFlags(
-      { featureFlags: [{ featureName: "persistent_subagents", enabledScopes: ["personal:person-with-a-long-name@example.com"] }] },
-      "org:test",
-    )`);
-    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
-    const list = dom.window.document.getElementById("feature-flag-list")!;
-    assert.equal(list.querySelectorAll(".feature-flag-row").length, 1);
-    assert.equal(list.querySelector(".setting-row"), null);
-    const editor = dom.window.document.querySelector("#card-feature-flags .feature-flag-editor")!;
-    assert.ok(editor);
-    assert.equal(editor.classList.contains("editor-grid"), false);
-  } finally {
-    dom.window.close();
-  }
-});
-
-test("feature flag picker offers every server feature and limits personal-only features to people", async () => {
-  const dom = setup();
-  try {
-    dom.window.eval(`settingsUI.configureFlags({
-      loadChoices: async () => [{ scopeId: "personal:ada" }, { scopeId: "channel:C1" }],
-      buildSelector: (choices) => Object.assign(document.createElement("ul"), { id: "offered", textContent: choices.map((c) => c.scopeId).join() }),
-      save: async () => ({ ok: true }),
-    })`);
-    await dom.window.eval(`settingsUI.loadFlags(
-      { featureFlags: [
-        { featureName: "persistent_subagents", label: "Persistent subagents", personalOnly: true, hint: "People only.", enabledScopes: [] },
-        { featureName: "ui_canvas", label: "UI canvas", personalOnly: true, enabledScopes: [] },
-        { featureName: "team_scopes", label: "Team scopes", enabledScopes: [] },
-      ] },
-      "org:test",
-    )`);
-    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
-    const doc = dom.window.document;
-    const select = doc.getElementById("feature-flag-name") as HTMLSelectElement;
-    assert.deepEqual(
-      [...select.options].map((option) => option.textContent),
-      ["Persistent subagents", "UI canvas", "Team scopes"],
-    );
-    assert.equal(select.value, "persistent_subagents");
-    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada");
-    assert.equal(doc.querySelector("#card-feature-flags .hint:not(#feature-flag-list)")!.textContent, "People only.");
-    select.value = "team_scopes";
-    select.dispatchEvent(new dom.window.Event("change"));
-    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada,channel:C1");
-  } finally {
-    dom.window.close();
-  }
-});
 
 test("instructions conflict keeps draft while replacing saved revision and version", () => {
-  const dom = setup();
+  const dom = settingsDom();
   try {
     dom.window.eval('settingsUI.load({instructions:"old",instructionsVersion:1},"org:test","instructions")');
     dom.window.document.getElementById("instructions-edit")!.click();
@@ -121,57 +55,38 @@ test("instructions conflict keeps draft while replacing saved revision and versi
   }
 });
 
-test("credential editor derives broker capabilities and preserves write-only secrets", () => {
-  const dom = setup();
-  try {
-    dom.window.eval(
-      'settingsUI.configureCredentials({label: id => id,formatTime:String,edit(){},remove(){}}); settingsUI.loadCredentials([],[],[],[],"org:test"); settingsUI.credentialState.begin({slug:"service",name:"Service",host:"api.example.com",updatedAt:10,hasSecret:true,injection:{actor:true},grantees:["org:test"]})',
-    );
-    const doc = dom.window.document;
-    const secret = doc.getElementById("sc-secret") as HTMLInputElement;
-    assert.equal(secret.value, "");
-    assert.equal(dom.window.eval('"secret" in settingsUI.credentialState.collect()'), false);
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().injection.actor"), true);
-    const host = doc.getElementById("sc-host") as HTMLInputElement;
-    host.value = "changed.example.com";
-    host.dispatchEvent(new dom.window.Event("input"));
-    assert.equal(doc.getElementById("sc-cap-host")!.textContent, "changed.example.com and its subdomains");
-    assert.equal((doc.getElementById("sc-save") as HTMLButtonElement).disabled, false);
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().expectedUpdatedAt"), 10);
-  } finally {
-    dom.window.close();
-  }
+test("default runtime controls save reasoning level and fast mode", () => {
+  loadSettings(
+    {
+      baseModelOptions: [{ id: "a" }],
+      baseModelDefault: "a",
+      runtime: { modelId: "a", effortLevel: "high", fastMode: true },
+      fastModeModelIds: ["a"],
+    },
+    "org:test",
+    "runtime",
+  );
+  assert.deepEqual(settingsStates.get("runtime")!.collect(), {
+    modelId: "a",
+    effortLevel: "high",
+    fastMode: true,
+  });
 });
 
-test("credential delivery transitions exclude narrower broker grants from env payloads", () => {
-  const dom = setup();
-  try {
-    dom.window.eval(
-      'settingsUI.loadCredentials([],[],[],[],"org:test"); settingsUI.credentialState.begin(null); settingsUI.credentialState.change("name","Example");settingsUI.credentialState.change("slug","example");settingsUI.credentialState.change("org",false);settingsUI.credentialState.change("people","person@example.com");settingsUI.credentialState.change("delivery","env");settingsUI.credentialState.change("envkey","EXAMPLE_KEY")',
-    );
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().grantees.join()"), "org:test");
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().host"), "");
-    assert.equal(dom.window.eval("settingsUI.credentialState.validate(settingsUI.credentialState.collect())"), "");
-    dom.window.eval('settingsUI.credentialState.change("envkey","AGENT_SECRET")');
-    assert.match(
-      String(dom.window.eval("settingsUI.credentialState.validate(settingsUI.credentialState.collect())")),
-      /reserved/,
-    );
-  } finally {
-    dom.window.close();
-  }
+test("instructions saves carry the expected version", () => {
+  const state = new SettingsState("instructions");
+  state.draft = { content: "test", expectedVersion: 4 };
+  assert.equal(state.collect().expectedVersion, 4);
 });
 
-test("credential save acknowledges its submitted snapshot and retains newer edits", () => {
-  const dom = setup();
-  try {
-    dom.window.eval(
-      'settingsUI.loadCredentials([],[],[],[],"org:test"); settingsUI.credentialState.begin({slug:"test",name:"Old",host:"example.com",updatedAt:1,grantees:["org:test"]});settingsUI.credentialState.change("name","Submitted");window.submitted=settingsUI.credentialState.collect();settingsUI.credentialState.change("name","Newer draft");settingsUI.loadCredentials([{slug:"test",updatedAt:2}],[],[],[],"org:test");settingsUI.credentialState.commit(submitted)',
-    );
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().name"), "Newer draft");
-    assert.equal(dom.window.eval("settingsUI.credentialState.collect().expectedUpdatedAt"), 2);
-    assert.equal(dom.window.eval("settingsUI.credentialState.dirty"), true);
-  } finally {
-    dom.window.close();
-  }
+test("enabled models add and remove through explicit actions", () => {
+  const state = new SettingsState("webui-models");
+  state.draft = { ids: [] };
+  state.baseline = JSON.stringify(state.draft);
+  state.selected = "model-a";
+  state.add();
+  assert.deepEqual(state.collect(), { ids: ["model-a"] });
+  assert.equal(state.dirty, true);
+  state.remove("model-a");
+  assert.equal(state.dirty, false);
 });

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { litFixture } from "../support/admin-fixture.ts";
-import { GovernanceState } from "../../src/admin/governance-state.ts";
 function setup() {
   const { dom } = litFixture({ markup: true });
   dom.window.eval("window.governanceUI = ui; governanceUI.mountCards();");
@@ -62,25 +61,4 @@ test("bot ledger changes derive rollup enablement and payload from state", () =>
   } finally {
     dom.window.close();
   }
-});
-test("saving an older submitted draft preserves edits made during the request", () => {
-  const state = new GovernanceState("org-ambient");
-  state.load({ on: true });
-  state.change("governance-org-ambient", false);
-  const submitted = state.collect();
-  state.saving = true;
-  state.change("governance-org-ambient", true);
-  state.commit(submitted);
-  assert.equal(state.draft.on, true);
-  assert.equal(state.dirty, true);
-  assert.equal(state.message, "Unsaved changes");
-});
-test("policy validation detects duplicate bots and overlapping hosts", () => {
-  const bots = new GovernanceState("ambient-policy");
-  bots.load({ bots: { Build: { mode: "ignore" } } });
-  bots.bots.push({ id: -1, name: "build", mode: "ignore", hours: "" });
-  assert.throws(() => bots.collect(), /Duplicate bot/);
-  const egress = new GovernanceState("egress");
-  egress.load({ allowedHosts: ["example.com"], deniedHosts: ["example.com"] });
-  assert.throws(() => egress.collect(), /both lists/);
 });

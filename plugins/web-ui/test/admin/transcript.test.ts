@@ -152,21 +152,8 @@ async function transcript(data: Record<string, unknown>) {
   return admin;
 }
 
-const coreItem = (seq: number, kind: string, extra: Record<string, unknown> = {}) => ({
-  sessionId: "sess-1",
-  seq,
-  kind,
-  createdAt: seq,
-  turnId: null,
-  author: null,
-  callId: null,
-  text: null,
-  tool: null,
-  variant: null,
-  isError: null,
-  body: {},
-  ...extra,
-});
+const coreItem = (seq: number, kind: string, extra: Record<string, unknown> = {}) =>
+  item(seq, kind, { sessionId: "sess-1", isError: null, ...extra });
 
 test("admin transcript renders core items with the real controller helpers", async () => {
   const admin = await transcript({

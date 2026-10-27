@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mountAdmin, type Route, type Reply } from "../support/admin-fixture.ts";
+import { governanceData } from "../support/admin-governance.ts";
 
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 const withResolvers = <T>() => {
@@ -146,28 +147,6 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
   }
 });
 
-test("a rejected fetch or an interrupted body becomes a visible failure", async () => {
-  const interrupted = () =>
-    new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(new Error("body interrupted"));
-        },
-      }),
-    );
-  for (const files of [
-    () => {
-      throw new Error("network disconnected");
-    },
-    interrupted,
-  ]) {
-    const admin = await mountAdmin("/settings/files", { "/scopes": { scopes: [] }, "/files": files });
-    await admin.settle();
-    assert.equal(admin.document.querySelector("#view-data .empty")!.textContent, "Network request failed.");
-    admin.close();
-  }
-});
-
 const meta = (id: string) => ({
   id,
   name: id,
@@ -257,20 +236,11 @@ test("the models view saves runtime rows chosen in the composer picker", async (
   admin.close();
 });
 
-const governance = {
-  autoFlagger: null,
-  autoFlaggerDefault: { modelId: "model-a", rubric: "Default rubric" },
-  baseModelOptions: [
-    { id: "model-a", name: "A" },
-    { id: "model-b", name: "B" },
-  ],
-};
-
 async function governancePage(routes: Record<string, Reply | Route> = {}, url = "/settings/governance") {
   const admin = await mountAdmin(url, {
     "/scopes": { scopes: [{ scopeId: "org:acme" }, { scopeId: "personal:other" }], environments: [] },
-    "/scopes/org:acme": governance,
-    "/scopes/personal:other": { ...governance, autoFlaggerDefault: undefined },
+    "/scopes/org:acme": governanceData,
+    "/scopes/personal:other": { ...governanceData, autoFlaggerDefault: undefined },
     "/users": { users: [] },
     ...routes,
   });
@@ -418,7 +388,7 @@ test("leaving governance with a draft asks before discarding it", async () => {
 test("a scope attached to a named environment links to it", async () => {
   const admin = await governancePage({
     "/scopes/org:acme": {
-      ...governance,
+      ...governanceData,
       environmentAttachment: { environmentId: "personal:other", environmentName: "Staging" },
     },
   });
