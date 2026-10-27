@@ -201,6 +201,16 @@ export async function failRun(
   await call(db, "SELECT absurd.fail_run($1, $2, $3::jsonb, $4)", [queue, runId, json(reason), retryAt ?? null]);
 }
 
+export async function abandonTask(
+  db: AbsurdDb,
+  queue: AbsurdQueue,
+  task: Pick<ClaimedRun, "runId" | "taskId">,
+  reason: string,
+): Promise<void> {
+  await failRun(db, queue, task.runId, { message: reason });
+  await cancelTask(db, queue, task.taskId);
+}
+
 export async function awaitEvent(
   db: AbsurdDb,
   queue: AbsurdQueue,

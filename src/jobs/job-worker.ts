@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  abandonTask,
   type ClaimedRun,
   claimTasks,
   cleanup,
@@ -16,7 +17,7 @@ import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { tenantLockKey } from "../persistence/pg-pool.ts";
 import { withoutTenant, withTenant } from "../tenant.ts";
-import { activeTenant, activeTenants } from "../tenants/directory.ts";
+import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 /**
  * What became of a claimed job: `done` finished it; `release` gave it up unfinished (the next
@@ -70,18 +71,21 @@ function serializeStart(worker: JobWorker): JobWorker {
 }
 
 type AbsurdDb = ReturnType<typeof registerAbsurdSchema>;
+type Settlement = JobDisposition | { abandon: string };
 type JobHandlers = Map<
   string,
   {
-    run: (params: unknown, tenantId: string | undefined) => Promise<JobDisposition>;
+    run: (params: unknown, tenantId: string | undefined) => Promise<Settlement>;
     concurrency: number;
     running: number;
   }
 >;
 
-async function settleJob(db: AbsurdDb, runId: string, disposition: JobDisposition): Promise<void> {
+async function settleJob(db: AbsurdDb, task: ClaimedRun, disposition: Settlement): Promise<void> {
   const pool = await db.pool();
-  if (disposition === "done") await completeRun(pool, JOB_QUEUE, runId);
+  const { runId } = task;
+  if (typeof disposition === "object") await abandonTask(pool, JOB_QUEUE, task, disposition.abandon);
+  else if (disposition === "done") await completeRun(pool, JOB_QUEUE, runId);
   else if (disposition === "release") await failRun(pool, JOB_QUEUE, runId, { message: "released unfinished" });
   else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
 }
@@ -99,15 +103,15 @@ async function runJob(db: AbsurdDb, handlers: JobHandlers, task: ClaimedRun): Pr
   const busy = handler && handler.running >= handler.concurrency;
   if (handler && !busy) handler.running++;
   try {
-    let disposition: JobDisposition;
+    let disposition: Settlement;
     if (!handler) disposition = Date.now() + UNKNOWN_JOB_RETRY_MS;
     else if (busy) disposition = Date.now() + BUSY_RETRY_MS;
     else
-      disposition = await handler.run(task.params, task.tenantId).catch((e: unknown): JobDisposition => {
+      disposition = await handler.run(task.params, task.tenantId).catch((e: unknown): Settlement => {
         reportFailure("jobs: run", e, `job=${name}`);
         return "release";
       });
-    await settleJob(db, runId, disposition);
+    await settleJob(db, task, disposition);
   } catch (e) {
     reportFailure("jobs: settle", e, `job=${name}`);
   } finally {
@@ -193,10 +197,11 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     handle(name, run, opts = {}) {
       handlers.set(name, {
         run: async (params, tenantId) => {
-          const owner = await activeTenant(tenantId).catch((e: unknown) => {
+          const owner = await taskTenant(tenantId).catch((e: unknown) => {
             reportFailure(`jobs: ${name} tenant`, e);
             return undefined;
           });
+          if (owner === "retired") return { abandon: retiredTenantReason(tenantId) };
           return owner ? withTenant(owner, () => run(params)) : Date.now() + TENANT_NOT_READY_RETRY_MS;
         },
         concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY),

@@ -16,6 +16,7 @@ export interface TenantDirectory {
   byHost(host: string | undefined): Promise<Tenant | undefined>;
   homeHosts(): HomeHosts;
   active(): Promise<Tenant[]>;
+  exists(id: string): Promise<boolean>;
   watch(listener: (active: Tenant[]) => void): void;
   close(): Promise<void>;
 }
@@ -193,6 +194,9 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       await snapshot();
       return readyTenants();
     },
+    async exists(id) {
+      return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0;
+    },
     watch(listener) {
       listeners.push(listener);
     },
@@ -238,6 +242,12 @@ export function isHomeTenant(t: Tenant): boolean {
   return t.id === undefined;
 }
 
-export async function activeTenant(id: string | undefined): Promise<Tenant | undefined> {
-  return (await activeTenants()).find((t) => t.id === id);
+export async function taskTenant(id: string | undefined): Promise<Tenant | "retired" | undefined> {
+  const owner = (await activeTenants()).find((t) => t.id === id);
+  if (owner || id === undefined || !directory || (await directory.exists(id))) return owner;
+  return "retired";
+}
+
+export function retiredTenantReason(id: string | undefined): string {
+  return `tenant ${id ?? "home"} no longer exists`;
 }

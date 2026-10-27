@@ -8,6 +8,7 @@ import { isUnstarted, PARKED, releasesDedupKey, withTraceCarrier } from "../runs
 import { rowToRun } from "../runs/postgres-run-store.ts";
 import {
   awaitEvent,
+  abandonTask,
   cancelTask,
   claimTasks,
   cleanup as cleanupQueue,
@@ -23,7 +24,7 @@ import { noticePayload } from "../persistence/postgres-notify-bus.ts";
 import { TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
 import { withTenant, type Tenant } from "../tenant.ts";
-import { activeTenant } from "../tenants/directory.ts";
+import { retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 const TURN_TASK = "turn";
 export const TURN_READY_CHANNEL = "qm_turn_ready";
@@ -390,7 +391,11 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
       const [claimed] = await claimTasks(await db.pool(), queue, token, TURN_CLAIM_TIMEOUT_SEC, 1);
       if (!claimed) return { claimed: false, run: null };
       const params = claimed.params as Partial<TurnTaskParams> | null;
-      const owner = await activeTenant(claimed.tenantId);
+      const owner = await taskTenant(claimed.tenantId);
+      if (owner === "retired") {
+        await abandonTask(await db.pool(), queue, claimed, retiredTenantReason(claimed.tenantId));
+        return { claimed: true, run: null };
+      }
       if (claimed.taskName !== TURN_TASK || typeof params?.turnId !== "string" || !owner) {
         const deferMs = owner || claimed.taskName !== TURN_TASK ? UNKNOWN_TASK_DEFER_MS : TENANT_NOT_READY_DEFER_MS;
         await scheduleRun(await db.pool(), queue, claimed.runId, new Date(Date.now() + deferMs));
