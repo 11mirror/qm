@@ -7,6 +7,7 @@ import ts from "typescript";
 interface Range {
   pos: number;
   end: number;
+  replacement?: string;
 }
 
 const DIRECTIVES = [
@@ -41,7 +42,7 @@ function scriptComments(path: string, text: string): Range[] {
   const visit = (node: ts.Node) => {
     if (node.kind === ts.SyntaxKind.JsxText) jsxText.push({ pos: node.pos, end: node.end });
     if (ts.isJsxExpression(node) && !node.expression && /^\{\s*\/[*/]/.test(text.slice(node.getStart(file)))) {
-      found.set(node.getStart(file), { pos: node.getStart(file), end: node.end });
+      found.set(node.getStart(file), { pos: node.getStart(file), end: node.end, replacement: "{}" });
       return;
     }
     if (node.kind !== ts.SyntaxKind.JsxText)
@@ -79,8 +80,9 @@ function lexedComments(text: string, sql: boolean): Range[] {
       found.push({ pos: start, end: i });
     } else if (text[i] === "'" || text[i] === '"') {
       const quote = text[i];
+      const escapes = !sql || /[eE]/.test(text[i - 1] ?? "");
       i++;
-      while (i < text.length && text[i] !== quote) i += text[i] === "\\" && !sql ? 2 : 1;
+      while (i < text.length && text[i] !== quote) i += text[i] === "\\" && escapes ? 2 : 1;
       i++;
     } else if (sql && text[i] === "$" && /^\$\w*\$/.test(text.slice(i, i + 64))) {
       const tag = /^\$\w*\$/.exec(text.slice(i, i + 64))![0];
@@ -98,7 +100,11 @@ export function comments(path: string, text: string): Range[] {
 
 export function stripComments(path: string, text: string) {
   let out = text;
-  for (const { pos, end } of comments(path, text).sort((a, b) => b.pos - a.pos)) {
+  for (const { pos, end, replacement } of comments(path, text).sort((a, b) => b.pos - a.pos)) {
+    if (replacement !== undefined) {
+      out = out.slice(0, pos) + replacement + out.slice(end);
+      continue;
+    }
     const lineStart = out.lastIndexOf("\n", pos - 1) + 1;
     const newline = out.indexOf("\n", end);
     const lineEnd = newline < 0 ? out.length : newline;

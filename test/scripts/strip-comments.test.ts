@@ -22,7 +22,7 @@ test("script comments go, directives, strings, regexes and JSX text stay", () =>
     "const re = /\\/\\/ not a comment/;",
     "// eslint-disable-next-line no-console",
     "const pure = /*#__PURE__*/ make();",
-    "const view = <p>// shown </p>;",
+    "const view = <p>// shown {}</p>;",
     "const sum = a +b;",
     "",
   ].join("\n");
@@ -31,6 +31,7 @@ test("script comments go, directives, strings, regexes and JSX text stay", () =>
 });
 
 test("SQL and CSS comments go, quoted and dollar-quoted text stays", () => {
+  assert.equal(stripComments("e.sql", "SELECT E'it\\'s -- x' -- real\n"), "SELECT E'it\\'s -- x'\n");
   const sql =
     "-- header\nSELECT '--kept' AS a, \"x--y\" /* gone /* nested */ */ FROM t;\nDO $$ BEGIN -- body\nEND $$;\n";
   assert.equal(stripComments("a.sql", sql), "SELECT '--kept' AS a, \"x--y\" FROM t;\nDO $$ BEGIN -- body\nEND $$;\n");

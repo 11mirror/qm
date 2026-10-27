@@ -38,12 +38,12 @@ test("findings survive only when their anchor is in the reviewed code", () => {
     anchor,
     title: "t",
   });
-  const reply = `Here:\n${JSON.stringify({ findings: [finding("  catch {}"), finding("invented()"), { ...finding("const a"), path: "y.ts" }] })}`;
+  const reply = `Here:\n${JSON.stringify({ findings: [finding("  catch {}"), finding("invented()"), { ...finding("const a"), path: "y.ts" }, { lens: "Regex", severity: "low", path: "x.ts", title: "no anchor" }] })}`;
   assert.deepEqual(verifiedFindings(reply, [source]), {
     findings: [
       { path: "x.ts", line: 2, lens: "Discarded error evidence", severity: "low", title: "t", anchor: "catch {}" },
     ],
-    unverified: 2,
+    unverified: 3,
   });
 });
 
