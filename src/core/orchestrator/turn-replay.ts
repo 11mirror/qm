@@ -17,12 +17,9 @@ export async function findRecordedTurn(ctx: TurnCtx, session: Session): Promise<
   if (!input.runId || !deps.runs) return null;
   const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
   if (seq == null) return null;
-  const entries = await deps.sessions.getItems(session.id);
-  if (!entries.some((entry) => entry.seq === seq)) return null;
-  return turnAtSeq(
-    entries.filter((entry) => entry.seq >= seq),
-    seq,
-  );
+  const entries = await deps.sessions.getItems(session.id, { sinceSeq: seq });
+  if (entries[0]?.seq !== seq) return null;
+  return turnAtSeq(entries, seq);
 }
 
 export function replayRecordedAnswer(

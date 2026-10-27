@@ -632,6 +632,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.length > 0;
     },
 
+    async recordedMessageTimestamps(sessionId, timestamps) {
+      if (!timestamps.length) return new Set<string>();
+      const rows = await q(
+        `SELECT external_id AS ts FROM items
+          WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'UserMessage' AND external_id = ANY($2::text[])
+         UNION
+         SELECT body ->> 'ts' AS ts FROM items
+          WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'SteeringMessage' AND body ->> 'ts' = ANY($2::text[])`,
+        [sessionId, [...timestamps]],
+      );
+      return new Set(rows.map((row) => row.ts as string));
+    },
+
     async getItems(sessionId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;

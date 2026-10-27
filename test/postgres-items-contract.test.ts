@@ -215,3 +215,20 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
     assert.equal((await store.getItems(session.id)).length, 2);
   });
 });
+
+test("pg items report which message timestamps a session already recorded", { skip }, async () => {
+  await withSchema("items_recorded_ts", async ({ store }) => {
+    const session = await store.getOrCreateByThread("slack:T1:C1:2.0", "channel", scopeId("personal", "alice"));
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await store.appendMany({ ...lease, turnId: randomUUID() }, [
+      { kind: "UserMessage", text: "hi", externalId: "2.0" },
+      { kind: "SteeringMessage", text: "steer", body: { ts: "4.0" } },
+    ]);
+    assert.deepEqual([...(await store.recordedMessageTimestamps(session.id, ["2.0", "3.0", "4.0"]))].sort(), [
+      "2.0",
+      "4.0",
+    ]);
+    assert.equal((await store.recordedMessageTimestamps(session.id, [])).size, 0);
+  });
+});

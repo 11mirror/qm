@@ -74,6 +74,7 @@ const PREVIEW_CHARS = 500;
 const NOTICE_CHARS = 2_000;
 const NOTIFY_GRACE_MS = 60_000;
 const OPEN_CONCURRENCY = 4;
+const NOTIFY_CONCURRENCY = 8;
 const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 
 function memberNote(swarmId: string, coordinator: string): string {
@@ -140,8 +141,8 @@ async function chain(sessions: SwarmCallContext["sessions"], session: Session): 
 async function notifySubscribers(ctx: SwarmCallContext, post: SwarmBoardPost): Promise<number> {
   const notice = renderNotice(post.swarmId, post);
   const notified = (await ctx.board.subscribers(post.swarmId, post.channel)).filter((id) => id !== post.authorId);
-  for (const recipientId of notified)
-    await ctx.mailbox.send({
+  await mapBounded(notified, NOTIFY_CONCURRENCY, (recipientId) =>
+    ctx.mailbox.send({
       id: `swarm-post-${post.id}-${recipientId}`,
       recipientId,
       senderId: post.authorId,
@@ -149,7 +150,8 @@ async function notifySubscribers(ctx: SwarmCallContext, post: SwarmBoardPost): P
       text: notice,
       audience: ctx.audience,
       createdAt: post.createdAt,
-    });
+    }),
+  );
   await ctx.board.markNotified(post.swarmId, post.id);
   return notified.length;
 }
