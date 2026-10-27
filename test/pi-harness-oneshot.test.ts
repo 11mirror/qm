@@ -3,20 +3,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import {
-  buildDetectionPrompt,
-  createPiHarness,
-  complete,
-  parseDetectVerdict,
-  piHarnessConfigOptions,
-  renderDetectPrompt,
-  resolveConfiguredModelId,
-  sanitizeLlmPayload,
-  trimPayloadToByteBudget,
-  seedRawMessagesIntoSession,
-  toPiMessage,
-  transportFromModel,
-} from "../src/harness/pi-harness.ts";
+import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "../src/harness/pi-aux-prompts.ts";
+import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
+import { seedRawMessagesIntoSession, toPiMessage } from "../src/harness/pi-turn-session.ts";
+import { complete, resolveConfiguredModelId } from "../src/harness/pi-model-runtime.ts";
+import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/harness/pi-payload.ts";
 import {
   piLastAssistantTextOrThrow,
   piTurnError,

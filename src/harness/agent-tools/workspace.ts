@@ -16,7 +16,15 @@ import {
 } from "./shared.ts";
 
 export function workspaceTools(kit: ToolKit) {
-  const { ref, recordCall, recordResult, recordText, recordFail } = kit;
+  const { discoverSkills, skill } = skillTools(kit);
+  const { read, installCanvas, write } = fileTools(kit);
+  const { publish } = publishTool(kit);
+  return { discoverSkills, skill, read, installCanvas, write, publish };
+}
+
+/** The skills list/search and read actions. */
+function skillTools(kit: ToolKit) {
+  const { ref, recordCall, recordResult } = kit;
   const discoverSkills = (search: boolean) =>
     defineTool({
       name: search ? "search_skills" : "list_skills",
@@ -104,7 +112,12 @@ export function workspaceTools(kit: ToolKit) {
       );
     },
   });
+  return { discoverSkills, skill };
+}
 
+/** The files read, install_canvas and write actions. */
+function fileTools(kit: ToolKit) {
+  const { ref, recordCall, recordResult, recordText, recordFail } = kit;
   const read = defineTool({
     name: "read",
     label: "read",
@@ -205,7 +218,12 @@ export function workspaceTools(kit: ToolKit) {
       }
     },
   });
+  return { read, installCanvas, write };
+}
 
+/** The apps publish action. */
+function publishTool(kit: ToolKit) {
+  const { ref, recordCall, recordText, recordFail } = kit;
   const publish = defineTool({
     name: "publish",
     label: "publish",
@@ -298,5 +316,5 @@ export function workspaceTools(kit: ToolKit) {
       }
     },
   });
-  return { discoverSkills, skill, read, installCanvas, write, publish };
+  return { publish };
 }

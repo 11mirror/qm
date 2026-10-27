@@ -12,7 +12,7 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
+import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-payload.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta } from "../src/types.ts";
 import { storedItem, type NewItem } from "../src/sessions/items.ts";

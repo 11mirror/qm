@@ -3,7 +3,7 @@ import { isObj } from "../../util/objects.ts";
 // The execute, sandbox and background tools: one command path for scoped, scratch, owner and reached computers.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
@@ -20,23 +20,24 @@ import {
 } from "./shared.ts";
 
 export function computerTools(kit: ToolKit) {
-  const {
-    ref,
-    scratchExec,
-    reachExec,
-    execTimeoutSec,
-    execCeilingSec,
-    bgTtlSec,
-    bgTtlMaxSec,
-    bgTtlMin,
-    bgTtlMaxMin,
-    capabilityExpiry,
-    log,
-    recordCall,
-    recordResult,
-    recordText,
-    recordFail,
-  } = kit;
+  const { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval } = executeShared(kit);
+  const { runExecute, invalidExecute } = executeRunner(kit, { blockOnApproval });
+  const { sandboxManagement } = sandboxTool(kit, { blockOnApproval });
+  const { execute } = executeTool(kit, {
+    EXECUTE_TIMEOUT_GUIDANCE,
+    runExecute,
+    invalidExecute,
+    executeBaseParams,
+    blockOnApproval,
+  });
+  const { background } = backgroundTool(kit, { blockOnApproval });
+  const { validateSandboxTool } = sandboxValidation(kit);
+  return { execute, sandboxManagement, background, validateSandboxTool };
+}
+
+/** The execute tool's shared timeout guidance, base parameters and approval pause. */
+function executeShared(kit: ToolKit) {
+  const { ref, execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under a POSIX sh such as dash, not bash: wrap bash-only syntax like ${var/a/b} or arrays in bash -c. " +
     `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
@@ -107,7 +108,12 @@ export function computerTools(kit: ToolKit) {
       true,
     );
   };
+  return { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval };
+}
 
+/** Runs one foreground command and records its call and result. */
+function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
+  const { ref, scratchExec, log, recordCall, recordResult, recordFail } = kit;
   const runExecute = async (
     callId: string,
     params: {
@@ -195,87 +201,12 @@ export function computerTools(kit: ToolKit) {
 
   const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
     recordFail(callId, summary, message);
+  return { runExecute, invalidExecute };
+}
 
-  const scopedBullet =
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
-  const scratchBullet = scratchExec
-    ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-    : "";
-  const reachScopeDescription =
-    (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
-    '"owner" | ' +
-    "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
-  const reachDescription =
-    "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    scopedBullet +
-    scratchBullet +
-    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
-    "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
-    "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
-    FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
-  const scopeDescription =
-    `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    scopedBullet +
-    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
-    scratchBullet +
-    FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
-
-  const runScopedExecute = async (
-    callId: string,
-    params: {
-      command: string;
-      timeout_seconds?: number;
-      purpose?: string;
-      scope?: string;
-      credentials?: string[];
-    },
-  ) => {
-    const scope = (params.scope ?? "scoped").trim();
-    const keyword = scope.toLowerCase();
-    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
-    if (keyword === "scratch") {
-      if (!scratchExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "scratch_unavailable" },
-          '[error] a scratch box isn\'t available here — use scope:"scoped" or name a room like "#project-alpha".',
-        );
-      }
-      return runExecute(callId, params, { scratch: true });
-    }
-    if (keyword === "owner") return runExecute(callId, params, { ownerAuth: true });
-    return runExecute(callId, params, { reachTarget: scope });
-  };
-
-  const runCommand = (
-    callId: string,
-    params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
-  ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
-
-  const execute = defineTool({
-    name: "execute",
-    label: "execute",
-    description: reachExec ? reachDescription : scopeDescription,
-    parameters: Type.Object({
-      ...executeBaseParams,
-      scope: reachExec
-        ? Type.Optional(Type.String({ description: reachScopeDescription }))
-        : Type.Optional(
-            Type.Union(
-              [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
-              {
-                description:
-                  'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
-              },
-            ),
-          ),
-    }),
-    execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-  });
-
+/** The sandbox tool: inventory, defaults, status and restart. */
+function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
+  const { ref, recordCall, recordText, recordFail } = kit;
   const sandboxActions = Object.keys(SANDBOX_TOOL_ARGS.sandbox!);
   const sandboxManagement = defineTool({
     name: "sandbox",
@@ -369,6 +300,102 @@ export function computerTools(kit: ToolKit) {
       }
     },
   });
+  return { sandboxManagement };
+}
+
+/** The execute tool: scope routing, descriptions, and background starts. */
+function executeTool(
+  kit: ToolKit,
+  {
+    EXECUTE_TIMEOUT_GUIDANCE,
+    runExecute,
+    invalidExecute,
+    executeBaseParams,
+    blockOnApproval,
+  }: Pick<ReturnType<typeof executeShared>, "EXECUTE_TIMEOUT_GUIDANCE" | "executeBaseParams" | "blockOnApproval"> &
+    Pick<ReturnType<typeof executeRunner>, "runExecute" | "invalidExecute">,
+) {
+  const { ref, scratchExec, reachExec, recordCall, recordResult, recordFail } = kit;
+  const scopedBullet =
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
+  const scratchBullet = scratchExec
+    ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
+    : "";
+  const reachScopeDescription =
+    (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
+    '"owner" | ' +
+    "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
+  const reachDescription =
+    "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
+    scopedBullet +
+    scratchBullet +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
+    "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
+    "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
+    FILE_SEND_GUIDANCE +
+    EXECUTE_TIMEOUT_GUIDANCE;
+  const scopeDescription =
+    `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
+    scopedBullet +
+    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
+    scratchBullet +
+    FILE_SEND_GUIDANCE +
+    EXECUTE_TIMEOUT_GUIDANCE;
+
+  const runScopedExecute = async (
+    callId: string,
+    params: {
+      command: string;
+      timeout_seconds?: number;
+      purpose?: string;
+      scope?: string;
+      credentials?: string[];
+    },
+  ) => {
+    const scope = (params.scope ?? "scoped").trim();
+    const keyword = scope.toLowerCase();
+    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
+    if (keyword === "scratch") {
+      if (!scratchExec) {
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
+        return invalidExecute(
+          callId,
+          { tool: "execute", invalid: "scratch_unavailable" },
+          '[error] a scratch box isn\'t available here — use scope:"scoped" or name a room like "#project-alpha".',
+        );
+      }
+      return runExecute(callId, params, { scratch: true });
+    }
+    if (keyword === "owner") return runExecute(callId, params, { ownerAuth: true });
+    return runExecute(callId, params, { reachTarget: scope });
+  };
+
+  const runCommand = (
+    callId: string,
+    params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
+  ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
+
+  const execute = defineTool({
+    name: "execute",
+    label: "execute",
+    description: reachExec ? reachDescription : scopeDescription,
+    parameters: Type.Object({
+      ...executeBaseParams,
+      scope: reachExec
+        ? Type.Optional(Type.String({ description: reachScopeDescription }))
+        : Type.Optional(
+            Type.Union(
+              [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
+              {
+                description:
+                  'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
+              },
+            ),
+          ),
+    }),
+    execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
+  });
+
   const runBackgroundExecute = async (callId: string, params: Parameters<typeof runCommand>[1]) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
@@ -422,7 +449,12 @@ export function computerTools(kit: ToolKit) {
       throw e;
     }
   };
+  return { execute };
+}
 
+/** The background tool: poll, input, stop, list and watch detached jobs. */
+function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
+  const { execCeilingSec, bgTtlMin, bgTtlMaxMin, capabilityExpiry } = kit;
   const background = defineTool({
     name: "background",
     label: "background",
@@ -453,201 +485,216 @@ export function computerTools(kit: ToolKit) {
       "login mid-flight — that throws away the pending approval and wedges it. Read the `interactive-login` skill " +
       "before starting one and run it as the skill says: under a temporary home, never this computer's $HOME, then " +
       "saved to the keychain.",
-    parameters: Type.Object({
-      action: Type.Union(
-        [
-          Type.Literal("poll"),
-          Type.Literal("send_input"),
-          Type.Literal("stop"),
-          Type.Literal("list"),
-          Type.Literal("watch"),
-          Type.Literal("unwatch"),
-        ],
-        {
-          description:
-            "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
-        },
+    parameters: backgroundParams(),
+    execute: (callId, params) => runBackgroundAction(kit, blockOnApproval, callId, params),
+  });
+  return { background };
+}
+
+function backgroundParams() {
+  return Type.Object({
+    action: Type.Union(
+      [
+        Type.Literal("poll"),
+        Type.Literal("send_input"),
+        Type.Literal("stop"),
+        Type.Literal("list"),
+        Type.Literal("watch"),
+        Type.Literal("unwatch"),
+      ],
+      {
+        description:
+          "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
+      },
+    ),
+    purpose: optionalString(
+      "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
+    ),
+    process_id: optionalString("poll/send_input/stop/watch only: the process_id execute returned."),
+    data: optionalString(
+      "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
+    ),
+    since_cursor: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
+      }),
+    ),
+    pattern: optionalString(
+      'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
+    ),
+    instructions: optionalString(
+      "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
+    ),
+    monitor_id: optionalString("unwatch only: the monitor id watch returned."),
+    wait_seconds: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 60,
+        description: "poll only: block up to this long for new output or exit, then answer (default 0).",
+      }),
+    ),
+    max_bytes: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description: "poll only: cap bytes this read (default 65536); re-poll with the returned cursor for more.",
+      }),
+    ),
+    signal: Type.Optional(
+      Type.Union(
+        [Type.Literal("TERM"), Type.Literal("KILL"), Type.Literal("INT"), Type.Literal("HUP"), Type.Literal("QUIT")],
+        { description: "stop only: default TERM; use KILL to force." },
       ),
-      purpose: optionalString(
-        "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
-      ),
-      process_id: optionalString("poll/send_input/stop/watch only: the process_id execute returned."),
-      data: optionalString(
-        "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
-      ),
-      since_cursor: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description:
-            "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
-        }),
-      ),
-      pattern: optionalString(
-        'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
-      ),
-      instructions: optionalString(
-        "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
-      ),
-      monitor_id: optionalString("unwatch only: the monitor id watch returned."),
-      wait_seconds: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          maximum: 60,
-          description: "poll only: block up to this long for new output or exit, then answer (default 0).",
-        }),
-      ),
-      max_bytes: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          description: "poll only: cap bytes this read (default 65536); re-poll with the returned cursor for more.",
-        }),
-      ),
-      signal: Type.Optional(
-        Type.Union(
-          [Type.Literal("TERM"), Type.Literal("KILL"), Type.Literal("INT"), Type.Literal("HUP"), Type.Literal("QUIT")],
-          { description: "stop only: default TERM; use KILL to force." },
-        ),
-      ),
-    }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, {
-        tool: "background",
-        action: params.action,
-        purpose: params.purpose,
-        process_id: params.process_id,
-        ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
-      });
-      const pid = params.process_id ?? "";
-      try {
-        switch (params.action) {
-          case "poll": {
-            const r = await tc.backgroundPoll(pid, {
-              ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
-              ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
-              ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
-            });
-            const { chunks: _chunks, ...pollMeta } = r;
+    ),
+  });
+}
+
+/** Runs one background-tool action against the turn's tool context. */
+async function runBackgroundAction(
+  kit: ToolKit,
+  blockOnApproval: ReturnType<typeof executeShared>["blockOnApproval"],
+  callId: string,
+  params: Static<ReturnType<typeof backgroundParams>>,
+) {
+  const { ref, recordCall, recordResult, recordFail } = kit;
+  const tc = ref.current;
+  if (!tc) return text("[error] no active tool context");
+  await recordCall(callId, {
+    tool: "background",
+    action: params.action,
+    purpose: params.purpose,
+    process_id: params.process_id,
+    ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
+  });
+  const pid = params.process_id ?? "";
+  try {
+    switch (params.action) {
+      case "poll": {
+        const r = await tc.backgroundPoll(pid, {
+          ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
+          ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
+          ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
+        });
+        const { chunks: _chunks, ...pollMeta } = r;
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, ...pollMeta },
+          { ...text(`${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`), details: r },
+          false,
+          { screenAs: { provenance: "external" } },
+        );
+      }
+      case "stop": {
+        const r = await tc.backgroundStop(pid, params.signal);
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, ...r },
+          { ...text(`signalled ${r.processId}; status now ${fmtStatus(r.status)}`), details: r },
+        );
+      }
+      case "watch": {
+        try {
+          const r = await tc.backgroundWatch(pid, {
+            ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
+            ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
+            ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
+          });
+          if ("completed" in r) {
+            const status = `${r.registryStatus}${r.exitCode !== undefined ? ` (code ${r.exitCode})` : ""}`;
+            const result = r.outputTail
+              ? `job already ${status} — no watch armed; here is the tail of its output:\n${r.outputTail}`
+              : `job already ${status} — no watch armed; it produced no output.`;
             return recordResult(
               callId,
-              { tool: "background", action: params.action, ...pollMeta },
-              { ...text(`${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`), details: r },
+              { tool: "background", action: params.action, ...r },
+              { ...text(result), details: r },
               false,
-              { screenAs: { provenance: "external" } },
+              { screenAs: { provenance: "external", source: "finished job output" } },
             );
           }
-          case "stop": {
-            const r = await tc.backgroundStop(pid, params.signal);
-            return recordResult(
-              callId,
-              { tool: "background", action: params.action, ...r },
-              { ...text(`signalled ${r.processId}; status now ${fmtStatus(r.status)}`), details: r },
-            );
-          }
-          case "watch": {
-            try {
-              const r = await tc.backgroundWatch(pid, {
-                ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
-                ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
-                ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
-              });
-              if ("completed" in r) {
-                const status = `${r.registryStatus}${r.exitCode !== undefined ? ` (code ${r.exitCode})` : ""}`;
-                const result = r.outputTail
-                  ? `job already ${status} — no watch armed; here is the tail of its output:\n${r.outputTail}`
-                  : `job already ${status} — no watch armed; it produced no output.`;
-                return recordResult(
-                  callId,
-                  { tool: "background", action: params.action, ...r },
-                  { ...text(result), details: r },
-                  false,
-                  { screenAs: { provenance: "external", source: "finished job output" } },
-                );
-              }
-              const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, ...r },
-                {
-                  ...text(
-                    `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
-                      `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
-                  ),
-                  details: r,
-                },
-              );
-            } catch (e) {
-              if (e instanceof NeedsApproval || e instanceof CommandDenied) throw e;
-              const msg = errMessage(e);
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: msg },
-                `[watch failed] ${msg}`,
-              );
-            }
-          }
-          case "unwatch": {
-            try {
-              const r = await tc.backgroundUnwatch(params.monitor_id!);
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, ...r },
-                text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
-                !r.removed,
-              );
-            } catch (e) {
-              const msg = errMessage(e);
-              return recordFail(
-                callId,
-                { tool: "background", action: params.action, error: msg },
-                `[unwatch failed] ${msg}`,
-              );
-            }
-          }
-          case "send_input": {
-            const r = await tc.backgroundWrite(pid, params.data!);
-            return recordResult(
-              callId,
-              { tool: "background", action: params.action, ...r },
-              { ...text(`wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}`), details: r },
-            );
-          }
-          case "list": {
-            const jobs = await tc.backgroundList();
-            return recordResult(
-              callId,
-              { tool: "background", action: params.action, jobs },
-              {
-                ...text(
-                  jobs.length
-                    ? jobs
-                        .map(
-                          (j) =>
-                            `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
-                        )
-                        .join("\n")
-                    : "(no background jobs)",
-                ),
-                details: { jobs },
-              },
-            );
-          }
+          const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
+          return recordResult(
+            callId,
+            { tool: "background", action: params.action, ...r },
+            {
+              ...text(
+                `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
+                  `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
+              ),
+              details: r,
+            },
+          );
+        } catch (e) {
+          if (e instanceof NeedsApproval || e instanceof CommandDenied) throw e;
+          const msg = errMessage(e);
+          return recordFail(callId, { tool: "background", action: params.action, error: msg }, `[watch failed] ${msg}`);
         }
-      } catch (e) {
-        if (e instanceof NeedsApproval)
-          return blockOnApproval(callId, e, params.purpose, "background", { action: params.action });
-        if (e instanceof CommandDenied) {
+      }
+      case "unwatch": {
+        try {
+          const r = await tc.backgroundUnwatch(params.monitor_id!);
+          return recordResult(
+            callId,
+            { tool: "background", action: params.action, ...r },
+            text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
+            !r.removed,
+          );
+        } catch (e) {
+          const msg = errMessage(e);
           return recordFail(
             callId,
-            { tool: "background", action: params.action, denied: true, reason: e.message },
-            `[denied by policy] ${e.message}`,
+            { tool: "background", action: params.action, error: msg },
+            `[unwatch failed] ${msg}`,
           );
         }
-        throw e;
       }
-    },
-  });
+      case "send_input": {
+        const r = await tc.backgroundWrite(pid, params.data!);
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, ...r },
+          { ...text(`wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}`), details: r },
+        );
+      }
+      case "list": {
+        const jobs = await tc.backgroundList();
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, jobs },
+          {
+            ...text(
+              jobs.length
+                ? jobs
+                    .map(
+                      (j) =>
+                        `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                    )
+                    .join("\n")
+                : "(no background jobs)",
+            ),
+            details: { jobs },
+          },
+        );
+      }
+    }
+  } catch (e) {
+    if (e instanceof NeedsApproval)
+      return blockOnApproval(callId, e, params.purpose, "background", { action: params.action });
+    if (e instanceof CommandDenied) {
+      return recordFail(
+        callId,
+        { tool: "background", action: params.action, denied: true, reason: e.message },
+        `[denied by policy] ${e.message}`,
+      );
+    }
+    throw e;
+  }
+}
+
+/** Rejects sandbox-targeting tool calls whose sandbox_id is malformed. */
+function sandboxValidation(kit: ToolKit) {
+  const { recordCall, recordFail } = kit;
   const validateSandboxTool = (tool: ToolDefinition): ToolDefinition => {
     const rules = SANDBOX_TOOL_ARGS[tool.name];
     if (!rules) return tool;
@@ -688,7 +735,7 @@ export function computerTools(kit: ToolKit) {
       },
     };
   };
-  return { execute, sandboxManagement, background, validateSandboxTool };
+  return { validateSandboxTool };
 }
 
 /**

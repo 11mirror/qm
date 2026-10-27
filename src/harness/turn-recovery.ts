@@ -5,13 +5,8 @@ import { defaultInteractiveThinkingLevel, modelDisplayName } from "../model/pi-m
 import { swallow } from "../util/errors.ts";
 import type { ToolContextRef } from "./agent-tools.ts";
 import type { HarnessTurnInput } from "./harness.ts";
-import {
-  applyTurnEffort,
-  EMPTY_ENDING_MIN_BUDGET_MS,
-  wantsFastMode,
-  withRequestHeaders,
-  type TurnWallClockOutcome,
-} from "./pi-harness.ts";
+import { applyTurnEffort, wantsFastMode, withRequestHeaders } from "./pi-model-runtime.ts";
+import { EMPTY_ENDING_MIN_BUDGET_MS, type TurnWallClockOutcome } from "./pi-turn-clock.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { documentStub } from "../core/document-kinds.ts";
 import { type AgentSession } from "@earendil-works/pi-coding-agent";

@@ -12,7 +12,15 @@ import { type ToolKit } from "./kit.ts";
 import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 export function controlPlaneTools(kit: ToolKit) {
-  const { ref, recordCall, recordResult, recordText, recordFail, unavailable, isUnavailable } = kit;
+  const { instructionsTool } = instructionsToolFor(kit);
+  const { sharingTool } = sharingTools(kit);
+  const { resourceTool, adminActions, adminPreamble } = resourceTools(kit);
+  return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
+}
+
+/** The instructions tool: read and edit standing guidance for this channel or conversation. */
+function instructionsToolFor(kit: ToolKit) {
+  const { ref, recordCall, recordText, recordFail, unavailable, isUnavailable } = kit;
   const instructionsTool = defineTool({
     name: "instructions",
     label: "instructions",
@@ -130,7 +138,12 @@ export function controlPlaneTools(kit: ToolKit) {
       );
     },
   });
+  return { instructionsTool };
+}
 
+/** Builds the share and move actions for files, skills, deployments and crons. */
+function sharingTools(kit: ToolKit) {
+  const { ref, recordCall, recordText, recordFail, unavailable, isUnavailable } = kit;
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
@@ -245,7 +258,12 @@ export function controlPlaneTools(kit: ToolKit) {
       },
     });
   }
+  return { sharingTool };
+}
 
+/** Groups action tools under one resource tool, and the admin actions with their preamble. */
+function resourceTools(kit: ToolKit) {
+  const { ref, recordCall, recordResult, recordFail } = kit;
   function resourceTool(name: string, actions: Record<string, ToolDefinition>): ToolDefinition {
     const groups = [...new Set(Object.values(actions))].map((operation) => ({
       operation,
@@ -327,5 +345,5 @@ export function controlPlaneTools(kit: ToolKit) {
 
   const adminPreamble =
     "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or on a turn they started; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n";
-  return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
+  return { resourceTool, adminActions, adminPreamble };
 }

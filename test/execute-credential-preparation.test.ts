@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createToolContext, type CommandCredential, type ToolContextDeps } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
+import { type CommandCredential } from "../src/tools/primitives.ts";
 import type { ExecOptions, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 

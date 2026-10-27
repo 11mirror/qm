@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { buildModelRuntime } from "../src/harness/pi-model-runtime.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
 const bindingBeta = "thinking-binding-controls-2026-08-01";

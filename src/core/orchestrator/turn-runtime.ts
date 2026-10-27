@@ -6,7 +6,7 @@ import type { RuntimeChoice } from "../../harness/harness.ts";
 import { errMessage } from "../../util/errors.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../../model/pi-models.ts";
-import type { ProviderKeys } from "../../harness/pi-harness.ts";
+import type { ProviderKeys } from "../../harness/pi-model-runtime.ts";
 import { resolveIndividualAuthRouting } from "../individual-auth-routing.ts";
 
 import type { TurnCtx } from "./turn-context.ts";

@@ -4,13 +4,8 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import {
-  createToolContext,
-  type ToolContext,
-  type ToolContextDeps,
-  CommandDenied,
-  NeedsApproval,
-} from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
+import { type ToolContext, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
 import { resolveReachableChannel } from "../src/resolution/scope-reach.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

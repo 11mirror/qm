@@ -1,6 +1,7 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createPiHarness, EMPTY_ENDING_NOTE } from "../src/harness/pi-harness.ts";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { EMPTY_ENDING_NOTE } from "../src/harness/pi-turn-clock.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";

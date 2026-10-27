@@ -59,69 +59,318 @@ export interface TurnRunState {
   remainingDocumentTokens: number;
 }
 
-export function createHarnessSegment(
+/** What one harness segment needs from the turn's earlier phases. */
+export interface HarnessSegmentTurn {
+  screenTrace: ScreenTrace;
+  framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
+  approvalLedger: ApprovalLedger;
+  provision: ReturnType<typeof createTurnSandboxes>["provision"];
+  turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
+  prepared: Awaited<ReturnType<typeof prepareTurnInput>>;
+  selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
+  strictReadOnly: boolean;
+  mcpToolsReady: ReturnType<NonNullable<OrchestratorDeps["mcp"]>["toolDefsFor"]> | undefined;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
+  systemPrompt: string;
+  session: Session;
+  gapWork: { listener?: (work: GapWork) => void };
+  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
+  lease: Lease;
+  turnAbort: AbortController;
+  run: TurnRunState;
+  publishFirstAck: (deliberatePost: boolean) => void;
+  turnStart: number;
+  emittedEntries: Item[];
+  syntheticPrompt: boolean;
+  blobTransfer: OrchestratorDeps["blobTransfer"];
+  observeSecurityData: SecurityObserver;
+}
+
+export function createHarnessSegment(ctx: TurnCtx, turn: HarnessSegmentTurn) {
+  return (harnessInput: string, extras: Parameters<typeof runHarnessSegment>[3], continuation?: { history: Item[] }) =>
+    runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
+}
+
+/** One harness run over the turn's prepared state; continuation segments pass their own history. */
+async function runHarnessSegment(
   ctx: TurnCtx,
-  turn: {
-    screenTrace: ScreenTrace;
-    framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
-    approvalLedger: ApprovalLedger;
-    provision: ReturnType<typeof createTurnSandboxes>["provision"];
-    turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
-    prepared: Awaited<ReturnType<typeof prepareTurnInput>>;
-    selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
-    strictReadOnly: boolean;
-    mcpToolsReady: ReturnType<NonNullable<OrchestratorDeps["mcp"]>["toolDefsFor"]> | undefined;
-    context: Awaited<ReturnType<typeof resolveTurnContext>>;
-    memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
-    systemPrompt: string;
-    session: Session;
-    gapWork: { listener?: (work: GapWork) => void };
-    emitGapWork: (phase: GapPhase, start: number, end: number) => void;
-    lease: Lease;
-    turnAbort: AbortController;
-    run: TurnRunState;
-    publishFirstAck: (deliberatePost: boolean) => void;
-    turnStart: number;
-    emittedEntries: Item[];
-    syntheticPrompt: boolean;
-    blobTransfer: OrchestratorDeps["blobTransfer"];
-    observeSecurityData: SecurityObserver;
+  turn: HarnessSegmentTurn,
+  harnessInput: string,
+  extras: {
+    priorTurns?: typeof ctx.input.priorTurns;
+    overheard?: HarnessSegmentTurn["prepared"]["importedOverheard"];
+    attachments?: HarnessSegmentTurn["prepared"]["inbound"]["metas"];
+    images?: HarnessSegmentTurn["prepared"]["inbound"]["images"];
   },
+  continuation?: { history: Item[] },
 ) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    automatedTurn,
-    sessionTurn,
-    humanInput,
-    messageTs,
-    entryTs,
-    coreReceivedAt,
-    turnTimezone,
-    withManagedRosterVersion,
-    mirrorRunActivity,
-    resolution,
-    scopeId,
-  } = ctx;
-  const { surfaceName, delegateWork, turnContextBlocks, turnInboxDir, memoryHeading } = turn.framed;
+  const { deps, input, messageTs, entryTs, turnTimezone, resolution, scopeId } = ctx;
+  const { surfaceName, delegateWork } = turn.framed;
   const { consume: consumeApproval } = turn.approvalLedger;
-  const { spine, spineFirst, fileRegistration, earlyTaskAck, mayReadArtifact, surfaceToolDeps, tools } = turn.turnTools;
+  const { mayReadArtifact, surfaceToolDeps, tools } = turn.turnTools;
+  const { partial, resumePlan, history, documentInputs, continueTurn, isPollFire } = turn.prepared;
+  const { effectiveTurnWallClockMs, runtimeState } = turn.selected;
+  const { strictReadOnly, mcpToolsReady, systemPrompt, session, lease, turnAbort, turnStart } = turn;
+  const segmentEnv = segmentEnvironment(turn, continuation);
+  const { environment, silentResume } = segmentEnv;
+  const emit = createSegmentEmit(ctx, turn, segmentEnv, continuation);
+  const initialDocuments = [...documentInputs.documents];
+  const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
+  const sessionGoal = openGoal(storedGoal);
+  const saveGoal = async (goal: GoalRecord): Promise<void> => {
+    await deps.sessions.setGoal(lease, goal);
+    if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
+  };
+  const turnResult = await deps.harness.turns.runTurn({
+    session,
+    loadImage: artifactImageLoader(deps.files, mayReadArtifact),
+    ...(turnTimezone ? { timezone: turnTimezone } : {}),
+    prepareSteer: createPrepareSteer(ctx, turn, initialDocuments),
+    ...segmentRuntimeOptions(ctx, turn),
+    ...(input.runId ? { runId: input.runId } : {}),
+    cancel: turnAbort.signal,
+    ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
+    ...(input.shutdown ? { shutdown: input.shutdown } : {}),
+    input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
+    ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
+    ...(!partial && entryTs ? { entryTs } : {}),
+    ...(environment ? { environment } : {}),
+    ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
+    ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
+    ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
+    ...(extras.images?.length ? { images: extras.images } : {}),
+    documents: initialDocuments,
+    ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
+    ...(strictReadOnly ? { readOnly: true } : {}),
+    surfaceName,
+    delegateWork,
+    ...((session.clientTools ?? input.clientTools)?.length
+      ? { clientTools: session.clientTools ?? input.clientTools }
+      : {}),
+    ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
+    ...(isPollFire ? { pollFire: true } : {}),
+    turnWallClockMs:
+      effectiveTurnWallClockMs > 0
+        ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
+        : effectiveTurnWallClockMs,
+    toolApprovalGate: consumeApproval,
+    systemPrompt,
+    history: continuation?.history ?? history,
+    tools,
+    ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
+    ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
+    emit,
+    goal: sessionGoal,
+    saveGoal,
+    scopeLabel: scopeId,
+    orgScopeId: resolution.orgScopeId,
+    ...segmentCallbacks(ctx, turn),
+  });
+  return turnResult;
+}
+
+/** The segment's environment note: turn facts, environment and memory deltas since the history, inbound issues. */
+function segmentEnvironment(turn: HarnessSegmentTurn, continuation: { history: Item[] } | undefined) {
+  const { turnContextBlocks, memoryHeading } = turn.framed;
+  const { inboundIssues, recalled, history, documentInputs, turnEnvironmentContents, continueTurn } = turn.prepared;
+  const { context, memoryView, session } = turn;
+  const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryView.held, context.memoryLabels);
+  const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
+  const turnEnvironment = environmentNote(
+    [
+      turnEnvironmentContents,
+      snapshot.text,
+      recall.text ? `${memoryHeading}${recall.text}` : "",
+      inboundIssuesNote(inboundIssues),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+  const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
+  const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
+  return { recall, snapshot, environment, silentResume };
+}
+
+/**
+ * The segment's transcript writer: stamps work times on replies, attaches the environment and recall
+ * to the turn's first user message, then appends and mirrors each entry.
+ */
+function createSegmentEmit(
+  ctx: TurnCtx,
+  turn: HarnessSegmentTurn,
+  { recall, snapshot, environment }: ReturnType<typeof segmentEnvironment>,
+  continuation: { history: Item[] } | undefined,
+): HarnessTurnInput["emit"] {
+  const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion, mirrorRunActivity } = ctx;
+  const { surfaceName } = turn.framed;
+  const { spine } = turn.turnTools;
+  const { partial } = turn.prepared;
+  const { lease, run, publishFirstAck, emittedEntries, syntheticPrompt, emitGapWork } = turn;
+  let recordedRecall = false;
+  const emit: HarnessTurnInput["emit"] = async (entry) => {
+    run.turnProgress++;
+    const persistStart = Date.now();
+    try {
+      const stored = ((): NewItem => {
+        if (
+          (entry.kind === "AgentMessage" && !entry.variant) ||
+          entry.kind === "Elicitation" ||
+          ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
+        ) {
+          const body = { ...entry.body };
+          if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+          if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+          return { ...entry, body };
+        }
+        if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
+        const body: Record<string, unknown> = { ...entry.body };
+        const steered = entry.kind === "SteeringMessage";
+        const overheard = body.overheard === true;
+        const turnStart = !steered && !overheard;
+        if (!recordedRecall && turnStart) {
+          recordedRecall = true;
+          body.environmentSnapshot = snapshot.record;
+          if (environment) body.environment = environment;
+          if (recall.text) body.memoryRecall = recall.record;
+        }
+        delete body.speakerId;
+        if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
+        if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+        if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
+          body.display = input.displayText;
+        if ((partial || continuation) && turnStart) body.resumeNote = true;
+        return entry.kind === "UserMessage"
+          ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
+          : { ...entry, body };
+      })();
+      const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+      emittedEntries.push(appended);
+      if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
+        spine.turnUserEntrySeq = appended.seq;
+        if (input.runId && deps.runs)
+          await deps.runs
+            .noteTurnUserSeq(input.runId, appended.seq)
+            .catch(swallowAs("orchestrator: record turn boundary", false));
+      }
+      if (isUserMessage(appended)) run.failureUserItem = undefined;
+      if (appended.kind === "ToolCall") {
+        run.toolCalls += 1;
+        if (run.toolCalls === 1 && input.runId) {
+          if (!input.surfaceTools) {
+            deps.turnStream?.noteToolCall(input.runId);
+          } else {
+            publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
+          }
+        }
+      }
+      await mirrorRunActivity(appended);
+      return appended;
+    } finally {
+      emitGapWork("persist", persistStart, Date.now());
+    }
+  };
+  return emit;
+}
+
+/** Prepares a mid-turn steer: refreshed inbox header, staged attachments and their documents. */
+function createPrepareSteer(
+  ctx: TurnCtx,
+  turn: HarnessSegmentTurn,
+  initialDocuments: HarnessTurnInput["documents"],
+): NonNullable<HarnessTurnInput["prepareSteer"]> {
+  const { deps, input, actor, conversation, scopeId } = ctx;
+  const { turnInboxDir } = turn.framed;
+  const { fileRegistration, mayReadArtifact } = turn.turnTools;
+  const { documentInputs, observeDocuments } = turn.prepared;
+  const { screenTrace, provision, strictReadOnly, session, turnAbort, run, blobTransfer, observeSecurityData } = turn;
+  return async (text, request) => {
+    const author = request ? deps.identity.resolve(request.actor).id : actor.id;
+    const refreshedInbox =
+      input.surface === "web" &&
+      conversation.kind === "dm" &&
+      /^web:.+:inbox$/.test(conversation.threadRef) &&
+      request?.conversation.threadRef === conversation.threadRef
+        ? request.conversationHeader?.trim()
+        : undefined;
+    if (refreshedInbox) {
+      for (const chunk of securityScreenChunks("conversation-header", refreshedInbox))
+        void observeSecurityData(chunk, actor.id, scopeId, {
+          ...screenTrace,
+          sessionId: session.id,
+          hook: "user_input",
+          request: text,
+          surface: "steer",
+          origin: input.origin.kind,
+        });
+      text = `${text}\n\n${refreshedInbox}`;
+    }
+    if (!request?.attachments?.length) return { text, author };
+    const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
+    const inboxDir = `${turnInboxDir}/${randomUUID()}`;
+    const received = strictReadOnly
+      ? { metas: [], images: [], tooMany: [], unavailable: [] }
+      : await materializeInbound(
+          deps.sandbox,
+          provision,
+          request.attachments,
+          blobTransfer,
+          { ...fileRegistration, seed },
+          inboxDir,
+          ({ content, name, mimetype }) =>
+            void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
+              ...screenTrace,
+              sessionId: session.id,
+              hook: "tool_response",
+              surface: "inbound_file",
+              origin: input.origin.kind,
+            }),
+        );
+    const steeredDocuments = await loadDocumentInputs(
+      deps.files,
+      received.metas,
+      mayReadArtifact,
+      run.remainingDocumentBytes,
+      turnAbort.signal,
+      run.remainingDocumentCount,
+      initialDocuments,
+      run.remainingDocumentTokens,
+    );
+    observeDocuments(steeredDocuments, text);
+    run.remainingDocumentBytes -= steeredDocuments.documents.reduce(
+      (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
+      0,
+    );
+    run.remainingDocumentCount -= steeredDocuments.documents.length;
+    run.remainingDocumentTokens -= steeredDocuments.tokens;
+    documentInputs.documents.push(...steeredDocuments.documents);
+    const issues = inboundIssueList({
+      ...received,
+      surfaceNotes: strictReadOnly
+        ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
+        : [],
+    });
+    return {
+      text: [
+        text,
+        inboundManifest(received.metas, inboxDir, received.unstaged),
+        ...steeredDocuments.notices,
+        inboundIssuesNote(issues),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      attachments: received.metas,
+      images: received.images,
+      documents: steeredDocuments.documents,
+      author,
+    };
+  };
+}
+
+/** The segment's runtime options: personal provider keys, pinning, runtime reports and the runtime tool. */
+function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<HarnessTurnInput> {
+  const { deps, input, actor, automatedTurn, sessionTurn } = ctx;
   const {
-    inboundIssues,
-    recalled,
-    partial,
-    resumePlan,
-    history,
-    documentInputs,
-    observeDocuments,
-    turnEnvironmentContents,
-    continueTurn,
-    isPollFire,
-  } = turn.prepared;
-  const {
-    effectiveTurnWallClockMs,
     runtimePurpose,
     purposeDefault,
     runtimeDefaults,
@@ -130,348 +379,120 @@ export function createHarnessSegment(
     checkRuntimeAuth,
     runtimeState,
   } = turn.selected;
-  const {
-    screenTrace,
-    provision,
-    strictReadOnly,
-    mcpToolsReady,
-    context,
-    memoryView,
-    systemPrompt,
-    session,
-    gapWork,
-    emitGapWork,
-    lease,
-    turnAbort,
-    run,
-    publishFirstAck,
-    turnStart,
-    emittedEntries,
-    syntheticPrompt,
-    blobTransfer,
-    observeSecurityData,
-  } = turn;
-  const runHarnessSegment = async (
-    harnessInput: string,
-    extras: {
-      priorTurns?: typeof input.priorTurns;
-      overheard?: typeof turn.prepared.importedOverheard;
-      attachments?: typeof turn.prepared.inbound.metas;
-      images?: typeof turn.prepared.inbound.images;
+  const { run } = turn;
+  return {
+    ...(runtimeState.userProviderKeys ? { providerKeys: runtimeState.userProviderKeys } : {}),
+    ...(runtimeState.personalAuth && !purposeDefault && !restoredRuntime && run.runtimeHandoffs === 0
+      ? { runtimePinned: true }
+      : {}),
+    runtimeActorId: actor.id,
+    onRuntime: (reported: TurnRuntime) => {
+      const runtime: TurnRuntime = runtimeState.agentSwitch
+        ? { ...reported, change: { agent: runtimeState.agentSwitch } }
+        : reported;
+      run.turnRuntime = runtime;
+      if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
     },
-    continuation?: { history: Item[] },
-  ) => {
-    const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryView.held, context.memoryLabels);
-    const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
-    const turnEnvironment = environmentNote(
-      [
-        turnEnvironmentContents,
-        snapshot.text,
-        recall.text ? `${memoryHeading}${recall.text}` : "",
-        inboundIssuesNote(inboundIssues),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
-    const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-    const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
-    let recordedRecall = false;
-    const emit: HarnessTurnInput["emit"] = async (entry) => {
-      run.turnProgress++;
-      const persistStart = Date.now();
-      try {
-        const stored = ((): NewItem => {
-          if (
-            (entry.kind === "AgentMessage" && !entry.variant) ||
-            entry.kind === "Elicitation" ||
-            ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
-          ) {
-            const body = { ...entry.body };
-            if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-            if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
-            return { ...entry, body };
-          }
-          if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
-          const body: Record<string, unknown> = { ...entry.body };
-          const steered = entry.kind === "SteeringMessage";
-          const overheard = body.overheard === true;
-          const turnStart = !steered && !overheard;
-          if (!recordedRecall && turnStart) {
-            recordedRecall = true;
-            body.environmentSnapshot = snapshot.record;
-            if (environment) body.environment = environment;
-            if (recall.text) body.memoryRecall = recall.record;
-          }
-          delete body.speakerId;
-          if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
-          if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
-          if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
-            body.display = input.displayText;
-          if ((partial || continuation) && turnStart) body.resumeNote = true;
-          return entry.kind === "UserMessage"
-            ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
-            : { ...entry, body };
-        })();
-        const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-        emittedEntries.push(appended);
-        if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
-          spine.turnUserEntrySeq = appended.seq;
-          if (input.runId && deps.runs)
-            await deps.runs
-              .noteTurnUserSeq(input.runId, appended.seq)
-              .catch(swallowAs("orchestrator: record turn boundary", false));
+    ...(runtimePurpose ? { runtimePurpose } : {}),
+    ...(deps.runtime && input.runId
+      ? {
+          runtimeControl: (
+            active: RuntimeChoice,
+            request: import("../../harness/runtime-types.ts").RuntimeRequest,
+            signal?: AbortSignal,
+          ) =>
+            deps.runtime!(
+              sessionTurn && request.lifetime === "scope"
+                ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
+                : runtimeClaims,
+              active,
+              request,
+              checkRuntimeAuth,
+              runtimeState.personalAuth,
+              signal,
+              automatedTurn && input.surface === "cron",
+              runtimePurpose,
+              runtimeDefaults,
+            ),
         }
-        if (isUserMessage(appended)) run.failureUserItem = undefined;
-        if (appended.kind === "ToolCall") {
-          run.toolCalls += 1;
-          if (run.toolCalls === 1 && input.runId) {
-            if (!input.surfaceTools) {
-              deps.turnStream?.noteToolCall(input.runId);
-            } else {
-              publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
-            }
-          }
-        }
-        await mirrorRunActivity(appended);
-        return appended;
-      } finally {
-        emitGapWork("persist", persistStart, Date.now());
-      }
-    };
-    const initialDocuments = [...documentInputs.documents];
-    const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
-    const sessionGoal = openGoal(storedGoal);
-    const saveGoal = async (goal: GoalRecord): Promise<void> => {
-      await deps.sessions.setGoal(lease, goal);
-      if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
-    };
-    const turnResult = await deps.harness.turns.runTurn({
-      session,
-      loadImage: artifactImageLoader(deps.files, mayReadArtifact),
-      ...(turnTimezone ? { timezone: turnTimezone } : {}),
-      prepareSteer: async (text, request) => {
-        const author = request ? deps.identity.resolve(request.actor).id : actor.id;
-        const refreshedInbox =
-          input.surface === "web" &&
-          conversation.kind === "dm" &&
-          /^web:.+:inbox$/.test(conversation.threadRef) &&
-          request?.conversation.threadRef === conversation.threadRef
-            ? request.conversationHeader?.trim()
-            : undefined;
-        if (refreshedInbox) {
-          for (const chunk of securityScreenChunks("conversation-header", refreshedInbox))
-            void observeSecurityData(chunk, actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "user_input",
-              request: text,
-              surface: "steer",
-              origin: input.origin.kind,
-            });
-          text = `${text}\n\n${refreshedInbox}`;
-        }
-        if (!request?.attachments?.length) return { text, author };
-        const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-        const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-        const received = strictReadOnly
-          ? { metas: [], images: [], tooMany: [], unavailable: [] }
-          : await materializeInbound(
-              deps.sandbox,
-              provision,
-              request.attachments,
-              blobTransfer,
-              { ...fileRegistration, seed },
-              inboxDir,
-              ({ content, name, mimetype }) =>
-                void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
-                  ...screenTrace,
-                  sessionId: session.id,
-                  hook: "tool_response",
-                  surface: "inbound_file",
-                  origin: input.origin.kind,
-                }),
-            );
-        const steeredDocuments = await loadDocumentInputs(
-          deps.files,
-          received.metas,
-          mayReadArtifact,
-          run.remainingDocumentBytes,
-          turnAbort.signal,
-          run.remainingDocumentCount,
-          initialDocuments,
-          run.remainingDocumentTokens,
-        );
-        observeDocuments(steeredDocuments, text);
-        run.remainingDocumentBytes -= steeredDocuments.documents.reduce(
-          (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
-          0,
-        );
-        run.remainingDocumentCount -= steeredDocuments.documents.length;
-        run.remainingDocumentTokens -= steeredDocuments.tokens;
-        documentInputs.documents.push(...steeredDocuments.documents);
-        const issues = inboundIssueList({
-          ...received,
-          surfaceNotes: strictReadOnly
-            ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-            : [],
-        });
-        return {
-          text: [
-            text,
-            inboundManifest(received.metas, inboxDir, received.unstaged),
-            ...steeredDocuments.notices,
-            inboundIssuesNote(issues),
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          attachments: received.metas,
-          images: received.images,
-          documents: steeredDocuments.documents,
-          author,
-        };
-      },
-      ...(runtimeState.userProviderKeys ? { providerKeys: runtimeState.userProviderKeys } : {}),
-      ...(runtimeState.personalAuth && !purposeDefault && !restoredRuntime && run.runtimeHandoffs === 0
-        ? { runtimePinned: true }
-        : {}),
-      runtimeActorId: actor.id,
-      onRuntime: (reported: TurnRuntime) => {
-        const runtime: TurnRuntime = runtimeState.agentSwitch
-          ? { ...reported, change: { agent: runtimeState.agentSwitch } }
-          : reported;
-        run.turnRuntime = runtime;
-        if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
-      },
-      ...(runtimePurpose ? { runtimePurpose } : {}),
-      ...(deps.runtime && input.runId
-        ? {
-            runtimeControl: (
-              active: RuntimeChoice,
-              request: import("../../harness/runtime-types.ts").RuntimeRequest,
-              signal?: AbortSignal,
-            ) =>
-              deps.runtime!(
-                sessionTurn && request.lifetime === "scope"
-                  ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
-                  : runtimeClaims,
-                active,
-                request,
-                checkRuntimeAuth,
-                runtimeState.personalAuth,
-                signal,
-                automatedTurn && input.surface === "cron",
-                runtimePurpose,
-                runtimeDefaults,
-              ),
-          }
-        : {}),
-      ...(input.runId ? { runId: input.runId } : {}),
-      cancel: turnAbort.signal,
-      ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
-      ...(input.shutdown ? { shutdown: input.shutdown } : {}),
-      input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
-      ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
-      ...(!partial && entryTs ? { entryTs } : {}),
-      ...(environment ? { environment } : {}),
-      ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
-      ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
-      ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
-      ...(extras.images?.length ? { images: extras.images } : {}),
-      documents: initialDocuments,
-      ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
-      ...(strictReadOnly ? { readOnly: true } : {}),
-      surfaceName,
-      delegateWork,
-      ...((session.clientTools ?? input.clientTools)?.length
-        ? { clientTools: session.clientTools ?? input.clientTools }
-        : {}),
-      ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-      ...(isPollFire ? { pollFire: true } : {}),
-      turnWallClockMs:
-        effectiveTurnWallClockMs > 0
-          ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
-          : effectiveTurnWallClockMs,
-      observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
-        if (provenance !== "external" || unscreenable) return;
-        const toolLabel = toolLabelOf(tool);
-        const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-        for (const chunk of securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result))
-          void observeSecurityData(chunk, actor.id, scopeId, {
-            ...screenTrace,
-            sessionId: session.id,
-            hook: "tool_response",
-            request: input.text,
-            surface: toolLabel,
-            origin: input.origin.kind,
-          });
-      },
-      toolApprovalGate: consumeApproval,
-      systemPrompt,
-      history: continuation?.history ?? history,
-      tools,
-      ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
-      ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
-      emit,
-      goal: sessionGoal,
-      saveGoal,
-      scopeLabel: scopeId,
-      orgScopeId: resolution.orgScopeId,
-      onDelta: (chunk: string) => {
-        if (!run.firstTokenMarked) {
-          run.firstTokenMarked = true;
-          markFirstToken();
-        }
-        if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
-        if (input.surfaceTools && spineFirst.open && spineFirst.block.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
-          spineFirst.block += chunk;
-      },
-      onReasoningDelta: (step: string, index: number, chunk: string) => {
-        if (input.runId && deps.turnStream && !input.surfaceTools)
-          deps.turnStream.publishReasoning(input.runId, step, index, chunk);
-      },
-      onToolCallStart: (name: string) => {
-        if (!earlyTaskAck || name === surfaceName) return;
-        if (input.surfaceTools) publishFirstAck(false);
-        else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
-      },
-      onTextBlockStart: async (phase) => {
-        if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
-        if (input.surfaceTools && spineFirst.block) spineFirst.open = false;
-        if (!input.surfaceTools) {
-          const streamOffset =
-            input.runId && deps.turnStream
-              ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
-              : undefined;
-          if (input.runId && deps.runActivity) {
-            const started = deps.runActivity.append(input.runId, {
-              marker: "text_start",
-              seq: emittedEntries.at(-1)?.seq ?? 0,
-              createdAt: Date.now(),
-              ...(phase ? { phase } : {}),
-              ...(streamOffset !== undefined ? { streamOffset } : {}),
-            });
-            await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
-          }
-        }
-      },
-      onGapWork: (cb) => {
-        gapWork.listener = cb;
-      },
-      recordModelCall: (rec) => {
-        deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-        void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-      },
-      recordLlmRequest: async (rec, signal) => {
-        try {
-          await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
-        } catch (err) {
-          reportFailure("orchestrator: persist LLM request snapshot", err);
-        }
-      },
-    });
-    return turnResult;
+      : {}),
   };
-  return runHarnessSegment;
+}
+
+/** The segment's streaming, security and accounting callbacks into the harness. */
+function segmentCallbacks(ctx: TurnCtx, turn: HarnessSegmentTurn) {
+  const { deps, input, actor, scopeId } = ctx;
+  const { surfaceName } = turn.framed;
+  const { spineFirst, earlyTaskAck } = turn.turnTools;
+  const { screenTrace, session, gapWork, run, publishFirstAck, emittedEntries, observeSecurityData } = turn;
+  return {
+    observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
+      if (provenance !== "external" || unscreenable) return;
+      const toolLabel = toolLabelOf(tool);
+      const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
+      for (const chunk of securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result))
+        void observeSecurityData(chunk, actor.id, scopeId, {
+          ...screenTrace,
+          sessionId: session.id,
+          hook: "tool_response",
+          request: input.text,
+          surface: toolLabel,
+          origin: input.origin.kind,
+        });
+    },
+    onDelta: (chunk: string) => {
+      if (!run.firstTokenMarked) {
+        run.firstTokenMarked = true;
+        markFirstToken();
+      }
+      if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
+      if (input.surfaceTools && spineFirst.open && spineFirst.block.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
+        spineFirst.block += chunk;
+    },
+    onReasoningDelta: (step: string, index: number, chunk: string) => {
+      if (input.runId && deps.turnStream && !input.surfaceTools)
+        deps.turnStream.publishReasoning(input.runId, step, index, chunk);
+    },
+    onToolCallStart: (name: string) => {
+      if (!earlyTaskAck || name === surfaceName) return;
+      if (input.surfaceTools) publishFirstAck(false);
+      else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
+    },
+    onTextBlockStart: async (phase) => {
+      if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
+      if (input.surfaceTools && spineFirst.block) spineFirst.open = false;
+      if (!input.surfaceTools) {
+        const streamOffset =
+          input.runId && deps.turnStream
+            ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+            : undefined;
+        if (input.runId && deps.runActivity) {
+          const started = deps.runActivity.append(input.runId, {
+            marker: "text_start",
+            seq: emittedEntries.at(-1)?.seq ?? 0,
+            createdAt: Date.now(),
+            ...(phase ? { phase } : {}),
+            ...(streamOffset !== undefined ? { streamOffset } : {}),
+          });
+          await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
+        }
+      }
+    },
+    onGapWork: (cb) => {
+      gapWork.listener = cb;
+    },
+    recordModelCall: (rec) => {
+      deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
+      void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
+    },
+    recordLlmRequest: async (rec, signal) => {
+      try {
+        await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
+      } catch (err) {
+        reportFailure("orchestrator: persist LLM request snapshot", err);
+      }
+    },
+  } satisfies Partial<HarnessTurnInput>;
 }
 
 export async function runSegments(

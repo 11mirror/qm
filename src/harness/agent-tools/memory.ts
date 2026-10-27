@@ -1,14 +1,20 @@
 // The memory and history tools: notebook facts and this conversation's own transcript.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../../memory/facts.ts";
 import { type ToolKit } from "./kit.ts";
 import { optionalInteger, optionalString, text } from "./shared.ts";
 
 export function memoryTools(kit: ToolKit) {
-  const { ref, opts, recordCall, recordText, recordFail } = kit;
+  const { memory } = memoryTool(kit);
+  const { history } = historyTool(kit);
+  return { memory, history };
+}
+
+/** The memory tool: search, read, add, edit and delete notebook facts. */
+function memoryTool(kit: ToolKit) {
   const memory = defineTool({
     name: "memory",
     label: "memory",
@@ -34,133 +40,134 @@ export function memoryTools(kit: ToolKit) {
       'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a contradicting one, ' +
       "and delete what is wrong or stale. Ids come from search or read; an edit or delete that names any id " +
       "not in this conversation's notebook changes nothing and says which ids were bad.",
-    parameters: Type.Object({
-      action: Type.Union(
-        [
-          Type.Literal("search"),
-          Type.Literal("read"),
-          Type.Literal("add"),
-          Type.Literal("edit"),
-          Type.Literal("delete"),
-        ],
-        { description: "search facts, read this notebook, or add, edit, or delete facts." },
-      ),
-      query: optionalString("search only: words to look for among your remembered facts (all must match)."),
-      limit: optionalInteger("search only: max facts to return (default 20)."),
-      scope: optionalString(
-        "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
-      ),
-      facts: Type.Optional(
-        Type.Array(
-          Type.Object({
-            id: optionalString("edit only: the fact's id, e.g. #42."),
-            text: Type.String({
-              description: "one short self-contained fact — a pointer to data, never the data itself.",
-            }),
-          }),
-          { description: "add: [{text}, …]; edit: [{id, text}, …]." },
-        ),
-      ),
-      ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
-    }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      const action = params.action;
-      await recordCall(callId, {
-        tool: "memory",
-        action,
-        ...(params.scope !== undefined ? { scope: params.scope } : {}),
-        ...(params.query !== undefined ? { query: params.query } : {}),
-        ...(params.limit !== undefined ? { limit: params.limit } : {}),
-        ...(params.facts !== undefined ? { facts: params.facts } : {}),
-        ...(params.ids !== undefined ? { ids: params.ids } : {}),
-      });
-      const fail = (error: string) => recordFail(callId, { tool: "memory", action, error }, `[error] ${error}`);
-      const unavailable = () =>
-        recordFail(
-          callId,
-          { tool: "memory", action, unavailable: true },
-          "[memory isn't available in this conversation]",
-        );
-      if (params.scope !== undefined && action !== "search" && action !== "read") {
-        return recordFail(
-          callId,
-          { tool: "memory", action, error: "scope is read-only" },
-          "[error] scope is only allowed for memory search/read; writes stay in this conversation.",
-        );
-      }
-      if (opts?.readOnly && action !== "search" && action !== "read") {
-        return recordFail(
-          callId,
-          { tool: "memory", action, readOnly: true },
-          "[this is a read-only wake — memory can be searched and read here, but not written]",
-        );
-      }
-      const facts = (params.facts ?? []).map((fact) => ({ id: fact.id?.trim() ?? "", text: fact.text.trim() }));
-      try {
-        switch (action) {
-          case "search": {
-            const query = params.query ?? "";
-            if (!query.trim()) return fail("memory search requires `query`.");
-            const hits = await tc.memorySearch(query, params.limit, params.scope);
-            if (hits === null) return unavailable();
-            return recordText(
-              callId,
-              { tool: "memory", action, query, count: hits.length },
-              hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`,
-            );
-          }
-          case "read": {
-            const body = await tc.memoryRead(params.scope);
-            if (body === null) return unavailable();
-            return recordText(
-              callId,
-              { tool: "memory", action, chars: body.length },
-              body.trim() ? body : "(you have nothing remembered here yet)",
-            );
-          }
-          case "add": {
-            const texts = facts.map((fact) => fact.text).filter(Boolean);
-            if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
-            const added = await tc.memoryAdd(texts);
-            if (added === null) return unavailable();
-            return recordText(
-              callId,
-              { tool: "memory", action, added },
-              added
-                ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
-                : "Already remembered — nothing new to save.",
-            );
-          }
-          case "edit": {
-            if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
-              return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
-            if ((await tc.memoryEdit(facts)) === null) return unavailable();
-            return recordText(
-              callId,
-              { tool: "memory", action, edited: facts.length },
-              `Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`,
-            );
-          }
-          case "delete": {
-            const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
-            if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
-            if ((await tc.memoryDelete(ids)) === null) return unavailable();
-            return recordText(
-              callId,
-              { tool: "memory", action, deleted: ids.length },
-              `Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`,
-            );
-          }
-        }
-      } catch (e) {
-        if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied) return fail(e.message);
-        throw e;
-      }
-    },
+    parameters: memoryParams(),
+    execute: (callId, params) => runMemoryAction(kit, callId, params),
   });
+  return { memory };
+}
 
+function memoryParams() {
+  return Type.Object({
+    action: Type.Union(
+      [Type.Literal("search"), Type.Literal("read"), Type.Literal("add"), Type.Literal("edit"), Type.Literal("delete")],
+      { description: "search facts, read this notebook, or add, edit, or delete facts." },
+    ),
+    query: optionalString("search only: words to look for among your remembered facts (all must match)."),
+    limit: optionalInteger("search only: max facts to return (default 20)."),
+    scope: optionalString(
+      "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
+    ),
+    facts: Type.Optional(
+      Type.Array(
+        Type.Object({
+          id: optionalString("edit only: the fact's id, e.g. #42."),
+          text: Type.String({
+            description: "one short self-contained fact — a pointer to data, never the data itself.",
+          }),
+        }),
+        { description: "add: [{text}, …]; edit: [{id, text}, …]." },
+      ),
+    ),
+    ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
+  });
+}
+
+/** Runs one memory-tool action against the turn's notebook. */
+async function runMemoryAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof memoryParams>>) {
+  const { ref, opts, recordCall, recordText, recordFail } = kit;
+  const tc = ref.current;
+  if (!tc) return text("[error] no active tool context");
+  const action = params.action;
+  await recordCall(callId, {
+    tool: "memory",
+    action,
+    ...(params.scope !== undefined ? { scope: params.scope } : {}),
+    ...(params.query !== undefined ? { query: params.query } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.facts !== undefined ? { facts: params.facts } : {}),
+    ...(params.ids !== undefined ? { ids: params.ids } : {}),
+  });
+  const fail = (error: string) => recordFail(callId, { tool: "memory", action, error }, `[error] ${error}`);
+  const unavailable = () =>
+    recordFail(callId, { tool: "memory", action, unavailable: true }, "[memory isn't available in this conversation]");
+  if (params.scope !== undefined && action !== "search" && action !== "read") {
+    return recordFail(
+      callId,
+      { tool: "memory", action, error: "scope is read-only" },
+      "[error] scope is only allowed for memory search/read; writes stay in this conversation.",
+    );
+  }
+  if (opts?.readOnly && action !== "search" && action !== "read") {
+    return recordFail(
+      callId,
+      { tool: "memory", action, readOnly: true },
+      "[this is a read-only wake — memory can be searched and read here, but not written]",
+    );
+  }
+  const facts = (params.facts ?? []).map((fact) => ({ id: fact.id?.trim() ?? "", text: fact.text.trim() }));
+  try {
+    switch (action) {
+      case "search": {
+        const query = params.query ?? "";
+        if (!query.trim()) return fail("memory search requires `query`.");
+        const hits = await tc.memorySearch(query, params.limit, params.scope);
+        if (hits === null) return unavailable();
+        return recordText(
+          callId,
+          { tool: "memory", action, query, count: hits.length },
+          hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`,
+        );
+      }
+      case "read": {
+        const body = await tc.memoryRead(params.scope);
+        if (body === null) return unavailable();
+        return recordText(
+          callId,
+          { tool: "memory", action, chars: body.length },
+          body.trim() ? body : "(you have nothing remembered here yet)",
+        );
+      }
+      case "add": {
+        const texts = facts.map((fact) => fact.text).filter(Boolean);
+        if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
+        const added = await tc.memoryAdd(texts);
+        if (added === null) return unavailable();
+        return recordText(
+          callId,
+          { tool: "memory", action, added },
+          added ? `Remembered ${added} fact${added === 1 ? "" : "s"}.` : "Already remembered — nothing new to save.",
+        );
+      }
+      case "edit": {
+        if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
+          return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
+        if ((await tc.memoryEdit(facts)) === null) return unavailable();
+        return recordText(
+          callId,
+          { tool: "memory", action, edited: facts.length },
+          `Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`,
+        );
+      }
+      case "delete": {
+        const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
+        if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
+        if ((await tc.memoryDelete(ids)) === null) return unavailable();
+        return recordText(
+          callId,
+          { tool: "memory", action, deleted: ids.length },
+          `Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`,
+        );
+      }
+    }
+  } catch (e) {
+    if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied) return fail(e.message);
+    throw e;
+  }
+}
+
+/** The history tool: search or reopen this conversation's own transcript. */
+function historyTool(kit: ToolKit) {
+  const { ref, recordCall, recordText, recordFail } = kit;
   const history = defineTool({
     name: "history",
     label: "history",
@@ -220,5 +227,5 @@ export function memoryTools(kit: ToolKit) {
       );
     },
   });
-  return { memory, history };
+  return { history };
 }

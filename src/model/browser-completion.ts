@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { buildModelRuntime, type ProviderKeys } from "../harness/pi-harness.ts";
+import { buildModelRuntime, type ProviderKeys } from "../harness/pi-model-runtime.ts";
 import { zeroUsage } from "../harness/replay.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,

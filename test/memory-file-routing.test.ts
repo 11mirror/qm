@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext } from "../src/tools/tool-context.ts";
 import { MEMORY_FILE, type MemoryService } from "../src/memory/memory-service.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

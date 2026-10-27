@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyReasoningMode, createPiHarness } from "../src/harness/pi-harness.ts";
+import { applyReasoningMode } from "../src/harness/pi-model-runtime.ts";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";

@@ -19,7 +19,8 @@ import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/mo
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { GapWork } from "../../harness/harness.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
-import { createToolContext, type CommandCredential } from "../../tools/primitives.ts";
+import { createToolContext } from "../../tools/tool-context.ts";
+import { type CommandCredential } from "../../tools/primitives.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
@@ -33,64 +34,125 @@ import { createTurnSandboxes } from "./sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./surface-tools.ts";
 import { createAttachStaging } from "./attach-tool.ts";
 
-export async function buildTurnTools(
-  ctx: TurnCtx,
-  turn: {
-    session: Session;
-    strictReadOnly: boolean;
-    context: Awaited<ReturnType<typeof resolveTurnContext>>;
-    framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
-    catalog: Awaited<ReturnType<typeof buildCredentialCatalog>>;
-    sandboxes: ReturnType<typeof createTurnSandboxes>;
-    approvalLedger: ApprovalLedger;
-    commandPolicy: TurnCtx["resolution"]["commandPolicy"];
-    layerCommandRules: NonNullable<OrchestratorDeps["deploymentLayer"]>["commandRules"];
-    reachAvailable: boolean;
-    turnSandboxResources: OrchestratorDeps["sandboxResources"];
-    gapWork: { listener?: (work: GapWork) => void };
-    turnAbort: AbortController;
-    captureDependencies: () => MemoryProvenance[];
-    blobTransfer: OrchestratorDeps["blobTransfer"];
-  },
-) {
-  const { deps, input, actor, conversation, external, humanInput, liveTurn, resolution, scopeId, filterHistory } = ctx;
-  const {
+/** What the turn's tool context is built from: the session, prompt framing, credentials, sandboxes and approvals. */
+export interface TurnToolsInput {
+  session: Session;
+  strictReadOnly: boolean;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
+  catalog: Awaited<ReturnType<typeof buildCredentialCatalog>>;
+  sandboxes: ReturnType<typeof createTurnSandboxes>;
+  approvalLedger: ApprovalLedger;
+  commandPolicy: TurnCtx["resolution"]["commandPolicy"];
+  layerCommandRules: NonNullable<OrchestratorDeps["deploymentLayer"]>["commandRules"];
+  reachAvailable: boolean;
+  turnSandboxResources: OrchestratorDeps["sandboxResources"];
+  gapWork: { listener?: (work: GapWork) => void };
+  turnAbort: AbortController;
+  captureDependencies: () => MemoryProvenance[];
+  blobTransfer: OrchestratorDeps["blobTransfer"];
+}
+
+/** Builds the turn's tool context and the state the delivery and segment phases share with it. */
+export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
+  const { deps, input, actor, conversation, external, humanInput, liveTurn, scopeId } = ctx;
+  const { session, strictReadOnly, blobTransfer } = turn;
+  const { defaultDestination } = turn.framed;
+  const { provision, accessResource, provisionResource } = turn.sandboxes;
+  const { backgroundBroker, monitorBroker } = createProcessBrokers(ctx, turn);
+
+  const spine: SpineState = {
+    surfaceOutboundCount: 0,
+    crossConversationPosts: 0,
+    turnUserEntrySeq: undefined,
+  };
+  const turnKey = input.runId ?? randomUUID();
+  const postKeys = turnPostKeys(turnKey);
+  const spineFirst: { block: string; open: boolean; ackText?: string } = { block: "", open: true };
+  const fileRegistration = createFileRegistration(ctx, session);
+  const postProvenance = (deliveryKey: string): DeliveryProvenance =>
+    turnPostProvenance({
+      origin: input.origin,
+      surface: input.surface,
+      fireKey: deliveryKey,
+      sourceScopeId: scopeId as ScopeId,
+      sourceThreadRef: session.threadRef,
+      sourceSessionId: session.id,
+    });
+  const earlyTaskAck =
+    input.surface === "slack" && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor;
+  const mayReadArtifact = artifactReadCheck(ctx);
+  const provisionOutbound = (sandboxId?: string) =>
+    sandboxId !== undefined ? provisionResource(sandboxId) : provision();
+  const openStoredOutbound = async (id: string) => {
+    const artifact = await deps.files.get(id);
+    if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
+    const opened = await deps.files.open(id);
+    return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
+  };
+  const surfaceToolDeps = createSurfaceToolDeps({
+    deps,
+    input,
+    actor,
+    conversation,
     session,
+    scopeId,
     strictReadOnly,
-    context,
-    commandPolicy,
-    layerCommandRules,
-    reachAvailable,
-    turnSandboxResources,
-    gapWork,
-    turnAbort,
-    captureDependencies,
+    defaultDestination,
     blobTransfer,
-  } = turn;
-  const { memoryScopeId, memoryAccess } = context;
-  const { sessionSyscalls, defaultDestination, visibleSkillsForTurn } = turn.framed;
-  const {
-    connectorEnv,
-    commandCredentials,
-    credentialBroker,
-    registerKeychainCredentials,
-    registerConnectorCredentials,
-    actorIsOrgAdmin,
-    controlClaims,
-    registerServiceCredentials,
-  } = turn.catalog;
-  const {
-    ownerAuthCommand,
-    provision,
-    provisionScratch,
-    accessResource,
-    provisionResource,
-    provisionOwnerAuth,
-    useSkill,
-    provisionForReach,
-    invalidateProvision,
-  } = turn.sandboxes;
-  const { authorizeCommand } = turn.approvalLedger;
+    fileRegistration,
+    provision: provisionOutbound,
+    openStored: openStoredOutbound,
+    postProvenance,
+    postKeys,
+    spine,
+  });
+  const attachStaging = createAttachStaging({
+    sandbox: deps.sandbox,
+    provision: provisionOutbound,
+    openStored: openStoredOutbound,
+    blobTransfer,
+    fileRegistration,
+  });
+  if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
+    console.error(
+      `[orchestrator] trigger delivery has no surface tools (no outbound sender?) — reply would be lost session=${session.id}`,
+    );
+
+  const canInstallCanvas =
+    deps.installSharedCanvas &&
+    liveTurn &&
+    (await deps.featureFlags?.enabled("ui_canvas", personalScope(actor.id))) === true;
+  const baseTools = await createTurnToolContext(ctx, turn, {
+    canInstallCanvas,
+    surfaceToolDeps,
+    attachStaging,
+    backgroundBroker,
+    monitorBroker,
+  });
+
+  const tools = external ? externalTools(baseTools, accessResource) : baseTools;
+  return {
+    spine,
+    postKeys,
+    spineFirst,
+    fileRegistration,
+    postProvenance,
+    earlyTaskAck,
+    turnKey,
+    mayReadArtifact,
+    surfaceToolDeps,
+    attachStaging,
+    tools,
+  };
+}
+
+/** The turn's background-process and monitor brokers, when the sandbox supports process sessions. */
+function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
+  const { deps, actor, conversation, scopeId } = ctx;
+  const { memoryScopeId } = turn.context;
+  const { defaultDestination } = turn.framed;
+  const { provision, provisionResource } = turn.sandboxes;
   const backgroundBroker =
     deps.processes && supportsProcessSessions(deps.sandbox)
       ? createBackgroundBroker({
@@ -145,15 +207,12 @@ export async function buildTurnTools(
           ...(defaultDestination ? { destination: defaultDestination } : {}),
         })
       : undefined;
+  return { backgroundBroker, monitorBroker };
+}
 
-  const spine: SpineState = {
-    surfaceOutboundCount: 0,
-    crossConversationPosts: 0,
-    turnUserEntrySeq: undefined,
-  };
-  const turnKey = input.runId ?? randomUUID();
-  const postKeys = turnPostKeys(turnKey);
-  const spineFirst: { block: string; open: boolean; ackText?: string } = { block: "", open: true };
+/** Where files the turn registers are owned, and who is granted read access to them. */
+function createFileRegistration(ctx: TurnCtx, session: Session): ArtifactRegistration {
+  const { deps, input, actor, conversation, external, resolution, scopeId } = ctx;
   const fileAudience =
     !external && resolution.orgScopeId
       ? defaultPublishAudience({
@@ -207,17 +266,12 @@ export async function buildTurnTools(
         e,
       ),
   };
-  const postProvenance = (deliveryKey: string): DeliveryProvenance =>
-    turnPostProvenance({
-      origin: input.origin,
-      surface: input.surface,
-      fireKey: deliveryKey,
-      sourceScopeId: scopeId as ScopeId,
-      sourceThreadRef: session.threadRef,
-      sourceSessionId: session.id,
-    });
-  const earlyTaskAck =
-    input.surface === "slack" && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor;
+  return fileRegistration;
+}
+
+/** Whether everyone in the conversation may read an artifact; ACL handles are cached unless asked fresh. */
+function artifactReadCheck(ctx: TurnCtx): (artifact: FileArtifact, fresh?: boolean) => Promise<boolean> {
+  const { deps, conversation, resolution, scopeId } = ctx;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
   const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
     if (
@@ -236,48 +290,100 @@ export async function buildTurnTools(
     if (!fresh) readableHandles = handles;
     return handles.some((handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id);
   };
-  const provisionOutbound = (sandboxId?: string) =>
-    sandboxId !== undefined ? provisionResource(sandboxId) : provision();
-  const openStoredOutbound = async (id: string) => {
-    const artifact = await deps.files.get(id);
-    if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
-    const opened = await deps.files.open(id);
-    return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
-  };
-  const surfaceToolDeps = createSurfaceToolDeps({
-    deps,
-    input,
-    actor,
-    conversation,
-    session,
-    scopeId,
-    strictReadOnly,
-    defaultDestination,
-    blobTransfer,
-    fileRegistration,
-    provision: provisionOutbound,
-    openStored: openStoredOutbound,
-    postProvenance,
-    postKeys,
-    spine,
-  });
-  const attachStaging = createAttachStaging({
-    sandbox: deps.sandbox,
-    provision: provisionOutbound,
-    openStored: openStoredOutbound,
-    blobTransfer,
-    fileRegistration,
-  });
-  if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
-    console.error(
-      `[orchestrator] trigger delivery has no surface tools (no outbound sender?) — reply would be lost session=${session.id}`,
-    );
+  return mayReadArtifact;
+}
 
-  const canInstallCanvas =
-    deps.installSharedCanvas &&
-    liveTurn &&
-    (await deps.featureFlags?.enabled("ui_canvas", personalScope(actor.id))) === true;
-  const baseTools = createToolContext({
+/** Re-resolves the command credentials for a set of handles, rejecting handle collisions. */
+function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
+  const {
+    commandCredentials,
+    credentialBroker,
+    registerKeychainCredentials,
+    registerConnectorCredentials,
+    registerServiceCredentials,
+  } = catalog;
+  return async (handles: Parameters<typeof credentialBroker>[0]) => {
+    const refreshed = new Map<string, CommandCredential>();
+    const identities = new Map<string, string>();
+    const add: Parameters<typeof registerKeychainCredentials>[0] = (
+      credential,
+      _description,
+      identity = credential.handle,
+    ) => {
+      const prior = identities.get(credential.handle);
+      if (prior !== undefined) {
+        if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
+        return;
+      }
+      identities.set(credential.handle, identity);
+      refreshed.set(credential.handle, credential);
+    };
+    const broker = credentialBroker(handles);
+    await registerKeychainCredentials(add, broker);
+    await registerConnectorCredentials(add, broker);
+    await registerServiceCredentials(add, broker);
+    for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
+      add(credential, "");
+    return [...refreshed.values()];
+  };
+}
+
+/** The session-history search/open tools over the turn's filtered transcript. */
+function sessionHistoryTools(ctx: TurnCtx, session: Session) {
+  const { deps, filterHistory } = ctx;
+  const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
+  return {
+    search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
+    open: async (seq: number) => {
+      const item = await deps.sessions.getItem(session.id, seq);
+      if (!item) return null;
+      // Only a compaction summary's visibility depends on the rest of the transcript (just the latest shows).
+      const view = item.kind === "ContextCompaction" ? await historyView() : filterHistory(forSearchView([item]));
+      return openSessionItem(view, seq);
+    },
+  };
+}
+
+/** The turn's tool context: sandboxes, credentials, publishing, memory, session tools and brokers. */
+function createTurnToolContext(
+  ctx: TurnCtx,
+  turn: TurnToolsInput,
+  parts: {
+    surfaceToolDeps: ReturnType<typeof createSurfaceToolDeps>;
+    attachStaging: ReturnType<typeof createAttachStaging>;
+    canInstallCanvas: boolean | undefined;
+  } & ReturnType<typeof createProcessBrokers>,
+) {
+  const { deps, input, actor, conversation, external, humanInput, liveTurn, resolution, scopeId } = ctx;
+  const {
+    session,
+    strictReadOnly,
+    context,
+    commandPolicy,
+    layerCommandRules,
+    reachAvailable,
+    turnSandboxResources,
+    gapWork,
+    turnAbort,
+    captureDependencies,
+  } = turn;
+  const { memoryScopeId, memoryAccess } = turn.context;
+  const { sessionSyscalls, visibleSkillsForTurn } = turn.framed;
+  const { connectorEnv, commandCredentials, actorIsOrgAdmin, controlClaims } = turn.catalog;
+  const {
+    ownerAuthCommand,
+    provision,
+    provisionScratch,
+    accessResource,
+    provisionResource,
+    provisionOwnerAuth,
+    useSkill,
+    provisionForReach,
+    invalidateProvision,
+  } = turn.sandboxes;
+  const { authorizeCommand } = turn.approvalLedger;
+  const { surfaceToolDeps, attachStaging, backgroundBroker, monitorBroker, canInstallCanvas } = parts;
+  return createToolContext({
     desktopClientId: desktopClientForTurn(input),
     ...(canInstallCanvas
       ? {
@@ -321,38 +427,9 @@ export async function buildTurnTools(
     auditLog: deps.auditLog,
     createdBy: actor.id,
     commandCredentials,
-    resolveCommandCredentials: async (handles) => {
-      const refreshed = new Map<string, CommandCredential>();
-      const identities = new Map<string, string>();
-      const add: Parameters<typeof registerKeychainCredentials>[0] = (
-        credential,
-        _description,
-        identity = credential.handle,
-      ) => {
-        const prior = identities.get(credential.handle);
-        if (prior !== undefined) {
-          if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-          return;
-        }
-        identities.set(credential.handle, identity);
-        refreshed.set(credential.handle, credential);
-      };
-      const broker = credentialBroker(handles);
-      await registerKeychainCredentials(add, broker);
-      await registerConnectorCredentials(add, broker);
-      await registerServiceCredentials(add, broker);
-      for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
-        add(credential, "");
-      return [...refreshed.values()];
-    },
+    resolveCommandCredentials: commandCredentialResolver(turn.catalog),
     ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
-    publishContext: {
-      conversationKind: conversation.kind,
-      ...(conversation.channelRef ? { channelRef: conversation.channelRef } : {}),
-      ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-      ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-      ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
-    },
+    publishContext: publishContextFor(conversation),
     ...(deps.config ? { config: deps.config } : {}),
     ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
     ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
@@ -394,19 +471,7 @@ export async function buildTurnTools(
           },
         }
       : {}),
-    sessionHistory: (() => {
-      const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
-      return {
-        search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
-        open: async (seq: number) => {
-          const item = await deps.sessions.getItem(session.id, seq);
-          if (!item) return null;
-          // Only a compaction summary's visibility depends on the rest of the transcript (just the latest shows).
-          const view = item.kind === "ContextCompaction" ? await historyView() : filterHistory(forSearchView([item]));
-          return openSessionItem(view, seq);
-        },
-      };
-    })(),
+    sessionHistory: sessionHistoryTools(ctx, session),
     ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
     ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
     ...(deps.ledger ? { ledger: deps.ledger } : {}),
@@ -423,21 +488,6 @@ export async function buildTurnTools(
       }
     },
   });
-
-  const tools = external ? externalTools(baseTools, accessResource) : baseTools;
-  return {
-    spine,
-    postKeys,
-    spineFirst,
-    fileRegistration,
-    postProvenance,
-    earlyTaskAck,
-    turnKey,
-    mayReadArtifact,
-    surfaceToolDeps,
-    attachStaging,
-    tools,
-  };
 }
 
 export function firstAckPublisher(
@@ -471,5 +521,16 @@ export function firstAckPublisher(
     })
       .then(() => deps.turnStream?.markSurfacePosted(runId))
       .catch(swallowAs("orchestrator: first-block ack", undefined));
+  };
+}
+
+/** How the conversation looks to the publish tools when they pick a default audience. */
+function publishContextFor(conversation: TurnCtx["conversation"]) {
+  return {
+    conversationKind: conversation.kind,
+    ...(conversation.channelRef ? { channelRef: conversation.channelRef } : {}),
+    ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
+    ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
+    ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
   };
 }

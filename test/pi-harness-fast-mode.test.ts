@@ -7,10 +7,9 @@ import {
   scaleCost,
   withRequestHeaders,
   FAST_COST_MULTIPLIER,
-  modelSupportsFastMode,
   wantsFastMode,
-  createPiHarness,
-} from "../src/harness/pi-harness.ts";
+} from "../src/harness/pi-model-runtime.ts";
+import { modelSupportsFastMode, createPiHarness } from "../src/harness/pi-harness.ts";
 import { piUsageToCallUsage } from "../src/harness/call-telemetry.ts";
 import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";

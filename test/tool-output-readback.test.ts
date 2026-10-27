@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext } from "../src/tools/tool-context.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
