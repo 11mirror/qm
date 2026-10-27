@@ -4,16 +4,12 @@ import type { GrantedHandle, Principal, ScopeId, TurnOrigin } from "../types.ts"
 import { parseScopeId, personalScope } from "../types.ts";
 import type { IsCurrentSharedScopeMember } from "./scope-membership.ts";
 
-export const MAX_OPEN_SHARED_SCOPES = 25;
-const MAX_OPEN_FILES = 200;
-const MAX_OPEN_CANDIDATES = 100;
-
 interface SharingSourcesInput {
   actor: Principal;
   origin: TurnOrigin;
   trustedLiveHuman: boolean;
   targetScope: ScopeId;
-  sessions: Pick<SessionStore, "listByParticipant">;
+  sessions: Pick<SessionStore, "participantScopes">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
 }
 
@@ -42,23 +38,15 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
     return (await input.isCurrentSharedScopeMember(input.actor.id, input.targetScope)) ? [personal] : [];
   }
   if (targetKind !== "personal") return [];
-  const sessions = await input.sessions
-    .listByParticipant(input.actor.id, { limit: MAX_OPEN_CANDIDATES })
-    .catch(() => []);
-  const candidates = [...sessions]
-    .filter((session) => {
-      const kind = parseScopeId(session.scopeId).kind;
+  const rooms = (await input.sessions.participantScopes(input.actor.id).catch(() => []))
+    .filter((scope) => {
+      const kind = parseScopeId(scope.scopeId).kind;
       return kind === "channel" || kind === "group";
     })
-    .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
-  const seen = new Set<ScopeId>();
+    .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
   const sources: ScopeId[] = [];
-  for (const session of candidates.slice(0, MAX_OPEN_CANDIDATES)) {
-    if (seen.has(session.scopeId)) continue;
-    seen.add(session.scopeId);
-    if (!(await input.isCurrentSharedScopeMember(input.actor.id, session.scopeId))) continue;
-    sources.push(session.scopeId);
-    if (sources.length >= MAX_OPEN_SHARED_SCOPES) break;
+  for (const room of rooms) {
+    if (await input.isCurrentSharedScopeMember(input.actor.id, room.scopeId)) sources.push(room.scopeId);
   }
   return sources;
 }
@@ -81,19 +69,20 @@ export async function carriedFileHandles(
 ): Promise<GrantedHandle[]> {
   const handles = new Map<string, GrantedHandle>();
   for (const sourceScope of sourceScopes) {
-    const remaining = MAX_OPEN_FILES - handles.size;
-    if (remaining <= 0) break;
-    const page = await files.listOwnedByScopes([sourceScope], { limit: remaining });
-    for (const file of page.files) {
-      if (handles.size >= MAX_OPEN_FILES) break;
-      handles.set(file.id, {
-        carried: true,
-        handlePath: `shared/open-${handleSource(sourceScope)}/${file.id}/${handlePath(file.name)}`,
-        ownerScopeId: sourceScope,
-        fileId: file.id,
-        permission: "read",
-      });
-    }
+    let cursor: string | undefined;
+    do {
+      const page = await files.listOwnedByScopes([sourceScope], cursor ? { cursor } : {});
+      for (const file of page.files) {
+        handles.set(file.id, {
+          carried: true,
+          handlePath: `shared/open-${handleSource(sourceScope)}/${file.id}/${handlePath(file.name)}`,
+          ownerScopeId: sourceScope,
+          fileId: file.id,
+          permission: "read",
+        });
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
   }
   return [...handles.values()];
 }
