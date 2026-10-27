@@ -1,6 +1,6 @@
 import { sendJson } from "../../http.ts";
 import { renderFacts } from "../../../memory/facts.ts";
-import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
+import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface-agent.ts";
 import { type ApiCtx } from "../route.ts";
 import { badRequest, discoverScopes, notFound, orgAdmin, scopedAdmin } from "./common.ts";
 

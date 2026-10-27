@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
-import { postInstructions } from "../src/api/routes/surface.ts";
+import { postInstructions } from "../src/api/routes/surface-config.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";

@@ -1,20 +1,8 @@
-import { disclosedMemory } from "../../memory/disclosure.ts";
-import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { PendingApproval, ScopeId, Session } from "../../types.ts";
-import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
-import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
-import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
-import { InstructionsUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
-import { InstructionsTooLargeError } from "../../resolution/config-store.ts";
-import { renderAgentApis } from "../agent-api-catalog.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
+import { type SessionPageStatus } from "../app-types.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
-import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
@@ -24,10 +12,37 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
-import { isConfigured, withActor, type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import type { ItemKind } from "../../sessions/items.ts";
-import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
-import { tenant } from "../../tenant.ts";
+import {
+  sessionCapability,
+  listAgentApis,
+  selfMemory,
+  createSkill,
+  updateSkill,
+  deleteSkill,
+  restoreSkill,
+  listSkills,
+  getSkillDetail,
+} from "./surface-agent.ts";
+import {
+  getSurfaceConfig,
+  getRuntimeConfig,
+  putRuntimeConfig,
+  getChannelHeaderPin,
+  putChannelHeaderPin,
+  getInstructions,
+  postInstructions,
+} from "./surface-config.ts";
+import {
+  withBodyPrincipal,
+  found,
+  bodyField,
+  badRequest,
+  withQuery,
+  WINDOW_ERROR,
+  AGENT_ONLY,
+} from "./surface-shared.ts";
 
 const SYSTEM_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "ContextCompaction",
@@ -36,52 +51,6 @@ const SYSTEM_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "Retraction",
   "Wake",
 ]);
-
-function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
-  if (!capability) return null;
-  if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (livePersonCapability(capability)) return null;
-  return SHARED_SKILL_TRIGGER_REFUSAL;
-}
-
-const AGENT_ONLY = { error: "capability_required", message: "this endpoint is for the agent self-API" };
-const WINDOW_ERROR = "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one";
-
-function badRequest(res: ApiCtx["res"], message: string): void {
-  return sendJson(res, 400, { error: "bad_request", message });
-}
-
-function found(res: ApiCtx["res"], value: unknown): void {
-  return value ? sendJson(res, 200, value) : sendJson(res, 404, { error: "not_found" });
-}
-
-function bodyField(ctx: ApiCtx, name: string): unknown {
-  return isObj(ctx.body) ? ctx.body[name] : undefined;
-}
-
-function bodyPrincipal(ctx: ApiCtx): string | null {
-  const principalId = bodyField(ctx, "principalId");
-  return typeof principalId === "string" && principalId ? principalId : null;
-}
-
-function withQuery(
-  name: "viewer" | "principalId",
-  handle: (ctx: ApiCtx, id: string) => Promise<void>,
-): (ctx: ApiCtx) => Promise<void> {
-  return async (ctx) => {
-    const id = ctx.url.searchParams.get(name);
-    return id ? handle(ctx, id) : badRequest(ctx.res, `${name} required`);
-  };
-}
-
-function withBodyPrincipal(
-  handle: (ctx: ApiCtx, principalId: string) => Promise<void>,
-): (ctx: ApiCtx) => Promise<void> {
-  return async (ctx) => {
-    const principalId = bodyPrincipal(ctx);
-    return principalId ? handle(ctx, principalId) : badRequest(ctx.res, "principalId required");
-  };
-}
 
 const regenerateSessionTitle = withBodyPrincipal(async ({ res, app, params }, principalId) =>
   found(res, await app.regenerateTitle(params.id!, principalId)),
@@ -478,459 +447,6 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
   const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
   return sendJson(res, 200, result);
-}
-
-export async function memoryFacts(memory: MemoryService, scope: ScopeId) {
-  return ((await memory.facts?.(scope)) ?? []).map(({ id, text, createdAt, updatedAt }) => ({
-    id,
-    text,
-    createdAt,
-    updatedAt,
-  }));
-}
-
-export function parseEdits(body: unknown): MemoryEdit[] | string {
-  const facts = (isObj(body) ? body : {}).facts;
-  if (!Array.isArray(facts) || !facts.length) return "facts (non-empty array of {id, text}) required";
-  const edits = facts.flatMap((fact): MemoryEdit[] =>
-    isObj(fact) && typeof fact.id === "string" && typeof fact.text === "string" && fact.text.trim()
-      ? [{ id: fact.id, text: fact.text }]
-      : [],
-  );
-  return edits.length === facts.length ? edits : "every fact needs a string id and non-empty text";
-}
-
-export function parseIds(body: unknown): string[] | string {
-  const ids = (isObj(body) ? body : {}).ids;
-  return Array.isArray(ids) && ids.length && ids.every((id) => typeof id === "string" && id.trim())
-    ? (ids as string[])
-    : "ids (non-empty string array) required";
-}
-
-async function selfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, method, body } = ctx;
-  const principalId =
-    method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const scope = makeScopeId("personal", principalId);
-  const viewerId = ctx.actor?.p ?? principalId;
-  const actor = deps.identity?.classify(viewerId) ?? { id: viewerId, type: "internal" as const };
-  const viewerScope = makeScopeId("personal", viewerId);
-  const memory = disclosedMemory(deps.memory, {
-    actor,
-    targetScope: viewerScope,
-    nativeScopes: [viewerScope],
-    audience: [actor],
-    open: true,
-    isCurrentSharedScopeMember: (person, target) => ctx.app.isCurrentSharedScopeMember(person, target),
-    currentScopeMembers: (target) => ctx.app.currentScopeMembers(target),
-  });
-  if (method === "PATCH") {
-    const edits = parseEdits(body);
-    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-    await memory.edit?.(scope, edits, principalId);
-  } else if (method === "DELETE") {
-    const ids = parseIds(body);
-    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-    await memory.delete?.(scope, ids, principalId);
-  }
-  const action = method === "GET" ? "memory.self.read" : "memory.self.update";
-  audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
-  return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
-}
-
-async function sessionCapability(ctx: ApiCtx): Promise<void> {
-  const { res, deps, actor } = ctx;
-  if (!actor) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
-  const secret = deps.capabilitySecret ?? ctx.secret;
-  if (!secret) return sendJson(res, 503, { error: "not_configured", message: "capability secret not set" });
-  const token = await mintCapabilityToken(
-    { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
-    secret,
-    deps.capabilityTokenCompression,
-  );
-  return sendJson(res, 200, { token });
-}
-
-async function listAgentApis(ctx: ApiCtx): Promise<void> {
-  const { res, deps, capability } = ctx;
-  if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
-  const admin: { isAdmin: boolean; role?: string } = deps.admin
-    ? await deps.admin
-        .adminStatusOf({ id: capability.actorId, type: "internal" })
-        .catch(swallowAs("apis: admin status", { isAdmin: false }))
-    : { isAdmin: false };
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "apis.list",
-    resource: "apis",
-    scopeLabel: capability.scopeId,
-  });
-  return sendJson(
-    res,
-    200,
-    renderAgentApis(capability, { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) }),
-  );
-}
-
-export function parseFacts(body: unknown): string[] | string {
-  const b = (isObj(body) ? body : {}) as { facts?: unknown };
-  const facts = Array.isArray(b.facts)
-    ? b.facts.filter((f): f is string => typeof f === "string" && f.trim() !== "")
-    : [];
-  if (facts.length === 0) return "facts (non-empty string array) required";
-  if (facts.length > 20) return "at most 20 facts per call";
-  return facts;
-}
-
-const listSkills = withQuery("principalId", async ({ res, app, url }, principalId) => {
-  const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
-    (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
-  );
-  const archivedChecks = await Promise.all(
-    (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
-  );
-  const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
-  const visible = resolved.flatMap((row) => [
-    { skill: row.skill, shadowed: row.shadowed },
-    ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
-  ]);
-  const skills = await Promise.all(
-    [...visible, ...archived].map(async (r) => ({
-      id: r.skill.id,
-      name: r.skill.manifest.name,
-      description: r.skill.manifest.description,
-      scope: parseScopeId(r.skill.scopeId).kind ?? r.skill.scopeId,
-      scopeId: r.skill.scopeId,
-      shadowed: r.shadowed.length > 0,
-      status: r.skill.status,
-      version: r.skill.version,
-      source: r.skill.pack ? "pack" : "native",
-      pack: r.skill.pack,
-      assetCount: r.skill.manifest.files?.length ?? 0,
-      requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId),
-    })),
-  );
-  return sendJson(res, 200, { skills });
-});
-
-function skillReader(ctx: ApiCtx, fallback: unknown): string | null {
-  const principalId = ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof fallback === "string" ? fallback : "");
-  if (!ctx.capability && !ctx.actor && ctx.secret) {
-    sendJson(ctx.res, 401, { error: "capability_required" });
-    return null;
-  }
-  if (principalId) return principalId;
-  badRequest(ctx.res, "principalId required");
-  return null;
-}
-
-function skillView(skill: Skill) {
-  return {
-    id: skill.id,
-    name: skill.manifest.name,
-    description: skill.manifest.description,
-    body: skill.manifest.body,
-    status: skill.status,
-    version: skill.version,
-  };
-}
-
-async function getSkillDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app } = ctx;
-  const principalId = skillReader(ctx, ctx.url.searchParams.get("principalId"));
-  if (!principalId) return;
-  const skill = await app.getSkill(ctx.params.id!);
-  if (
-    !skill ||
-    (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
-  ) {
-    return sendJson(res, 404, { error: "not_found" });
-  }
-  return sendJson(res, 200, {
-    skill: {
-      ...skillView(skill),
-      scope: parseScopeId(skill.scopeId).kind ?? skill.scopeId,
-      scopeId: skill.scopeId,
-      createdBy: skill.createdBy,
-      pack: skill.pack,
-      files: (skill.manifest.files ?? []).map((file) => ({ path: file.path, executable: file.executable === true })),
-      requiredCapabilities: skill.manifest.requiredCapabilities,
-      grantedCapabilities: skill.grantedCapabilities,
-      createdAt: skill.createdAt,
-      updatedAt: skill.updatedAt,
-      editable: await app.canManageSkill(skill, principalId),
-    },
-  });
-}
-
-async function restoreSkill(ctx: ApiCtx): Promise<void> {
-  const principalId = skillReader(ctx, bodyField(ctx, "principalId"));
-  if (!principalId) return;
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
-  return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
-}
-
-function skillOwner(ctx: ApiCtx): string | null {
-  return ctx.capability ? ctx.capability.actorId : bodyPrincipal(ctx);
-}
-
-async function updateSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
-  const patch: { description?: string; body?: string } = {};
-  for (const field of ["description", "body"] as const) {
-    const value = bodyField(ctx, field);
-    if (value !== undefined && typeof value !== "string") return badRequest(res, `${field} must be a string`);
-    if (typeof value === "string") patch[field] = value;
-  }
-  const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(ctx.params.id!, principalId, patch, { liveActor });
-  if (updated === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
-  if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
-  return sendJson(res, 200, { skill: skillView(updated) });
-}
-
-async function deleteSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
-  const liveActor = capability ? livePersonCapability(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id: ctx.params.id!, liveActor });
-  if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
-  if (outcome === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
-  if (outcome === "forbidden")
-    return sendJson(res, 403, { error: "forbidden", message: "that skill isn't yours to archive" });
-  return sendJson(res, 200, { ok: true });
-}
-
-async function createSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  const blocked = sharedSkillCreateBlock(capability);
-  if (blocked) return sendJson(res, 403, { error: "forbidden", message: blocked });
-  const principalId = skillOwner(ctx);
-  if (principalId === null) return badRequest(res, "principalId required");
-  let homeScope = capability?.scopeId;
-  const requestedScope = bodyField(ctx, "scopeId");
-  if (!capability && typeof requestedScope === "string" && requestedScope !== makeScopeId("personal", principalId)) {
-    if (!(await app.managesScope(principalId, requestedScope as ScopeId)))
-      return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
-    homeScope = requestedScope as ScopeId;
-  }
-  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "a skill cannot be created in an org or team scope — promote a published skill instead",
-    });
-  }
-  const fields = {
-    name: bodyField(ctx, "name"),
-    description: bodyField(ctx, "description"),
-    body: bodyField(ctx, "body"),
-  };
-  for (const [field, value] of Object.entries(fields))
-    if (typeof value !== "string" || !value.trim()) return badRequest(res, `${field} required`);
-  const created = await app.createOwnedSkill({
-    principalId,
-    ...(homeScope ? { homeScope } : {}),
-    name: fields.name as string,
-    description: fields.description as string,
-    body: fields.body as string,
-  });
-  if (!created)
-    return sendJson(res, 409, {
-      error: "exists",
-      message: "a skill of that name already exists here — edit it instead",
-    });
-  return sendJson(res, 201, { skill: skillView(created) });
-}
-
-async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
-  await ctx.deps.refreshModels?.();
-  const { res, deps } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
-    deps.config.settingDurable("webuiModels", tenant().orgScope),
-    deps.config.getRuntimeSelectionDurable(tenant().orgScope).then((selection) => selection?.modelId ?? null),
-    deps.config.settingDurable("externalSlackParticipants", tenant().orgScope),
-    resolveBranding(deps.config, tenant().orgScope, deps.brandingDefault),
-  ]);
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const providerStatus = managedKeys ?? deps.providerKeys;
-  const catalog = managedKeys?.openrouter
-    ? await selectableModelCatalog(deps.modelCredentialFetch)
-    : builtInModelCatalog();
-  const allowed = selectableCatalog(catalog).map((model) => model.id);
-  const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
-  const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
-  const resolvedBranding = Object.fromEntries(
-    (["orgName", "accent", "mark", "markUrl", "selfLabel"] as const).flatMap((key) =>
-      branding[key] ? [[key, branding[key]]] : [],
-    ),
-  );
-  return sendJson(res, 200, {
-    webuiModels: webuiModels != null ? configuredPicker : allowed,
-    baseModel: resolvedBase,
-    ...(providerStatus && {
-      modelProviderConfigured: Boolean(
-        providerStatus.anthropic ||
-        providerStatus.openai ||
-        providerStatus.openrouter ||
-        providerStatus.modelIds?.size ||
-        deps.companySubscriptionAuth,
-      ),
-    }),
-    externalSlackParticipants,
-    ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
-  });
-}
-
-async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: ScopeId } | null> {
-  const requested = (name: string) => {
-    const value = bodyField(ctx, name);
-    return typeof value === "string" ? value : ctx.url.searchParams.get(name);
-  };
-  const actorId = ctx.capability?.actorId ?? requested("principalId");
-  const scope = (ctx.capability?.scopeId ?? requested("scopeId")) as ScopeId | null;
-  if (!actorId || !scope) return null;
-  const parsed = parseScopeId(scope);
-  const allowed =
-    (parsed.kind === "personal" && parsed.ref === actorId) ||
-    (parsed.kind !== "org" && (Boolean(ctx.capability) || (await ctx.app.belongsToScope(actorId, scope))));
-  return allowed ? { actorId, scope } : null;
-}
-
-async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
-  const account = ctx.url.searchParams.get("account");
-  if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
-  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
-  const target = await runtimeTarget(ctx);
-  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
-  return sendJson(
-    ctx.res,
-    200,
-    account === "company"
-      ? await runtimeConfigBody(ctx, target.scope)
-      : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
-  );
-}
-
-async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
-  if (!isConfigured(ctx) || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  const target = await runtimeTarget(ctx);
-  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
-  const config = ctx.deps.config;
-  if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
-  else if (ctx.body.keep === true) {
-    if (await config.getRuntimeSelectionDurable(target.scope)) await config.acknowledgeRuntimeSelection(target.scope);
-  } else {
-    const modelId = ctx.body.modelId;
-    if (typeof modelId !== "string" || !modelSupported(modelId))
-      return sendJson(ctx.res, 400, { error: "model_not_supported" });
-    if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
-    const effortLevel = ctx.body.effortLevel ?? "auto";
-    if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
-      return sendJson(ctx.res, 400, { error: "effort_not_supported" });
-    const fastMode = ctx.body.fastMode ?? false;
-    if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
-    const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
-    if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
-      const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
-    }
-    await config.setRuntimeSelection(target.scope, choice);
-  }
-  audit(ctx.deps, {
-    principalId: target.actorId,
-    action: "runtime-config.update",
-    resource: "runtime-config",
-    scopeLabel: target.scope,
-  });
-  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
-}
-
-async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
-  const target = await runtimeTarget(ctx);
-  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const [on, configured, def] = await Promise.all([
-    ctx.deps.config.settingDurable("channelHeaderPin", target.scope),
-    ctx.deps.config.settingOwnDurable("channelHeaderPin", target.scope),
-    ctx.deps.config.settingDurable("channelHeaderPin"),
-  ]);
-  return sendJson(ctx.res, 200, { scopeId: target.scope, on, configured, default: def });
-}
-
-async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!isConfigured(ctx) || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !livePersonCapability(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "live_actor_required" });
-  const target = await runtimeTarget(ctx);
-  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  if (typeof ctx.body.on !== "boolean" && ctx.body.on !== null)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "expected { on: boolean | null } (null reverts to the org default)",
-    });
-  await ctx.deps.config.setSetting("channelHeaderPin", ctx.body.on, target.scope);
-  audit(ctx.deps, {
-    principalId: target.actorId,
-    action: "channel-header-pin.update",
-    resource: "channel-header-pin",
-    scopeLabel: target.scope,
-  });
-  return sendJson(ctx.res, 200, {
-    scopeId: target.scope,
-    on: ctx.body.on ?? (await ctx.deps.config.settingDurable("channelHeaderPin")),
-    configured: ctx.body.on,
-  });
-}
-
-function getInstructions(ctx: ApiCtx): void {
-  const { res, app, url, capability } = ctx;
-  const scopeIdVal = capability?.scopeId ?? url.searchParams.get("scopeId");
-  if (!scopeIdVal) return sendJson(res, 400, { error: "bad_request", message: "scopeId required" });
-  return sendJson(res, 200, app.getInstructions(scopeIdVal));
-}
-
-export async function postInstructions(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const b = body as { scopeId?: unknown; content?: unknown; actorId?: unknown };
-  const scopeIdVal = capability ? capability.scopeId : b.scopeId;
-  const actorId = capability ? capability.actorId : b.actorId;
-  const content = b.content;
-  if (typeof content !== "string" || typeof scopeIdVal !== "string" || typeof actorId !== "string")
-    return badRequest(res, capability ? "content (string) required" : "scopeId, content, actorId required");
-  const allowSharedScope =
-    Boolean(capability) ||
-    (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
-  try {
-    const version = await app.updateInstructions(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
-    return sendJson(res, 200, { ok: true, version });
-  } catch (e) {
-    if (e instanceof InstructionsUpdateDeniedError)
-      return sendJson(res, 403, { error: "instructions_update_denied", message: e.message });
-    if (e instanceof InstructionsTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    return sendJson(res, 500, { error: "instructions_update_failed", message: errMessage(e) });
-  }
 }
 
 export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
