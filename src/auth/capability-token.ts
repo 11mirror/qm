@@ -25,7 +25,6 @@ interface BlobGrant {
 
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
-/** A connected-app OAuth token the credential broker may inject; the sandbox never sees the token. */
 export interface BrokeredConnector {
   handle: string;
   host: string;
