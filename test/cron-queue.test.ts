@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, CRON_FIRE_JOB, type Scheduler } from "../src/cron/scheduler.ts";
 import { createJobWorker, type JobWorker } from "../src/jobs/job-worker.ts";
@@ -7,24 +7,13 @@ import { type CronFireStore } from "../src/cron/fire-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
-
-const CRONS_TABLE = "cron_queue_test_crons";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}`);
-  await p.end();
-});
 
 async function until(cond: () => boolean, ms: number): Promise<void> {
   const deadline = Date.now() + ms;
@@ -36,8 +25,7 @@ function instance(
   turnMs: number,
   fires: CronFireStore,
 ): { scheduler: Scheduler; crons: CronStore; jobs: JobWorker } {
-  const maps = createPostgresMapFactory(URL!);
-  const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), { fires });
+  const crons = createCronStore(URL!, { fires });
   const jobs = createJobWorker(URL ?? "");
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);

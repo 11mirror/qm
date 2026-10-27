@@ -1,15 +1,24 @@
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import {
+  mapToTableMigration,
+  ownerIndexMigration,
+  tableCodec,
+  updateRow,
+  type TableSpec,
+} from "../persistence/typed-table.ts";
 import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
   createDeduped,
+  TRIGGER_COLUMNS,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
@@ -87,12 +96,47 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
+const CRONS: TableSpec = {
+  table: "crons",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    ...TRIGGER_COLUMNS,
+    runtime: { type: "jsonb" },
+    schedule: { type: "jsonb", required: true },
+    nextFireAt: { type: "bigint" },
+    deferUntil: { type: "bigint" },
+    title: { type: "text" },
+    archived: { type: "boolean" },
+    action: { type: "text" },
+    message: { type: "text" },
+    inbox: { type: "jsonb" },
+    unattendedGrants: { type: "text[]" },
+    sessionRef: { type: "text" },
+    lastFireNote: { type: "jsonb" },
+  },
+};
+
+export const CRONS_MIGRATION = mapToTableMigration("triggers/crons/0001-typed", CRONS, {
+  statements: [
+    `CREATE INDEX IF NOT EXISTS crons_resource_search_gin ON crons USING gin
+     (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(action, '') || ' ' || coalesce(message, '')))`,
+  ],
+});
+
+const codec = tableCodec<Cron>(CRONS);
+
 export function createCronStore(
-  backing: DurableMap<Cron>,
+  databaseUrl: string,
   opts: { staleRunningMs?: number; fires: CronFireStore },
 ): CronStore {
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires;
+  const { q, pool } = createPgPool(databaseUrl, [CRONS_MIGRATION, ownerIndexMigration("crons")]);
+  const get = async (id: string): Promise<Cron | null> =>
+    codec.rows(await q(`SELECT ${codec.columns} FROM crons WHERE id = $1`, [id]))[0] ?? null;
+  const update = async (id: string, fn: (cron: Cron) => Cron): Promise<Cron | null> =>
+    updateRow(await pool(), CRONS, id, fn);
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -112,8 +156,8 @@ export function createCronStore(
         ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
-      return createDeduped(backing, contentId, (id) => ({
-        ...buildTriggerBase(input, id, now),
+      return createDeduped(q, CRONS, {
+        ...buildTriggerBase(input, contentId, now),
         enabled: input.enabled !== false,
         schedule,
         ...(nextFireAt !== undefined ? { nextFireAt } : {}),
@@ -124,13 +168,14 @@ export function createCronStore(
         ...(input.inbox ? { inbox: input.inbox } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
-      }));
+      });
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    byOwner: (scopeId) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [scopeId] } }),
+    get,
+    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM crons ORDER BY id`)),
+    byOwner: async (scopeId) =>
+      codec.rows(await q(`SELECT ${codec.columns} FROM crons WHERE owner_scope_id = $1 ORDER BY id`, [scopeId])),
     async update(id, patch) {
-      const before = await backing.get(id);
+      const before = await get(id);
       if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
@@ -149,17 +194,25 @@ export function createCronStore(
       if (patch.archived === true) fields.enabled = false;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      return backing.merge(id, fields);
+      return update(id, (cron) => ({ ...cron, ...fields }));
     },
-    delete: (id) => backing.delete(id),
+    async delete(id) {
+      await q(`DELETE FROM crons WHERE id = $1`, [id]);
+    },
     async setEnabled(id, enabled) {
-      await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+      await q(`UPDATE crons SET enabled = $2, archived = CASE WHEN $2 THEN false ELSE archived END WHERE id = $1`, [
+        id,
+        enabled,
+      ]);
     },
     async setDestination(id, destination) {
-      await backing.merge(id, { destination });
+      await q(`UPDATE crons SET destination = $2 WHERE id = $1`, [
+        id,
+        destination === undefined ? null : jsonbStringify(destination),
+      ]);
     },
     async beginFire(id, entry, opts) {
-      if ((await backing.get(id)) === null) return { begun: false };
+      if ((await get(id)) === null) return { begun: false };
       if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs);
       await fires.record(id, entry);
       return { begun: true };
@@ -182,7 +235,7 @@ export function createCronStore(
         applied = !(cron.lastFireNote && cron.lastFireNote.at > note.at);
         return applied ? { ...cron, lastFireNote: note } : cron;
       };
-      if ((await backing.update(id, apply)) === null) return "missing";
+      if ((await update(id, apply)) === null) return "missing";
       return applied ? "applied" : "superseded";
     },
     async claimSlot(id, scheduledAt, at) {
@@ -198,7 +251,7 @@ export function createCronStore(
         const { nextFireAt: _dropped, deferUntil: _cleared, ...rest } = cron;
         return { ...rest, lastFiredAt: at, ...(next !== undefined ? { nextFireAt: next } : {}) };
       };
-      await backing.update(id, transform);
+      await update(id, transform);
       return claimed;
     },
     async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
@@ -211,10 +264,10 @@ export function createCronStore(
           nextFireAt: scheduledAt,
         };
       };
-      await backing.update(id, restore);
+      await update(id, restore);
     },
     async defer(id, until) {
-      await backing.merge(id, { deferUntil: until });
+      await q(`UPDATE crons SET defer_until = $2 WHERE id = $1`, [id, until]);
     },
   };
 }

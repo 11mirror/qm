@@ -1,9 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire table tests";
@@ -12,10 +11,6 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS fire_test_crons");
-  await p.query(
-    "DO $$ BEGIN IF to_regclass('qm_schema_migrations') IS NOT NULL THEN DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/fire\\_test\\_crons/%'; END IF; END $$",
-  );
   await p.query(
     "DO $$ BEGIN IF to_regclass('cron_fires') IS NOT NULL THEN TRUNCATE cron_fires, durable_map_versions; END IF; END $$",
   );
@@ -128,8 +123,7 @@ test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NUL
 
 test("pg cron_fires: the cron store writes the table only and reads back through it", { skip }, async () => {
   const fires = createPostgresCronFireStore(URL!);
-  const backing = createPostgresMapFactory(URL!).map<Cron>("fire_test_crons");
-  const store = createCronStore(backing, { fires });
+  const store = createCronStore(URL!, { fires });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
   await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
   await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });

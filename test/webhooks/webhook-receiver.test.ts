@@ -58,7 +58,7 @@ function harness(
   runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" },
   extra: Partial<Pick<TriggerDeps, "directory" | "sessions" | "currentScopeMembers">> = {},
 ) {
-  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const webhooks = tracked(createWebhookStore(testDatabaseUrl()));
   const outbound = recordingOutbound();
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];

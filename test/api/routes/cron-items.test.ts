@@ -11,7 +11,7 @@ import type { LedgerItemView } from "../../../src/inbox/view.ts";
 import type { SlackUserClient } from "../../../src/inbox/sources/adapter.ts";
 import { sleep } from "../../../src/util/async.ts";
 import { inboxApp } from "../../support/inbox-app.ts";
-import { testMap } from "../../support/test-database.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -46,7 +46,7 @@ interface World {
 function world(over: { tokens?: boolean; chat?: boolean } = {}): World {
   const { crons, app } = inboxApp();
   const w: World = {
-    items: createInboxLedger(testMap()),
+    items: createInboxLedger(testDatabaseUrl()),
     crons,
     app,
     sent: [],

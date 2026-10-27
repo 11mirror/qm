@@ -33,7 +33,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,

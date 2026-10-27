@@ -1,6 +1,14 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
 import type { CronStore } from "../cron/cron-store.ts";
-import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
+import {
+  claimManagedCron,
+  managedCronProfiles,
+  MANAGED_CRON_COLUMNS,
+  nightlyAt,
+  type ManagedCronClaim,
+  type ManagedCronProfiles,
+} from "../cron/managed.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -17,8 +25,19 @@ Batch your edits and deletes into list calls; each call changes everything or no
 
 export type MemoryTidyProfile = ManagedCronClaim;
 
+const MEMORY_TIDY_PROFILES: TableSpec = { table: "memory_tidy_profiles", key: "id", columns: MANAGED_CRON_COLUMNS };
+
+export const MEMORY_TIDY_PROFILES_MIGRATION = mapToTableMigration(
+  "memory/tidy-profiles/0001-typed",
+  MEMORY_TIDY_PROFILES,
+);
+
+export function createMemoryTidyProfileStore(databaseUrl: string): ManagedCronProfiles<MemoryTidyProfile> {
+  return managedCronProfiles(createPgPool(databaseUrl, [MEMORY_TIDY_PROFILES_MIGRATION]).q, MEMORY_TIDY_PROFILES);
+}
+
 export function createMemoryTidyService(deps: {
-  store: DurableMap<MemoryTidyProfile>;
+  store: ManagedCronProfiles<MemoryTidyProfile>;
   memory: Pick<MemoryService, "facts">;
   timezone: (principalId: string) => Promise<string | undefined>;
   crons: CronStore;

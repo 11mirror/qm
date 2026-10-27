@@ -71,9 +71,9 @@ test("stored harness choices are dropped while their runtime selections stay rec
   await withDatabase(async (url, admin) => {
     await migrate(url);
     await admin.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed')",
+      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed', 'triggers/crons/0001-typed')",
     );
-    await admin.query("DROP TABLE feature_flags");
+    await admin.query("DROP TABLE feature_flags, crons");
     await asMapTables(admin, [CONFIG_TABLES.baseModels, CONFIG_TABLES.autoFlaggerConfigs]);
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
@@ -93,8 +93,16 @@ test("stored harness choices are dropped while their runtime selections stay rec
     await insert("base_model_configs", "personal:b", { scopeId: "personal:b", modelId: "legacy-only" });
     await insert("approved_harness_configs", "org:o", { scopeId: "org:o", ids: ["pi", "claude"] });
     await insert("auto_flagger_configs", "org:o", { scopeId: "org:o", harnessId: "claude", modelId: "m", rubric: "r" });
-    await insert("crons", "c1", { id: "c1", runtime: { harnessId: "claude", modelId: "m" } });
-    await insert("crons", "c2", { id: "c2", runtime: null });
+    const cron = {
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      enabled: true,
+      createdAt: 1,
+      schedule: {},
+    };
+    await insert("crons", "c1", { id: "c1", ...cron, runtime: { harnessId: "claude", modelId: "m" } });
+    await insert("crons", "c2", { id: "c2", ...cron, runtime: null });
     await insert("swarms", "s1", { id: "s1", template: { harness: "claude", model: "m" } });
     await insert("swarms", "s2", { id: "s2", template: { model: "m" } });
     await insert("feature_flags", "swarms", { featureName: "swarms", enabledScopes: [], updatedAt: 1, updatedBy: "a" });

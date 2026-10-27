@@ -539,7 +539,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,
@@ -979,7 +979,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: HarnessTurnInput[] = [];
   const harness = createMockHarness();

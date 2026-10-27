@@ -4,7 +4,8 @@ import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type { InboxItem, InboxItemStatus, InboxProposal, InboxPayload, InboxThreadMessage } from "../types.ts";
 import { isResolved } from "./view.ts";
 import { adapterForItem, conversationKeyOf, inboxMetadataKeys, sourceAdapters } from "./sources/index.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, updateRow, type TableSpec } from "../persistence/typed-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -242,100 +243,105 @@ function mergeIngest(item: InboxItem, entry: IngestEntryInput, now: number): Inb
   };
 }
 
-export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (event: LedgerEvent) => void): InboxLedger {
-  const update = backing.update.bind(backing);
-  const emit = (item: InboxItem | null | undefined, op: LedgerEventOp): void => {
-    if (item && onEvent) onEvent({ cronId: item.cronId, itemId: item.id, op, at: Date.now() });
-  };
+const CRON_ITEMS: TableSpec = {
+  table: "cron_items",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    cronId: { type: "text", required: true },
+    sourceKey: { type: "text", required: true },
+    sourceSummary: { type: "text" },
+    source: { type: "text" },
+    sourcePayload: { type: "jsonb" },
+    conversationKey: { type: "text" },
+    sourceAt: { type: "double precision" },
+    inboxPreview: { type: "jsonb" },
+    proposal: { type: "jsonb" },
+    agentDrafts: { type: "jsonb" },
+    agentMentionKeys: { type: "text[]" },
+    thread: { type: "jsonb" },
+    status: { type: "text", required: true },
+    parkedReason: { type: "text" },
+    actedAt: { type: "bigint" },
+    actionKind: { type: "text" },
+    actionResult: { type: "text" },
+    decisionAt: { type: "double precision" },
+    decisionToken: { type: "text" },
+    createdAt: { type: "bigint", required: true },
+    updatedAt: { type: "bigint", required: true },
+  },
+};
 
+export const CRON_ITEMS_MIGRATION = mapToTableMigration("triggers/cron-items/0001-typed", CRON_ITEMS, {
+  statements: [
+    `CREATE INDEX IF NOT EXISTS cron_items_cron_id ON cron_items (cron_id)`,
+    `CREATE INDEX IF NOT EXISTS cron_items_conversation_key ON cron_items (conversation_key)`,
+  ],
+});
+
+const codec = tableCodec<InboxItem>(CRON_ITEMS);
+
+const HEAVY_FIELDS = new Set(["proposal", "agentDrafts", "thread", "sourcePayload"]);
+
+const summary = tableCodec<Omit<InboxItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>({
+  ...CRON_ITEMS,
+  columns: Object.fromEntries(Object.entries(CRON_ITEMS.columns).filter(([field]) => !HEAVY_FIELDS.has(field))),
+});
+
+function itemRows(databaseUrl: string) {
+  const { q, pool } = createPgPool(databaseUrl, [CRON_ITEMS_MIGRATION]);
   const forCrons = async (cronIds: readonly string[]): Promise<InboxItem[]> => {
-    const wanted = new Set(cronIds);
-    if (!wanted.size) return [];
-    const items = await backing.select({ where: { field: "cronId", anyOfFold: [...wanted] } });
-    return items.filter((item) => wanted.has(item.cronId));
+    if (!cronIds.length) return [];
+    return codec.rows(
+      await q(`SELECT ${codec.columns} FROM cron_items WHERE cron_id = ANY($1::text[]) ORDER BY id`, [[...cronIds]]),
+    );
   };
-  const forCron = (cronId: string): Promise<InboxItem[]> => forCrons([cronId]);
+  return {
+    q,
+    forCrons,
+    update: async (id: string, fn: (item: InboxItem) => InboxItem): Promise<InboxItem | null> =>
+      updateRow(await pool(), CRON_ITEMS, id, fn),
+    get: async (id: string): Promise<InboxItem | null> =>
+      codec.rows(await q(`SELECT ${codec.columns} FROM cron_items WHERE id = $1`, [id]))[0] ?? null,
+    summaries: async (cronIds: readonly string[]) =>
+      summary.rows(
+        await q(`SELECT ${summary.columns} FROM cron_items WHERE cron_id = ANY($1::text[]) ORDER BY id`, [
+          [...cronIds],
+        ]),
+      ),
+    mutateMany: async (updates: ReadonlyArray<{ id: string; apply: (item: InboxItem | null) => InboxItem }>) =>
+      withPgTransaction(await pool(), async (client) => {
+        const found = await client.query(
+          `SELECT ${codec.columns} FROM cron_items WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
+          [updates.map(({ id }) => id)],
+        );
+        const pending = new Map(codec.rows(found.rows).map((item) => [item.id, item]));
+        const written = new Map<string, InboxItem>();
+        for (const { id, apply } of updates) {
+          const before = pending.get(id) ?? null;
+          const next = apply(before ? structuredClone(before) : null);
+          pending.set(id, next);
+          written.set(id, next);
+        }
+        for (const [id, item] of written)
+          await client.query(
+            `INSERT INTO cron_items (${codec.columns}) VALUES (${codec.placeholders})
+             ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+            codec.values(id, item),
+          );
+      }),
+  };
+}
 
-  const ledger: InboxLedger = {
-    async summaries(cronIds, options) {
-      if (!options?.includeInboxMetadata)
-        return backing.select({
-          where: { field: "cronId", anyOfFold: cronIds },
-          omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
-        });
-      const items = await backing.select({
-        where: { field: "cronId", anyOfFold: cronIds },
-        omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: inboxMetadataKeys() },
-      });
-      return items.map(({ sourcePayload, ...item }) => {
-        const adapter = adapterForItem(item);
-        return adapter
-          ? { ...item, inboxPreview: { ...item.inboxPreview, ...adapter.inboxMetadata(sourcePayload ?? {}) } }
-          : item;
-      });
-    },
-    async ingest(entries) {
-      const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
-      if (!entries.length) return outcome;
-      const existing = await backing.select({
-        where: { field: "cronId", anyOfFold: [...new Set(entries.map((entry) => entry.cronId))] },
-        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-      });
-      const idByKey = new Map(existing.map((item) => [JSON.stringify([item.cronId, item.sourceKey]), item.id]));
-      const changed: InboxItem[] = [];
-      await backing.mutateMany(
-        entries.map((entry) => {
-          const id =
-            idByKey.get(JSON.stringify([entry.cronId, entry.dedupeKey])) ?? inboxItemId(entry.cronId, entry.dedupeKey);
-          return {
-            id,
-            apply: (item: InboxItem | null): InboxItem => {
-              const now = Date.now();
-              const candidate: InboxItem = {
-                id,
-                cronId: entry.cronId,
-                sourceKey: entry.dedupeKey,
-                status: entry.proposal ? "ready" : "queued",
-                sourcePayload: entry.sourcePayload,
-                inboxPreview: inboxPreview(entry.sourcePayload),
-                createdAt: now,
-                updatedAt: now,
-                ...(entry.source !== undefined ? { source: entry.source } : {}),
-                ...(entry.summary !== undefined ? { sourceSummary: entry.summary } : {}),
-                ...(entry.sourceAt !== undefined ? { sourceAt: entry.sourceAt } : {}),
-                ...(entry.proposal ? { proposal: { ...entry.proposal, at: now } } : {}),
-                ...withAgentDraft({ agentDrafts: [] }, entry.proposal ? { ...entry.proposal, at: now } : undefined),
-              };
-              if (!item) {
-                outcome.created++;
-                const created = withConversationKey(candidate);
-                changed.push(created);
-                return created;
-              }
-              const merged = mergeIngest(item, entry, now);
-              if (merged) {
-                outcome.updated++;
-                const next = withConversationKey(merged);
-                changed.push(next);
-                return next;
-              }
-              outcome.skipped++;
-              return item;
-            },
-          };
-        }),
-      );
-      for (const item of changed) emit(item, "ingest");
-      return outcome;
-    },
-    async recordEvent(item, event) {
-      const current = await backing.get(item.id);
-      if (!current) return false;
-      const entry = eventEntry(current, event);
-      if (!entry) return false;
-      return (await ledger.ingest([entry])).updated > 0;
-    },
+type ItemRows = ReturnType<typeof itemRows>;
+
+type ItemEdits = Pick<
+  InboxLedger,
+  "setProposal" | "annotate" | "appendThread" | "recordAction" | "reopen" | "acquireDecision" | "releaseDecision"
+>;
+
+function itemEdits({ update, get }: ItemRows, emit: (item: InboxItem | null, op: LedgerEventOp) => void): ItemEdits {
+  return {
     async setProposal(id, proposal, opts) {
       let applied = false;
       const after = await update(id, (item) => {
@@ -376,7 +382,7 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       return applied ? after : null;
     },
     async appendThread(id, messages) {
-      if (messages.length === 0) return backing.get(id);
+      if (messages.length === 0) return get(id);
       let applied = false;
       const after = await update(id, (item) => {
         applied = true;
@@ -437,33 +443,6 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       if (applied) emit(after, "reopen");
       return applied ? after : null;
     },
-    async prune(cronId, options) {
-      const now = options.now ?? Date.now();
-      const items = await backing.select({
-        where: { field: "cronId", anyOfFold: [cronId] },
-        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-      });
-      const expired = items.filter(
-        (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
-      );
-      const doomed = new Map(expired.map((item) => [item.id, item]));
-      const surviving = items.filter((item) => !doomed.has(item.id));
-      if (surviving.length > options.maxItems) {
-        const resolvedOldestFirst = surviving
-          .filter(isResolved)
-          .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
-        for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
-      }
-      await backing.deleteMany([...doomed.keys()]);
-      return doomed.size;
-    },
-    get: (id) => backing.get(id),
-    byCron: forCron,
-    byCrons: forCrons,
-    async byConversation(conversationKey) {
-      const items = await backing.select({ where: { field: "conversationKey", anyOfFold: [conversationKey] } });
-      return items.filter((item) => item.conversationKey === conversationKey);
-    },
     async acquireDecision(id, decisionAt = Date.now()) {
       let token: string | null = null;
       await update(id, (item) => {
@@ -483,12 +462,125 @@ export function createInboxLedger(backing: DurableMap<InboxItem>, onEvent?: (eve
       });
       return released;
     },
-    async deleteByCron(cronId) {
-      const items = await backing.selectEntries({
-        where: { field: "cronId", anyOfFold: [cronId] },
-        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
+  };
+}
+
+export function createInboxLedger(databaseUrl: string, onEvent?: (event: LedgerEvent) => void): InboxLedger {
+  const rows = itemRows(databaseUrl);
+  const { q, get, forCrons } = rows;
+  const emit = (item: InboxItem | null | undefined, op: LedgerEventOp): void => {
+    if (item && onEvent) onEvent({ cronId: item.cronId, itemId: item.id, op, at: Date.now() });
+  };
+
+  const ledger: InboxLedger = {
+    async summaries(cronIds, options) {
+      if (!options?.includeInboxMetadata) return rows.summaries(cronIds);
+      const found = await q(
+        `SELECT ${summary.columns}, (SELECT jsonb_object_agg(key, value) FROM jsonb_each(source_payload)
+           WHERE key = ANY($2::text[])) AS metadata
+         FROM cron_items WHERE cron_id = ANY($1::text[]) ORDER BY id`,
+        [cronIds, inboxMetadataKeys()],
+      );
+      return found.map((row) => {
+        const item = summary.row(row);
+        const adapter = adapterForItem(item);
+        return adapter
+          ? {
+              ...item,
+              inboxPreview: {
+                ...item.inboxPreview,
+                ...adapter.inboxMetadata((row.metadata as InboxPayload | null) ?? {}),
+              },
+            }
+          : item;
       });
-      await backing.deleteMany(items.flatMap(([id, item]) => (item.cronId === cronId ? [id] : [])));
+    },
+    async ingest(entries) {
+      const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
+      if (!entries.length) return outcome;
+      const existing = await rows.summaries([...new Set(entries.map((entry) => entry.cronId))]);
+      const idByKey = new Map(existing.map((item) => [JSON.stringify([item.cronId, item.sourceKey]), item.id]));
+      const changed: InboxItem[] = [];
+      await rows.mutateMany(
+        entries.map((entry) => {
+          const id =
+            idByKey.get(JSON.stringify([entry.cronId, entry.dedupeKey])) ?? inboxItemId(entry.cronId, entry.dedupeKey);
+          return {
+            id,
+            apply: (item: InboxItem | null): InboxItem => {
+              const now = Date.now();
+              const candidate: InboxItem = {
+                id,
+                cronId: entry.cronId,
+                sourceKey: entry.dedupeKey,
+                status: entry.proposal ? "ready" : "queued",
+                sourcePayload: entry.sourcePayload,
+                inboxPreview: inboxPreview(entry.sourcePayload),
+                createdAt: now,
+                updatedAt: now,
+                ...(entry.source !== undefined ? { source: entry.source } : {}),
+                ...(entry.summary !== undefined ? { sourceSummary: entry.summary } : {}),
+                ...(entry.sourceAt !== undefined ? { sourceAt: entry.sourceAt } : {}),
+                ...(entry.proposal ? { proposal: { ...entry.proposal, at: now } } : {}),
+                ...withAgentDraft({ agentDrafts: [] }, entry.proposal ? { ...entry.proposal, at: now } : undefined),
+              };
+              if (!item) {
+                outcome.created++;
+                const created = withConversationKey(candidate);
+                changed.push(created);
+                return created;
+              }
+              const merged = mergeIngest(item, entry, now);
+              if (merged) {
+                outcome.updated++;
+                const next = withConversationKey(merged);
+                changed.push(next);
+                return next;
+              }
+              outcome.skipped++;
+              return item;
+            },
+          };
+        }),
+      );
+      for (const item of changed) emit(item, "ingest");
+      return outcome;
+    },
+    ...itemEdits(rows, emit),
+    async recordEvent(item, event) {
+      const current = await get(item.id);
+      if (!current) return false;
+      const entry = eventEntry(current, event);
+      if (!entry) return false;
+      return (await ledger.ingest([entry])).updated > 0;
+    },
+    async prune(cronId, options) {
+      const now = options.now ?? Date.now();
+      const items = await rows.summaries([cronId]);
+      const expired = items.filter(
+        (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
+      );
+      const doomed = new Map(expired.map((item) => [item.id, item]));
+      const surviving = items.filter((item) => !doomed.has(item.id));
+      if (surviving.length > options.maxItems) {
+        const resolvedOldestFirst = surviving
+          .filter(isResolved)
+          .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
+        for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
+      }
+      if (doomed.size) await q(`DELETE FROM cron_items WHERE id = ANY($1::text[])`, [[...doomed.keys()]]);
+      return doomed.size;
+    },
+    get,
+    byCron: (cronId) => forCrons([cronId]),
+    byCrons: forCrons,
+    async byConversation(conversationKey) {
+      return codec.rows(
+        await q(`SELECT ${codec.columns} FROM cron_items WHERE conversation_key = $1 ORDER BY id`, [conversationKey]),
+      );
+    },
+    async deleteByCron(cronId) {
+      await q(`DELETE FROM cron_items WHERE cron_id = $1`, [cronId]);
     },
   };
   return ledger;

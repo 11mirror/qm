@@ -5,7 +5,7 @@ import { createInboxRealtime } from "../../src/inbox/realtime.ts";
 import { slackConversationRef } from "../../src/inbox/sources/slack.ts";
 import type { LedgerEvent } from "../../src/inbox/events.ts";
 import type { Cron } from "../../src/types.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const CRON = { id: "cron-inbox", owner: "owner@example.com", inbox: { source: "slack" } } as unknown as Cron;
 
@@ -59,7 +59,7 @@ function realtime(items: ReturnType<typeof createInboxLedger>) {
 }
 
 test("the owner's own reply is queued as an owner event for the card's conversation", async () => {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([slackEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -78,7 +78,7 @@ test("the owner's own reply is queued as an owner event for the card's conversat
 });
 
 test("someone else's messages are queued as other events with their sender", async () => {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([slackEntry(), gmailEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -122,7 +122,7 @@ test("someone else's messages are queued as other events with their sender", asy
 });
 
 test("events in unrelated conversations or other sources queue nothing", async () => {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
@@ -159,7 +159,7 @@ test("events in unrelated conversations or other sources queue nothing", async (
 });
 
 test("a thread reply reaches a channel card anchored at the thread root", async () => {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
@@ -194,7 +194,7 @@ test("slack conversation refs key DMs by channel and channel asks by thread root
 
 test("ledger mutations emit change events", async () => {
   const events: LedgerEvent[] = [];
-  const items = createInboxLedger(testMap(), (e) => events.push(e));
+  const items = createInboxLedger(testDatabaseUrl(), (e) => events.push(e));
   await items.ingest([slackEntry()]);
   const [item] = await items.byCron(CRON.id);
   await items.setProposal(item!.id, { data: { body: "draft" }, by: "agent" });
@@ -212,7 +212,7 @@ test("private-channel mentions stay anchored to their thread, not the channel ta
 
 test("one conversation event reads only that conversation's items, across inbox crons", async () => {
   const other = { id: "cron-other", owner: "other@example.com", inbox: { source: "slack" } } as unknown as Cron;
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     slackEntry(),
     slackEntry({ cronId: other.id }),

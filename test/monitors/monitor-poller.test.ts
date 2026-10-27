@@ -103,7 +103,7 @@ async function harness(opts?: {
   onRun?: () => Promise<void>;
 }) {
   const fake = fakeSandbox();
-  const monitors = createMonitorStore(testMap());
+  const monitors = createMonitorStore(testDatabaseUrl());
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];

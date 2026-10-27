@@ -23,7 +23,7 @@ function harness(
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
 ) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const outbound = recordingOutbound();
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const calls: TurnRequest[] = [];
@@ -420,7 +420,7 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
 });
 
 test("cron fires do not replay prior sessions or inline prior fire context", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const sessionIds: string[] = [];
@@ -477,7 +477,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
 });
 
 test("an idempotency-skipped cron fire does not create fire log history", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     jobs: idleJobs(),
@@ -553,7 +553,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
   t.mock.method(console, "error", (...args: unknown[]) => {
     logged.push(args.map(String).join(" "));
   });
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const scheduler = createScheduler({
     jobs: idleJobs(),
     ...singleProcessDeps(),
@@ -584,7 +584,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
 });
 
 test("queue mode: fires claim the slot before running, and stale or lost claims never run", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
   const enqueued: Array<{ cronId: string; scheduledAt: number }> = [];
@@ -631,7 +631,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
 
 for (const queued of [false, true]) {
   test(`${queued ? "queue" : "interval"} mode: a busy cron defers without blocking other crons or losing its slot`, async () => {
-    const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+    const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
     const gate = Promise.withResolvers<TurnResult>();
     const started = Promise.withResolvers<void>();
     const calls: TurnRequest[] = [];
@@ -723,7 +723,7 @@ for (const queued of [false, true]) {
 }
 
 test("queue mode: concurrent reconciliation cannot consume an overdue slot while its lifecycle lock is held", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     schedule: { cron: "* * * * *", timezone: "UTC" },
     action: "overdue calendar task",
@@ -809,7 +809,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
 });
 
 test("queue mode: an authz-failed fire disables the cron but gives the slot back (parity with the interval path)", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
   const calls: TurnRequest[] = [];
@@ -1025,7 +1025,7 @@ function busyOnce(calls: TurnRequest[]) {
 }
 
 test("a one-shot whose session is busy is deferred, stays enabled, and fires once the deferral passes", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   let clock = 1000;
   const scheduler = createScheduler({
@@ -1077,7 +1077,7 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
 });
 
 test("a fire that is still busy ten minutes past its slot gives up: consumed and recorded refused", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     jobs: idleJobs(),
@@ -1108,7 +1108,7 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
 });
 
 test("queue mode: a busy fire releases its slot and its job sleeps until the deferral", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   let clock = 5000;
   let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<unknown>) | undefined;
@@ -1162,7 +1162,7 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
 test("manual cron preparation and detached fire retain admission across pause", async () => {
   const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
   const work = createAdmittedWork();
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "test",

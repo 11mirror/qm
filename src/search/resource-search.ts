@@ -32,6 +32,8 @@ const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ow
   json->>'owner' AS owner, json->>'status' AS status,
   json->'members' AS members, json->'destination' AS destination`;
 
+const TRIGGER_FIELDS = `owner_scope_id AS "ownerScopeId", created_by AS "createdBy", owner, destination`;
+
 const sources = {
   skills: {
     table: "skills",
@@ -41,9 +43,9 @@ const sources = {
   },
   crons: {
     table: "crons",
-    title: "coalesce(json->>'title', '')",
-    description: "coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')",
-    fields: JSON_FIELDS,
+    title: "coalesce(title, '')",
+    description: "coalesce(action, '') || ' ' || coalesce(message, '')",
+    fields: TRIGGER_FIELDS,
   },
   deploys: {
     table: "deployments",
@@ -53,9 +55,9 @@ const sources = {
   },
   webhooks: {
     table: "webhooks",
-    title: "coalesce(json->>'action', '')",
-    description: "coalesce(json->'verification'->>'scheme', '')",
-    fields: JSON_FIELDS,
+    title: "coalesce(action, '')",
+    description: "coalesce(verification->>'scheme', '')",
+    fields: TRIGGER_FIELDS,
   },
 } satisfies Record<ResourceKind, { table: string; title: string; description: string; fields: string }>;
 
