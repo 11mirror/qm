@@ -88,4 +88,42 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
            ON CONFLICT DO NOTHING`,
     ],
   },
+  {
+    // Migrations run with tenancy bypassed and before qm_tenantize(), so 0048's seed and any bypassed write (a tenant
+    // import) marked sessions dirty under the home tenant: other tenants' Admin Users caches never rebuilt. Dirty
+    // marks now carry the source row's tenant, and a tenantized database is re-seeded per tenant.
+    id: "sessions/store/0049-attributed-turns-tenant",
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `CREATE OR REPLACE FUNCTION mark_attribution_dirty() RETURNS trigger LANGUAGE plpgsql AS $mark_attribution_dirty$
+           BEGIN
+             IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'attributed_turns_dirty'::regclass
+                             AND attname = 'tenant_id' AND NOT attisdropped) THEN
+               INSERT INTO attributed_turns_dirty(session_id) VALUES (COALESCE(NEW.session_id, OLD.session_id))
+               ON CONFLICT DO NOTHING;
+             ELSIF TG_OP = 'DELETE' THEN
+               INSERT INTO attributed_turns_dirty(tenant_id, session_id) VALUES (OLD.tenant_id, OLD.session_id)
+               ON CONFLICT DO NOTHING;
+             ELSE
+               INSERT INTO attributed_turns_dirty(tenant_id, session_id) VALUES (NEW.tenant_id, NEW.session_id)
+               ON CONFLICT DO NOTHING;
+             END IF;
+             RETURN NULL;
+           END $mark_attribution_dirty$`,
+      `DO $attributed_turns_tenant$
+           BEGIN
+             IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'participants'::regclass
+                         AND attname = 'tenant_id' AND NOT attisdropped) THEN
+               ALTER TABLE attributed_turns ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
+               ALTER TABLE attributed_turns_dirty ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
+               DELETE FROM attributed_turns;
+               DELETE FROM attributed_turns_dirty;
+               INSERT INTO attributed_turns_dirty(tenant_id, session_id)
+                 SELECT DISTINCT tenant_id, session_id FROM participants
+               ON CONFLICT DO NOTHING;
+             END IF;
+           END
+           $attributed_turns_tenant$`,
+    ],
+  },
 ];
