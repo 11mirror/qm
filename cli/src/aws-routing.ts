@@ -8,11 +8,13 @@ export const validAlbHostname = (value: string): boolean =>
     .split(".")
     .every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
 
+const hostKey = (value: string): string => value.trim().toLowerCase().replace(/\.$/, "");
+
 export function awsPortalAppsDomain(config: QmConfig): string | undefined {
   if (!config.aws || !hostsWebEdge(config.services)) return undefined;
-  const domain = config.env.portal?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
+  const domain = hostKey(config.env.portal?.PORTAL_APPS_DOMAIN ?? "");
   if (!domain) return undefined;
-  const coreDomain = config.env.core?.DEPLOY_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
+  const coreDomain = hostKey(config.env.core?.DEPLOY_APPS_DOMAIN ?? "");
   const company = new URL(config.publicUrl).hostname.toLowerCase();
   if (!validAlbHostname(domain) || domain !== coreDomain || !domain.endsWith(`.${company}`)) {
     throw new Error("portal apps domain must match core and remain beneath the company public hostname");
@@ -23,7 +25,7 @@ export function awsPortalAppsDomain(config: QmConfig): string | undefined {
 export function awsCoreHostnames(config: QmConfig): string[] {
   const hosts: string[] = [];
   const normalize = (value: string, source: string): string => {
-    const host = value.trim().toLowerCase().replace(/\.$/, "");
+    const host = hostKey(value);
     if (!validAlbHostname(host)) {
       throw new Error(`${source} ${JSON.stringify(value)} does not derive a valid ALB host-header hostname`);
     }
@@ -40,11 +42,11 @@ export function awsCoreHostnames(config: QmConfig): string[] {
       );
     }
     const apiHost = normalize(hostname, "apiUrl");
-    if (apiHost !== new URL(config.publicUrl).hostname.toLowerCase().replace(/\.$/, "")) hosts.push(apiHost);
+    if (apiHost !== hostKey(new URL(config.publicUrl).hostname)) hosts.push(apiHost);
   }
   const apps = config.env.core?.DEPLOY_APPS_DOMAIN?.trim();
   const portalAppsDomain = awsPortalAppsDomain(config);
-  if (apps && (!config.aws?.sharedAlb || apps.trim().toLowerCase().replace(/\.$/, "") !== portalAppsDomain))
+  if (apps && (!config.aws?.sharedAlb || hostKey(apps) !== portalAppsDomain))
     hosts.push(`*.${normalize(apps, "the apps domain (env.core.DEPLOY_APPS_DOMAIN)")}`);
   return [...new Set(hosts)];
 }

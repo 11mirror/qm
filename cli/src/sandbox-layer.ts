@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
 import { errMessage } from "./log.ts";
@@ -142,8 +143,11 @@ const subdirs = (dir: string): string[] => {
     .sort();
 };
 
-const isCidr = (host: string): boolean =>
-  /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(host) || /^[0-9A-Fa-f:]+\/\d{1,3}$/.test(host);
+const isCidr = (host: string): boolean => {
+  const [address = "", prefix = "", ...rest] = host.split("/");
+  const family = isIP(address);
+  return family !== 0 && !rest.length && /^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128);
+};
 
 export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
   const out: SandboxValidation = {

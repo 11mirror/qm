@@ -115,6 +115,8 @@ function dockerfileHeredocs(instruction: string): DockerfileHeredoc[] {
   return out;
 }
 
+const chomp = (raw: string): string => (raw.endsWith("\n") ? raw.slice(0, -1) : raw).replace(/\r$/, "");
+
 function dockerfileLogicalLines(body: string): DockerfileLogicalLine[] {
   const physical = body.match(/[^\n]*(?:\n|$)/g)?.filter((line) => line.length > 0) ?? [];
   let escape = "\\";
@@ -128,7 +130,7 @@ function dockerfileLogicalLines(body: string): DockerfileLogicalLine[] {
     const raw = physical[physicalIndex]!;
     const start = offset;
     offset += raw.length;
-    const line = raw.endsWith("\n") ? raw.slice(0, -1).replace(/\r$/, "") : raw.replace(/\r$/, "");
+    const line = chomp(raw);
     if (!pending && !sawInstruction) {
       const directive = line.match(/^#\s*escape=(\\|`)\s*$/i);
       if (directive) escape = directive[1]!;
@@ -148,9 +150,7 @@ function dockerfileLogicalLines(body: string): DockerfileLogicalLine[] {
       while (++physicalIndex < physical.length) {
         const heredocRaw = physical[physicalIndex]!;
         offset += heredocRaw.length;
-        const heredocLine = heredocRaw.endsWith("\n")
-          ? heredocRaw.slice(0, -1).replace(/\r$/, "")
-          : heredocRaw.replace(/\r$/, "");
+        const heredocLine = chomp(heredocRaw);
         const terminator = heredoc.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
         if (terminator === heredoc.delimiter) {
           terminated = true;
