@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createPostgresMapFactory, type DurableMap } from "../persistence/durable-map.ts";
 import { registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { type AdvisoryLock, createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -33,9 +34,8 @@ import {
 import { createPostgresDecisionStore } from "../decisions/store.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
-import type { Config } from "../config.ts";
 
-export function buildStores(w: { databaseUrl: string; config: Config; connectorSecretKey: string }) {
+export function buildStores(w: Head) {
   const { databaseUrl, config, connectorSecretKey } = w;
 
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);

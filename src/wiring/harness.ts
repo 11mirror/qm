@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { type RunSignalStore, createMemoryRunSignalStore } from "../runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../runs/postgres-run-signal-store.ts";
 import {
@@ -9,7 +10,7 @@ import {
   modelSupported,
 } from "../model/pi-models.ts";
 import { scopeId } from "../types.ts";
-import { configuredModel, baseModelProviders, type Config } from "../config.ts";
+import { configuredModel, baseModelProviders } from "../config.ts";
 import { createPiHarness, piHarnessConfigOptions } from "../harness/pi-harness.ts";
 import { createDecisionHooks, turnStartState, routeTurnRuntime } from "../decisions/hooks.ts";
 import { createDecisionBackend } from "../decisions/providers.ts";
@@ -19,17 +20,12 @@ import { selectableModelCatalog } from "../model/model-catalog.ts";
 import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { StoresModule } from "./stores.ts";
 import type { ModelCredentialsModule } from "./model-credentials.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { ModelKeysModule } from "./model-keys.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
 export function buildHarness(
-  w: Pick<StoresModule, "configStore" | "decisions"> &
-    Pick<ModelCredentialsModule, "gatewayTransport" | "directProviderAvailability" | "modelCredentials"> &
-    Pick<ModelKeysModule, "resolvePiProviderKeys" | "refreshModels"> &
-    Pick<CredentialsModule, "serviceCreds"> &
-    Pick<DeploymentLayerModule, "auditLog"> & { config: Config; databaseUrl: string; overrides: AppOverrides },
+  w: Head & StoresModule & ModelCredentialsModule & ModelKeysModule & CredentialsModule & DeploymentLayerModule,
 ) {
   const {
     config,

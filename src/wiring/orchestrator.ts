@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/surface-cache.ts";
 import { type ChannelPolicyStore, createPostgresChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type OrchestratorDeps, createOrchestrator } from "../core/orchestrator.ts";
@@ -9,10 +10,8 @@ import { resendMailer } from "../../plugins/chassis/src/resend.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { SessionSyscallsModule } from "./session-syscalls.ts";
-import type { Late } from "./late.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { RunsModule } from "./runs.ts";
-import type { Config } from "../config.ts";
 import type { ModelKeysModule } from "./model-keys.ts";
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
@@ -26,55 +25,23 @@ import type { ModelCredentialsModule } from "./model-credentials.ts";
 import type { StartupModule } from "./startup.ts";
 import type { RunStreamsModule } from "./run-streams.ts";
 
-type BuildOrchestratorInputs = Pick<OutboundModule, "chatSurfaces" | "outbound" | "recentDmPosts"> &
-  Pick<SessionSyscallsModule, "uiState" | "sessionSyscalls" | "layerBrokerFor"> &
-  Pick<DeploymentLayerModule, "auditLog" | "brokeredTools" | "deploymentLayer"> &
-  Pick<RunsModule, "sessionStateBus" | "ledger" | "runs"> &
-  Pick<ModelKeysModule, "refreshModels"> &
-  Pick<
-    StoresModule,
-    | "identity"
-    | "configStore"
-    | "sessions"
-    | "admin"
-    | "skills"
-    | "skillBundles"
-    | "advisoryLock"
-    | "featureFlags"
-    | "teams"
-    | "connectorStatusCache"
-    | "artifactMap"
-    | "directory"
-    | "isCurrentSharedScopeMember"
-    | "projects"
-    | "environments"
-  > &
-  Pick<
-    FilesModule,
-    "resolution" | "workspace" | "files" | "toolOutput" | "rateLimiter" | "budget" | "acl" | "errors" | "blobTransfer"
-  > &
-  Pick<
-    CredentialsModule,
-    | "userModelCredentials"
-    | "connectorTokens"
-    | "modelGateway"
-    | "mcpToolService"
-    | "resolveClient"
-    | "keychain"
-    | "serviceCreds"
-  > &
-  Pick<SandboxModule, "sandbox" | "sandboxResources"> &
-  Pick<HarnessModule, "harness" | "runSignals" | "orgBaseModelId" | "fallback"> &
-  Pick<MemoryModule, "memory" | "memoryStrategy"> &
-  Pick<DeployModule, "deployService"> &
-  Pick<CronsModule, "securityScreener" | "approvals" | "monitors" | "crons" | "webhooks"> &
-  Pick<ModelCredentialsModule, "gatewayTransport"> &
-  Pick<StartupModule, "skillsReady"> &
-  Pick<RunStreamsModule, "turnStream" | "runActivity" | "credentialUsage" | "processes"> & {
-    databaseUrl: string;
-    late: Late;
-    config: Config;
-  };
+type BuildOrchestratorInputs = Head &
+  OutboundModule &
+  SessionSyscallsModule &
+  DeploymentLayerModule &
+  RunsModule &
+  ModelKeysModule &
+  StoresModule &
+  FilesModule &
+  CredentialsModule &
+  SandboxModule &
+  HarnessModule &
+  MemoryModule &
+  DeployModule &
+  CronsModule &
+  ModelCredentialsModule &
+  StartupModule &
+  RunStreamsModule;
 
 export function buildOrchestrator(w: BuildOrchestratorInputs) {
   const { databaseUrl } = w;

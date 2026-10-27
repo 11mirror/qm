@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createMonitorStore } from "../monitors/monitor-store.ts";
 import type { Monitor, InboxItem, Cron, Webhook, PendingApprovalRecord } from "../types.ts";
 import type { LedgerEvent } from "../inbox/events.ts";
@@ -11,21 +12,9 @@ import { createApprovalStore } from "../core/approval-store.ts";
 import { createSecurityScreenProxy } from "../security/security-screener.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
-import type { Late } from "./late.ts";
-import type { Config } from "../config.ts";
 import type { OutboundModule } from "./outbound.ts";
-import type { AppOverrides } from "../wiring.ts";
 
-export function buildCrons(
-  w: Pick<StoresModule, "artifactMap"> &
-    Pick<RunsModule, "ledgerEventBus"> &
-    Pick<OutboundModule, "outbound" | "chatSurfaces"> & {
-      late: Late;
-      databaseUrl: string;
-      config: Config;
-      overrides: AppOverrides;
-    },
-) {
+export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule) {
   const { artifactMap, ledgerEventBus, late, databaseUrl, config, outbound, chatSurfaces, overrides } = w;
 
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));

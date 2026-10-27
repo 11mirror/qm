@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import type { ScopeId } from "../types.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS } from "../connectors/background-exec-broker.ts";
 import { type StoredE2bSandbox, createE2bSandbox, E2B_TEMPLATE_TOOLS } from "../sandbox/e2b-sandbox.ts";
@@ -22,11 +23,7 @@ import type { FilesModule } from "./files.ts";
 import type { StoresModule } from "./stores.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
-export function buildSandboxBackends(
-  w: Pick<FilesModule, "errors" | "blobTransfer" | "workspace"> &
-    Pick<StoresModule, "advisoryLock" | "artifactMap" | "pgArtifactMap"> &
-    Pick<DeploymentLayerModule, "deploymentLayer"> & { config: Config },
-) {
+export function buildSandboxBackends(w: Head & FilesModule & StoresModule & DeploymentLayerModule) {
   const { errors, config, advisoryLock, blobTransfer, deploymentLayer, artifactMap, pgArtifactMap, workspace } = w;
 
   const sandboxOnError = (

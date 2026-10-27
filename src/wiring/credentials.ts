@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh, type OAuthState } from "../connectors/oauth.ts";
 import {
@@ -29,16 +30,11 @@ import { type ConsentLinkStore, createConsentLinkStore, type ConsentLinkRecord }
 import { type OAuthFlowStore, createOAuthFlowStore } from "../connectors/oauth-flow-store.ts";
 import { type SecretDropStore, createSecretDropStore, type SecretDropRecord } from "../credentials/secret-drop.ts";
 import { createModelGateway } from "../model/model-gateway.ts";
-import type { AppOverrides } from "../wiring.ts";
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
-export function buildCredentials(
-  w: Pick<StoresModule, "configStore" | "artifactMap" | "advisoryLock"> &
-    Pick<FilesModule, "mcpServers"> &
-    Pick<DeploymentLayerModule, "auditLog"> & { overrides: AppOverrides; config: Config; connectorSecretKey: string },
-) {
+export function buildCredentials(w: Head & StoresModule & FilesModule & DeploymentLayerModule) {
   const { overrides, configStore, config, connectorSecretKey, artifactMap, advisoryLock, mcpServers, auditLog } = w;
 
   const secretSource = createEnvSecretSource(overrides.env);

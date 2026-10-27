@@ -1,3 +1,4 @@
+import type { Head } from "./late.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../idempotency/idempotency-store.ts";
 import { type RecentDmPosts, rememberDmPost } from "../surfaces/recent-dm-posts.ts";
 import { createOutbound, type QueuedPost, createWebSurface } from "../surfaces/outbound.ts";
@@ -8,13 +9,8 @@ import { createSurfaceRegistry } from "../surfaces/registry.ts";
 import { createHttpChatSurface } from "../surfaces/http-chat.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
-import type { Config } from "../config.ts";
-import type { Late } from "./late.ts";
 
-export function buildOutbound(
-  w: Pick<StoresModule, "artifactMap" | "sessions"> &
-    Pick<RunsModule, "sessionStateBus"> & { config: Config; late: Late },
-) {
+export function buildOutbound(w: Head & StoresModule & RunsModule) {
   const { artifactMap, sessions, sessionStateBus, config, late } = w;
 
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));

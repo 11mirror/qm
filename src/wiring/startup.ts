@@ -1,14 +1,10 @@
+import type { Head } from "./late.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
-import type { Config } from "../config.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { StoresModule } from "./stores.ts";
 
-export function buildStartup(
-  w: Pick<DeploymentLayerModule, "deploymentLayerStore" | "installCatalogs"> &
-    Pick<CredentialsModule, "warnShadowedBrokerCredentials"> &
-    Pick<StoresModule, "identity" | "configStore"> & { config: Config },
-) {
+export function buildStartup(w: Head & DeploymentLayerModule & CredentialsModule & StoresModule) {
   const { deploymentLayerStore, config, installCatalogs, warnShadowedBrokerCredentials, identity, configStore } = w;
 
   let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
