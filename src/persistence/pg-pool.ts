@@ -85,8 +85,8 @@ export function configurePgPooling(config: PgPoolingConfig): void {
     ["DATABASE_POOL_MAX", config.queryMax],
     ["DATABASE_DIRECT_POOL_MAX", config.sessionMax],
   ] as const) {
-    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 100)) {
-      throw new Error(`${name} must be an integer between 1 and 100`);
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+      throw new Error(`${name} must be a positive integer`);
     }
   }
   poolingConfig = { ...config };
@@ -133,6 +133,15 @@ async function applyTenancyIfEnabled(pool: Pool, connectionString: string, chang
   tenantized.add(connectionString);
 }
 
+const DEFAULT_QUERY_POOL_MAX = 10;
+const DEFAULT_SESSION_POOL_MAX = 32;
+
+export function pgPoolMax(kind: "query" | "session"): number {
+  return kind === "query"
+    ? (poolingConfig.queryMax ?? DEFAULT_QUERY_POOL_MAX)
+    : (poolingConfig.sessionMax ?? DEFAULT_SESSION_POOL_MAX);
+}
+
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
@@ -142,9 +151,8 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
-  if (!Number.isInteger(max) || max < 1 || max > 100)
-    throw new Error(`${setting} must be an integer between 1 and 100`);
+  const max = kind === "migration" ? 1 : pgPoolMax(kind);
+  if (!Number.isInteger(max) || max < 1) throw new Error(`${setting} must be a positive integer`);
   const connection = pgConnectionOptions(
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
