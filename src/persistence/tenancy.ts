@@ -177,6 +177,7 @@ type ServiceBags = Record<string, Record<string, string>>;
 
 async function foldTenantEnvBags(client: PoolClient, key: Buffer | undefined): Promise<void> {
   const settingColumns = TENANT_TEXT_SETTINGS.map(([, column]) => column).join(", ");
+  await client.query("SET LOCAL bytea_output = 'hex'");
   const { rows } = await client.query<{ id: string; slug: string; env: ServiceBags | null; sealed: string | null }>(
     `SELECT id::text AS id, slug, to_jsonb(t) -> 'env' AS env, to_jsonb(t) ->> 'secret_env' AS sealed FROM tenants t
      WHERE num_nonnulls(secrets, ${settingColumns}) = 0 AND NOT oidc_admin`,
@@ -190,16 +191,13 @@ async function foldTenantEnvBags(client: PoolClient, key: Buffer | undefined): P
       for (const service of ["web-ui", "portal", "core"]) Object.assign(flat, bags[service] ?? {});
     }
     const settings = settingsFromEnv(flat);
+    const sealed = sealTenantSecrets(settings.secrets, key);
+    if (!sealed && !settings.oidcAdmin && TENANT_TEXT_SETTINGS.every(([field]) => !settings[field])) continue;
     await client.query(
       `UPDATE tenants SET oidc_admin = $2, secrets = $3,
          ${TENANT_TEXT_SETTINGS.map(([, column], i) => `${column} = $${i + 4}`).join(", ")}
        WHERE id = $1`,
-      [
-        row.id,
-        settings.oidcAdmin,
-        sealTenantSecrets(settings.secrets, key),
-        ...TENANT_TEXT_SETTINGS.map(([field]) => settings[field] ?? null),
-      ],
+      [row.id, settings.oidcAdmin, sealed, ...TENANT_TEXT_SETTINGS.map(([field]) => settings[field] ?? null)],
     );
     console.log(`[qm] tenant ${row.slug}: settings filled from its env bags`);
   }

@@ -375,3 +375,27 @@ test("a registry change notifies the host, which boots added tenants and stops s
   assert.equal(JSON.parse((await postgresMultitenantHostGet(frontPort, "/v1/x", "gamma.example.test")).body).id, GAMMA);
   assert.equal((await postgresMultitenantHostGet(frontPort, "/v1/x", "beta.example.test")).status, 404);
 });
+
+test("a running tenant whose settings change is rebooted with them", async () => {
+  const frontPort = (host.servers[host.servers.length - 1]!.address() as AddressInfo).port;
+  const acme = async () =>
+    JSON.parse((await postgresMultitenantHostGet(frontPort, "/v1/x", "acme.example.test")).body) as { flag: string };
+  assert.equal((await acme()).flag, "a");
+  await upsertTenant(
+    registry,
+    {
+      id: ACME,
+      slug: "acme",
+      orgId: "acme",
+      hosts: ["acme.example.test"],
+      status: "active",
+      sandboxNamePrefix: "a2",
+      oidcAdmin: false,
+      secrets: {},
+    },
+    undefined,
+  );
+  await host.refresh();
+  assert.equal((await acme()).flag, "a2");
+  assert.equal(host.tenants.length, 3);
+});
