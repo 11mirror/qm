@@ -26,8 +26,30 @@ const ROLE = "qm_mt_runner_app";
 const acme = tenantFor("acme", "7d3f5e1a-0000-4000-8000-00000000a001", "acme");
 const beta = tenantFor("beta", "9a1b2c3d-0000-4000-8000-00000000b002", "beta");
 const GAMMA = "c4d5e6f7-0000-4000-8000-00000000c003";
-function directoryOf(active: () => Promise<Tenant[]>): TenantDirectory {
-  return { active, byHost: () => Promise.resolve(undefined), watch: () => {}, close: () => Promise.resolve() };
+const RETIRED = "e8f9a0b1-0000-4000-8000-00000000d004";
+const retired = tenantFor("retired", RETIRED, "retired");
+const WAITING = "f0a1b2c3-0000-4000-8000-00000000e005";
+const waiting = tenantFor("waiting", WAITING, "waiting");
+const withRetired = directoryOf(
+  () => Promise.resolve([acme, beta]),
+  (id) => Promise.resolve(id !== RETIRED),
+);
+
+async function absurdTask(queue: string, taskId: string) {
+  const rows = await rls.q(
+    `SELECT t.state, (SELECT r.failure_reason->>'message' FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} r
+        WHERE r.task_id = t.task_id AND r.failure_reason IS NOT NULL LIMIT 1) AS reason
+       FROM absurd.${pg.escapeIdentifier(`t_${queue}`)} t WHERE t.task_id = $1`,
+    [taskId],
+  );
+  return rows[0] as { state: string; reason: string | null } | undefined;
+}
+
+function directoryOf(
+  active: () => Promise<Tenant[]>,
+  exists: (id: string) => Promise<boolean> = () => Promise.resolve(true),
+): TenantDirectory {
+  return { active, exists, byHost: () => Promise.resolve(undefined), watch: () => {}, close: () => Promise.resolve() };
 }
 
 const directory = directoryOf(() => Promise.resolve([acme, beta]));
@@ -315,5 +337,81 @@ test(
       await real.close();
       useTenantDirectory(directory);
     }
+  },
+);
+
+test(
+  "a job whose tenant no longer exists is failed with a reason, and one whose tenant is not ready waits",
+  { skip },
+  async () => {
+    useTenantDirectory(withRetired);
+    const jobs = createJobWorker(appUrl);
+    const ran: string[] = [];
+    jobs.handle("tenant-gone-probe", (params) => {
+      ran.push(String((params as { name: string }).name));
+      return Promise.resolve("done");
+    });
+    await withTenant(retired, () => jobs.spawn("tenant-gone-probe", { name: "retired" }, "gone:1"));
+    await withTenant(waiting, () => jobs.spawn("tenant-gone-probe", { name: "waiting" }, "gone:1"));
+    const ids = async (key: string) =>
+      String((await rls.q("SELECT task_id::text AS id FROM absurd.t_jobs WHERE idempotency_key = $1", [key]))[0]?.id);
+    const gone = await ids(`tenant:${RETIRED}:gone:1`);
+    const later = await ids(`tenant:${WAITING}:gone:1`);
+    await jobs.start();
+    try {
+      await eventually(async () => (await absurdTask("jobs", gone))?.state === "failed", {
+        label: "the retired tenant's job was settled",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      await jobs.stop();
+      useTenantDirectory(directory);
+    }
+    assert.deepEqual(ran, []);
+    assert.deepEqual(await absurdTask("jobs", gone), {
+      state: "failed",
+      reason: `tenant ${RETIRED} no longer exists`,
+    });
+    assert.ok(["pending", "sleeping"].includes(String((await absurdTask("jobs", later))?.state)));
+  },
+);
+
+test(
+  "a turn whose tenant no longer exists is failed and cancelled, and one whose tenant is not ready waits",
+  { skip },
+  async () => {
+    useTenantDirectory(withRetired);
+    const seen: Seen[] = [];
+    const runner = createTurnRunner({
+      ledger,
+      orchestrator: recordingOrchestrator(seen),
+      queues: TURN_QUEUES,
+      slots: 2,
+      pollMs: 50,
+    });
+    const gone = await admit(retired, 0);
+    const later = await admit(waiting, 0);
+    const taskOf = async (t: Tenant, runId: string) =>
+      String(
+        (await withTenant(t, () => rls.q("SELECT absurd_task_id::text AS id FROM runs WHERE id = $1", [runId])))[0]?.id,
+      );
+    const goneTask = await taskOf(retired, gone.id);
+    const laterTask = await taskOf(waiting, later.id);
+    runner.start();
+    try {
+      await eventually(async () => (await absurdTask("turns_people", goneTask))?.state === "cancelled", {
+        label: "the retired tenant's turn task was settled",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      await runner.stopClaims();
+      useTenantDirectory(directory);
+    }
+    assert.ok(!seen.some((each) => each.runId === gone.id || each.runId === later.id));
+    assert.deepEqual(await absurdTask("turns_people", goneTask), {
+      state: "cancelled",
+      reason: `tenant ${RETIRED} no longer exists`,
+    });
+    assert.notEqual((await absurdTask("turns_people", laterTask))?.state, "cancelled");
   },
 );

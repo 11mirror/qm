@@ -113,6 +113,7 @@ async function servingMany(fn: () => Promise<void>): Promise<void> {
   useTenantDirectory({
     byHost: async () => undefined,
     active: async () => [tenant()],
+    exists: async () => true,
     watch() {},
     close: async () => {},
   });
