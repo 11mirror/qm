@@ -183,7 +183,7 @@ export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string
     ]);
     return true;
   } catch (error) {
-    if (!(await failedTask())) return false;
+    if (!(await failedTask().catch(() => task))) return false;
     throw error;
   }
 }

@@ -192,3 +192,21 @@ test("start opens members concurrently and keeps their order", { skip }, async (
   );
   assert.equal(peak, 4);
 });
+
+test("read_thread stops at a text budget and pages on", { skip }, async () => {
+  const w = world();
+  const coordinator = w.add("Coordinator");
+  await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });
+  const root = (await w.call(coordinator, { action: "post", text: "root" })).post as { id: string };
+  for (let i = 0; i < 6; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    await w.call(coordinator, { action: "post", replyTo: root.id, text: `${i}`.repeat(15_000) });
+  }
+  const first = await w.call(coordinator, { action: "read_thread", postId: root.id });
+  const page = first.posts as Array<{ text: string; cursor: number }>;
+  assert.equal(page.length, 5);
+  assert.equal(first.nextAfter, page.at(-1)!.cursor);
+  const rest = (await w.call(coordinator, { action: "read_thread", postId: root.id, after: first.nextAfter as number }))
+    .posts as Array<{ text: string }>;
+  assert.equal(rest.length, 2);
+});
