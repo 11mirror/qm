@@ -186,7 +186,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       attachments = r.attachments;
     } finally {
       if (provisioned) {
-        const used = await provisioned.catch(() => undefined);
+        const used = await provisioned.catch(() => undefined); // a failed provision already failed the attach
         if (used)
           await sandbox!.teardown(used, { keepWarm: true }).catch(swallowAs("reach: sandbox teardown", undefined));
       }

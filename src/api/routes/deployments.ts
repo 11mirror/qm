@@ -12,7 +12,7 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage, reportFailureAs, swallow, swallowAs } from "../../util/errors.ts";
+import { reportFailure, reportFailureAs, swallow, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { isTextualContentType, refusal, sendJson, verifySignedRoute } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
@@ -1147,7 +1147,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     ctx.res.writeHead(result.status, result.headers);
     ctx.res.end(result.body);
   } catch (e) {
-    console.error("[deploy-git] request failed:", errMessage(e));
+    reportFailure("deploy-git: request", e);
     return sendJson(ctx.res, 500, { error: "git_failed", message: "deployment git request failed" });
   }
 }
