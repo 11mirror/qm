@@ -1,5 +1,5 @@
-import { createApprovalRecords, type ApprovalRecords } from "../../src/core/approval-store.ts";
 import "../support/auto-fake-sprites.ts";
+import { createApprovalRecords, type ApprovalRecords } from "../../src/core/approval-store.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -702,4 +702,8 @@ test("pg items report which message timestamps a session already recorded", asyn
     ]);
     assert.equal((await store.recordedMessageTimestamps(session.id, [])).size, 0);
   });
+});
+
+test("released session migrations still match their pinned source checksums", () => {
+  assert.doesNotThrow(() => createPostgresSessionStore("postgres://migration-pin.invalid"));
 });

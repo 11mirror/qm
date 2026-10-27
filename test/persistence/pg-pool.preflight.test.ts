@@ -4,25 +4,24 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
-import { MEMORY_FACTS_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
-import { CONTRACT_MIGRATIONS } from "../src/persistence/contract-migrations.ts";
-import { withClient } from "./support/pg-client.ts";
+import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../../src/persistence/pg-pool.ts";
+import { MEMORY_FACTS_MIGRATIONS } from "../../src/memory/postgres-memory-service.ts";
+import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
+import { withClient } from "../support/pg-client.ts";
 
 // A refused migration run must leave the database exactly as it found it: no baseline adoption, no pending migration.
 
-const base = process.env.DATABASE_URL;
-const skip = base ? false : "set DATABASE_URL (a Postgres) to run the migration preflight tests";
+const base = process.env.DATABASE_URL!;
 const created: string[] = [];
 
 async function createDatabase(fixture?: string): Promise<string> {
   const name = `qm_preflight_${randomBytes(6).toString("hex")}`;
-  await withClient(base!, (client) => client.query(`CREATE DATABASE ${name}`));
+  await withClient(base, (client) => client.query(`CREATE DATABASE ${name}`));
   created.push(name);
-  const url = new URL(base!);
+  const url = new URL(base);
   url.pathname = `/${name}`;
   if (fixture) {
-    const sql = gunzipSync(readFileSync(new URL(`./fixtures/schema-baseline/${fixture}`, import.meta.url))).toString();
+    const sql = gunzipSync(readFileSync(new URL(`../fixtures/schema-baseline/${fixture}`, import.meta.url))).toString();
     await withClient(url.toString(), (client) => client.query(sql));
   }
   return url.toString();
@@ -45,13 +44,12 @@ const relation = (pool: pg.Pool, name: string) =>
   pool.query<{ r: string | null }>("SELECT to_regclass($1)::text AS r", [name]).then((r) => r.rows[0]!.r);
 
 after(async () => {
-  if (!base) return;
   for (const name of created) {
     await withClient(base, (client) => client.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
   }
 });
 
-test("a checksum mismatch refuses the run before any pending migration applies", { skip }, async () => {
+test("a checksum mismatch refuses the run before any pending migration applies", async () => {
   const url = await createDatabase();
   await withPool(url, async (pool) => {
     await applyPgMigrations(pool, [definePgMigration("test/preflight-a", ["CREATE TABLE preflight_a(x int)"])]);
@@ -69,7 +67,7 @@ test("a checksum mismatch refuses the run before any pending migration applies",
   });
 });
 
-test("a checksum mismatch refuses before the baseline is adopted", { skip }, async () => {
+test("a checksum mismatch refuses before the baseline is adopted", async () => {
   const url = await createDatabase("main-9be16d35.sql.gz");
   await withPool(url, async (pool) => {
     await pool.query(
@@ -89,7 +87,7 @@ test("a checksum mismatch refuses before the baseline is adopted", { skip }, asy
   });
 });
 
-test("an id defined twice with different statements refuses the run", { skip }, async () => {
+test("an id defined twice with different statements refuses the run", async () => {
   const url = await createDatabase();
   await withPool(url, async (pool) => {
     await assert.rejects(
@@ -103,76 +101,72 @@ test("an id defined twice with different statements refuses the run", { skip }, 
   });
 });
 
-test(
-  "memory text_hash: a database that ran the first release of 0002 reaches NOT NULL through 0003",
-  { skip },
-  async () => {
-    const url = await createDatabase();
-    const migrations = MEMORY_FACTS_MIGRATIONS.map((m) =>
-      definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
-    );
-    const current = migrations.find((m) => m.id === "memory/facts/0002-text-hash")!;
-    // memory/facts/0002-text-hash as the StyleUp line first released it (batch 17), which StyleUp databases recorded.
-    const firstRelease = [
-      "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
-      `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
+test("memory text_hash: a database that ran the first release of 0002 reaches NOT NULL through 0003", async () => {
+  const url = await createDatabase();
+  const migrations = MEMORY_FACTS_MIGRATIONS.map((m) =>
+    definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
+  );
+  const current = migrations.find((m) => m.id === "memory/facts/0002-text-hash")!;
+  // memory/facts/0002-text-hash as the StyleUp line first released it (batch 17), which StyleUp databases recorded.
+  const firstRelease = [
+    "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
+    `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
        BEGIN
          NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
          RETURN NEW;
        END $$`,
-      "DROP TRIGGER IF EXISTS memory_facts_text_hash ON memory_facts",
-      `CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON memory_facts
+    "DROP TRIGGER IF EXISTS memory_facts_text_hash ON memory_facts",
+    `CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON memory_facts
        FOR EACH ROW EXECUTE FUNCTION memory_facts_text_hash()`,
-      "UPDATE memory_facts SET text_hash = encode(sha256(convert_to(text, 'UTF8')), 'hex') WHERE text_hash IS NULL",
-    ];
-    assert.equal(pgMigrationChecksum(firstRelease), current.acceptedChecksums![0]);
-    await withPool(url, async (pool) => {
-      await applyPgMigrations(pool, []);
-      await pool.query(
-        "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'old', 'unknown', true, 1, 1)",
-      );
-      for (const statement of firstRelease) await pool.query(statement);
-      await pool.query("INSERT INTO qm_schema_migrations(id, checksum) VALUES ($1, $2)", [
-        current.id,
-        current.acceptedChecksums![0],
-      ]);
-      await pool.query("ALTER TABLE memory_facts DISABLE TRIGGER memory_facts_text_hash");
-      await pool.query(
-        "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'unhashed', 'unknown', true, 1, 1)",
-      );
-      await pool.query("ALTER TABLE memory_facts ENABLE TRIGGER memory_facts_text_hash");
+    "UPDATE memory_facts SET text_hash = encode(sha256(convert_to(text, 'UTF8')), 'hex') WHERE text_hash IS NULL",
+  ];
+  assert.equal(pgMigrationChecksum(firstRelease), current.acceptedChecksums![0]);
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(pool, []);
+    await pool.query(
+      "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'old', 'unknown', true, 1, 1)",
+    );
+    for (const statement of firstRelease) await pool.query(statement);
+    await pool.query("INSERT INTO qm_schema_migrations(id, checksum) VALUES ($1, $2)", [
+      current.id,
+      current.acceptedChecksums![0],
+    ]);
+    await pool.query("ALTER TABLE memory_facts DISABLE TRIGGER memory_facts_text_hash");
+    await pool.query(
+      "INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at) VALUES ('s', 'unhashed', 'unknown', true, 1, 1)",
+    );
+    await pool.query("ALTER TABLE memory_facts ENABLE TRIGGER memory_facts_text_hash");
 
-      const logged: string[] = [];
-      const log = console.log;
-      console.log = (...args: unknown[]) => void logged.push(args.join(" "));
-      try {
-        assert.equal(await applyPgMigrations(pool, migrations), 1);
-      } finally {
-        console.log = log;
-      }
-      const recorded = (await ledger(pool)).length - 1;
-      assert.deepEqual(
-        logged.filter((line) => line.startsWith("[pg] migration preflight ok")),
-        [
-          `[pg] migration preflight ok: 1 pending (${recorded} recorded); baseline already recorded; accepted an earlier checksum for memory/facts/0002-text-hash`,
-        ],
-      );
-      const rows = await ledger(pool);
-      assert.equal(rows.find((r) => r.id === current.id)?.checksum, current.acceptedChecksums![0]);
-      assert.ok(rows.some((r) => r.id === "memory/facts/0003-text-hash-not-null"));
-      const column = await pool.query(
-        "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'memory_facts' AND column_name = 'text_hash'",
-      );
-      assert.equal(column.rows[0].is_nullable, "NO");
-      assert.equal(
-        (await pool.query("SELECT count(*)::int AS n FROM memory_facts WHERE text_hash IS NULL")).rows[0].n,
-        0,
-      );
-    });
-  },
-);
+    const logged: string[] = [];
+    const log = console.log;
+    console.log = (...args: unknown[]) => void logged.push(args.join(" "));
+    try {
+      assert.equal(await applyPgMigrations(pool, migrations), 1);
+    } finally {
+      console.log = log;
+    }
+    const recorded = (await ledger(pool)).length - 1;
+    assert.deepEqual(
+      logged.filter((line) => line.startsWith("[pg] migration preflight ok")),
+      [
+        `[pg] migration preflight ok: 1 pending (${recorded} recorded); baseline already recorded; accepted an earlier checksum for memory/facts/0002-text-hash`,
+      ],
+    );
+    const rows = await ledger(pool);
+    assert.equal(rows.find((r) => r.id === current.id)?.checksum, current.acceptedChecksums![0]);
+    assert.ok(rows.some((r) => r.id === "memory/facts/0003-text-hash-not-null"));
+    const column = await pool.query(
+      "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'memory_facts' AND column_name = 'text_hash'",
+    );
+    assert.equal(column.rows[0].is_nullable, "NO");
+    assert.equal(
+      (await pool.query("SELECT count(*)::int AS n FROM memory_facts WHERE text_hash IS NULL")).rows[0].n,
+      0,
+    );
+  });
+});
 
-test("memory text_hash: a fresh database and a database on the current 0002 both end NOT NULL", { skip }, async () => {
+test("memory text_hash: a fresh database and a database on the current 0002 both end NOT NULL", async () => {
   const url = await createDatabase();
   const migrations = MEMORY_FACTS_MIGRATIONS.map((m) =>
     definePgMigration(m.id, m.statements, m.expectedChecksum, m.acceptedChecksums),
@@ -195,7 +189,7 @@ test("memory text_hash: a fresh database and a database on the current 0002 both
   });
 });
 
-test("a concurrent index build leaves the schema lock free for other migration runs", { skip }, async () => {
+test("a concurrent index build leaves the schema lock free for other migration runs", async () => {
   const url = await createDatabase();
   await withPool(url, async (pool) => {
     await applyPgMigrations(pool, [definePgMigration("test/cic-table", ["CREATE TABLE cic_target(x int)"])]);
@@ -234,7 +228,7 @@ test("a concurrent index build leaves the schema lock free for other migration r
   });
 });
 
-test("contract migrations are idempotent, before and after the drops they hold back", { skip }, async () => {
+test("contract migrations are idempotent, before and after the drops they hold back", async () => {
   const url = await createDatabase();
   const contract = CONTRACT_MIGRATIONS.map((m) => definePgMigration(m.id, m.statements));
   await withPool(url, async (pool) => {

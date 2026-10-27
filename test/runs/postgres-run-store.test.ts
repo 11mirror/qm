@@ -8,7 +8,7 @@ import type { Principal, TurnRequest } from "../../src/types.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import pg from "pg";
 
-const URL = process.env.DATABASE_URL!;
+const dbUrl = process.env.DATABASE_URL!;
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({
   actor,
@@ -244,12 +244,12 @@ test("pg run store: withdraw and claim cannot both win the same unstarted run", 
 });
 
 test("pg run store startup does not lock an already-migrated tool ledger", async () => {
-  const baseline = createPostgresRunStore(URL);
+  const baseline = createPostgresRunStore(dbUrl);
   await baseline.runs.activeSessionIds();
   const pg = (await import("pg")).default;
-  const reader = new pg.Client({ connectionString: URL });
+  const reader = new pg.Client({ connectionString: dbUrl });
   await reader.connect();
-  const reboot = createPostgresRunStore(URL);
+  const reboot = createPostgresRunStore(dbUrl);
   let initialization: Promise<unknown> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -276,9 +276,9 @@ test("pg run store startup does not lock an already-migrated tool ledger", async
 });
 
 test("pg run store indexes newest active run by session", async () => {
-  const { close } = createPostgresRunStore(URL);
+  const { close } = createPostgresRunStore(dbUrl);
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
+  const raw = new pg.Pool({ connectionString: dbUrl });
   try {
     const result = await raw.query(
       "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_runs_session_active_created'",
@@ -426,3 +426,6 @@ test(
     }
   },
 );
+test("released run migrations still match their pinned source checksums", () => {
+  assert.doesNotThrow(() => createPostgresRunStore("postgres://migration-pin.invalid"));
+});

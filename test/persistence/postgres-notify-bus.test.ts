@@ -4,7 +4,7 @@ import { mock, test } from "node:test";
 const started: string[][] = [];
 const pending: Array<() => void> = [];
 let closed = false;
-mock.module("../src/persistence/pg-pool.ts", {
+mock.module("../../src/persistence/pg-pool.ts", {
   namedExports: {
     createPgPool: () => ({
       query: (_sql: string, [payload]: string[][]) => {
@@ -17,7 +17,7 @@ mock.module("../src/persistence/pg-pool.ts", {
     }),
   },
 });
-const { createPostgresNotifyBus } = await import("../src/persistence/postgres-notify-bus.ts");
+const { createPostgresNotifyBus } = await import("../../src/persistence/postgres-notify-bus.ts");
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 test("notification publication preserves order without concurrent pool queries and drains on close", async () => {

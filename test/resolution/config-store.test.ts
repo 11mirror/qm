@@ -25,7 +25,7 @@ import { scopeId } from "../../src/types.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, failTableWrites } from "../support/test-database.ts";
 import { listenLocal } from "../support/listen-local.ts";
 
 function tables() {
@@ -602,4 +602,31 @@ test("clearing the org runtime keeps purpose runtimes and removes an empty row",
   await store.clearPurposeRuntime("cron");
   assert.equal(await rows.get(org), null);
   assert.equal(store.getRuntimeSelection(org), null);
+});
+
+const channel = scopeId("channel", "C1");
+
+test("a config write resolves only after another instance can read it from the store", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const writer = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore("default-org", { databaseUrl });
+
+  await writer.setSetting("orgAmbient", false);
+
+  assert.equal(await reader.settingDurable("orgAmbient"), false);
+});
+
+test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const config = testConfigStore("default-org", { databaseUrl });
+  await config.hydrate!();
+  await failTableWrites(databaseUrl, "egress_policies");
+
+  await assert.rejects(
+    config.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: [] }, channel),
+    /forced durable write failure/,
+  );
+
+  assert.equal(config.setting("egress", channel), null);
+  assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM egress_policies"), []);
 });

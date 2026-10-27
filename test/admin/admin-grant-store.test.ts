@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAdminGrantStore, grantKey } from "../../src/admin/admin-grant-store.ts";
+import {
+  createAdminGrantStore,
+  grantKey,
+  type AdminGrant,
+  type AdminGrantPersistence,
+} from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { scopeId } from "../../src/types.ts";
 
 test("grant store: add / list / revoke round-trip on (principal, scope, role)", async () => {
   const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()));
@@ -45,4 +51,31 @@ test("grantKey is stable and collision-free across the triple", () => {
   assert.equal(grantKey("U1", "org:default-org", "org_admin"), grantKey("U1", "org:default-org", "org_admin"));
   assert.notEqual(grantKey("U1", "org:default-org", "org_admin"), grantKey("U1", "org:other", "org_admin"));
   assert.notEqual(grantKey("U1", "org:default-org", "org_admin"), grantKey("U2", "org:default-org", "org_admin"));
+});
+
+test("admin grants: a failed seed is retried on the next call (rejection not cached)", async () => {
+  let failures = 1;
+  const rows: AdminGrant[] = [];
+  const persist: AdminGrantPersistence = {
+    async insertIfAbsent() {
+      throw new Error("not exercised");
+    },
+    async all() {
+      if (failures > 0) {
+        failures--;
+        throw new Error("transient pg failure");
+      }
+      return [...rows];
+    },
+    async put(g) {
+      rows.push(g);
+    },
+    async remove() {},
+  };
+  const store = createAdminGrantStore(persist, {
+    seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
+  });
+  await assert.rejects(() => store.list(), /transient pg failure/);
+  const listed = await store.list();
+  assert.equal(listed.length, 1, "second call re-runs seeding and lists the seeded grant");
 });

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type pg from "pg";
-import type { PersistedInstructions } from "../src/resolution/config-store.ts";
-import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
-import { migrate, skip, typedRows, withMigratedDatabase } from "./support/migrated-database.ts";
+import type { PersistedInstructions } from "../../src/resolution/config-store.ts";
+import { CONFIG_TABLES } from "../../src/resolution/config-tables.ts";
+import { migrate, skip, typedRows, withMigratedDatabase } from "../support/migrated-database.ts";
 
 const legacy = async (admin: pg.Pool, tenant: string | null) => {
   const tenantColumn = tenant ? "tenant_id UUID NOT NULL, " : "";

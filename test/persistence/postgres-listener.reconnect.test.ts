@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { settle } from "./support/settle.ts";
+import { settle } from "../support/settle.ts";
 
 class FakeClient extends EventEmitter {
   queries: string[] = [];
@@ -26,7 +26,7 @@ interface FakePool {
 }
 
 const pools = new Map<string, FakePool>();
-mock.module("../src/persistence/pg-pool.ts", {
+mock.module("../../src/persistence/pg-pool.ts", {
   namedExports: {
     createPgPool(url: string) {
       const pool = pools.get(url)!;
@@ -39,7 +39,7 @@ mock.module("../src/persistence/pg-pool.ts", {
     },
   },
 });
-const { subscribePostgresChannel } = await import("../src/persistence/postgres-listener.ts");
+const { subscribePostgresChannel } = await import("../../src/persistence/postgres-listener.ts");
 
 test("reconnect repeats LISTEN when the old client disconnects before its query continuation", async () => {
   const clients = [new FakeClient(), new FakeClient()];
