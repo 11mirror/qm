@@ -352,7 +352,7 @@ export function publishOps(
           grantees.map((g) => g.scope),
           d.createdInScope,
         );
-        const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
+        const urlBase = deps.publicWebUrl ?? "";
         const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
         const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
         return {

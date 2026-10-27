@@ -255,7 +255,7 @@ async function mintDrop(ctx: ApiCtx): Promise<RouteResult> {
     deps.capabilityTokenCompression,
   );
   const formPath = `/drop/${dropId}/form?t=${encodeURIComponent(linkToken)}`;
-  const base = (deps.portalUrl ?? deps.publicUrl)?.replace(/\/$/, "");
+  const base = deps.portalUrl ?? deps.publicUrl;
   return ok({ dropId, formPath, url: base ? `${base}${formPath}` : formPath });
 }
 

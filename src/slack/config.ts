@@ -70,7 +70,7 @@ export function slackPluginConfigFromEnv(
     ...opt("apiUrl", env.SLACK_API_URL),
     ...opt("signingSecret", env.SLACK_SIGNING_SECRET),
     ...opt("userToken", env.SLACK_USER_TOKEN),
-    ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
+    ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL?.trim().replace(/\/+$/, "")),
     ...opt("sharedServiceUrl", env.QM_SLACK_SERVICE_URL),
     ...opt("identityEmail", env.SLACK_IDENTITY_EMAIL),
     ...(() => {

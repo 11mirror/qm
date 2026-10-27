@@ -117,8 +117,7 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     userTokens: keychain,
     ...(config.publicWebUrl
       ? {
-          signInUrl: (id: string) =>
-            `${config.publicWebUrl!.replace(/\/$/, "")}/connect/${encodeURIComponent(id)}/self-connect`,
+          signInUrl: (id: string) => `${config.publicWebUrl!}/connect/${encodeURIComponent(id)}/self-connect`,
         }
       : {}),
   });

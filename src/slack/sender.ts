@@ -79,7 +79,7 @@ async function settle(op: () => Promise<unknown>, settledCodes: Set<string>, wha
 }
 
 function deliveryFooter(rt: SenderRuntime, d: Post): Array<Record<string, unknown>> {
-  const base = rt.webUiPublicUrl?.trim().replace(/\/+$/, "");
+  const base = rt.webUiPublicUrl;
   const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
   const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
   const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
@@ -258,7 +258,7 @@ async function postToPrincipal(rt: SenderRuntime, d: Post): Promise<PostReceipt 
         reason: commandApproval.reason ?? "Approval required",
         ...(rt.webUiPublicUrl && commandApproval.sessionId
           ? {
-              originUrl: `${rt.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
+              originUrl: `${rt.webUiPublicUrl}/s/${encodeURIComponent(commandApproval.sessionId)}`,
             }
           : {}),
       },

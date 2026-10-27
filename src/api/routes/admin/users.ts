@@ -72,7 +72,7 @@ export async function listUsers(ctx: ApiCtx): Promise<RouteResult> {
 }
 
 function signInUrlOf(deps: ApiCtx["deps"]): string | undefined {
-  return deps.portalUrl ? `${deps.portalUrl.replace(/\/+$/, "")}/auth/login` : undefined;
+  return deps.portalUrl ? `${deps.portalUrl}/auth/login` : undefined;
 }
 
 function endOfDayUtc(value: unknown): unknown {
@@ -165,14 +165,14 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<RouteResult> 
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
   authz.audit(teammate ? "user.invite" : action, email);
   const signInUrl = teammate
-    ? `${deps.portalUrl!.replace(/\/+$/, "")}/auth/invite#token=${encodeURIComponent(
+    ? `${deps.portalUrl!}/auth/invite#token=${encodeURIComponent(
         await mintSignedPayload(
           {
             purpose: "teammate-invite",
             inviteId: member.inviteId,
             email,
             org: scope,
-            aud: deps.portalUrl!.replace(/\/+$/, ""),
+            aud: deps.portalUrl!,
             iat: now,
             exp: now + 24 * 60 * 60 * 1000,
             jti: randomUUID(),

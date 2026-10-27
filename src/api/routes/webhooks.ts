@@ -84,7 +84,7 @@ const WEBHOOK_ERROR_STATUS: Record<string, number> = { bad_request: 400, forbidd
 
 function inboundUrl(publicBase: string | undefined, id: string): string {
   const incomingPath = `/v1/webhooks/incoming/${id}`;
-  return publicBase ? `${publicBase.replace(/\/$/, "")}${incomingPath}` : incomingPath;
+  return publicBase ? `${publicBase}${incomingPath}` : incomingPath;
 }
 
 async function listWebhooks(ctx: ApiCtx): Promise<RouteResult> {

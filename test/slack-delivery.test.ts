@@ -170,7 +170,6 @@ function fakeJoinClient(
 
 test("scopeSurfaceUrl builds the channel project deep link and degrades when unset", () => {
   assert.equal(scopeSurfaceUrl(WEB_BASE, "channel:C123"), `${WEB_BASE}/projects/channel/C123`);
-  assert.equal(scopeSurfaceUrl("https://x/web-ui/", "channel:C9"), "https://x/web-ui/projects/channel/C9");
   assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
   assert.equal(scopeSurfaceUrl("", "channel:C1"), undefined);
 });
@@ -901,7 +900,7 @@ test("surface header ensurer never edits a pinned message the bot does not own",
 });
 
 test("scopeSurfaceUrl deep-links each context to its own project page", () => {
-  assert.equal(scopeSurfaceUrl("https://claw.acme.dev/", "channel:C1"), "https://claw.acme.dev/projects/channel/C1");
+  assert.equal(scopeSurfaceUrl("https://claw.acme.dev", "channel:C1"), "https://claw.acme.dev/projects/channel/C1");
   assert.equal(
     scopeSurfaceUrl("https://claw.acme.dev", "personal:user.one@acme.dev"),
     "https://claw.acme.dev/projects/user.one",

@@ -74,7 +74,7 @@ export async function keychainApprovalOrigin(
     if (typeof result?.permalink === "string") return result.permalink;
   }
   if (!webUrl || !view.sessionId) return undefined;
-  const url = new URL(`${webUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(view.sessionId)}`);
+  const url = new URL(`${webUrl}/s/${encodeURIComponent(view.sessionId)}`);
   if (view.seq !== undefined) url.searchParams.set("seq", String(view.seq));
   return url.toString();
 }

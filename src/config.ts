@@ -837,8 +837,9 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
 }
 
 function loadTenantConfig(env: Env): TenantConfig {
-  const publicApiUrl = env.PUBLIC_API_URL;
-  const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
+  const publicApiUrl = env.PUBLIC_API_URL?.replace(/\/+$/, "");
+  const publicWebUrl = env.PUBLIC_WEB_URL?.replace(/\/+$/, "");
+  const publicUrl = publicWebUrl || publicApiUrl;
   const deployAppsDomain = deployAppsDomainEnv(env);
   const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
   const slack = slackPluginConfigFromEnv(env);
@@ -870,7 +871,7 @@ function loadTenantConfig(env: Env): TenantConfig {
       : {}),
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
     ...(publicUrl ? { publicUrl } : {}),
-    ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
+    ...(publicWebUrl ? { publicWebUrl } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     chatSurfaces: httpChatConfigsFromEnv(env),

@@ -46,7 +46,7 @@ export function buildAppServices(
   } = w;
 
   const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const recoveryAdminBase = config.publicWebUrl?.replace(/\/$/, "");
+  const recoveryAdminBase = config.publicWebUrl;
   const recoveryAdminUrlFor = recoveryAdminBase
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined

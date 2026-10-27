@@ -477,6 +477,6 @@ async function addConnectedApps(
   } catch (e) {
     swallow("orchestrator: connected-app status", e);
   }
-  const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
+  const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl}/keychain` : undefined;
   turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
 }

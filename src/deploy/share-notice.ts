@@ -27,8 +27,7 @@ export async function notifyDeploymentShared(
     const slug = d.name ?? d.id;
     const url = deps.deployAppsDomain
       ? `https://${slug}.${deps.deployAppsDomain}/`
-      : (publicUrlOf(d.endpoint) ??
-        (deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/+$/, "")}/d/${slug}/` : undefined));
+      : (publicUrlOf(d.endpoint) ?? (deps.publicWebUrl ? `${deps.publicWebUrl}/d/${slug}/` : undefined));
     await deps.outbound.send({
       destination: principalDestination(grantee.ref, by),
       text: `${by} gave you access to the app "${d.displayName ?? slug}"${permission === "write" ? " (you can also manage it)" : ""}.${url ? ` Open it: ${url}` : ""}`,

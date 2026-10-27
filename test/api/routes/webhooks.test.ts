@@ -86,7 +86,7 @@ test("register → list elides the secret; the inbound URL is returned", async (
 });
 
 test("with a public base configured, the inbound URL is ABSOLUTE (publicly reachable, not the 6PN api base)", async () => {
-  const srv = start(SECRET, "https://portal.example.com/");
+  const srv = start(SECRET, "https://portal.example.com");
   try {
     const body = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
