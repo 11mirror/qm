@@ -562,7 +562,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
     );
     let applied = 0;
     if (baseline !== "recorded") {
-      await upgradeToSchemaBaseline(client, chainPending, failure);
+      if (baseline === "upgrade") await upgradeToSchemaBaseline(client, chainPending, failure);
       await applySchemaBaseline(client, baseline);
       applied += chainPending.length + 1;
     }

@@ -253,6 +253,29 @@ test("a StyleUp database in its current shape migrates to the fresh schema", asy
   await upgradeMultitenant("styleup-c1dc52b8.sql.gz");
 });
 
+test("a tenantized database that lacks a folded migration keeps every tenant's tool calls through the chain", async () => {
+  const url = await createDatabase("styleup-323baddc.sql.gz");
+  const lacking = "durable-map/pinned_skills/0002-drop";
+  await withClient(url, async (client) => {
+    await client.query("SET qm.tenant_bypass = 'on'");
+    await client.query("DELETE FROM qm_schema_migrations WHERE id = $1", [lacking]);
+    const tenants = (await client.query<{ id: string }>("SELECT id FROM tenants ORDER BY id LIMIT 2")).rows;
+    for (const tenant of tenants) {
+      await client.query(
+        "INSERT INTO tool_calls(tenant_id, run_id, attempt, call_index, output, created_at) VALUES ($1, 'run-1', 1, 0, 'out', 1)",
+        [tenant.id],
+      );
+    }
+  });
+  await migrate(url, true);
+  const rows = await withClient(url, async (client) => {
+    await client.query("SET qm.tenant_bypass = 'on'");
+    return (await client.query("SELECT tenant_id FROM tool_calls WHERE run_id = 'run-1'")).rows;
+  });
+  assert.equal(rows.length, 2);
+  assert.ok((await ledgerIds(url)).has(lacking));
+});
+
 test("a pre-baseline migration recorded with another checksum refuses the run before anything is applied", async () => {
   const url = await createDatabase();
   const [first] = SCHEMA_BASELINE.chain.migrations;

@@ -48,7 +48,10 @@ without changing anything and runs only the later migrations. An older database,
 any earlier release including those before the `qm_schema_migrations` ledger, first
 runs the folded migrations it lacks, exactly as qm main 9be16d35 defined them
 (`src/persistence/schema-baseline-chain.json`, in the order that release applied
-them), then records `baseline/0001` and continues with the later migrations.
+them), then records `baseline/0001` and continues with the later migrations. On a
+database from before qm main moved session history into `items`, that first boot copies
+the whole history in one transaction and holds the migration lock until it finishes, so
+expect it to take a while on a large database.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those
