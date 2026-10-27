@@ -27,10 +27,7 @@ export type MemoryTidyProfile = ManagedCronClaim;
 
 const MEMORY_TIDY_PROFILES: TableSpec = { table: "memory_tidy_profiles", key: "id", columns: MANAGED_CRON_COLUMNS };
 
-export const MEMORY_TIDY_PROFILES_MIGRATION = mapToTableMigration(
-  "memory/tidy-profiles/0001-typed",
-  MEMORY_TIDY_PROFILES,
-);
+const MEMORY_TIDY_PROFILES_MIGRATION = mapToTableMigration("memory/tidy-profiles/0001-typed", MEMORY_TIDY_PROFILES);
 
 export function createMemoryTidyProfileStore(databaseUrl: string): ManagedCronProfiles<MemoryTidyProfile> {
   return managedCronProfiles(createPgPool(databaseUrl, [MEMORY_TIDY_PROFILES_MIGRATION]), MEMORY_TIDY_PROFILES);

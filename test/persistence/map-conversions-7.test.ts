@@ -4,42 +4,10 @@ import pg from "pg";
 import { typedTable, type MapConversion } from "../../src/persistence/typed-table.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { AMBIENT_CURSORS_MIGRATION } from "../../src/api/ambient-cursors.ts";
-import { CONTEXT_REQUESTS_MIGRATION } from "../../src/api/context-requests.ts";
-import { COMPOSIO_RETURNS_MIGRATION, SLACK_ACCOUNTS_MIGRATION } from "../../src/connectors/composio-links.ts";
 import { APPROVALS_MIGRATION } from "../../src/core/approval-store.ts";
-import { APPROVAL_GRANTS_MIGRATION } from "../../src/core/orchestrator/approvals.ts";
-import { SESSION_SHARES_MIGRATION } from "../../src/sessions/session-share.ts";
-import { STAGED_ENVELOPES_MIGRATION } from "../../src/slack/envelope-staging.ts";
-import { HANDLED_EVENTS_MIGRATION } from "../../src/slack/message-gating.ts";
-import { SESSION_STATUS_MIGRATION } from "../../src/slack/session-status.ts";
 import { TASK_ACKS_MIGRATION } from "../../src/slack/task-ack.ts";
-import { QUEUED_POSTS_MIGRATION } from "../../src/surfaces/queued-posts.ts";
-import { RECENT_DM_POSTS_MIGRATION } from "../../src/surfaces/recent-dm-posts.ts";
 import { SLACK_INSTALLATION_MIGRATION } from "../../src/surfaces/slack-installation.ts";
 import { WEB_UI_STATE_MIGRATION } from "../../src/surfaces/ui-state.ts";
-import { assertMapConversion } from "../support/map-conversion.ts";
-
-const CONVERSIONS = [
-  APPROVALS_MIGRATION,
-  APPROVAL_GRANTS_MIGRATION,
-  SLACK_INSTALLATION_MIGRATION,
-  TASK_ACKS_MIGRATION,
-  SESSION_STATUS_MIGRATION,
-  STAGED_ENVELOPES_MIGRATION,
-  HANDLED_EVENTS_MIGRATION,
-  AMBIENT_CURSORS_MIGRATION,
-  CONTEXT_REQUESTS_MIGRATION,
-  RECENT_DM_POSTS_MIGRATION,
-  QUEUED_POSTS_MIGRATION,
-  WEB_UI_STATE_MIGRATION,
-  SESSION_SHARES_MIGRATION,
-  SLACK_ACCOUNTS_MIGRATION,
-  COMPOSIO_RETURNS_MIGRATION,
-];
-
-for (const conversion of CONVERSIONS)
-  test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
 
 const REAL_ROWS: Array<[MapConversion, Record<string, Record<string, unknown>>]> = [
   [

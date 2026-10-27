@@ -66,7 +66,7 @@ const CONVERSION_OPTIONS: Partial<Record<ConfigTableName, Parameters<typeof mapT
   },
 };
 
-export const CONFIG_TABLE_MIGRATIONS: readonly MapConversion[] = (
+const CONFIG_TABLE_MIGRATIONS: readonly MapConversion[] = (
   Object.entries(CONFIG_TABLES) as [ConfigTableName, TableSpec][]
 ).map(([name, spec]) => mapToTableMigration(`typed/config/${spec.table}/0001`, spec, CONVERSION_OPTIONS[name]));
 

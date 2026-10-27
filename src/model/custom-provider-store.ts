@@ -33,7 +33,7 @@ const CUSTOM_PROVIDERS: TableSpec = {
     updatedAt bigint!, updatedBy text!`),
 };
 
-export const CUSTOM_PROVIDERS_MIGRATION = mapToTableMigration("model/custom-providers/0001-typed", CUSTOM_PROVIDERS);
+const CUSTOM_PROVIDERS_MIGRATION = mapToTableMigration("model/custom-providers/0001-typed", CUSTOM_PROVIDERS);
 
 function strip(saved: StoredCustomProvider): CustomProviderSpec {
   return {

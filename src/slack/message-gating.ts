@@ -169,7 +169,7 @@ const HANDLED_EVENTS: TableSpec = {
   columns: { at: { type: "bigint", required: true } },
 };
 
-export const HANDLED_EVENTS_MIGRATION = mapToTableMigration("slack/handled-events/0001-typed", HANDLED_EVENTS, {
+const HANDLED_EVENTS_MIGRATION = mapToTableMigration("slack/handled-events/0001-typed", HANDLED_EVENTS, {
   statements: [`CREATE INDEX IF NOT EXISTS slack_handled_events_at ON slack_handled_events (at)`],
 });
 

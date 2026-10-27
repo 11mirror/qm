@@ -56,7 +56,7 @@ const FEATURE_FLAGS: TableSpec = {
   columns: cols(`enabledScopes text[]!, updatedAt bigint!, updatedBy text!`),
 };
 
-export const FEATURE_FLAGS_MIGRATION = mapToTableMigration("feature-flags/store/0001-typed", FEATURE_FLAGS);
+const FEATURE_FLAGS_MIGRATION = mapToTableMigration("feature-flags/store/0001-typed", FEATURE_FLAGS);
 
 export function createFeatureFlagStore(databaseUrl: string, opts: { now?: () => number } = {}): FeatureFlagStore {
   const now = opts.now ?? Date.now;

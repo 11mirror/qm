@@ -38,10 +38,7 @@ const CONNECTOR_STATUS: TableSpec = {
   columns: cols(`checkedAt bigint!, providers jsonb!`),
 };
 
-export const CONNECTOR_STATUS_MIGRATION = mapToTableMigration(
-  "credentials/connector-status/0001-typed",
-  CONNECTOR_STATUS,
-);
+const CONNECTOR_STATUS_MIGRATION = mapToTableMigration("credentials/connector-status/0001-typed", CONNECTOR_STATUS);
 
 export function createConnectorStatusCache(databaseUrl: string): ConnectorStatusCache {
   const table = typedTable<ConnectorStatusRecord>(

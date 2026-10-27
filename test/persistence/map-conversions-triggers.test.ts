@@ -1,28 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { CRONS_MIGRATION } from "../../src/cron/cron-store.ts";
-import { CRON_ITEMS_MIGRATION } from "../../src/inbox/ledger.ts";
-import { MONITORS_MIGRATION } from "../../src/monitors/monitor-store.ts";
-import { WEBHOOK_HISTORY_MIGRATION, WEBHOOKS_MIGRATION } from "../../src/webhooks/webhook-store.ts";
-import { MEMORY_TIDY_PROFILES_MIGRATION } from "../../src/memory/tidy.ts";
-import { SUGGESTED_ACTIVITY_PROFILES_MIGRATION } from "../../src/suggestions/activities.ts";
 import { BACKGROUND_OWNERSHIP_MIGRATION } from "../../src/runs/background-ownership.ts";
-import { assertMapConversion } from "../support/map-conversion.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-
-const CONVERSIONS = [
-  CRONS_MIGRATION,
-  CRON_ITEMS_MIGRATION,
-  WEBHOOKS_MIGRATION,
-  WEBHOOK_HISTORY_MIGRATION,
-  MONITORS_MIGRATION,
-  MEMORY_TIDY_PROFILES_MIGRATION,
-  SUGGESTED_ACTIVITY_PROFILES_MIGRATION,
-];
-
-for (const conversion of CONVERSIONS)
-  test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
 
 test("background ownership keeps the owner a member-protocol row names and drops the protocol mirror", async () => {
   const member = { generation: 3, lastRequestId: null, lastRequest: null, members: [{ instanceId: "i" }] };

@@ -55,7 +55,7 @@ const MONITORS: TableSpec = {
   },
 };
 
-export const MONITORS_MIGRATION = mapToTableMigration("triggers/monitors/0001-typed", MONITORS);
+const MONITORS_MIGRATION = mapToTableMigration("triggers/monitors/0001-typed", MONITORS);
 
 export function createMonitorStore(databaseUrl: string): MonitorStore {
   const db = createPgPool(databaseUrl, [MONITORS_MIGRATION, ownerIndexMigration("monitors")]);

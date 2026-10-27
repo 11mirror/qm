@@ -11,7 +11,7 @@ const CONTEXT_REQUESTS: TableSpec = {
     sealedViewerToken text`),
 };
 
-export const CONTEXT_REQUESTS_MIGRATION = mapToTableMigration("api/context-requests/0001-typed", CONTEXT_REQUESTS);
+const CONTEXT_REQUESTS_MIGRATION = mapToTableMigration("api/context-requests/0001-typed", CONTEXT_REQUESTS);
 
 export type ContextOutcome = { status: "done"; result: SurfaceContextResult } | { status: "failed"; error: string };
 

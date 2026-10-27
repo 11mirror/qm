@@ -44,7 +44,7 @@ export const KEYCHAIN_CREDENTIALS_MIGRATION = mapToTableMigration(
   },
 );
 
-export const KEYCHAIN_GRANTS_MIGRATION = mapToTableMigration("credentials/keychain/0002-typed-grants", GRANTS, {
+const KEYCHAIN_GRANTS_MIGRATION = mapToTableMigration("credentials/keychain/0002-typed-grants", GRANTS, {
   statements: [
     `CREATE INDEX IF NOT EXISTS keychain_grants_owner_fold ON keychain_grants (lower(owner_id))`,
     `CREATE INDEX IF NOT EXISTS keychain_grants_audience ON keychain_grants (audience_scope_id)`,
@@ -52,7 +52,7 @@ export const KEYCHAIN_GRANTS_MIGRATION = mapToTableMigration("credentials/keycha
   ],
 });
 
-export const KEYCHAIN_ASKS_MIGRATION = mapToTableMigration("credentials/keychain/0003-typed-asks", ASKS);
+const KEYCHAIN_ASKS_MIGRATION = mapToTableMigration("credentials/keychain/0003-typed-asks", ASKS);
 
 const OWNED_BY = `(lower(owner_id) = ANY($1::text[]) OR owner_id ~ '[^\\x01-\\x7f]')`;
 

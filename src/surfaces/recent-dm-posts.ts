@@ -19,7 +19,7 @@ const RECENT_DM_POSTS: TableSpec = {
   columns: { posts: { type: "jsonb", required: true } },
 };
 
-export const RECENT_DM_POSTS_MIGRATION = mapToTableMigration("surfaces/recent-dm-posts/0001-typed", RECENT_DM_POSTS);
+const RECENT_DM_POSTS_MIGRATION = mapToTableMigration("surfaces/recent-dm-posts/0001-typed", RECENT_DM_POSTS);
 
 export function createRecentDmPosts(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [RECENT_DM_POSTS_MIGRATION]);

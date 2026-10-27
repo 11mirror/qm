@@ -34,7 +34,7 @@ const SESSION_SHARES: TableSpec = {
     messages jsonb!, files jsonb!`),
 };
 
-export const SESSION_SHARES_MIGRATION = mapToTableMigration("sessions/shares/0001-typed", SESSION_SHARES);
+const SESSION_SHARES_MIGRATION = mapToTableMigration("sessions/shares/0001-typed", SESSION_SHARES);
 
 export function createSessionShareStore(databaseUrl: string) {
   const table = typedTable<SessionShare>(createPgPool(databaseUrl, [SESSION_SHARES_MIGRATION]), SESSION_SHARES);

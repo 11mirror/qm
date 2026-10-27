@@ -54,7 +54,7 @@ const SKILL_PACKS: TableSpec = {
     createdAt bigint!, lastImport jsonb, updateAvailable boolean, available bigint`),
 };
 
-export const SKILL_PACKS_MIGRATION = mapToTableMigration("skills/packs/0001-typed", SKILL_PACKS);
+const SKILL_PACKS_MIGRATION = mapToTableMigration("skills/packs/0001-typed", SKILL_PACKS);
 
 const FIELDS = Object.keys(SKILL_PACKS.columns);
 

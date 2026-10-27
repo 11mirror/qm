@@ -32,7 +32,7 @@ const IDEMPOTENCY: TableSpec = {
   columns: cols(`at bigint!, claim text`),
 };
 
-export const IDEMPOTENCY_MIGRATION = mapToTableMigration("idempotency/store/0001-typed", IDEMPOTENCY, {
+const IDEMPOTENCY_MIGRATION = mapToTableMigration("idempotency/store/0001-typed", IDEMPOTENCY, {
   statements: [`CREATE INDEX IF NOT EXISTS idempotency_at ON idempotency (at)`],
 });
 

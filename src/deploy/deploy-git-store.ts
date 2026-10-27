@@ -50,7 +50,7 @@ export interface DeployGitArchive {
   updatedAt: number;
 }
 
-export const DEPLOY_GIT_REPOS_MIGRATION = deploymentKeyedTable(
+const DEPLOY_GIT_REPOS_MIGRATION = deploymentKeyedTable(
   "deploy_git_repos",
   cols(`bundleB64 text, blobKey text, etag text!, updatedAt bigint!`),
 );

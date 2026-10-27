@@ -94,7 +94,7 @@ const PROJECTS: TableSpec = {
     slackChannel jsonb, createdAt bigint!, updatedAt bigint!`),
 };
 
-export const PROJECTS_MIGRATION = mapToTableMigration("projects/store/0001-typed", PROJECTS, {
+const PROJECTS_MIGRATION = mapToTableMigration("projects/store/0001-typed", PROJECTS, {
   statements: [`CREATE INDEX IF NOT EXISTS projects_org ON projects (org_id)`],
 });
 

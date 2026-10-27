@@ -136,7 +136,7 @@ const APPROVAL_GRANTS: TableSpec = {
   columns: cols(`actorId text!, command text!, scope text!, createdAt bigint!, sessionId text, approvalKey text`),
 };
 
-export const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {
+const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {
   statements: [`CREATE INDEX IF NOT EXISTS approval_grants_actor ON approval_grants (lower(btrim(actor_id)))`],
 });
 

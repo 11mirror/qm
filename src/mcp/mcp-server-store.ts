@@ -59,7 +59,7 @@ const MCP_SERVERS: TableSpec = {
     updatedBy text!`),
 };
 
-export const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
+const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
 
 export function createMcpServerStore(databaseUrl: string): McpServerStore {
   const table = typedTable<McpServer>(createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION]), MCP_SERVERS);

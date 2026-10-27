@@ -47,7 +47,7 @@ const SECRET_DROPS: TableSpec = {
     threadRef text, requiresToken boolean, createdAt bigint!`),
 };
 
-export const SECRET_DROPS_MIGRATION = mapToTableMigration("credentials/secret-drops/0001-typed", SECRET_DROPS);
+const SECRET_DROPS_MIGRATION = mapToTableMigration("credentials/secret-drops/0001-typed", SECRET_DROPS);
 
 export function createSecretDropStore(
   databaseUrl: string,

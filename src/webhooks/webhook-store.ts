@@ -67,7 +67,7 @@ export const WEBHOOKS_MIGRATION = mapToTableMigration("triggers/webhooks/0001-ty
   ],
 });
 
-export const WEBHOOK_HISTORY_MIGRATION = mapToTableMigration("triggers/webhook-history/0001-typed", WEBHOOK_HISTORY);
+const WEBHOOK_HISTORY_MIGRATION = mapToTableMigration("triggers/webhook-history/0001-typed", WEBHOOK_HISTORY);
 
 const NEWEST_FIRST = `(e->>'receivedAt')::float8 DESC, e->>'deliveryId'`;
 
