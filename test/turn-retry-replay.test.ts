@@ -7,7 +7,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
@@ -27,6 +26,7 @@ import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limite
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testRunStore } from "./support/turns.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -78,7 +78,7 @@ function buildScenario(interruptAfterToolResult = false) {
     },
   });
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));

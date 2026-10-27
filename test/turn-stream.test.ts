@@ -105,7 +105,7 @@ test("markReplyDone flags the reply as final independently of the run lifecycle"
 });
 
 test("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -126,7 +126,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
 });
 
 test("a queued tool-using run surfaces its activity + timings via getRun()", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   built.runtime.start();
@@ -154,7 +154,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
 });
 
 test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -229,7 +229,7 @@ test("surfacePosted: false until marked, then sticky for the run", () => {
 });
 
 test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -251,7 +251,7 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
 });
 
 test("a harvested first block is stripped from the final reply (never shown twice)", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({
@@ -271,7 +271,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
 });
 
 test("a long first block is harvested too (no length gate) and stripped from the reply", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const long = "x".repeat(400);
@@ -295,7 +295,7 @@ test("a long first block is harvested too (no length gate) and stripped from the
 });
 
 test("a non-slack surface never strips the first block from the reply", async () => {
-  const built = buildApp(testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 }));
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({

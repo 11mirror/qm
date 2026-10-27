@@ -12,17 +12,13 @@ import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { RUN_MAX_AGE_MS } from "./runs/reaper.ts";
+import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
 import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import {
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -106,7 +102,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
-  runStore: "memory" | "postgres";
   seedSkills: boolean;
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
@@ -120,7 +115,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   memoryCapture: MemoryCaptureMode;
   memoryCaptureQuietMs: number;
   workers: number;
-  leaseTtlMs: number;
   reaperIntervalMs: number;
   shutdownDrainMs: number;
   maxAttempts: number;
@@ -472,7 +466,6 @@ export const CONFIG_DEFAULTS = {
   turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
   workers: 16,
-  leaseTtlMs: 120_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 30_000,
   maxAttempts: 3,
@@ -590,16 +583,6 @@ function modelProviderEnvStrict(env: Env): ModelProvider | undefined {
   return declared;
 }
 
-function resolveStoreKinds(env: Env): Pick<Config, "runStore"> {
-  const runStore = env.RUN_STORE === "memory" ? "memory" : "postgres";
-  if (env.NODE_ENV === "production" && runStore === "memory") {
-    throw new Error(
-      "production requires a Postgres run store (got RUN_STORE=memory): in-memory runs are lost on restart and invisible to other instances.",
-    );
-  }
-  return { runStore };
-}
-
 /**
  * Source requests, capability tokens, portal identity and connector keys each sign with their own secret, so a
  * surface holding one cannot forge another. Whenever source signing or portal identity is on, all three are required.
@@ -676,7 +659,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     enforcePortalIdentity: env.NODE_ENV === "production" || env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
   });
   const modelProvider = modelProviderEnvStrict(env);
-  const { runStore } = resolveStoreKinds(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !deployAppsDomain) {
     console.warn(
@@ -858,7 +840,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     memoryRecall: DEFAULT_MEMORY_POLICY.recall,
     memoryCapture: DEFAULT_MEMORY_POLICY.capture,
     memoryCaptureQuietMs: DEFAULT_CAPTURE_QUIET_MS,
-    leaseTtlMs: CONFIG_DEFAULTS.leaseTtlMs,
     reaperIntervalMs: CONFIG_DEFAULTS.reaperIntervalMs,
     maxAttempts: CONFIG_DEFAULTS.maxAttempts,
     approvalSummaryTimeoutMs: CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
@@ -868,7 +849,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     capabilityTokenCompression: e.CAPABILITY_TOKEN_COMPRESSION ?? false,
     requireSignedPortalIdentity: e.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     layerEnv: { ...env },
-    runStore,
     filesDirectUploadsEnabled: e.FILES_DIRECT_UPLOADS_ENABLED ?? false,
     deployGitDir: join(dataDir, "deploy-git"),
     cronFireConcurrency: e.CRON_FIRE_CONCURRENCY ?? CONFIG_DEFAULTS.cronFireConcurrency,

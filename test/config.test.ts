@@ -50,11 +50,6 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   );
 });
 
-test("run store defaults to postgres and accepts memory", () => {
-  assert.equal(loadConfig({}).runStore, "postgres");
-  assert.equal(loadConfig({ RUN_STORE: "memory" }).runStore, "memory");
-});
-
 test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.equal(loadConfig({}).deployProvider, "docker");
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "fly" }), /DEPLOY_PROVIDER="fly" is not recognized/);
@@ -175,17 +170,13 @@ test("sandbox backend is parsed once before production backend guards", () => {
   );
 });
 
-test("production refuses to boot without Postgres or on an in-memory run store", () => {
+test("production refuses to boot without Postgres", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
     () => loadConfig(noDatabase),
     /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
   );
-  assert.throws(
-    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
-    /production requires a Postgres run store/,
-  );
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(() => loadConfig(productionEnv));
   assert.doesNotThrow(
     () => loadConfig({ SANDBOX_BACKEND: "local" }),
     "a single-process dev instance needs no durable store",

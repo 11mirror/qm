@@ -1,7 +1,6 @@
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../src/subagents/session-tools.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
@@ -11,6 +10,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testRunStore } from "./support/turns.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -28,7 +28,7 @@ interface Rig {
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   const signals = createMemoryRunSignalStore();
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();

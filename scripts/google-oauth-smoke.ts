@@ -163,7 +163,6 @@ const built = buildApp({
   port: corePort,
   dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
   orgId,
-  runStore: "memory",
 });
 await built.start();
 const core = createServer(built.app, {

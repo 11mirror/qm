@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { runLeaseHeld, type RunStore } from "../runs/run-store.ts";
+import type { RunStore } from "../runs/run-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
@@ -56,7 +56,7 @@ export async function currentExternalSlackRun(
     run.attempts !== claims.runAttempt ||
     run.sessionId !== claims.threadRef ||
     !samePerson(run.request.actor.id, claims.actorId) ||
-    !(await runLeaseHeld(deps.runs!, run, claims.runLeaseToken)) ||
+    !(await deps.runs!.leaseHeld(run, claims.runLeaseToken)) ||
     !run.request.externalSlack ||
     !externalSlackRequestAllowed({ ...run.request, surface: run.request.surface ?? "" }, deps.externalSlackPolicies) ||
     conversationScope(run.request.conversation, run.request.actor.id) !== claims.scopeId

@@ -9,6 +9,8 @@ import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprit
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { failedTurn } from "./support/orchestrator-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -45,7 +47,7 @@ function acmecliBrokeredLayer(binary?: string, approvals?: Array<{ pattern: stri
 const actor = { externalId: "U_ENV_BROKER" };
 test("role broker vends only for explicitly selected scoped execution", async () => {
   let assumes = 0;
-  const built = buildApp(
+  const built = buildTestApp(
     testConfig({
       signingSecret: "legacy-selected-signing",
       deploymentLayerDir: acmecliBrokeredLayer(),
@@ -78,8 +80,14 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 0);
-  await assert.rejects(
-    run(`!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`),
+  await failedTurn(
+    built,
+    {
+      surface: "slack",
+      actor,
+      conversation,
+      text: `!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+    },
     /requires scope:scoped/,
   );
   assert.equal(assumes, 0);

@@ -572,7 +572,6 @@ test("AWS environment derives identity, public URLs and private wiring", () => {
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
   assert.equal(core.SANDBOX_BACKEND, "sprites");
-  assert.equal(core.RUN_STORE, "postgres");
   assert.equal(core.S3_REGION, "us-west-2");
   assert.equal(core.DEPLOY_PROVIDER, "aws");
   assert.equal(core.AWS_DEPLOY_REGION, "us-west-2");
@@ -682,12 +681,12 @@ test("AWS required runtime settings cannot be overridden by config env", () => {
       ...config.env,
       core: {
         ...config.env.core,
-        RUN_STORE: "memory",
+        S3_REGION: "eu-west-1",
       },
     },
   };
   const core = serviceEnvironment(overridden, "core");
-  assert.equal(core.RUN_STORE, "postgres");
+  assert.equal(core.S3_REGION, "us-west-2");
   assert.equal(core.SANDBOX_BACKEND, "sprites");
 });
 

@@ -216,21 +216,19 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     }
     const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
     const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
-    const absurdParent = inFlight.every((turn) => turn.engine === "absurd");
     const sharedWake = inFlight.some(
       (turn) =>
         turn.status === "queued" &&
         turn.request.wakeCause === "child_done" &&
         turn.request.actor.id === prepared.actor.id,
     );
-    if (inFlight.length && !absurdParent) return false;
     if (sharedWake) {
       await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
       return false;
     }
     const wake =
       "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    const { run: woken } = await deps.runs.enqueue({
+    await deps.runs.enqueue({
       sessionId: parent.threadRef,
       dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
       request: {
@@ -244,7 +242,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       },
       maxAttempts: deps.maxAttempts,
     });
-    if (woken.engine === "absurd") await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
+    await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
     return false;
   }
   return true;

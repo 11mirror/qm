@@ -324,7 +324,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
             if (fb?.closed) signalFirstBlock(fb.text);
-            const mark = `${run.status}:${run.attempts}:${run.leaseExpiresAt ?? ""}`;
+            const mark = `${run.status}:${run.attempts}`;
             if (mark !== lastMark) {
               lastMark = mark;
               lastProgressAt = Date.now();

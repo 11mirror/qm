@@ -6,18 +6,22 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { Principal, TurnRequest } from "../src/types.ts";
+import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
   return buildApp(testConfig({ dataDir }));
 }
 
-const actor = { externalId: "U1" };
-function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+/** A listed session with no turn run yet, so the app's turn runner stays idle and tests can claim by hand. */
+async function chat(sessions: ReturnType<typeof freshApp>["sessions"], threadRef: string): Promise<string> {
+  const session = await sessions.getOrCreateByThread(threadRef, "dm", "personal:U1");
+  await sessions.addParticipant(session.id, "U1");
+  await sessions.updateTitle(session.id, threadRef);
+  return session.id;
 }
 
 function enqueueRequest(): OrchestratorInput {
@@ -31,14 +35,12 @@ function enqueueRequest(): OrchestratorInput {
 }
 
 test("listSessions flags a session with an in-flight turn as working", async () => {
-  const { app, runs } = freshApp();
+  const { app, runs, sessions } = freshApp();
 
-  await app.turn(dm("Just a question", "web:U1:idle"));
+  await chat(sessions, "web:U1:idle");
 
   const busyThread = "web:U1:busy";
-  const busy = await app.turn(dm("Kick something off", busyThread));
-  const busyId = busy.sessionId!;
-  assert.ok(busyId);
+  const busyId = await chat(sessions, busyThread);
   assert.notEqual(busyId, busyThread, "session UUID and threadRef are distinct (the trap)");
   await runs.enqueue({ sessionId: busyThread, request: enqueueRequest() });
 
@@ -52,16 +54,16 @@ test("listSessions flags a session with an in-flight turn as working", async () 
 });
 
 test("the working flag clears once the in-flight run settles", async () => {
-  const { app, runs } = freshApp();
+  const { app, runs, sessions, turnLedger } = freshApp();
   const thread = "web:U1:settle";
-  await app.turn(dm("start", thread));
+  await chat(sessions, thread);
   await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
 
   assert.equal((await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working, true);
 
-  const claimed = await runs.claim("w1", 5_000);
-  assert.equal(claimed?.sessionId, thread, "the run is keyed by threadRef");
-  await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "ok", reply: "done" });
+  const claimed = await claimTurn(turnLedger);
+  assert.equal(claimed?.run.sessionId, thread, "the run is keyed by threadRef");
+  await finishTurn(claimed!, { status: "ok", reply: "done" });
 
   assert.ok(
     !(await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working,
@@ -70,26 +72,26 @@ test("the working flag clears once the in-flight run settles", async () => {
 });
 
 test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async () => {
-  const { app, runs, sessions } = freshApp();
-  const parent = await app.turn(dm("parent", "web:U1:parent"));
-  const child = await app.turn(dm("child", "web:U1:child"));
-  const loose = await app.turn(dm("loose", "web:U1:loose"));
-  await sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const { app, runs, sessions, turnLedger } = freshApp();
+  const parent = await chat(sessions, "web:U1:parent");
+  const child = await chat(sessions, "web:U1:child");
+  const loose = await chat(sessions, "web:U1:loose");
+  await sessions.setParentSession(child, parent);
 
   for (const thread of ["web:U1:child", "web:U1:loose"]) {
     await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
-    const claimed = await runs.claim("w1", 5_000);
-    await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
+    const claimed = await claimTurn(turnLedger);
+    await finishTurn(claimed!, { status: "failed", reason: "boom" });
   }
 
   const list = await app.listSessions("U1");
-  assert.equal(list.find((s) => s.id === child.sessionId)?.lastTurnFailed, true);
-  assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
+  assert.equal(list.find((s) => s.id === child)?.lastTurnFailed, true);
+  assert.ok(!list.find((s) => s.id === loose)?.lastTurnFailed, "only subagents carry the flag");
 
   await runs.enqueue({ sessionId: "web:U1:child", request: enqueueRequest() });
-  const retry = await runs.claim("w1", 5_000);
-  await runs.complete(retry!.id, retry!.leaseToken ?? "", { status: "ok", reply: "fine" });
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
+  const retry = await claimTurn(turnLedger);
+  await finishTurn(retry!, { status: "ok", reply: "fine" });
+  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child)?.lastTurnFailed);
 });
 
 test("sidebar batches visible goals from the session rows and drops inactive ones", async () => {

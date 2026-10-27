@@ -112,7 +112,6 @@ export const CORE_ENV_NAMES: readonly string[] = [
   "REACH_EXEC",
   "REQUIRE_SIGNED_PORTAL_IDENTITY",
   "RESEND_API_KEY",
-  "RUN_STORE",
   "S3_BUCKET",
   "S3_PREFIX",
   "S3_REGION",

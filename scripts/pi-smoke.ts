@@ -15,7 +15,6 @@ const built = buildApp({
   ...loadConfig(),
   port: 0,
   dataDir: mkdtempSync(join(tmpdir(), "pi-smoke-")),
-  runStore: "memory",
 });
 await built.start();
 const { app } = built;

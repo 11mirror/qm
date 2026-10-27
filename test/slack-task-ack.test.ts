@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testMap } from "./support/test-database.ts";
+import { completeTurn, testRunStore } from "./support/turns.ts";
 
 function setup() {
   const store = testMap<TaskAckState>();
@@ -138,7 +138,7 @@ test("reconciliation retries a persisted move without another incoming message",
 for (const reply of ["owed", "posted-by-turn", "silent"] as const) {
   test(`restart clears a finished task's acknowledgement only once its reply is out, reply=${reply}`, async () => {
     const { client, manager, store, events } = setup();
-    const { runs } = createMemoryRunStore();
+    const { runs, ledger } = testRunStore();
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({
       sessionId: "task-session",
@@ -156,13 +156,7 @@ for (const reply of ["owed", "posted-by-turn", "silent"] as const) {
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
-    const claimed = await runs.claimById(run.id, "test", 10000);
-    assert.ok(claimed);
-    await runs.complete(
-      run.id,
-      claimed.leaseToken!,
-      reply === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
-    );
+    await completeTurn(ledger, run.id, reply === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" });
     if (reply === "owed") {
       await restarted.reconcile(client);
       assert.equal((await store.get(run.id))?.finished, false, "the run's reply has not been posted yet");

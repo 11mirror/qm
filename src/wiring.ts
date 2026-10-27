@@ -277,16 +277,20 @@ import {
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
-import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "./turns/absurd-schema.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
+import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
-import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
-import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
-import { repairStaleTurns, routeTurns } from "./turns/turn-engine.ts";
-import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
+import { isTerminal, RUN_MAX_AGE_MS, type Run, type RunStore } from "./runs/run-store.ts";
+import {
+  createTurnLedger,
+  TURN_CANCEL_CHANNEL,
+  TURN_READY_CHANNEL,
+  TURN_YIELD_CHANNEL,
+  type TurnLedger,
+} from "./turns/turn-ledger.ts";
+import { createTurnRunner, RUN_MAX_CLAIMS } from "./turns/turn-runner.ts";
+import { bindTurnLedger, sweepTurns } from "./turns/turn-engine.ts";
 import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./harness/agent-tools.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "./connectors/background-exec-broker.ts";
 import {
@@ -295,7 +299,6 @@ import {
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPeriodicJobs } from "./util/periodic-jobs.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
@@ -311,9 +314,9 @@ import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
-import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
+import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
-import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
+import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
@@ -322,8 +325,6 @@ import { createSlackSurface } from "./chat-surface/slack.ts";
 import { createHttpChatSurface } from "./chat-surface/http-chat.ts";
 import { createSurfaceRegistry, type SurfaceRegistry } from "./chat-surface/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
-import { createEngagedRegistry } from "./wake/engaged-registry.ts";
-import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
 import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
 import { createPostgresChannelPolicyStore, type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
 import {
@@ -368,6 +369,7 @@ import type { ContextRequestEvent } from "./api/app-types.ts";
 
 export interface Runtime {
   start(): void;
+  startTurns(): void;
   startBackground(): void;
   stopBackgroundClaims(): Promise<void>;
   setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
@@ -423,6 +425,7 @@ export interface BuiltApp {
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
+  turnLedger: TurnLedger;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;
@@ -1037,9 +1040,7 @@ export function buildApp(
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
-  const runStoreKind = config.runStore;
-  const runSignals: RunSignalStore =
-    runStoreKind === "postgres" ? createPostgresRunSignalStore(databaseUrl) : createMemoryRunSignalStore();
+  const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1220,17 +1221,10 @@ export function buildApp(
     delete harness.models.screenSecurity;
   }
 
-  const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
-  const runStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunStore(databaseUrl, { maxClaims: RUN_MAX_CLAIMS })
-      : createMemoryRunStore({ maxClaims: RUN_MAX_CLAIMS });
-  const turnLedger =
-    runStoreKind === "postgres"
-      ? createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
-      : undefined;
-  const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
+  const runStore = createPostgresRunStore(databaseUrl);
+  const turnLedger = createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal(run) });
+  const turnBinding = bindTurnLedger(runStore.runs, turnLedger);
 
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
     if (!sessionIds.length) return new Set();
@@ -1256,10 +1250,7 @@ export function buildApp(
   };
   const runs: RunStore = {
     ...runStore.runs,
-    cancelTurn: turnRouting.cancelTurn,
-    cancelTree: turnRouting.cancelTree,
-    withdraw: turnRouting.withdraw,
-    leaseHeld: turnRouting.leaseHeld,
+    ...turnBinding,
     async enqueue(input) {
       const enqueue = async () => {
         const known = await sessions.getByThread(input.sessionId);
@@ -1273,7 +1264,7 @@ export function buildApp(
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
         const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = (await turnRouting.admit(input)) ?? (await runStore.runs.enqueue(input));
+        const result = await turnBinding.enqueue(input);
         if (result.deduped) return result;
         sessionStateBus.emit({
           threadRef: input.sessionId,
@@ -1330,12 +1321,9 @@ export function buildApp(
     }
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
-  const sessionStateBus: SessionStateBus = config.databaseUrl
-    ? createPostgresSessionStateBus(config.databaseUrl)
-    : createMemorySessionStateBus();
+  const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
   const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
-  const activityStore: RunActivityStore =
-    runStoreKind === "postgres" ? createPostgresRunActivityStore(databaseUrl) : createMemoryRunActivityStore();
+  const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {
@@ -1836,27 +1824,6 @@ export function buildApp(
         pack,
       ),
   });
-  const reaper: Reaper = createReaper(runs, sessions, {
-    intervalMs: config.reaperIntervalMs,
-    leaderLease,
-    maxAgeMs: RUN_MAX_AGE_MS,
-    errors,
-  });
-  const engaged = createEngagedRegistry();
-  let reapInFlight = false;
-  let lastReapAt = 0;
-  const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
@@ -1886,7 +1853,7 @@ export function buildApp(
     sessions,
     orchestrator,
     runs,
-    leaseTtlMs,
+    startTurns: () => runtime.startTurns(),
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -1938,8 +1905,6 @@ export function buildApp(
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
     contextRequestEvents,
     contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
-    engaged,
-    reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
     ...(harness.models.judge
@@ -1993,14 +1958,6 @@ export function buildApp(
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
-  });
-  runs.onTerminal((run) => {
-    void runs
-      .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
-      .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
     void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
@@ -2066,23 +2023,6 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const wakeSweep: WakeSweep = createWakeSweep(
-    {
-      async engagedSessions() {
-        return engaged.list();
-      },
-      async sweepSession(threadRef) {
-        const live = await runs.activeForThread(threadRef);
-        if (!live) {
-          pokeReaper();
-          engaged.settle(threadRef);
-          return 1;
-        }
-        return 0;
-      },
-    },
-    { intervalMs: config.reaperIntervalMs, leaderLease },
-  );
   orchestratorDeps.surfaceContext = createSurfaceContextPuller(app, {
     searchToken: async (source, viewer) =>
       source === "slack" && viewer
@@ -2225,45 +2165,21 @@ export function buildApp(
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
-  const turnReady = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness")
-    : undefined;
-  const turnCancels = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels")
-    : undefined;
-  const turnYields = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields")
-    : undefined;
-  const turnRunner: TurnRunner | undefined = turnLedger
-    ? createTurnRunner({
-        ledger: turnLedger,
-        orchestrator,
-        queues: TURN_QUEUES,
-        slots: Math.max(1, config.workers),
-        capacity: () => Math.max(1, config.workers) - workers.filter((worker) => worker.held()).length,
-        ...(turnReady ? { ready: turnReady } : {}),
-        ...(turnCancels ? { cancels: turnCancels } : {}),
-        ...(turnYields ? { yields: turnYields } : {}),
-        canClaim: canClaimRuns,
-        errors,
-        maxClaims: RUN_MAX_CLAIMS,
-      })
-    : undefined;
-  const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
-  const canClaimRunSlot = () => canClaimRuns() && busyRuns() < Math.max(1, config.workers);
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRunSlot,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
-  const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
+  const turnReady = createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness");
+  const turnCancels = createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels");
+  const turnYields = createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields");
+  const turnRunner = createTurnRunner({
+    ledger: turnLedger,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: Math.max(1, config.workers),
+    ready: turnReady,
+    cancels: turnCancels,
+    yields: turnYields,
+    canClaim: canClaimRuns,
+    errors,
+    maxClaims: RUN_MAX_CLAIMS,
+  });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: PROCESS_REAPER_INTERVAL_MS,
@@ -2364,27 +2280,22 @@ export function buildApp(
         immediate: true,
         run: () => approvals.deliverPending(),
       },
-      ...(turnLedger
-        ? [
-            {
-              name: "turns:pointer-repair",
-              everyMs: 60_000,
-              lock: "leader",
-              run: () => repairStaleTurns({ ledger: turnLedger, sessions, errors }),
-            } as const,
-            { name: "turns:cleanup", everyMs: 60 * 60_000, lock: "leader", run: () => turnLedger.cleanup() } as const,
-          ]
-        : []),
+      {
+        name: "turns:pointer-repair",
+        everyMs: 60_000,
+        lock: "leader",
+        immediate: true,
+        run: () => sweepTurns({ ledger: turnLedger, sessions, errors }),
+      },
+      { name: "turns:cleanup", everyMs: 60 * 60_000, lock: "leader", run: () => turnLedger.cleanup() },
     ],
     { createSweeper, leaderLease, advisoryLock },
   );
   // Started together once background work is admitted, and stopped together.
   const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [
-    reaper,
     ...(processReaper ? [processReaper] : []),
     semanticMemory,
     ...(fileUploads ? [fileUploads] : []),
-    wakeSweep,
     periodicJobs,
   ];
   let backgroundRunning = false;
@@ -2398,17 +2309,7 @@ export function buildApp(
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
-    preemptionSweeper.start();
-    turnRunner?.start();
+    turnRunner.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
       monitorPoller?.start(MONITOR_POLL_MS);
@@ -2430,12 +2331,7 @@ export function buildApp(
     backgroundGeneration++;
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
-    const stopping = [
-      ...periodicServices.map((service) => service.stop()),
-      preemptionSweeper.stop(),
-      turnRunner?.stopClaims(),
-      ...workers.map((worker) => worker.stopClaims()),
-    ];
+    const stopping = [...periodicServices.map((service) => service.stop()), turnRunner.stopClaims()];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
     const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
       .then(() => {})
@@ -2451,8 +2347,7 @@ export function buildApp(
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
-      turnRunner?.releaseInFlight(),
+      turnRunner.releaseInFlight(),
     ]);
   }
   const runtime: Runtime = {
@@ -2469,6 +2364,9 @@ export function buildApp(
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
+    startTurns() {
+      if (!inlineShutdown.signal.aborted) turnRunner.start();
+    },
     startBackground,
     setBackgroundAdmission(canClaim, active) {
       backgroundAdmission = canClaim;
@@ -2476,23 +2374,20 @@ export function buildApp(
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+      await backgroundClaimsStopping;
     },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await admittedWork.drained();
     },
     releaseInFlightRuns,
     async stop() {
-      await turnRunner?.releaseInFlight();
+      await turnRunner.releaseInFlight();
       await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+      await withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
+        swallowAs("wiring: admitted work drain failed", undefined),
+      );
       await releaseInFlightRuns();
       await drain.stop();
       stopStreamSync();
@@ -2500,11 +2395,11 @@ export function buildApp(
         [
           runs.close?.(),
           runSignals.close?.(),
-          turnLedger?.close(),
-          turnReady?.close?.(),
+          turnLedger.close(),
+          turnReady.close?.(),
           contextRequestEvents.close?.(),
-          turnCancels?.close?.(),
-          turnYields?.close?.(),
+          turnCancels.close?.(),
+          turnYields.close?.(),
           sessionStateBus.close?.(),
           ledgerEventBus.close?.(),
           runActivity.close?.(),
@@ -2529,6 +2424,7 @@ export function buildApp(
     deploymentLayerRefresh,
     sessions,
     runs,
+    turnLedger,
     signals: runSignals,
     sessionStateBus,
     ledgerEventBus,

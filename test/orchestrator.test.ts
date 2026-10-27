@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import type { OutboundPost } from "../src/surfaces/outbound.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { retryClock } from "./support/retry-clock.ts";
 import { runNowSettled } from "./support/settle.ts";
 import type { SandboxHandle, ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD, SANDBOX_CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -17,7 +16,15 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { testMap } from "./support/test-database.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { buildTestApp, freshApp, internalActor, dm, channel, grantCred } from "./support/orchestrator-app.ts";
+import {
+  buildTestApp,
+  freshApp,
+  failedTurn,
+  internalActor,
+  dm,
+  channel,
+  grantCred,
+} from "./support/orchestrator-app.ts";
 
 test("internal DM turn runs end-to-end and records the session", async () => {
   const { app } = freshApp();
@@ -106,9 +113,10 @@ test("inbound file problems reach the model in the environment footer, not a log
 });
 
 test("a failed turn still records which inbound files did not arrive", async () => {
-  const { app, sessions, errors } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { sessions, errors } = built;
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
-  await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
+  await failedTurn(built, dm("!boom", { inboundNotes: [note] }), /boom/);
   const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
   const user = (await sessions.getItems(sessionId!)).find((e) => isUserMessage(e));
   assert.match(String((user?.body as { environment?: unknown } | undefined)?.environment), /screenshot\.png/);
@@ -262,49 +270,40 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
   assert.doesNotMatch(footer, /deploy digest ready/);
 });
 
-test(
-  "an inline turn retries its failed predecessor before executing without a background worker",
-  { timeout: 10_000 },
-  async (t) => {
-    const backoff = retryClock(t);
-    const built = freshApp();
-    const { app, keychain } = built;
-    assert.ok(keychain);
+test("a turn whose setup fails is retried before the next turn in the conversation runs", async () => {
+  const built = freshApp();
+  const { app, keychain } = built;
+  assert.ok(keychain);
 
-    const realGrantsForScope = keychain.grantsForScope.bind(keychain);
-    const attempted: string[] = [];
-    const claimForSession = built.runs.claimForSession.bind(built.runs);
-    built.runs.claimForSession = async (...args) => {
-      const run = await claimForSession(...args);
-      if (run) attempted.push(run.request.text);
-      return run;
-    };
-    let injectFailure = true;
-    keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
-      if (injectFailure) {
-        injectFailure = false;
-        throw new Error("injected setup failure");
-      }
-      return realGrantsForScope(...args);
-    };
+  const realGrantsForScope = keychain.grantsForScope.bind(keychain);
+  const attempted: string[] = [];
+  const claim = built.turnLedger.claim.bind(built.turnLedger);
+  built.turnLedger.claim = async (...args) => {
+    const claimed = await claim(...args);
+    if (claimed.run) attempted.push(claimed.run.request.text);
+    return claimed;
+  };
+  let injectFailure = true;
+  keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
+    if (injectFailure) {
+      injectFailure = false;
+      throw new Error("injected setup failure");
+    }
+    return realGrantsForScope(...args);
+  };
 
-    await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
-    backoff();
+  const first = await app.turn(dm("hi"));
+  assert.equal(first.status, "ok", first.reason);
 
-    const res = await app.turn(dm("hi again"));
-    assert.equal(res.status, "ok", res.reason);
-    assert.doesNotMatch(res.reason ?? "", /session busy/);
-    assert.deepEqual(attempted, ["hi", "hi", "hi again"]);
-  },
-);
+  const res = await app.turn(dm("hi again"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.doesNotMatch(res.reason ?? "", /session busy/);
+  assert.deepEqual(attempted, ["hi", "hi", "hi again"]);
+});
 
-test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async (t) => {
-  const backoff = retryClock(t);
+test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
-
-  await assert.rejects(app.turn(req), /boom/);
-  backoff();
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -319,13 +318,9 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
   );
 });
 
-test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async (t) => {
-  const backoff = retryClock(t);
+test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async () => {
   const { app } = freshApp();
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
-
-  await assert.rejects(app.turn(req), /boom/);
-  backoff();
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -478,10 +473,12 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
 });
 
 test("Composio backend access is announced without delivering the project key", async () => {
-  const { app, serviceCreds, acl, sandbox } = freshApp({
+  const built = freshApp({
     apiBaseUrl: "https://core.example.com",
     signingSecret: "test-secret",
+    maxAttempts: 1,
   });
+  const { app, serviceCreds, acl, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const provision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -511,12 +508,11 @@ test("Composio backend access is announced without delivering the project key", 
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
   assert.doesNotMatch(granted, /`composio`/);
-  await assert.rejects(
-    app.turn(
-      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
-        conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
-      }),
-    ),
+  await failedTurn(
+    built,
+    dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
+      conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
+    }),
     /not available/,
   );
   assert.doesNotMatch(granted, /COMPOSIO_API_KEY/);
@@ -654,8 +650,9 @@ test("a disabled or broker-delivery credential never rides provision env", async
 });
 
 test("a credential flipped away from env between the metadata read and the secret read stays home", async () => {
-  const config = testConfig({ signingSecret: "test-secret", apiBaseUrl: "https://core.example.com" });
-  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
+  const config = testConfig({ signingSecret: "test-secret", apiBaseUrl: "https://core.example.com", maxAttempts: 1 });
+  const built = buildTestApp(config);
+  const { sandbox, serviceCreds, acl } = built;
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -678,12 +675,11 @@ test("a credential flipped away from env between the metadata read and the secre
     return realProvision(layers, opts);
   };
 
-  await assert.rejects(
-    app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
-        conversation: { kind: "dm", threadRef: "dm:U1:env4" },
-      }),
-    ),
+  await failedTurn(
+    built,
+    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
+      conversation: { kind: "dm", threadRef: "dm:U1:env4" },
+    }),
     /Service credential is no longer available/,
   );
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);

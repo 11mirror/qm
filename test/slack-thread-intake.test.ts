@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { completeTurn } from "./support/turns.ts";
 
 function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()): TurnRequest {
   return {
@@ -74,8 +75,7 @@ test("explicit threads steer only their own active conversation", async () => {
 test("changing model accounts queues in the same Slack thread without steering the old account", async () => {
   const b = await fixture();
   try {
-    const prior = (await b.runs.claimById(b.root.id, "test", 60000))!;
-    await b.runs.complete(prior.id, prior.leaseToken!, { status: "ok", reply: "Done" });
+    await completeTurn(b.turnLedger, b.root.id, { status: "ok", reply: "Done" });
     const old = (
       await b.runs.enqueue({
         sessionId: b.root.sessionId,

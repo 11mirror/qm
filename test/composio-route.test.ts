@@ -17,6 +17,14 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { testMap } from "./support/test-database.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 
+function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
+  return {
+    get: async () => run,
+    leaseHeld: async (held: { status: string; leaseToken?: string }, token: string) =>
+      held.status === "running" && token === held.leaseToken,
+  } as unknown as ServerDeps["runs"];
+}
+
 function fixture() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
@@ -38,16 +46,13 @@ function fixture() {
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
-    runs: {
-      get: async () => ({
-        status: "running",
-        sessionId: "cron:test-cron:fire:test-fire",
-        attempts: 1,
-        leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
-        request: { actor: { id: "alice" } },
-      }),
-    } as unknown as ServerDeps["runs"],
+    runs: fakeRuns({
+      status: "running",
+      sessionId: "cron:test-cron:fire:test-fire",
+      attempts: 1,
+      leaseToken: "test-lease",
+      request: { actor: { id: "alice" } },
+    }),
     composioFetch: (async (input, init) => {
       calls.push({ url: String(input), init });
       const result = replies.shift();
@@ -732,7 +737,7 @@ test("finished runs and stale lease capabilities cannot reuse backend connection
   }
   const f = fixture();
   await f.own();
-  f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+  f.deps.runs = fakeRuns({ status: "done" });
   assert.equal((await f.invoke("/v1/composio/connections", undefined, null, privateCap)).status, 403);
   assert.equal(f.calls.length, 0);
 });
@@ -743,7 +748,7 @@ test("ending the run during account lookup prevents execution", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = fakeRuns({ status: "done" });
     return response;
   };
   f.replies.push(aliceAccount, gmailTool);
@@ -758,7 +763,7 @@ test("ending the run during account lookup prevents disconnecting", async () => 
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = fakeRuns({ status: "done" });
     return response;
   };
   f.replies.push(aliceAccount);
