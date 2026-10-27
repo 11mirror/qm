@@ -259,7 +259,7 @@ const args = process.argv.slice(2);
 const command = args.slice(0, 2).join(" ");
 const option = (name) => args[args.indexOf(name) + 1];
 const json = (value) => process.stdout.write(JSON.stringify(value));
-if (command === "sts get-caller-identity") process.stdout.write("000000000000\\n");
+if (command === "sts get-caller-identity") json({ Account: "000000000000" });
 else if (command === "elbv2 describe-load-balancers") json({ LoadBalancers: [{ LoadBalancerArn: "arn:alb", DNSName: "replace-with-alb-hostname", State: { Code: "active" } }] });
 else if (command === "elbv2 describe-listeners") json({ Listeners: [{ ListenerArn: "arn:listener", Protocol: "HTTP", Port: 80, DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(portalTarget)} }] }] });
 else if (command === "elbv2 describe-target-groups") json({ TargetGroups: [{ TargetGroupArn: ${JSON.stringify(portalTarget)}, TargetGroupName: ${JSON.stringify(portalTarget.split("/")[1])} }] });
@@ -267,7 +267,7 @@ else if (command === "elbv2 describe-rules") json({ Rules: [] });
 else if (command === "ecs describe-services") {
   const start = args.indexOf("--services") + 1;
   const end = args.indexOf("--region");
-  json({ services: args.slice(start, end).map((serviceName) => ({
+  json({ services: args.slice(start, end === -1 ? undefined : end).map((serviceName) => ({
     serviceName,
     status: "ACTIVE",
     desiredCount: 0,
