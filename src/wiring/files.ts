@@ -57,7 +57,6 @@ export function buildFiles(w: Head & StoresModule) {
       ...(config.s3Region ? { region: config.s3Region } : {}),
       prefix: `${config.s3Prefix ?? ""}${prefix}`,
     });
-  // S3 under `prefix` when a bucket is configured, else local disk under dataDir/localDir.
   const byteStore = (prefix: string, localDir: string): DurableByteStore =>
     config.s3Bucket ? s3Bytes(config.s3Bucket, prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
   const fileBytes = byteStore("", "docstore");

@@ -43,7 +43,6 @@ const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
 
-// Built per call: tenantCols depends on whether tenancy is on, which is decided after this module loads.
 const upsertFire = (): string => `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (${tenantCols("cron_id, fire_key")}) DO UPDATE
@@ -96,11 +95,6 @@ const JSON_LOG_FIELDS = [
 const hasTenantColumn = (table: string) =>
   `EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'tenant_id' AND NOT attisdropped)`;
 
-/**
- * Fire history used to live in two older places: a `fireLog` array on each cron's JSON and a
- * `cron_fire_log` table kept in step by a trigger. Import whatever is left of both into cron_fires,
- * then remove the old copies so cron_fires is the only history.
- */
 const RETIRE_LEGACY_FIRE_HISTORY = {
   id: "cron/fires/0002-retire-legacy-history",
   statements: [

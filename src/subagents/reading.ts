@@ -10,7 +10,6 @@ const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
-/** Messages handed to the agent per receive call; the rest stay pending for the next call. */
 const RECEIVE_BATCH_MAX = 4;
 
 function itemText(item: Item): string | undefined {

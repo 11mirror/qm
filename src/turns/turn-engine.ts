@@ -9,7 +9,6 @@ import type { TurnLedger } from "./turn-ledger.ts";
 
 const TURN_REPAIRED_REASON = "This turn stopped unexpectedly and could not be resumed.";
 
-/** Admission, cancellation and fencing of turns, all through the Absurd turn ledger. */
 export function bindTurnLedger(
   rows: Pick<RunRows, "get">,
   ledger: TurnLedger,
@@ -26,7 +25,6 @@ export function bindTurnLedger(
   };
 }
 
-/** Adopts runs the legacy engine left behind, then fails turns whose Absurd task is gone and frees their thread. */
 export async function sweepTurns(deps: {
   ledger: TurnLedger;
   sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease" | "acquireLease" | "append" | "releaseLease">;

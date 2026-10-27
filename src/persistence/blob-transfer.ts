@@ -171,8 +171,6 @@ export interface S3BlobTransferOptions {
   _client?: S3Send;
 }
 
-/** Re-chunk a byte stream into parts of exactly `size` bytes plus a final remainder; `last` marks the final part,
- * so a stream that fits in one part can go up as a single PutObject. */
 async function* exactParts(
   chunks: AsyncIterable<Buffer>,
   size: number,

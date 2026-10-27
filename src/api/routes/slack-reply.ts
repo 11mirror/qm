@@ -126,7 +126,6 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<RouteResul
     return notLinked();
   } catch (error) {
     const status = (error as { status?: unknown }).status;
-    // Composio answers 4xx when the linked account can no longer be used; for the read-only probe that just means "not linked".
     if (!send && typeof status === "number" && status >= 400 && status < 500 && status !== 401 && status !== 429) {
       console.debug(`[slack reply] Composio ${status} on the reply probe; treating as not linked`);
       return notLinked();

@@ -512,7 +512,6 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
     try {
       re = compileSafeRegex(rule.pattern, "i");
     } catch {
-      // A stored rule that no longer compiles is skipped rather than blocking every command.
       console.error(
         `[command-policy] skipping invalid stored rule pattern ${JSON.stringify(rule.pattern)} (${rule.decision}) — re-save it to migrate`,
       );

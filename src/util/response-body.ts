@@ -1,9 +1,5 @@
 import { swallowAs } from "./errors.ts";
 
-/**
- * A response body as UTF-8 text, refusing bodies over `maxBytes` by declared length or by bytes
- * read. Returns undefined when the response has no body.
- */
 export async function readCappedText(
   response: Response,
   maxBytes: number,

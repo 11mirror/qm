@@ -306,7 +306,6 @@ async function connectAccount(
   return auth;
 }
 
-/** Upkeep only the core-singleton app runs: the custom emoji catalog and task acknowledgements. */
 function singletonUpkeep(core: SlackCoreClient, app: SlackApp): Partial<SlackUpkeep> {
   return {
     publishEmojiCatalog: () =>

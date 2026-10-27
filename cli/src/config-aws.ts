@@ -4,16 +4,13 @@ import { isDeclaredService, isServiceName, isVirtualService, pluginNameError, ty
 import { DNS_LABEL, IAM_ROLE_ARN, isPlainObject, validateStringArray, validateStringMap } from "./config-validators.ts";
 import type { AwsConfig, AwsServiceConfig } from "./config.ts";
 
-/** An OCI/ECR image tag: 1-128 letters, digits, underscores, periods or hyphens, not starting with a period or hyphen. */
 export const IMAGE_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
 export type AwsAccount = Pick<AwsConfig, "accountId" | "cluster">;
 
-/** The per-service task role Terraform creates when it manages the role. */
 export const awsManagedTaskRoleArn = (aws: AwsAccount, name: string): string =>
   `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-${name}-task`;
 
-/** The task role a service runs as: configured, its own managed role, or the shared default. */
 export function awsTaskRoleArn(aws: AwsAccount, name: string, service: AwsServiceConfig): string {
   if (service.taskRoleArn) return service.taskRoleArn;
   if (name === "core" || service.assumeRoleArns?.length) return awsManagedTaskRoleArn(aws, name);

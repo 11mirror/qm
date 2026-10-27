@@ -8,7 +8,6 @@ import { perTenant } from "../tenant.ts";
 export interface ModelCatalogEntry {
   id: string;
   name: string;
-  /** A built-in provider or the slug of an admin-registered custom provider. */
   provider: string;
 }
 

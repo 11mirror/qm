@@ -53,7 +53,6 @@ export function proxyExportPrefix(handle: SandboxHandle): string {
   return picked.map(([k, v]) => `export ${k}=${shq(v)}`).join("; ") + "; ";
 }
 
-/** The egress proxy's host as every backend puts it on its allow-list: no IPv6 brackets, lowercase, no trailing dot. */
 export const egressProxyHost = (egressProxyUrl: string): string =>
   new URL(egressProxyUrl).hostname
     .replace(/^\[|\]$/g, "")

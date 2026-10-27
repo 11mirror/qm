@@ -1,5 +1,3 @@
-// Per-model-call telemetry for a pi turn: usage conversion, TTFT/duration/step-gap stats and the decomposition of the gap between steps into named phases.
-
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
 import type { HarnessTurnInput } from "./harness.ts";
 import type { ToolContextRef } from "./agent-tools.ts";
@@ -231,10 +229,6 @@ export function sumCacheUsage(
   return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
 }
 
-/**
- * Per-turn model-call telemetry: tool wall time per step, gap work, TTFT/duration/step-gap stats
- * from the session's stream events, and the captured request records written when the turn ends.
- */
 export function createCallTelemetry(
   turn: HarnessTurnInput,
   entry: { agentSession: AgentSession; ref: ToolContextRef },

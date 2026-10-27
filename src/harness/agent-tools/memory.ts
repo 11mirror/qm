@@ -1,5 +1,3 @@
-// The memory and history tools: notebook facts and this conversation's own transcript.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
@@ -13,7 +11,6 @@ export function memoryTools(kit: ToolKit) {
   return { memory, history };
 }
 
-/** The memory tool: search, read, add, edit and delete notebook facts. */
 function memoryTool(kit: ToolKit) {
   const memory = defineTool({
     name: "memory",
@@ -59,7 +56,6 @@ function memoryParams() {
   });
 }
 
-/** Runs one memory-tool action against the turn's notebook. */
 async function runMemoryAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof memoryParams>>) {
   const { ref, opts, recordCall, recordText, recordFail } = kit;
   const tc = ref.current;
@@ -152,7 +148,6 @@ async function runMemoryAction(kit: ToolKit, callId: string, params: Static<Retu
   }
 }
 
-/** The history tool: search or reopen this conversation's own transcript. */
 function historyTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const history = defineTool({

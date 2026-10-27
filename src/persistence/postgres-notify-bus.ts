@@ -75,9 +75,6 @@ export function createPostgresNotifyBus<T>(
     },
 
     subscribe(cb, opts) {
-      // Notifications arrive on one LISTEN connection shared per database, in the async context of whichever
-      // caller opened it. Run each callback in its subscriber's context instead, so a tenant's handlers query as
-      // that tenant (pg-pool sets qm.tenant_id from it) rather than as the tenant that booted first.
       const onResync = opts?.onResync;
       const off = local.subscribe(AsyncResource.bind(cb), {
         ...opts,

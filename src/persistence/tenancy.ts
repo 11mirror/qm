@@ -1,17 +1,5 @@
 import type { Pool } from "pg";
 
-// Row-level tenancy for every table in the application schema.
-//
-// Each table carries `tenant_id uuid NOT NULL DEFAULT qm_tenant_id()` as the leading column of its primary key,
-// unique indexes and foreign keys, and a FORCE'd row-level-security policy that admits only rows of the current
-// tenant. The current tenant is the per-connection setting `qm.tenant_id`, which the pool sets from the
-// AsyncLocalStorage tenant on every checkout (see pg-pool.ts). When the setting is empty, `qm_tenant_id()` falls
-// back to the database's `qm_tenant` singleton, so a single-tenant deployment behaves exactly as before.
-// Migrations connect with `qm.tenant_bypass=on` so data migrations see every tenant's rows.
-//
-// `qm_tenantize()` is idempotent and runs after every store's migrations, so tables added later are covered
-// without a hand-written migration. Code that upserts must name `tenant_id` first in its ON CONFLICT target.
-
 export const TENANT_BYPASS_OPTION = "-c qm.tenant_bypass=on";
 
 export const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];

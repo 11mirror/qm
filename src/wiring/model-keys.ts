@@ -62,8 +62,6 @@ export function buildModelKeys(w: Head & StoresModule & ModelCredentialsModule &
             try {
               return [p.id, await customProviders.resolveKey(p.id)] as const;
             } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
               reportFailure("model: custom provider key unreadable", e, p.id);
               return [p.id, null] as const;
             }

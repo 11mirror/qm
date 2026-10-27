@@ -1,7 +1,3 @@
-// How a pi turn ends once its rounds are done: bank the goal's turn, then return a runtime
-// handoff, a stopped turn (with whatever partial reply streamed), or the closing reply plus any
-// pending approvals.
-
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ToolContextRef } from "./agent-tools.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
@@ -14,10 +10,6 @@ import { recordStoppedTurn } from "./harness-shared.ts";
 import { textFromContent } from "./pi-payload.ts";
 import { piLastAssistantTextOrThrow } from "./turn-recovery.ts";
 
-/**
- * Build the turn result after the last round. `settled` waits for queued step writes and rethrows a
- * persistence failure.
- */
 export async function finishTurn(o: {
   turn: HarnessTurnInput;
   entry: { agentSession: AgentSession; ref: ToolContextRef };
@@ -84,7 +76,6 @@ export async function finishTurn(o: {
 
   await settleGoal();
   const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-  // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
   const reply = entry.ref.silentRequested ? "" : closingText;
   const closing = steps.closing(reply);
   await turn.emit({

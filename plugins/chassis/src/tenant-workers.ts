@@ -59,9 +59,10 @@ interface PgClient {
 
 async function readTenantRegistry(env: Env): Promise<TenantRegistrySnapshot> {
   if (!env.DATABASE_URL) throw new Error("QM_MULTITENANT=1 needs DATABASE_URL to read the tenant registry");
-  // The plugins don't depend on pg; multitenant mode runs from the core image, where it resolves from the root.
   const pgModule = "pg";
-  const { default: pg } = (await import(pgModule)) as { default: { Client: new (config: { connectionString: string }) => PgClient } };
+  const { default: pg } = (await import(pgModule)) as {
+    default: { Client: new (config: { connectionString: string }) => PgClient };
+  };
   const client = new pg.Client({ connectionString: env.DATABASE_URL });
   await client.connect();
   try {

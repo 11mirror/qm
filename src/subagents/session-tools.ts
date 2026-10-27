@@ -10,10 +10,8 @@ import type { SessionSyscallDeps, SessionSyscalls, SessionSyscallsFactory } from
 
 export type { SessionSyscallDeps, SessionSyscalls, SessionSyscallsFactory } from "./types.ts";
 
-/** The subagents and sessions tools for one turn: each call is one of the operations in admission, reading and conversations. */
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
-  /** Opens and writes that add runs to one session tree queue behind each other; other trees go on in parallel. */
   const admissionKey = (root: Session) => `session-tree-admission:${root.id}`;
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 

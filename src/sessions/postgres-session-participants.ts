@@ -134,7 +134,6 @@ const descendantsOf = async (q: PgPool["q"], rootIds: readonly string[]): Promis
     scopeId: r.scope_id as ScopeId,
   }));
 };
-/** Rows hanging off a session that its delete must take with it (items cascade on their own). */
 const deleteSessionChildren = async (client: PoolClient, sessionId: string): Promise<void> => {
   for (const table of ["session_llm_requests", "session_leases", "participants", "session_pins"])
     await client.query(`DELETE FROM ${table} WHERE session_id = $1`, [sessionId]);

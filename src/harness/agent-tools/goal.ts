@@ -1,5 +1,3 @@
-// The goal tool's create/get/update actions and the evidence files the governor reads.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { errMessage } from "../../util/errors.ts";
@@ -30,7 +28,6 @@ export function goalTools(kit: ToolKit) {
   return { createGoal, getGoal, updateGoal };
 }
 
-/** Reads the deliverable files a goal completion names, for the governor to check. */
 function goalEvidence() {
   const GOAL_EVIDENCE_FILES = 5;
   const GOAL_EVIDENCE_FILE_CHARS = 20_000;
@@ -58,7 +55,6 @@ function goalEvidence() {
   return { GOAL_EVIDENCE_FILES, goalEvidenceFiles };
 }
 
-/** goal create: registers a goal for sustained work. */
 function createGoalTool(kit: ToolKit) {
   const { ref, recordCall, recordCoreAuthoredResult } = kit;
   const createGoal = defineTool({
@@ -118,7 +114,6 @@ function createGoalTool(kit: ToolKit) {
   return { createGoal };
 }
 
-/** goal get: the session's goal, its floor and usage. */
 function getGoalTool(kit: ToolKit) {
   const { ref, recordCall, recordCoreAuthoredResult } = kit;
   const getGoal = defineTool({
@@ -139,7 +134,6 @@ function getGoalTool(kit: ToolKit) {
   return { getGoal };
 }
 
-/** goal update: complete, resume, cancel or wait, with the governor's check on completion. */
 function updateGoalTool(
   kit: ToolKit,
   {
@@ -175,7 +169,6 @@ function updateGoalParams(GOAL_EVIDENCE_FILES: number) {
   });
 }
 
-/** Runs goal update: status changes, and the governor check before a completion lands. */
 async function runUpdateGoal(
   kit: ToolKit,
   goalEvidenceFiles: ReturnType<typeof goalEvidence>["goalEvidenceFiles"],
@@ -273,7 +266,6 @@ async function runUpdateGoal(
   );
 }
 
-/** goal update status=cancel: only the user's own message after the goal started may cancel it. */
 async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref"]["goal"], note: string) {
   const { ref, recordCoreAuthoredResult } = kit;
   if (!goalIsOpen(goal)) {
@@ -305,7 +297,6 @@ async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
   );
 }
 
-/** goal update status=resume: only the user's own message may lift a pause. */
 async function resumeGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref"]["goal"]) {
   const { ref, recordCoreAuthoredResult } = kit;
   if (goal?.status !== "paused") {
@@ -316,8 +307,6 @@ async function resumeGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
       true,
     );
   }
-  // Only a person's own message can lift a pause the person put there;
-  // crons, webhooks, ambient and delegated wakes cannot.
   if (ref.current?.humanTurn !== true) {
     return recordCoreAuthoredResult(
       callId,

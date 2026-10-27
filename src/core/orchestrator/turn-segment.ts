@@ -60,7 +60,6 @@ export interface TurnRunState {
   remainingDocumentTokens: number;
 }
 
-/** What one harness segment needs from the turn's earlier phases. */
 export interface HarnessSegmentTurn {
   screenTrace: ScreenTrace;
   framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
@@ -93,7 +92,6 @@ export function createHarnessSegment(ctx: TurnCtx, turn: HarnessSegmentTurn) {
     runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
 }
 
-/** One harness run over the turn's prepared state; continuation segments pass their own history. */
 async function runHarnessSegment(
   ctx: TurnCtx,
   turn: HarnessSegmentTurn,
@@ -171,7 +169,6 @@ async function runHarnessSegment(
   return turnResult;
 }
 
-/** The segment's environment note: turn facts, environment and memory deltas since the history, inbound issues. */
 function segmentEnvironment(turn: HarnessSegmentTurn, continuation: { history: Item[] } | undefined) {
   const { turnContextBlocks, memoryHeading } = turn.framed;
   const { inboundIssues, recalled, history, documentInputs, turnEnvironmentContents, continueTurn } = turn.prepared;
@@ -193,10 +190,6 @@ function segmentEnvironment(turn: HarnessSegmentTurn, continuation: { history: I
   return { recall, snapshot, environment, silentResume };
 }
 
-/**
- * The segment's transcript writer: stamps work times on replies, attaches the environment and recall
- * to the turn's first user message, then appends and mirrors each entry.
- */
 function createSegmentEmit(
   ctx: TurnCtx,
   turn: HarnessSegmentTurn,
@@ -274,7 +267,6 @@ function createSegmentEmit(
   return emit;
 }
 
-/** Prepares a mid-turn steer: refreshed inbox header, staged attachments and their documents. */
 function createPrepareSteer(
   ctx: TurnCtx,
   turn: HarnessSegmentTurn,
@@ -368,7 +360,6 @@ function createPrepareSteer(
   };
 }
 
-/** The segment's runtime options: personal provider keys, pinning, runtime reports and the runtime tool. */
 function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<HarnessTurnInput> {
   const { deps, input, actor, automatedTurn, sessionTurn } = ctx;
   const {
@@ -420,7 +411,6 @@ function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<
   };
 }
 
-/** The segment's streaming, security and accounting callbacks into the harness. */
 function segmentCallbacks(ctx: TurnCtx, turn: HarnessSegmentTurn) {
   const { deps, input, actor, scopeId } = ctx;
   const { surfaceName } = turn.framed;

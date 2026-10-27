@@ -120,7 +120,6 @@ export function buildBackground(w: BackgroundInputs) {
 
 export type BackgroundModule = ReturnType<typeof buildBackground>;
 
-/** Final shutdown step: stop the stream sync, close every event store, then flush memory and the error log. */
 async function closeEventStores(w: BackgroundInputs): Promise<void> {
   const {
     semanticMemory,

@@ -7,7 +7,6 @@ import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 type RunStatus = "queued" | "pending" | "running" | "done" | "failed";
 
 export type RunPriority = 0 | 1 | 2;
-/** Crons treat a fire this old as stale, and a turn waiter gives up after it. */
 export const RUN_MAX_AGE_MS = 24 * 60 * 60_000;
 export const MAX_PREEMPTIONS = 3;
 

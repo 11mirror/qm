@@ -117,7 +117,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     onSignal(runId, listener) {
-      // Wake the waiter in its own (tenant) context, not the shared LISTEN connection's.
       const cb = AsyncResource.bind(listener);
       const set = listeners.get(runId) ?? new Set();
       set.add(cb);

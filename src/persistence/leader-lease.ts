@@ -125,7 +125,6 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
           .then((c) => {
             if (held.size === 0) drop(entry, c, false);
           })
-          // A failed connect already rejected the caller that acquired the lease; nothing is left to drop.
           .catch(() => {});
       }
     },

@@ -68,7 +68,6 @@ const spendSql = `WITH RECURSIVE ancestry AS (
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-/** Admin reports over all sessions: per-day LLM spend (cached per day) and per-person turn attribution (cached per session). */
 export function createSessionReports(
   db: Pick<PgPool, "pool" | "q">,
   now: () => number,
@@ -76,8 +75,6 @@ export function createSessionReports(
   const { pool, q } = db;
   return {
     async attributedTurns(): Promise<AttributedTurn[]> {
-      // Sessions whose user items or participant windows changed are recomputed in small batches,
-      // so a message append waits on at most one batch; everything else is read from the cache.
       for (;;) {
         const recomputed = await withPgTransaction(await pool(), async (client) => {
           const dirty = await client.query(

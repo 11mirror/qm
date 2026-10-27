@@ -451,9 +451,6 @@ type ConnectorTokens = ReturnType<typeof connectorTokens>;
 
 export function credentialWrites(c: KeychainCtx) {
   const { deps, store, now } = c;
-  /** The record a pre-`targets`/pre-`fields` row is rewritten to, or null when it already has the current shape:
-   * a single-file credential saved as `target` + raw content becomes a one-file `targets` bundle, and an env
-   * credential carrying a plaintext `username` becomes a two-field credential (secret + `<BASE>_USERNAME`). */
   function currentShape(rec: TargetUsernameCredential): KeychainCredential | null {
     const { target, username, ...rest } = rec;
     if (target === undefined && username === undefined) return null;

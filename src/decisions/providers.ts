@@ -176,7 +176,7 @@ export function createDecisionBackend(opts: {
       const aborted = new Promise<never>((_, reject) =>
         signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true }),
       );
-      aborted.catch(() => {}); // observed by the races below
+      aborted.catch(() => {});
       const provider = (await Promise.race([opts.providers([model.provider]), aborted])).find(
         (p) => p.id === model.provider,
       );

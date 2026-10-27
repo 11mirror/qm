@@ -70,7 +70,6 @@ async function stageOperatorSecrets(config: QmConfig, aws: AwsConfig, values: Ma
   return staged;
 }
 
-/** The live service snapshot when it matches the current manifest; refuses rotation when it does not. */
 function rotationBaseline(
   workloads: string[],
   states: ReadonlyMap<string, EcsServiceState>,
@@ -145,7 +144,6 @@ async function uploadSecrets(aws: AwsConfig, staged: StagedSecret[]): Promise<vo
   }
 }
 
-/** Registers a new task definition for each affected workload whose rendered secrets changed. */
 async function registerRotatedTasks(
   config: QmConfig,
   aws: AwsConfig,
@@ -174,7 +172,6 @@ async function registerRotatedTasks(
   return changed;
 }
 
-/** Forces a fresh deployment of each workload and waits for every replacement to settle. */
 async function forceRedeploy(config: QmConfig, aws: AwsConfig, workloads: string[], before: ServiceSnapshot) {
   const forcedDeployments: Record<string, string> = {};
   for (const workload of workloads) {
@@ -203,7 +200,6 @@ async function forceRedeploy(config: QmConfig, aws: AwsConfig, workloads: string
   );
 }
 
-/** Rolls the affected workloads onto the rotated secrets, restoring changed task definitions on failure. */
 async function activateRotatedSecrets(
   config: QmConfig,
   aws: AwsConfig,

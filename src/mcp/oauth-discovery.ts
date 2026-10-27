@@ -39,7 +39,7 @@ async function fetchMeta(url: string, errors: string[]): Promise<Record<string, 
     errors.push(`${url}: HTTP ${r.status}`);
     return undefined;
   }
-  const meta: unknown = await r.json().catch(() => undefined); // recorded below as not a JSON object
+  const meta: unknown = await r.json().catch(() => undefined);
   if (meta && typeof meta === "object") return meta as Record<string, unknown>;
   errors.push(`${url}: response is not a JSON object`);
   return undefined;

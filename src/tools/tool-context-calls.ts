@@ -1,7 +1,3 @@
-/** ToolContext operations that call out: background jobs, the control plane and the conversation surface. */
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
-/** ToolContext operations that call out: background jobs, the control plane and the conversation surface. */
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
 import { processCredentialFiles } from "../credentials/execute-files.ts";
 import { executionSecretEnv } from "../security/secret-masking.ts";
 import type {
@@ -18,7 +14,6 @@ import { type ToolContext, CONTROL_UNAVAILABLE } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
 import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
 
-/** Background jobs: start, poll, stop, input, list and watch. */
 export function backgroundOps(
   deps: ToolContextDeps,
   {
@@ -140,7 +135,6 @@ export function backgroundOps(
   } satisfies Partial<ToolContext>;
 }
 
-/** Control-plane calls: crons, webhooks, instructions and sharing. */
 export function controlOps(deps: ToolContextDeps, { controlOp }: Pick<ReturnType<typeof callLedger>, "controlOp">) {
   return {
     cronCreate: (req) =>
@@ -209,7 +203,6 @@ export function controlOps(deps: ToolContextDeps, { controlOp }: Pick<ReturnType
   } satisfies Partial<ToolContext>;
 }
 
-/** Surface calls: post, reach, react, edit, read and attach. */
 export function surfaceOps(deps: ToolContextDeps, { surfaceOp }: Pick<ReturnType<typeof callLedger>, "surfaceOp">) {
   return {
     post: (text, opts, files, sandboxId) =>

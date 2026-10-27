@@ -18,14 +18,11 @@ interface PgPoolingConfig {
   caCert?: string;
   queryMax?: number;
   sessionMax?: number;
-  /** Row-level tenancy (QM_MULTITENANT): tenant_id-led keys, RLS, per-connection tenant setting. */
   tenancy?: boolean;
 }
 
 let poolingConfig: PgPoolingConfig = {};
 
-// The tenant whose rows a checked-out connection may see. tenant.ts installs a reader for the
-// AsyncLocalStorage tenant; undefined means the database's own singleton tenant (single-tenant mode).
 let tenantSource: () => string | undefined = () => undefined;
 
 export function configurePgTenantSource(source: () => string | undefined): void {
@@ -36,7 +33,6 @@ export function pgTenantId(): string | undefined {
   return tenantSource();
 }
 
-/** Advisory-lock keys are database-wide; prefix them so tenants sharing a database never contend. */
 export function tenantLockKey(key: string): string {
   const id = tenancyEnabled ? tenantSource() : undefined;
   return id ? `tenant:${id}:${key}` : key;
@@ -46,9 +42,6 @@ const TENANT_GUC = Symbol("qm.tenant_id");
 
 type TenantTracked = PoolClient & { [TENANT_GUC]?: string };
 
-// Every checkout (including the implicit one inside Pool.query) sets qm.tenant_id on the session when it
-// differs from what the connection last carried. Session-level, so it requires direct or session-pooled
-// connections; multitenant deployments must not route through a transaction-mode pooler.
 function tenantScopedPool(pool: Pool): Pool {
   const connect = pool.connect.bind(pool) as () => Promise<PoolClient>;
   const scoped = (
@@ -93,7 +86,6 @@ export function configurePgPooling(config: PgPoolingConfig): void {
   if (config.tenancy !== undefined) tenancyEnabled = config.tenancy;
 }
 
-// Off by default: a single-tenant database keeps its original keys and needs no tenant setting.
 let tenancyEnabled = false;
 
 export function pgTenancyEnabled(): boolean {
@@ -104,7 +96,6 @@ export function configurePgTenancy(enabled: boolean): void {
   tenancyEnabled = enabled;
 }
 
-/** Conflict-target / key column list, led by tenant_id when row-level tenancy is on. */
 export function tenantCols(cols: string): string {
   return tenancyEnabled ? `tenant_id, ${cols}` : cols;
 }
@@ -115,8 +106,6 @@ const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
 const tenantized = new Set<string>();
 
-// Migration ids this process has seen applied, per database, so a store's first use skips the ledger when nothing new
-// was registered since.
 const settledMigrations = new Map<string, Set<string>>();
 
 function markSettled(connectionString: string, migrations: readonly PgMigration[]): void {
@@ -125,8 +114,6 @@ function markSettled(connectionString: string, migrations: readonly PgMigration[
   for (const migration of migrations) settled.add(migration.id);
 }
 
-// qm_tenantize() is idempotent, so a store reruns it only when migrations changed the schema or this process has
-// not run it on the database yet.
 async function applyTenancyIfEnabled(pool: Pool, connectionString: string, changed: boolean): Promise<void> {
   if (!tenancyEnabled || (!changed && tenantized.has(connectionString))) return;
   await applyTenancy(pool);
@@ -199,10 +186,6 @@ export interface PgMigrationDefinition {
   id: string;
   statements: readonly string[];
   expectedChecksum?: string;
-  /**
-   * Checksums of earlier released definitions of this id. A database that recorded one of them counts the migration as
-   * applied; a follow-up migration brings it to this definition's end state.
-   */
   acceptedChecksums?: readonly string[];
   script?: boolean;
 }
@@ -324,9 +307,6 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
-// A database with no migration history gets the baseline schema. A database that applied every folded migration adopts
-// the baseline without running it. A database with only some of them, or with QM tables but no history, is refused: its
-// schema is older than this build can upgrade.
 async function planSchemaBaseline(
   client: PoolClient,
   ledger: ReadonlyMap<string, string>,
@@ -373,8 +353,6 @@ async function applySchemaBaseline(client: PoolClient, plan: "apply" | "adopt"):
   }
 }
 
-// Everything that can refuse a migration run is checked before the first write, so a refused run leaves the database
-// exactly as it found it: recorded checksums, the pending set, and the baseline decision.
 function preflightPgMigrations(
   ledger: ReadonlyMap<string, string>,
   migrations: readonly PgMigration[],
@@ -419,7 +397,6 @@ const BASELINE_PLAN_LOG = {
   adopt: "adopting over the folded migrations",
 } as const;
 
-/** Applies the baseline and any pending migrations; returns how many it applied. */
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<number> {
   const client = await pool.connect();
   let discard: Error | undefined;
@@ -459,8 +436,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       const migration = remaining[0]!;
       remaining = remaining.slice(1);
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
-        // A concurrent build can run for minutes on a large table. It holds its own lock instead of the schema lock,
-        // so other processes' migration runs are not stuck behind it; they still wait here before passing this id.
         await client.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
         const indexLock = `qm:schema-migrations:${migration.id}`;
         await lockSchema(client, indexLock);
@@ -506,7 +481,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             .catch(swallowAs("pg-pool: concurrent index unlock", undefined));
         }
         await lockSchema(client, "qm:schema-migrations");
-        // Another process may have moved on while the lock was free: re-check what is left against the ledger.
         const ledgerNow = new Map(
           (
             await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
@@ -538,17 +512,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   }
 }
 
-/**
- * Extra root-CA trust for the Postgres connection, with full verification
- * semantics kept. Managed providers (Supabase's pooler, RDS, …) often pin a
- * private root the container's trust store doesn't carry; without a supported
- * way to add it, operators were left choosing between sslmode=no-verify and
- * forking the image. DATABASE_CA_CERT carries PEM content (a secret-store
- * value); DATABASE_CA_CERT_FILE points at a mounted file. Parsed once at the
- * process boundary (config.ts / a script's own env read), installed here, and
- * applied to every pg pool and client this process opens — database CA trust
- * is inherently process-global, like NODE_EXTRA_CA_CERTS.
- */
 export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): { ssl?: { ca: string } } {
   if (opts.cert?.trim()) return { ssl: { ca: opts.cert } };
   if (opts.certFile?.trim()) {
@@ -619,11 +582,6 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-/**
- * A store passes its migrations (an empty list when the baseline holds its whole schema): before first use the pool
- * applies the baseline and every migration registered for the database, in one global order. A pool created without
- * them only queries (under row-level tenancy it migrates too).
- */
 export function createPgPool(connectionString: string): PgPool;
 export function createPgPool(connectionString: string, migrationId: string, statements: readonly string[]): PgPool;
 export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[]): PgPool;
@@ -652,11 +610,9 @@ export function createPgPool(
       }
     });
   }
-  // With row-level tenancy every pool migrates first: qm_tenantize() must run on the finished schema.
   async function settle(): Promise<void> {
     if (!migrates && !tenancyEnabled) return;
     await withMigrationPool(async (instance) => {
-      // Read the registry here, after construction finished registering, not when the first query was issued.
       const migrations = registeredPgMigrations(connectionString);
       const settled = settledMigrations.get(connectionString);
       const current = settled && migrations.every((migration) => settled.has(migration.id));
@@ -697,7 +653,7 @@ export function createPgPool(
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    await readyP?.catch(() => {}); // ready() callers saw the failure
+    await readyP?.catch(() => {});
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),

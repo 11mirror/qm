@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-// The schema baseline replaces the migrations folded into it: schema-baseline.sql is the schema they produce on an
-// empty database. pg-pool applies it to an empty database and lets a database that already applied every folded
-// migration adopt it; it refuses anything older.
 const sql = readFileSync(new URL("./schema-baseline.sql", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const checksum = createHash("sha256").update(sql).digest("hex");
 const EXPECTED_CHECKSUM = "ce6b6272ae4d2f1f5d7737323fe3e9a57feb3f12d0abc3c6f00f7b052f41c2ce";

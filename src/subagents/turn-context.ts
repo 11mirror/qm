@@ -9,7 +9,6 @@ import type { SessionSyscallBinding, SessionSyscallDeps } from "./types.ts";
 
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 
-/** What every session tool call in one turn shares: the caller binding and the target lookups. */
 export interface TurnContext {
   deps: SessionSyscallDeps;
   binding: SessionSyscallBinding;

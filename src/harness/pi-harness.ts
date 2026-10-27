@@ -57,7 +57,6 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
 
 export { modelSupportsFastMode } from "../model/pi-models.ts";
 
-/** What one Pi harness's turns and side calls share: its options and how it resolves models and provider keys. */
 export type PiHarnessContext = ReturnType<typeof piHarnessContext>;
 
 function piHarnessContext(opts?: PiHarnessOptions) {

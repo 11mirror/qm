@@ -49,18 +49,14 @@ export interface CronFireJob {
   notBefore?: number;
 }
 
-/** `done` consumed the slot; `release` left it unconsumed (re-armed by the next enqueue); a number sleeps the job. */
 export type CronFireDisposition = JobDisposition;
 
 export const CRON_FIRE_JOB = "cron-fire";
 
-/** Fires run as `cron-fire` jobs on the background job worker, one per (cron, slot), keyed `cron:<id>:<slot>`. */
 export interface Scheduler {
-  /** Fire every due slot inline at `now`, as the job path would (tests drive the clock with it). */
   tick(now?: number): Promise<void>;
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
-  /** Re-enqueue every enabled cron's next slot; repairs slots lost to crashes or released fires. */
   repair(): Promise<void>;
 }
 
@@ -185,7 +181,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
   ].join("\n");
 }
 
-/** Fire `cron` once at `t` unless it was disabled or its skip check says no; journals the outcome either way. */
 async function fireCron(
   deps: SchedulerDeps,
   now: () => number,
@@ -405,7 +400,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.fireConcurrency ? { concurrency: deps.fireConcurrency } : {},
   );
 
-  /** Every due slot fires inline through the job path at the caller's clock. */
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     await withWork(async () => {

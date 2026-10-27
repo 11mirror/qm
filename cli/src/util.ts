@@ -268,12 +268,6 @@ export function isInvalidSecret(name: string, value: string | undefined): boolea
   );
 }
 
-// One line of a dotenv file, following Node's --env-file semantics for the
-// `export ` prefix and quoted values ('', "", ``: the quotes are stripped and
-// \n expands to a newline inside double quotes). Two deliberate divergences
-// from Node, both pinned by tests: a `#` inside an unquoted value is part of
-// the value (tokens and URL fragments), and a quoted value ends on its own
-// line (writeEnvValue never emits multi-line values).
 function parseEnvLine(raw: string): [key: string, value: string] | undefined {
   let line = raw.trim();
   if (!line || line.startsWith("#")) return undefined;
@@ -336,7 +330,6 @@ export function writeEnvValue(path: string, key: string, value: string): void {
   chmodSync(path, mode);
 }
 
-/** ADMIN_GRANTS entries ("email[:role]", comma-separated) with a plausible email address. */
 export function parseAdminGrants(raw: string | undefined): Array<{ email: string; role: string | undefined }> {
   return (raw ?? "").split(",").flatMap((entry) => {
     const trimmed = entry.trim();

@@ -1,5 +1,3 @@
-// How a pi turn reads a failed or refused model round, and how it recovers: retry without inline documents, or fall back to another model after a provider refusal.
-
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { defaultInteractiveThinkingLevel, modelDisplayName } from "../model/pi-models.ts";
 import { swallow } from "../util/errors.ts";
@@ -41,7 +39,6 @@ export function piAssistantFailure(session: AssistantTextSession): ProviderTurnE
   return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
 
-/** Codes that retry the turn on the configured fallback model. */
 export const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
@@ -118,10 +115,6 @@ export function refusalFallbackNote(fromModel: string, toModel: string, refusal:
   );
 }
 
-/**
- * A turn's recovery from a failed model round: retry once without inline documents when the
- * provider rejected them, and fall back to another model after a provider refusal.
- */
 export function createTurnRecovery(o: {
   turn: HarnessTurnInput;
   entry: { agentSession: AgentSession; ref: ToolContextRef & { effortLevel?: string } };

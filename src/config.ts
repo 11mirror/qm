@@ -69,7 +69,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   production: boolean;
-  /** QM_MULTITENANT=1: one process serves every registered tenant from one database with row-level tenancy. */
   multitenant: boolean;
   port: number;
   publicPort?: number;
@@ -84,9 +83,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
   modelId?: string;
-  /** Keychain credential id holding the Codex ChatGPT OAuth auth.json (production path). */
   codexAuthCredential?: string;
-  /** Keychain credential id holding a Claude Code subscription token (production path). */
   claudeAuthCredential?: string;
   detectModelId?: string;
   titleModelId?: string;
@@ -226,7 +223,6 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
   return [...enabled];
 }
 
-/** "a, b, or c" */
 const orList = (names: readonly string[]): string => `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`;
 
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
@@ -293,10 +289,6 @@ function modelProviderEnvStrict(env: Env): ModelProvider | undefined {
   return declared;
 }
 
-/**
- * Source requests, capability tokens, portal identity and connector keys each sign with their own secret, so a
- * surface holding one cannot forge another. Whenever source signing or portal identity is on, all three are required.
- */
 function assertDistinctSecrets(secrets: {
   signing?: string;
   capability?: string;

@@ -11,7 +11,7 @@ export async function withTimeout<T>(start: () => Promise<T>, ms: number, label:
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      p.catch(() => undefined); // caller already got the timeout
+      p.catch(() => undefined);
       reject(new Error(`${label} timed out after ${ms}ms`));
     }, ms);
     timer.unref?.();
@@ -131,7 +131,6 @@ export async function fetchWithRetry(
       continue;
     }
     if (!statuses.has(res.status) || attempt >= attempts) return res;
-    // Discarding a retried response body; a failed cancel cannot change the retry.
     await withAbort(() => res.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
     await wait(retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts));
   }

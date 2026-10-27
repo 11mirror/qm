@@ -39,16 +39,11 @@ export function isNoSuchLifecycleConfiguration(err: unknown): boolean {
   );
 }
 
-/** One part of a multipart upload: its body and, for a stream body, its exact length. */
 export interface S3Part {
   body: Buffer | Readable;
   length?: number;
 }
 
-/**
- * Upload `parts` to one S3 key as a multipart upload: create it, send each part in order, complete it,
- * and abort it if anything fails so no parts are left billed. Callers that fit in one part use PutObject.
- */
 export async function s3MultipartUpload(
   client: S3Send,
   bucket: string,

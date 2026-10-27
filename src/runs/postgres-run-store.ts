@@ -7,7 +7,6 @@ import type { Run, RunDeliveryState, RunPriority, RunStop, RunStore } from "./ru
 import { isTerminal } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
-/** The run rows; admission, cancellation and fencing come from the turn ledger (turns/turn-engine.ts). */
 export type RunRows = Omit<RunStore, "enqueue" | "withdraw" | "cancelTurn" | "cancelTree" | "leaseHeld">;
 
 export interface PostgresRuntime {

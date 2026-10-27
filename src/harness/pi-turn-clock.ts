@@ -1,4 +1,3 @@
-/** The Pi turn's wall-clock race and the empty-ending re-prompt note. */
 import { piFailedAssistant, type AssistantTextSession } from "./turn-recovery.ts";
 import { swallowAs } from "../util/errors.ts";
 

@@ -56,7 +56,6 @@ function asset(name: string): Buffer {
 }
 
 export function microvmBuildArchive(): Buffer {
-  // A fixed timestamp keeps the archive, and so its content-addressed S3 key, deterministic.
   const entry = (name: string): [Uint8Array, ZipOptions] => [asset(name), { level: 9, mtime: new Date(1980, 0, 1) }];
   return Buffer.from(zipSync({ Dockerfile: entry("Dockerfile"), "agent.mjs": entry("agent.mjs") }));
 }
@@ -150,7 +149,6 @@ async function assertImageIdentity(config: QmConfig, image: ImageSummary): Promi
   return { ...image, tags };
 }
 
-/** The image as it stands once it is gone or no state transition is running; re-checks its ownership. */
 async function settledImage(
   config: QmConfig,
   imageName: string,

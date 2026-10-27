@@ -120,7 +120,6 @@ export interface TurnLedger {
   finish(run: Run, token: string, outcome: TurnOutcome): Promise<boolean>;
   fenceHeld(turnId: string, token: string, client?: PoolClient): Promise<boolean>;
   cancel(turnId: string): Promise<"withdrawn" | "cancelled" | "signalled" | null>;
-  /** Cancels the turn only if it has not started, checked under the thread's lock. */
   withdraw(turnId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
   cancelTree(threadRefs: readonly string[]): Promise<number>;
   repairCandidates(limit?: number): Promise<RepairCandidate[]>;
@@ -169,7 +168,6 @@ const POINTER_KEY = "tenant_id = qm_tenant_id() AND thread_ref = $1";
 interface LedgerContext {
   db: PgPool;
   tx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
-  /** Re-reads an ended turn and tells the run store's terminal listeners. */
   settle(id: string): Promise<Run | null>;
 }
 
@@ -329,8 +327,6 @@ async function legacyLeased(client: PoolClient, threadRef: string): Promise<bool
   return rows.length > 0;
 }
 
-// A run the legacy engine enqueued becomes a queued Absurd turn once no old process holds it: pending rows at once,
-// running rows when their lease lapses. The thread then starts its oldest queued turn if none is active.
 async function adoptThread(client: PoolClient, threadRef: string): Promise<number> {
   const active = await lockPointer(client, threadRef);
   if (await legacyLeased(client, threadRef)) return 0;
@@ -393,7 +389,6 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
     async admit({ sessionId, request, dedupKey, maxAttempts = 3, priority }) {
       return tx(async (client) => {
         const active = await lockPointer(client, sessionId);
-        // The key's holder can release it between the conflict and the lookup, so look and insert until one lands.
         let inserted: Record<string, unknown> | undefined;
         while (!inserted) {
           if (dedupKey) {

@@ -88,7 +88,6 @@ async function authorizeOwnerCredentials(c: CatalogState): Promise<void> {
   });
 }
 
-/** In a shared scope, a credential that is not a brokered org service runs only on the turn's scratch computer. */
 export function placeCredential(
   c: Pick<CatalogState, "sharedScope">,
   credential: CommandCredential,

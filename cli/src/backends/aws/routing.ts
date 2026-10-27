@@ -41,7 +41,7 @@ export async function fetchCore(
         chunks.push(value);
       }
     } catch (error) {
-      await reader.cancel().catch(() => {}); // the read error below is what matters
+      await reader.cancel().catch(() => {});
       throw error;
     } finally {
       reader.releaseLock();
@@ -324,7 +324,6 @@ async function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: s
   }
 }
 
-/** What the live ALB must route, derived from config and the target groups found for it. */
 interface RoutingLayout {
   config: QmConfig;
   aws: AwsConfig;
@@ -369,7 +368,6 @@ function assertListenerDefault(layout: RoutingLayout): void {
   }
 }
 
-/** On a shared ALB, checks that no other company's rule overlaps ours and keeps only our rule. */
 function ownSharedAlbRules(layout: RoutingLayout, nonDefault: Rule[]): Rule[] {
   const { config, productionRules, expectedTargetArns } = layout;
   const hostname = new URL(config.publicUrl).hostname.toLowerCase();
@@ -426,7 +424,6 @@ function ownSharedAlbRules(layout: RoutingLayout, nonDefault: Rule[]): Rule[] {
     }));
 }
 
-/** The rule routing each public plugin's declared paths; they must precede core and portal routes. */
 function publicPluginRules(layout: RoutingLayout, nonDefault: Rule[]): Set<Rule> {
   const { publicPaths, targets, alternateTargets, productionRules } = layout;
   const pluginRules = new Set<(typeof nonDefault)[number]>();

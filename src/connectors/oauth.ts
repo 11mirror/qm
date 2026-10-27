@@ -106,7 +106,7 @@ function oauthErrorDetail(body: unknown): string {
 }
 
 export async function oauthFailure(action: string, res: { status: number; json(): Promise<unknown> }): Promise<Error> {
-  const detail = oauthErrorDetail(await res.json().catch(() => undefined)); // non-JSON error bodies leave detail empty
+  const detail = oauthErrorDetail(await res.json().catch(() => undefined));
   return new Error(`${action} failed (${res.status})${detail ? `: ${detail}` : ""}`);
 }
 

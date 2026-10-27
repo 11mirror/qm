@@ -50,8 +50,6 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
@@ -78,9 +76,6 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain = credentialStore;
   const serviceCreds = withDeploymentCredentials(

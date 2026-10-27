@@ -36,9 +36,7 @@ export function createSemanticMemory(opts: {
   const indexer = createMemoryVectorIndexer({ resolve });
   return {
     memory,
-    /** Embed a batch of unindexed facts; run by the `memory-vector-index` background job. */
     index: () => indexer.tick(),
-    /** Abort an in-flight indexing batch. */
     stop: () => indexer.stop(),
     async close() {
       await store?.close();

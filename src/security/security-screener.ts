@@ -14,10 +14,6 @@ export interface SecurityScreenClassification {
   outcome?: string;
 }
 
-/**
- * Run one screening with an explicit flagger configuration, outside any turn. Used by the Auto
- * flagger test run to replay past screenings through a candidate rubric.
- */
 export type SecurityScreenProbe = (input: {
   payload: string;
   modelId: string;

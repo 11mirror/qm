@@ -1,7 +1,5 @@
 import { readdir } from "node:fs/promises";
 
-// Every test file under test/ that `npm test` runs. Subdirectories mirror src/;
-// these hold other suites, helpers, or data and are skipped.
 const SKIPPED = new Set(["e2e", "fixtures", "integration", "memory-bench", "support"]);
 
 export async function rootTestFiles(dir = "test") {

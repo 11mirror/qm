@@ -206,7 +206,6 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  /** Startup I/O (store hydration, deployment layer, skill seeding); buildApp itself only constructs. */
   start: () => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -246,7 +245,6 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
-  /** Resolve expired keychain asks now (the `cron:asks` job runs it every few seconds). */
   sweepAsks(now: number): Promise<void>;
   inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
@@ -307,7 +305,6 @@ export interface AppOverrides {
 }
 
 export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp {
-  // Switches the background lifecycle flips at runtime; modules read them through this object.
   const gates: Gates = {
     backgroundAdmission: () => !config.backgroundDeploymentId,
     backgroundActive: () => false,
@@ -316,7 +313,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || gates.backgroundAdmission(),
   });
-  // Values built later in buildApp that earlier modules reach through closures.
   const late = {} as Late;
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
@@ -324,7 +320,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   if (!connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
-    // Tenancy sets qm.tenant_id per session, which a transaction-mode pooler would leak between clients.
     ...(config.databasePoolUrl && !config.multitenant ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),

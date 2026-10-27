@@ -29,7 +29,6 @@ export function createPostgresInstanceRegistry(
            )`,
         )
         .then(async () => {
-          // Created outside the migration runner, so give it tenant keys here when tenancy is on.
           if (pgTenancyEnabled()) await pg.query("SELECT qm_tenantize()");
         })
         .catch((e) => {

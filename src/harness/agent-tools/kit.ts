@@ -1,5 +1,3 @@
-// State every agent tool shares within one createAgentTools call: option flags and limits, and the ToolCall/ToolResult recorders.
-
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { handbackStop } from "../../runs/run-store.ts";
@@ -73,7 +71,6 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   };
 }
 
-/** The tool options and limits every tool builder reads. */
 function kitSettings(opts?: AgentToolsOptions) {
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
@@ -103,7 +100,6 @@ function kitSettings(opts?: AgentToolsOptions) {
   };
 }
 
-/** Appends tool call/result entries to the transcript. */
 function kitLog(ref: ToolContextRef) {
   const log = async (kind: "ToolCall" | "ToolResult", summary: Record<string, unknown>): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
@@ -134,7 +130,6 @@ function kitLog(ref: ToolContextRef) {
   return { log };
 }
 
-/** Records each tool call and its result, screening external output and tracking retry safety. */
 function kitRecorders(ref: ToolContextRef, { log }: Pick<ReturnType<typeof kitLog>, "log">) {
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
@@ -267,7 +262,6 @@ function kitRecorders(ref: ToolContextRef, { log }: Pick<ReturnType<typeof kitLo
   };
 }
 
-/** Standard replies for an unavailable control plane or a refused request. */
 function kitReplies({ recordFail }: Pick<ReturnType<typeof kitRecorders>, "recordFail">) {
   const unavailable = (callId: string, tool: string) =>
     recordFail(

@@ -14,25 +14,13 @@ import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 
-/**
- * What became of a claimed job: `done` finished it; `release` gave it up unfinished (the next
- * spawn with the same key re-arms it); a number sleeps the job until that epoch-ms time.
- */
 export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
 
-/** Background jobs on the Absurd `jobs` queue: named handlers, keyed spawns, claimed by background owners. */
 export interface JobWorker {
-  /** Register a handler; `concurrency` caps how many of this job run at once in this process. */
   handle(name: string, handler: JobHandler, opts?: { concurrency?: number }): void;
-  /** Durably queue a job; a key already live is a no-op, a released one is re-armed. */
   spawn(name: string, params: unknown, key: string): Promise<void>;
-  /**
-   * Run `fn` about every `everyMs` on one background owner: a self-rescheduling `every:<name>` job, spawned by
-   * `start` and run first right after its first spawn. A failed run is reported and the next one still comes.
-   * `immediate` also runs it once whenever a worker starts after that, outside the cadence.
-   */
   every(name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }): void;
   start(): Promise<void>;
   healthy(): boolean;
@@ -156,7 +144,6 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     }
   }
 
-  /** Spawn or re-arm the job keyed `key`; true when this created it. */
   async function spawnKeyed(name: string, params: unknown, key: string, maxAttempts: number | null): Promise<boolean> {
     const pool = await db.pool();
     const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts }).catch(
@@ -219,7 +206,6 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       while (active.size) await Promise.allSettled([...active]);
     },
   });
-  // Finished and failed jobs (spent cron slots, webhook fires, start-up runs) are dropped after a week.
   jobWorker.every("jobs:cleanup", 60 * 60_000, async () => {
     while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
   });

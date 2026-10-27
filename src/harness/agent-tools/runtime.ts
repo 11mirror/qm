@@ -1,5 +1,3 @@
-// The context and runtime tools: compacting this conversation's context and switching model, effort or fast mode.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { isObj } from "../../util/objects.ts";

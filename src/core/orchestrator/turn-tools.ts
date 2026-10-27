@@ -35,7 +35,6 @@ import { createTurnSandboxes } from "./sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./surface-tools.ts";
 import { createAttachStaging } from "./attach-tool.ts";
 
-/** What the turn's tool context is built from: the session, prompt framing, credentials, sandboxes and approvals. */
 export interface TurnToolsInput {
   session: Session;
   strictReadOnly: boolean;
@@ -54,7 +53,6 @@ export interface TurnToolsInput {
   blobTransfer: OrchestratorDeps["blobTransfer"];
 }
 
-/** Builds the turn's tool context and the state the delivery and segment phases share with it. */
 export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
   const { deps, input, actor, conversation, external, humanInput, liveTurn, scopeId } = ctx;
   const { session, strictReadOnly, blobTransfer } = turn;
@@ -152,7 +150,6 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
   };
 }
 
-/** The turn's background-process and monitor brokers, when the sandbox supports process sessions. */
 function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
   const { deps, actor, conversation, scopeId } = ctx;
   const { memoryScopeId } = turn.context;
@@ -215,7 +212,6 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
   return { backgroundBroker, monitorBroker };
 }
 
-/** Where files the turn registers are owned, and who is granted read access to them. */
 function createFileRegistration(ctx: TurnCtx, session: Session): ArtifactRegistration {
   const { deps, input, actor, conversation, external, resolution, scopeId } = ctx;
   const fileAudience =
@@ -270,7 +266,6 @@ function createFileRegistration(ctx: TurnCtx, session: Session): ArtifactRegistr
   return fileRegistration;
 }
 
-/** Whether everyone in the conversation may read an artifact; ACL handles are cached unless asked fresh. */
 function artifactReadCheck(ctx: TurnCtx): (artifact: FileArtifact, fresh?: boolean) => Promise<boolean> {
   const { deps, conversation, resolution, scopeId } = ctx;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
@@ -294,7 +289,6 @@ function artifactReadCheck(ctx: TurnCtx): (artifact: FileArtifact, fresh?: boole
   return mayReadArtifact;
 }
 
-/** Re-resolves the command credentials for a set of handles, rejecting handle collisions. */
 function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
   const {
     commandCredentials,
@@ -330,7 +324,6 @@ function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
   };
 }
 
-/** The session-history search/open tools over the turn's filtered transcript. */
 function sessionHistoryTools(ctx: TurnCtx, session: Session) {
   const { deps, filterHistory } = ctx;
   const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
@@ -345,7 +338,6 @@ function sessionHistoryTools(ctx: TurnCtx, session: Session) {
   };
 }
 
-/** The turn's tool context: sandboxes, credentials, publishing, memory, session tools and brokers. */
 function createTurnToolContext(
   ctx: TurnCtx,
   turn: TurnToolsInput,
@@ -523,7 +515,6 @@ export function firstAckPublisher(
   };
 }
 
-/** How the conversation looks to the publish tools when they pick a default audience. */
 function publishContextFor(conversation: TurnCtx["conversation"]) {
   return {
     conversationKind: conversation.kind,

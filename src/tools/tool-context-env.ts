@@ -1,5 +1,3 @@
-/** The shared state a ToolContext's operations run on: computer access, the per-call ledger and credential staging. */
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
 import { prepareExecutionFiles, type ExecutionFileCredential } from "../credentials/execute-files.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import type { SandboxAccessPlan, SandboxResource } from "../sandbox/sandbox-resources.ts";
@@ -22,7 +20,6 @@ import {
 } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
 
-/** How the turn reaches computers: the writable scope, memory view, sandbox access plans, command authorization and provisioning. */
 export const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =>
   credentials
     .filter((credential) => credential.scratchOnly)
@@ -117,10 +114,6 @@ export function sandboxAccess(deps: ToolContextDeps) {
       );
   };
 
-  /**
-   * The computer a command runs on: an explicit sandbox, authorized against its owner (credentials
-   * never cross scopes), or the default from `otherwise` after authorizing here.
-   */
   const provisionForCommand = async (
     command: string,
     sandboxId: string | undefined,
@@ -152,7 +145,6 @@ export function sandboxAccess(deps: ToolContextDeps) {
   };
 }
 
-/** Per-call timing, the durable once-per-call ledger, and the control-plane and surface call wrappers. */
 export function callLedger(deps: ToolContextDeps) {
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
@@ -203,7 +195,6 @@ export function callLedger(deps: ToolContextDeps) {
   return { runId, timed, once, controlOp, surfaceOp };
 }
 
-/** Selects and stages the credentials a command asked for. */
 export function credentialStaging(
   deps: ToolContextDeps,
   { writableScopeId }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId">,

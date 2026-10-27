@@ -1,4 +1,3 @@
-/** The Pi harness's side calls: reply detection, compaction, judging, security screening, ack emoji, titles and approval summaries. */
 import { refusalFallbackModelId } from "./turn-recovery.ts";
 import { type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ProviderTurnError } from "../core/turn-error.ts";
@@ -26,7 +25,6 @@ import { buildModelRuntime, complete } from "./pi-model-runtime.ts";
 import type { PiHarnessContext } from "./pi-harness.ts";
 import type { HarnessSecurityScreenInput } from "./harness.ts";
 import type { SecurityScreenVerdict } from "../security/security-screen.ts";
-/** One isolated completion on `modelId`; null when no provider key serves that model. */
 async function keyedOneShot(
   ctx: PiHarnessContext,
   modelId: string,
@@ -177,7 +175,6 @@ export async function piPickAckEmoji(
     const providerKeys = await resolveProviderKeys();
     if (!keyForModel(providerKeys, model)) return undefined;
     const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-    // Haiku thinks by default; a 64-token budget would go entirely to thinking.
     const raw = await complete(model, providerKeys, ACK_EMOJI_PROMPT, prompt, {
       modelGateway,
       thinkingLevel: "off",

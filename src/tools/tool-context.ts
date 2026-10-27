@@ -1,5 +1,3 @@
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
 import type { AdminToolAccess } from "./admin.ts";
 import { type ToolOutputStore } from "../sessions/tool-output.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -165,7 +163,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 }
 
-/** Pass-through capabilities and the selected-sandbox resource operations. */
 function contextBasics(
   deps: ToolContextDeps,
   { writableScopeId, accessSandbox }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "accessSandbox">,
@@ -222,7 +219,6 @@ function contextBasics(
   } satisfies Partial<ToolContext>;
 }
 
-/** Computer status and restart. */
 function computerOps(
   deps: ToolContextDeps,
   { writableScopeId, accessSandbox }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "accessSandbox">,

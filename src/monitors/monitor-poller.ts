@@ -21,7 +21,6 @@ export const MONITOR_POLL_MS = 10_000;
 const DEFAULT_MIN_FIRE_INTERVAL_MS = 60_000;
 
 export interface MonitorPoller {
-  /** Poll every live monitor once; run by the `monitor:poll` background job every MONITOR_POLL_MS. */
   tick(now?: number): Promise<void>;
 }
 
@@ -134,7 +133,6 @@ interface PollContext {
   reportLost(m: Monitor): Promise<void>;
 }
 
-/** Read one monitor's new output and fire the turn it calls for; true when it fired (or gave up on the process). */
 async function pollMonitor(
   { deps, heartbeatMs, minFireIntervalMs, fire, reportLost }: PollContext,
   sandbox: ProcessSandbox,

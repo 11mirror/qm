@@ -1,6 +1,3 @@
-// How a running pi turn listens for being stopped or steered: the run's cancel signal (a lost
-// lease), and the run-signal poll that delivers user steers and user aborts.
-
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -9,16 +6,11 @@ import type { HarnessTurnInput } from "./harness.ts";
 import type { SteerIntake } from "./harness-shared.ts";
 import { recordedMessageTimestamps } from "./replay.ts";
 
-/** Whether the user stopped this turn, and why. */
 export interface TurnStop {
   userAborted: boolean;
   abortReason?: string;
 }
 
-/**
- * Abort the turn when its cancel signal fires, and poll the run's signals for steers (queued into
- * the live session) and user aborts (recorded on `stop`). `release` detaches both.
- */
 export function watchTurnSignals(o: {
   turn: HarnessTurnInput;
   entry: { agentSession: AgentSession; ref: ToolContextRef };

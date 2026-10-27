@@ -73,7 +73,6 @@ import {
 
 type Plugins = ReadonlyMap<string, ResolvedPlugin>;
 
-/** Validates the flag combination and returns the build concurrency and the restart set. */
 function validateUpOptions(config: QmConfig, services: string[], opts: AwsUpOpts) {
   const aws = requireAws(config);
   const buildConcurrency = opts.buildConcurrency ?? 1;
@@ -106,7 +105,6 @@ function validateUpOptions(config: QmConfig, services: string[], opts: AwsUpOpts
   return { buildConcurrency, restart };
 }
 
-/** `qm up --build-only`: builds and pushes every selected image and writes the release candidate. */
 async function buildUpCandidate(
   config: QmConfig,
   services: string[],
@@ -164,7 +162,6 @@ async function buildUpCandidate(
   ok(`AWS release candidate written to ${opts.candidateOut}`);
 }
 
-/** Everything one `qm up` run decides up front, plus the state its compensation and cleanup need. */
 interface UpRun {
   config: QmConfig;
   aws: AwsConfig;
@@ -210,7 +207,6 @@ function selectsCoreLayer(opts: AwsUpOpts): boolean {
   return !!opts.sandboxDir && existsSync(opts.sandboxDir) && (!opts.only || opts.only.includes("core"));
 }
 
-/** `qm plan`: reports the images, task changes, counts and layer the deploy would apply. */
 async function planUp(run: UpRun): Promise<void> {
   const { config, aws, opts, services, allServices, plugins, candidate } = run;
   step(
@@ -268,7 +264,6 @@ async function planUp(run: UpRun): Promise<void> {
   );
 }
 
-/** Snapshots the live services and manifest, adopts untouched workloads and takes the DB restore point. */
 async function prepareUpBaseline(run: UpRun): Promise<ServiceSnapshot> {
   const { config, aws, services, allServices } = run;
   await assertAwsDeployImage(config);
@@ -297,7 +292,6 @@ async function prepareUpBaseline(run: UpRun): Promise<ServiceSnapshot> {
   return before;
 }
 
-/** Records the layer to restore on failure and uploads the layer this deploy should apply. */
 async function prepareUpLayer(run: UpRun, before: ServiceSnapshot): Promise<void> {
   const { config, aws, opts, current } = run;
   if (current?.layer) {
@@ -336,7 +330,6 @@ async function prepareUpLayer(run: UpRun, before: ServiceSnapshot): Promise<void
   }
 }
 
-/** Pushes each selected image under the staging tag, or takes it from the release candidate. */
 async function publishUpImages(run: UpRun) {
   const { config, aws, opts, candidate } = run;
   if (!candidate) await dockerLogin(aws);
@@ -355,7 +348,6 @@ async function publishUpImages(run: UpRun) {
   return { images, provenance };
 }
 
-/** Renders every selected task, registers the changed ones and returns each workload's target. */
 async function registerUpTasks(run: UpRun, before: ServiceSnapshot, images: Record<string, string>) {
   const { config, aws, current } = run;
   let backgroundDeploymentId = current?.backgroundDeploymentId;
@@ -385,7 +377,6 @@ async function registerUpTasks(run: UpRun, before: ServiceSnapshot, images: Reco
   return { targets, changed, changedCore: !!changedCore, backgroundDeploymentId };
 }
 
-/** Migrates a candidate, rolls changed workloads, waits for every selected service and syncs the layer. */
 async function rollOutUp(
   run: UpRun,
   before: ServiceSnapshot,
@@ -431,7 +422,6 @@ async function rollOutUp(
   }
 }
 
-/** Records the release manifest when anything changed, then promotes the staged images to the label. */
 async function recordUpRelease(
   run: UpRun,
   before: ServiceSnapshot,
@@ -484,7 +474,6 @@ async function recordUpRelease(
   }
 }
 
-/** Restores the pre-deploy layer and service targets after a failed deploy, then rethrows. */
 async function compensateUp(run: UpRun, error: unknown): Promise<never> {
   const compensationFailures: string[] = [];
   const { previousLayerBody } = run;
@@ -513,7 +502,6 @@ async function compensateUp(run: UpRun, error: unknown): Promise<never> {
   throwAfterCompensation(error, compensationFailures);
 }
 
-/** Deletes the staging tag unless the release succeeded and its promotion did not. */
 async function cleanUpStaging(run: UpRun): Promise<void> {
   const { aws } = run;
   for (const service of run.staged) {

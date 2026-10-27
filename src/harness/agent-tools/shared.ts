@@ -1,5 +1,3 @@
-// Schema helpers, result capping and list/cron formatting shared by the agent tool families.
-
 import { Type } from "typebox";
 import { MAX_OUTBOUND_FILES } from "../../core/attachments.ts";
 import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";

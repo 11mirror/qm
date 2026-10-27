@@ -1,5 +1,3 @@
-/** ToolContext operations on the turn's computers and stores: execute, files, skills, publishing, memory and history. */
-/** Builds the ToolContext a turn's agent tools call into: sandboxes, files, memory, surfaces, background jobs and the control plane. */
 import { parkedOutputKey } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -32,7 +30,6 @@ import {
 import { type ToolContextDeps } from "./tool-context.ts";
 import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
 
-/** Runs a command on the routed computer with its credentials, policy and ledger record. */
 export function executeOp(
   deps: ToolContextDeps,
   {
@@ -153,7 +150,6 @@ export function executeOp(
   } satisfies Partial<ToolContext>;
 }
 
-/** Workspace reads and writes, and the skills catalog. */
 export function fileOps(
   deps: ToolContextDeps,
   {
@@ -284,7 +280,6 @@ export function fileOps(
   } satisfies Partial<ToolContext>;
 }
 
-/** App publishing and deployment visibility. */
 export function publishOps(
   deps: ToolContextDeps,
   {
@@ -376,7 +371,6 @@ export function publishOps(
   } satisfies Partial<ToolContext>;
 }
 
-/** Memory, session history, MCP and client-tool calls. */
 export function memoryAndHistoryOps(
   deps: ToolContextDeps,
   {

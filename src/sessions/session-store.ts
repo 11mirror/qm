@@ -41,7 +41,6 @@ export interface Lease {
   fenceToken?: string;
 }
 
-/** Who holds a session lease: a turn, compaction, a fork copy, or an out-of-turn append (delivery, failure record, goal cancel). */
 export type LeaseHolder = "turn" | "compaction" | "fork" | "append";
 
 export interface LeaseAttempt {
@@ -236,7 +235,6 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
-/** A past security screening, recovered from its captured request — the replay corpus for flagger tests. */
 export interface ScreenSample {
   id: string;
   sessionId: string;
@@ -537,7 +535,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
   purgeLlmCaptures(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
@@ -559,12 +556,10 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  /** Items every listed principal may read (each one's participation window covers them). */
   visibleItems(sessionId: string, principals: string | readonly string[], opts?: GetItemsOptions): Promise<Item[]>;
 
   searchItems(principalId: string, query: string, limit?: number): Promise<ItemSearchHit[]>;
 
-  /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
   countSessions(): Promise<number>;

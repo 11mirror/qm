@@ -1,12 +1,6 @@
 import type { PgMigrationDefinition } from "./pg-pool.ts";
 import { mapConversions } from "./typed-table.ts";
 
-/**
- * Destructive migrations held back from the expand phase. An image from before them must still boot on a database
- * the current line migrated, so tables, rows and indexes that older code still reads stay until this line has settled
- * and rollback to an older image is off the table. Nothing registers this list yet; a later batch registers it.
- * Every statement is idempotent: some databases already ran the original drops.
- */
 export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   { id: "contract/0001-drop-deliveries", statements: ["DROP TABLE IF EXISTS deliveries"] },
   {
@@ -36,7 +30,6 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     ],
   },
   {
-    // Older images still write orders; this line keeps guidance in instructions and never reads the columns.
     id: "contract/0006-drop-channel-policy-orders",
     statements: [
       "SET LOCAL lock_timeout = '3s'",

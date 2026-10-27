@@ -1,4 +1,3 @@
-/** Opens the Pi agent session for one turn: isolated dirs, replay seeding, tools and the request hooks. */
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

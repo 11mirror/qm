@@ -104,13 +104,10 @@ const unserviceable = async (deps: ConfiguredDeps, modelId: string): Promise<{ e
 
 type Parsed<V> = { value: V } | { error: string };
 
-/** An admin resource over one per-scope setting: reads and writes go through the store, the target comes from SCOPE_SETTINGS. */
 function settingResource<K extends ScopeSettingName>(
   name: K,
   resource: Omit<AdminResource, "get" | "apply" | "target"> & {
-    /** The error for a non-org scope; required when the setting's target is "org". */
     orgWide?: string;
-    /** Read only at the org scope. */
     orgRead?: true;
     parse: (
       body: unknown,
@@ -127,7 +124,6 @@ function settingResource<K extends ScopeSettingName>(
     await ctx.deps.config.setSetting(name, parsed.value, orgOnly ? undefined : scope);
     return { ok: true };
   };
-  // Copy descriptors rather than spreading so a live `get enumValues()` stays live.
   const { orgWide: _o, orgRead: _r, parse: _p, ...props } = Object.getOwnPropertyDescriptors(resource);
   return Object.defineProperties(
     {

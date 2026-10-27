@@ -30,7 +30,6 @@ const FINISH_ATTEMPTS = 20;
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 const LEASE_LOST_CONSECUTIVE = 3;
-/** Times a turn may be claimed before it is failed. */
 export const RUN_MAX_CLAIMS = 8;
 
 function runTurnInput(
@@ -193,7 +192,6 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
       });
   }, extendMs);
   beat.unref?.();
-  // Gives up after FINISH_ATTEMPTS: the claim then lapses and Absurd re-runs the turn, as after a crash.
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
     for (let attempt = 1; attempt <= FINISH_ATTEMPTS && !shutdown.signal.aborted; attempt++) {
       try {

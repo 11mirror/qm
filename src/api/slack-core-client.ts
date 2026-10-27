@@ -77,7 +77,6 @@ interface DirectoryPush {
   groupsSyncedAt?: number;
 }
 
-/** Periodic upkeep for one Slack app attached in this process; `slack:*` background jobs run each kind. */
 export type SlackUpkeep = { reconcileStatus(): Promise<unknown> } & Partial<
   Record<"replayEnvelopes" | "publishEmojiCatalog" | "reconcileTaskAcks", () => Promise<unknown>>
 >;
@@ -111,9 +110,7 @@ export interface SlackCoreClient {
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   slack: SlackNative;
   upkeep: {
-    /** The returned detach waits out this app's in-flight upkeep. */
     attach(upkeep: SlackUpkeep): () => Promise<void>;
-    /** Run one kind of upkeep for every Slack app attached in this process. */
     run(kind: keyof SlackUpkeep): Promise<void>;
   };
   stagedEnvelopes?: StagedEnvelopes;

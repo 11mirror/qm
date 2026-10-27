@@ -5,8 +5,6 @@ export interface FenceQueryable {
   query(text: string, params: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
 }
 
-// A turn holds its fence while its row is running under the token and its Absurd run is still claimed by that token
-// (or was cancelled, so it may wrap up). The Absurd tables are per tenant; tenantQueue is the one place that names them.
 function fenceSql(): string {
   const held = TURN_QUEUES.map(
     (queue) => `WHEN '${queue}' THEN EXISTS (

@@ -460,7 +460,6 @@ function jobComputerPlan(t: TurnSandboxState, resource: SandboxResource): Sandbo
   return { resource, crossScope: false, egress: t.resolution.egress, commandPolicy: null };
 }
 
-/** A fresh job-only computer for a background job that names private credentials in a shared scope. */
 async function provisionJobComputer(t: TurnSandboxState): Promise<SandboxHandle> {
   const { deps, actor, memoryScopeId } = t;
   const resources = deps.sandboxResources!;
@@ -469,7 +468,6 @@ async function provisionJobComputer(t: TurnSandboxState): Promise<SandboxHandle>
   return provisionResource(t, jobComputerPlan(t, resource));
 }
 
-/** Reattaches a background job's computer; job-only computers skip the conversation access check. */
 async function provisionJobSandbox(t: TurnSandboxState, id: string): Promise<SandboxHandle> {
   const resource = await t.deps.sandboxResources!.get(id);
   return resource.jobOnly ? provisionResource(t, jobComputerPlan(t, resource)) : provisionResource(t, id);

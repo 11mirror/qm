@@ -2,7 +2,6 @@ import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { USER_KINDS } from "./items.ts";
 import { SPEND_FIELDS, spendValue } from "./postgres-session-sql.ts";
 
-// Sessions migrations after the schema baseline (src/persistence/schema-baseline.sql), which holds 0001–0044.
 export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
   {
     id: "sessions/store/0045-llm-request-spend-columns",
@@ -11,7 +10,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
       ...SPEND_FIELDS.map(
         ([column, , type]) => `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ${column} ${type}`,
       ),
-      // Usage JSON as jsonb when it parses and every number field casts, else NULL (never an error).
       `CREATE OR REPLACE FUNCTION llm_spend_usage(t text) RETURNS jsonb
              LANGUAGE plpgsql IMMUTABLE PARALLEL RESTRICTED AS $llm_spend_usage$
              DECLARE j jsonb;
@@ -30,7 +28,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
                RETURN NULL;
              END
              $llm_spend_usage$`,
-      // Spend reads these columns; a call with malformed usage still counts, at zero.
       `CREATE OR REPLACE FUNCTION llm_request_spend_columns() RETURNS trigger
              LANGUAGE plpgsql AS $llm_request_spend_columns$
              DECLARE u jsonb := llm_spend_usage(NEW.usage_json);
@@ -71,7 +68,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
              ON CONFLICT DO NOTHING;
              RETURN NULL;
            END $mark_attribution_dirty$`,
-      // Items are append-only and leave only with their session, whose participants go too.
       `CREATE TRIGGER items_attribution_dirty AFTER INSERT ON items
            FOR EACH ROW WHEN (NEW.kind IN ${USER_KINDS}) EXECUTE FUNCTION mark_attribution_dirty()`,
       `CREATE TRIGGER participants_attribution_dirty AFTER INSERT OR UPDATE OR DELETE ON participants
@@ -81,9 +77,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
   {
-    // Migrations run with tenancy bypassed and before qm_tenantize(), so 0048's seed and any bypassed write (a tenant
-    // import) marked sessions dirty under the home tenant: other tenants' Admin Users caches never rebuilt. Dirty
-    // marks now carry the source row's tenant, and a tenantized database is re-seeded per tenant.
     id: "sessions/store/0049-attributed-turns-tenant",
     statements: [
       `SET LOCAL lock_timeout = '3s'`,

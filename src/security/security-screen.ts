@@ -17,14 +17,8 @@ ${SECURITY_SCREEN_OUTPUT_CONTRACT}`;
 
 export const SECURITY_SCREEN_SYSTEM_PROMPT = securityScreenSystemPrompt();
 
-/**
- * Step recorded on a captured security-screen LLM request. Screening calls are not part of any
- * turn's step sequence, so they are stamped with this sentinel — which also makes past screenings
- * findable as a replay corpus for the Auto flagger test run.
- */
 export const SECURITY_SCREEN_STEP = -1;
 
-/** Recover the screened payload from a captured screening request envelope, or null if it isn't one. */
 export function screenPayloadFromEnvelope(envelope: unknown): string | null {
   const messages = (envelope as { messages?: unknown } | null)?.messages;
   if (!Array.isArray(messages) || messages.length !== 1) return null;

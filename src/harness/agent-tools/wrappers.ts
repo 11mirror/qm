@@ -1,5 +1,3 @@
-// Wrappers applied to every agent tool: retry-safety marks, the approval gate, body timing and the runtime barrier.
-
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";

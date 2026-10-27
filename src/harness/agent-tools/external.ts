@@ -1,5 +1,3 @@
-// Connector (MCP) and client-page tools: external tools wrapped with provenance and approval rules.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { errMessage } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";

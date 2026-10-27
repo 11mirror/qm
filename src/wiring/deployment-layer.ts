@@ -51,7 +51,6 @@ export function buildDeploymentLayer(w: Head & StoresModule) {
         }
       : {}),
   });
-  // Every instance re-applies the layer when any instance publishes one, and after a missed notification.
   const deploymentLayerChanged = createPostgresNotifyBus<null>(databaseUrl, "deployment_layer", "deployment layer");
   const deploymentLayerStore: DeploymentLayerStore = {
     ...layerStore,

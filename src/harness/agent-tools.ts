@@ -84,7 +84,6 @@ export interface ToolContextRef {
   goalMeter?: import("./grind.ts").GrindMeter;
   modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
-  /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
   observeToolResult?: (input: ToolResultScreenInput) => void;
   toolApprovalGate?: (callKey: string) => boolean;

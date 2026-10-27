@@ -65,7 +65,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
           },
         })
         .then(tokensFromCredential);
-      void outcome.catch(() => undefined); // poll() awaits the outcome
+      void outcome.catch(() => undefined);
       let startTimer: NodeJS.Timeout | undefined;
       try {
         const event = await Promise.race([
@@ -82,7 +82,6 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
         const login: PendingLogin = { abort, expiresAt, outcome, settled: false };
         void outcome
           .catch(() => undefined)
-          // Only marks the login settled; poll() reads the outcome itself.
           .finally(() => {
             login.settled = true;
           });
