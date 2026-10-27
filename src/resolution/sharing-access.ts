@@ -38,17 +38,15 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
     return (await input.isCurrentSharedScopeMember(input.actor.id, input.targetScope)) ? [personal] : [];
   }
   if (targetKind !== "personal") return [];
-  const rooms = (await input.sessions.participantScopes(input.actor.id).catch(() => []))
+  const isMember = input.isCurrentSharedScopeMember;
+  const rooms = (await input.sessions.participantScopes(input.actor.id))
     .filter((scope) => {
       const kind = parseScopeId(scope.scopeId).kind;
       return kind === "channel" || kind === "group";
     })
     .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
-  const sources: ScopeId[] = [];
-  for (const room of rooms) {
-    if (await input.isCurrentSharedScopeMember(input.actor.id, room.scopeId)) sources.push(room.scopeId);
-  }
-  return sources;
+  const current = await Promise.all(rooms.map((room) => isMember(input.actor.id, room.scopeId)));
+  return rooms.filter((_room, i) => current[i]).map((room) => room.scopeId);
 }
 
 function handleSource(scope: ScopeId): string {
@@ -68,21 +66,20 @@ export async function carriedFileHandles(
   files: Pick<FileArtifactStore, "listOwnedByScopes">,
 ): Promise<GrantedHandle[]> {
   const handles = new Map<string, GrantedHandle>();
-  for (const sourceScope of sourceScopes) {
-    let cursor: string | undefined;
-    do {
-      const page = await files.listOwnedByScopes([sourceScope], cursor ? { cursor } : {});
-      for (const file of page.files) {
-        handles.set(file.id, {
-          carried: true,
-          handlePath: `shared/open-${handleSource(sourceScope)}/${file.id}/${handlePath(file.name)}`,
-          ownerScopeId: sourceScope,
-          fileId: file.id,
-          permission: "read",
-        });
-      }
-      cursor = page.nextCursor;
-    } while (cursor);
-  }
+  if (!sourceScopes.length) return [];
+  let cursor: string | undefined;
+  do {
+    const page = await files.listOwnedByScopes(sourceScopes, cursor ? { cursor } : {});
+    for (const file of page.files) {
+      handles.set(file.id, {
+        carried: true,
+        handlePath: `shared/open-${handleSource(file.ownerScopeId)}/${file.id}/${handlePath(file.name)}`,
+        ownerScopeId: file.ownerScopeId,
+        fileId: file.id,
+        permission: "read",
+      });
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
   return [...handles.values()];
 }
