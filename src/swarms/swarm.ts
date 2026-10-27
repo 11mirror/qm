@@ -4,7 +4,7 @@ import type { SessionMailbox } from "../sessions/session-mailbox.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
 import { mapBounded } from "../util/async.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import type { SwarmBoard, SwarmBoardPost } from "./swarm-board.ts";
 
@@ -72,6 +72,7 @@ const MAX_LIMIT = 100;
 const MAX_POST_CHARS = 16_000;
 const PREVIEW_CHARS = 500;
 const NOTICE_CHARS = 2_000;
+const THREAD_CHARS = 64_000;
 const NOTIFY_GRACE_MS = 60_000;
 const OPEN_CONCURRENCY = 4;
 const NOTIFY_CONCURRENCY = 8;
@@ -193,8 +194,12 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       ok: false,
       message: "this session is not in a swarm. A coordinator creates one with swarm start; its members inherit it.",
     };
-  for (const stranded of await ctx.board.unnotified(swarmId, Date.now() - NOTIFY_GRACE_MS))
-    await notifySubscribers(ctx, stranded);
+  const stranded = await ctx.board
+    .unnotified(swarmId, Date.now() - NOTIFY_GRACE_MS)
+    .catch(swallowAs("swarm board: list stranded notices", []));
+  await mapBounded(stranded, NOTIFY_CONCURRENCY, (post) =>
+    notifySubscribers(ctx, post).catch(swallowAs("swarm board: redeliver a stranded notice", 0)),
+  );
   const channel = input.channel?.trim().toLowerCase();
   switch (input.action) {
     case "channels":
@@ -237,14 +242,16 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       const root = await ctx.board.post(swarmId, input.postId);
       if (!root) return { ok: false, message: `no post ${input.postId} on this board.` };
       const limit = clampLimit(input.limit);
-      const posts = (await ctx.board.thread(swarmId, root.threadId ?? root.id, input.after, limit)).map(view);
+      const fetched = await ctx.board.thread(swarmId, root.threadId ?? root.id, input.after, limit);
+      let budget = THREAD_CHARS;
+      const posts = fetched.filter((post, index) => (budget -= post.body.length) >= 0 || index === 0).map(view);
       return {
         ok: true,
         result: {
           swarmId,
           threadId: root.threadId ?? root.id,
           posts,
-          ...(posts.length === limit ? { nextAfter: posts.at(-1)!.cursor } : {}),
+          ...(posts.length < fetched.length || posts.length === limit ? { nextAfter: posts.at(-1)!.cursor } : {}),
         },
       };
     }

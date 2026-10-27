@@ -34,3 +34,14 @@ export async function readCappedText(
   }
   return Buffer.concat(chunks, total).toString("utf8");
 }
+
+export async function readTextPrefix(response: Response, maxChars: number): Promise<string> {
+  if (!response.body) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of response.body) {
+    text += decoder.decode(chunk, { stream: true });
+    if (text.length >= maxChars) return text.slice(0, maxChars);
+  }
+  return text + decoder.decode();
+}
