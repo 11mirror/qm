@@ -22,22 +22,9 @@ export function piFailedAssistant(session: AssistantTextSession): AssistantMessa
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
-  const ok = [...session.messages]
-    .reverse()
-    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
-    AssistantMessage | undefined;
-  const u = ok?.usage;
-  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
-}
-
 function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
-  if (!failed) return null;
-  const contextWindow = (
-    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
-  )?.contextWindow;
-  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
+  return failed ? providerTurnError(failed) : null;
 }
 
 export const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
