@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -12,7 +13,7 @@ export function requiresDelegation(
   return (
     enabled &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
-    (request.surface === "slack" || request.surfaceTools === true)
+    (surfaceHas(request.surface, "delegates") || request.surfaceTools === true)
   );
 }
 
@@ -46,7 +47,7 @@ export async function delegatedAuthorizationOrigin(
       sender.parentSessionId === child.id &&
       source.sessionId === child.threadRef;
     const started =
-      current.surface === "web" &&
+      surfaceHas(current.surface, "sidebar") &&
       !child.parentSessionId &&
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;

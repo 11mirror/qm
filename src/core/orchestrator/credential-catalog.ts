@@ -1,3 +1,4 @@
+import { surfaceHas } from "../../surfaces/surface.ts";
 import type { Session } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { type Destination } from "../../types.ts";
@@ -139,7 +140,7 @@ async function mintControlTokens(
         .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
       actorIsOrgAdmin = status.isAdmin;
     }
-    const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
+    const turnSurface = surfaceHas(input.surface, "transcript") ? input.surface : (session.surface ?? input.surface);
     controlClaims = {
       ...scopeAttestation,
       aud: CONTROL_PLANE_AUD,

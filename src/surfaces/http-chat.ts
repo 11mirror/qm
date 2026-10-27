@@ -179,6 +179,7 @@ export function createHttpChatSurface(
   return {
     name: config.surface,
     label: config.label,
+    traits: [],
     destinationTypes: [config.surface],
     async normalize({ headers, pathWithQuery, rawBody }): Promise<InboundOutcome> {
       const verified = verifySignature(

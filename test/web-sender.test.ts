@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStateBus, type SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { createOutbound, createWebSender } from "../src/surfaces/outbound.ts";
+import { createOutbound, createWebSurface } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -37,7 +37,7 @@ function wired(leaseWaitMs?: number) {
   const outbound = createOutbound({ idempotency: createIdempotencyStore(testMap()) });
   outbound.register(
     ["web"],
-    createWebSender({ sessions, sessionStates: bus, ...(leaseWaitMs !== undefined ? { leaseWaitMs } : {}) }),
+    createWebSurface({ sessions, sessionStates: bus, ...(leaseWaitMs !== undefined ? { leaseWaitMs } : {}) }).deliver,
   );
   return { sessions, outbound, states };
 }

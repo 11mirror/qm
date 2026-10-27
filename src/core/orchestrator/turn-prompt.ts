@@ -1,3 +1,4 @@
+import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { requiresDelegation } from "../../subagents/delegation.ts";
@@ -80,8 +81,8 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     scopeId,
   } = ctx;
   const { useMemory, context, memoryScopeId, memoryStrategy } = turn;
-  const isWeb = input.surface === "web";
-  const isSlack = input.surface === "slack";
+  const profile = surfaceProfile(input.surface);
+  const isWeb = profile.traits.includes("transcript");
   const surfaceTool = input.surface ?? "slack";
   const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
   const botName = branding.selfLabel ?? "QM";
@@ -98,12 +99,12 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const frameVars: PromptVars = {
     botName,
     surfaceTool,
-    surfaceLabel: isWeb ? `the ${botName} web app` : (!isSlack && deps.surfaceLabel?.(surfaceTool)) || "Slack",
+    surfaceLabel: isWeb ? `the ${botName} web app` : deps.surfaceLabel?.(surfaceTool) || "Slack",
     conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
       conversation.kind
     ],
-    web: isWeb,
-    slack: isSlack,
+    web: profile.promptFlavor === "web",
+    slack: profile.promptFlavor === "slack",
   };
   if (modeName === "mode-conversation") {
     frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
@@ -128,9 +129,9 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     botName,
     botHandle,
     orgName,
-    web: isWeb,
-    slack: isSlack,
-    sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls),
+    web: profile.promptFlavor === "web",
+    slack: profile.promptFlavor === "slack",
+    sessions: profile.traits.includes("sidebar") && surfaceHas(surfaceName, "sidebar") && Boolean(sessionSyscalls),
   });
   let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
   if (external) systemPrompt += `\n\n${EXTERNAL_SLACK_MD}`;

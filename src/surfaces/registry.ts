@@ -1,5 +1,5 @@
 import { withTenant } from "../tenant.ts";
-import type { Outbound } from "../surfaces/outbound.ts";
+import type { Outbound } from "./outbound.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { InboundMessage, InboundSurface, Surface, SurfaceRequest } from "./surface.ts";
 import { surfaceContainerRef, surfaceDeliveryTarget, surfaceThreadRef } from "./refs.ts";

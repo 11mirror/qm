@@ -132,7 +132,7 @@ import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
 import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
-import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
+import { createOutbound, createWebSurface, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
 import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
 import { wireRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
@@ -318,9 +318,9 @@ import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-sto
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
-import { createSlackSurface } from "./chat-surface/slack.ts";
-import { createHttpChatSurface } from "./chat-surface/http-chat.ts";
-import { createSurfaceRegistry, type SurfaceRegistry } from "./chat-surface/registry.ts";
+import { createSlackSurface } from "./surfaces/slack-surface.ts";
+import { createHttpChatSurface } from "./surfaces/http-chat.ts";
+import { createSurfaceRegistry, type SurfaceRegistry } from "./surfaces/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
@@ -1425,10 +1425,10 @@ export function buildApp(
       })().catch(swallowAs("outbound: remember DM post", undefined));
     },
   });
-  outbound.register(["web"], createWebSender(transcripts));
   const slackSurface = createSlackSurface();
   const chatSurfaces = createSurfaceRegistry({
     surfaces: [
+      createWebSurface(transcripts),
       slackSurface,
       ...(config.chatSurfaces ?? []).map((surface) =>
         createHttpChatSurface(surface, { mirror: (events) => app.ingestSurfaceEvents(events, surface.surface) }),

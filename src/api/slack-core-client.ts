@@ -35,7 +35,7 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { ByteSource } from "../util/bytes.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
-import type { SlackNative } from "../chat-surface/slack.ts";
+import type { SlackNative } from "../surfaces/slack-surface.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";

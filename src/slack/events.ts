@@ -38,41 +38,39 @@ interface EventArgs {
 
 type EventIdentity = { userId: string; actor?: { externalId: string; isBot: true; displayName?: string } };
 
-export function registerSlackEvents(
-  app: {
-    event(name: string, handler: (args: any) => Promise<void>): void;
-    message(handler: (args: any) => Promise<void>): void;
-  },
-  deps: {
-    handler: TurnHandler;
-    mirror: Mirror;
-    directory: Directory;
-    ids: BotIdentity;
-    deduper: Deduper;
-    allowActor?: (actor: ActorAssertion) => boolean;
-    denyResponder?: DenyResponder;
-    webUiPublicUrl?: string;
-    backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
-    ensureHeader?: (
-      client: SurfaceHeaderClient,
-      channel: string,
-      scopeId: string,
-      kind: "dm" | "channel",
-      ensureOpts?: { pinNew?: boolean },
-    ) => void;
-    inboxMessage?: (
-      client: unknown,
-      msg: {
-        channel: string;
-        ts: string;
-        threadTs?: string;
-        text?: string;
-        senderSlackId?: string;
-        isDirectMessage: boolean;
-      },
-    ) => void;
-  },
-): void {
+type SlackEventDeps = {
+  handler: TurnHandler;
+  mirror: Mirror;
+  directory: Directory;
+  ids: BotIdentity;
+  deduper: Deduper;
+  allowActor?: (actor: ActorAssertion) => boolean;
+  denyResponder?: DenyResponder;
+  webUiPublicUrl?: string;
+  backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
+  ensureHeader?: (
+    client: SurfaceHeaderClient,
+    channel: string,
+    scopeId: string,
+    kind: "dm" | "channel",
+    ensureOpts?: { pinNew?: boolean },
+  ) => void;
+  inboxMessage?: (
+    client: unknown,
+    msg: {
+      channel: string;
+      ts: string;
+      threadTs?: string;
+      text?: string;
+      senderSlackId?: string;
+      isDirectMessage: boolean;
+    },
+  ) => void;
+};
+
+type SlackEventContext = ReturnType<typeof slackEventContext>;
+
+function slackEventContext(deps: SlackEventDeps) {
   const { handler, mirror, directory, ids, deduper, allowActor, denyResponder } = deps;
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
@@ -152,7 +150,29 @@ export function registerSlackEvents(
     );
   };
 
-  app.event("app_mention", async ({ event, body, client, context }: EventArgs) => {
+  return {
+    deps,
+    ids,
+    deduper,
+    directory,
+    allowActor,
+    handleReactionEvent,
+    botHasStakeInThread,
+    mirrorMessageEvent,
+    pushSurfaceEvents,
+    syncForUnseenGroup,
+    forceDirectorySync,
+    ownMessage,
+    actorAllowed,
+    denyDirectApproach,
+    eventIdentity,
+    dispatchMessage,
+  };
+}
+
+function onAppMention(ctx: SlackEventContext) {
+  const { ids, deduper, allowActor, actorAllowed, denyDirectApproach, eventIdentity, dispatchMessage } = ctx;
+  return async ({ event, body, client, context }: EventArgs) => {
     try {
       const e = parseMessageEvent(event);
       if (!shouldProcessMessage(e, ids.botUserId, ids.ownBotId)) return;
@@ -179,9 +199,25 @@ export function registerSlackEvents(
       context.ackGate?.failed("Slack mention processing failed");
       throw error;
     }
-  });
+  };
+}
 
-  app.message(async ({ message, body, client, context }: EventArgs) => {
+function onMessage(ctx: SlackEventContext) {
+  const {
+    deps,
+    ids,
+    directory,
+    botHasStakeInThread,
+    mirrorMessageEvent,
+    pushSurfaceEvents,
+    syncForUnseenGroup,
+    forceDirectorySync,
+    ownMessage,
+    actorAllowed,
+    denyDirectApproach,
+    dispatchMessage,
+  } = ctx;
+  return async ({ message, body, client, context }: EventArgs) => {
     try {
       const m = parseMessageEvent(message);
       if (isOwnStatusCard(m.message ?? m.previous_message ?? m, ids.botUserId, ids.ownBotId)) return;
@@ -286,8 +322,14 @@ export function registerSlackEvents(
       context.ackGate?.failed("Slack message processing failed");
       throw error;
     }
-  });
+  };
+}
 
+function registerLifecycle(
+  app: { event(name: string, handler: (args: any) => Promise<void>): void },
+  ctx: SlackEventContext,
+): void {
+  const { deps, ids, deduper, directory, allowActor, handleReactionEvent, forceDirectorySync } = ctx;
   const lifecycle = (name: string, run: (client: any, e: ReturnType<typeof parseLifecycleEvent>) => Promise<void>) =>
     app.event(name, async ({ event, body, client }: EventArgs) => {
       const e = parseLifecycleEvent(event);
@@ -342,4 +384,17 @@ export function registerSlackEvents(
       await handleReactionEvent(reaction, parseEventId(body), client, added);
     });
   }
+}
+
+export function registerSlackEvents(
+  app: {
+    event(name: string, handler: (args: any) => Promise<void>): void;
+    message(handler: (args: any) => Promise<void>): void;
+  },
+  deps: SlackEventDeps,
+): void {
+  const ctx = slackEventContext(deps);
+  app.event("app_mention", onAppMention(ctx));
+  app.message(onMessage(ctx));
+  registerLifecycle(app, ctx);
 }

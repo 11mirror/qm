@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { surfaceHas, surfaceProfile, type Surface } from "./surface.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
@@ -53,7 +54,7 @@ export function createOutbound(opts: {
   const once =
     opts.idempotency?.once.bind(opts.idempotency) ?? (async (_: string, fn: () => Promise<void>) => (await fn(), true));
   const retryable = (post: OutboundPost, error: unknown): boolean =>
-    Boolean(opts.retries) && post.destination.type !== "web" && !isPermanent(error);
+    Boolean(opts.retries) && !surfaceHas(post.destination.type, "transcript") && !isPermanent(error);
   return {
     async send(post) {
       const sender = senderFor(post.destination.type);
@@ -210,10 +211,17 @@ export async function appendToTranscript(
   });
 }
 
-export function createWebSender(deps: {
-  sessions: TranscriptSessions;
-  sessionStates?: SessionStateBus;
-}): SurfaceSender {
+export function createWebSurface(deps: TranscriptDeps): Surface {
+  return {
+    name: "web",
+    label: "web",
+    destinationTypes: ["web"],
+    traits: surfaceProfile("web").traits,
+    deliver: webSender(deps),
+  };
+}
+
+function webSender(deps: TranscriptDeps): SurfaceSender {
   return async (post) => {
     const { destination: dest, provenance } = post;
     const fromElsewhere = provenance !== undefined && provenance.sourceThreadRef !== dest.target;

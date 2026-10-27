@@ -26,7 +26,6 @@ const req = (n) => { const v = process.env[n]; if (!v) throw new Error(n); retur
 console.log(JSON.stringify([{
   id: "batch-twin",
   botToken: req("B_SLACK_BOT_TOKEN"),
-  eventsMode: "http",
   signingSecret: req("B_SLACK_SIGNING_SECRET"),
   apiUrl: req("B_SLACK_API_URL"),
   allowFrom: ["e2e-alice@slack-twin.local", "e2e-qa@slack-twin.local"],

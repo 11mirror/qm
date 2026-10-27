@@ -665,13 +665,13 @@ test("AWS core receives the configured model and virtual-service environment", (
     model: "anthropic/claude-sonnet-4-5",
     env: {
       ...config.env,
-      slack: { SLACK_EVENTS_MODE: "http", SHARED_SETTING: "slack" },
+      slack: { SLACK_LOG_LEVEL: "debug", SHARED_SETTING: "slack" },
       core: { ...config.env.core, SHARED_SETTING: "core" },
     },
   };
   const core = serviceEnvironment(configured, "core");
   assert.equal(core.PI_MODEL, "anthropic/claude-sonnet-4-5");
-  assert.equal(core.SLACK_EVENTS_MODE, "http");
+  assert.equal(core.SLACK_LOG_LEVEL, "debug");
   assert.equal(core.SHARED_SETTING, "core");
 });
 

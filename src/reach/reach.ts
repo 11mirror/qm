@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import type {
   DeliveryProvenance,
   Destination,
@@ -292,7 +293,9 @@ export function withEdit(destination: Destination, editRef: string | undefined):
 }
 
 export function withWebTranscriptText(destination: Destination): Destination {
-  return destination.type === "web" ? { ...destination, webTranscript: { kind: "reply" } } : destination;
+  return surfaceHas(destination.type, "transcript")
+    ? { ...destination, webTranscript: { kind: "reply" } }
+    : destination;
 }
 
 export async function reachPost(input: ReachPostInput): Promise<PostReceipt | void> {

@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import type { ScopeId, TurnRequest } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 
@@ -53,7 +54,7 @@ export function isIdeasConversation(input: {
   conversation: Pick<TurnRequest["conversation"], "kind" | "threadRef">;
 }): boolean {
   return (
-    input.surface === "web" &&
+    surfaceHas(input.surface, "sidebar") &&
     input.conversation.kind === "dm" &&
     /^web:.+:ideas:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       input.conversation.threadRef,

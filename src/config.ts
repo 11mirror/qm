@@ -1,4 +1,4 @@
-import { httpChatConfigsFromEnv, type HttpChatConfig } from "./chat-surface/http-chat.ts";
+import { httpChatConfigsFromEnv, type HttpChatConfig } from "./surfaces/http-chat.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -18,11 +18,7 @@ import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import {
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,

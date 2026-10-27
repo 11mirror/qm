@@ -1,3 +1,4 @@
+import { surfaceHas } from "../surfaces/surface.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { SWARM_ACTIONS } from "../swarms/swarm.ts";
 
@@ -104,7 +105,7 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
       "sessions",
       input.sessionTools
         ? gate(
-            surface === "web",
+            surfaceHas(surface, "sidebar"),
             "On in web conversations when helper agents are enabled.",
             "Off outside the web app, the only place with a sidebar.",
           )
