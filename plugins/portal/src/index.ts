@@ -20,6 +20,7 @@ import {
   proxyToUpstream,
   proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
+  FORWARD_SANDBOX_MODEL_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
@@ -220,6 +221,16 @@ function isOAuthPublicPassthrough(method: string, pathname: string): boolean {
 function hasAgentCapability(req: IncomingMessage): boolean {
   const value = req.headers["x-agent-capability"];
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasSandboxModelCredential(req: IncomingMessage): boolean {
+  const bearer = req.headers.authorization;
+  const apiKey = req.headers["x-api-key"];
+  return (
+    hasAgentCapability(req) ||
+    (typeof bearer === "string" && /^Bearer\s+\S/i.test(bearer)) ||
+    (typeof apiKey === "string" && apiKey.trim().length > 0)
+  );
 }
 
 function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
@@ -572,6 +583,15 @@ async function passthroughRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
       res,
       { baseUrl: CORE, path: pathname, search: url.search },
       FORWARD_DEPLOYMENT_LAYER_HEADERS,
+    );
+  }
+
+  if (pathname.startsWith("/v1/sandbox-model/") && hasSandboxModelCredential(req)) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_SANDBOX_MODEL_HEADERS,
     );
   }
 

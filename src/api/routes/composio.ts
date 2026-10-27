@@ -1,4 +1,4 @@
-import { runLeaseHeld } from "../../runs/run-store.ts";
+import { capabilityRunActive } from "../../runs/capability-run.ts";
 import { slackReply } from "./slack-reply.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
@@ -31,23 +31,12 @@ export function composioUserIds(principal: string): string[] {
 
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const cap = ctx.capability;
-  if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  if (
-    !run ||
-    !cap.runLeaseToken ||
-    run.attempts !== cap.runAttempt ||
-    run.sessionId !== cap.threadRef ||
-    !samePerson(run.request.actor.id, cap.actorId) ||
-    !(await runLeaseHeld(ctx.deps.runs!, run, cap.runLeaseToken))
-  ) {
-    sendJson(ctx.res, 403, {
-      error: "inactive_run",
-      message: "Connected app access requires this run's current capability.",
-    });
-    return false;
-  }
-  return true;
+  if (!cap || (await capabilityRunActive(ctx.deps.runs, cap))) return true;
+  sendJson(ctx.res, 403, {
+    error: "inactive_run",
+    message: "Connected app access requires this run's current capability.",
+  });
+  return false;
 }
 
 type Access = { key: string; principal: string };

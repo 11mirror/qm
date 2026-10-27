@@ -180,6 +180,17 @@ export const FORWARD_AGENT_API_HEADERS = [
   "git-protocol",
 ];
 
+export const FORWARD_SANDBOX_MODEL_HEADERS = [
+  "content-type",
+  "content-length",
+  "accept",
+  "authorization",
+  "x-api-key",
+  "x-agent-capability",
+  "anthropic-version",
+  "anthropic-beta",
+];
+
 export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
   "content-type",
   "content-length",

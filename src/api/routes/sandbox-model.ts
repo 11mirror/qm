@@ -4,6 +4,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { SANDBOX_MODEL_AUD } from "../../auth/capability-token.ts";
 import { gatewayRoot } from "../../model/provider-endpoints.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
+import { capabilityRunActive } from "../../runs/capability-run.ts";
 import { reportFailure } from "../../util/errors.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
@@ -40,6 +41,10 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   const { capability, deps, res } = ctx;
   if (capability?.aud !== SANDBOX_MODEL_AUD) {
     sendJson(res, 403, { error: { message: "sandbox model grant required" } });
+    return true;
+  }
+  if (!(await capabilityRunActive(deps.runs, capability))) {
+    sendJson(res, 403, { error: { message: "the turn this token was issued for has ended" } });
     return true;
   }
   if (!deps.modelGatewayTransport) {

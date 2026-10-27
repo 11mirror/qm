@@ -191,10 +191,18 @@ async function mintControlTokens(
         deps.capabilitySecret ?? deps.signingSecret,
       );
     }
-    if (deps.sandboxModels && allInternal) {
+    if (deps.sandboxModels && allInternal && input.runId && input.runLeaseToken) {
       connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
       connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
-        { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
+        {
+          ...scopeAttestation,
+          aud: SANDBOX_MODEL_AUD,
+          runId: input.runId,
+          runAttempt: input.attempt,
+          runLeaseToken: input.runLeaseToken,
+          threadRef: conversation.threadRef,
+          exp: sandboxTokenExpiry,
+        },
         deps.capabilitySecret ?? deps.signingSecret,
         deps.capabilityTokenCompression,
       );
