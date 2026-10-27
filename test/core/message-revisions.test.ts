@@ -233,8 +233,6 @@ test("renderMessageRevision escapes attribute and body text", () => {
   assert.match(rendered, />&lt;b&gt;&amp;</);
 });
 
-const NO_WAIT = { attempts: 1, retryMs: 0 };
-
 test("while a turn holds the lease the ingest-time marker is skipped, and the turn-end catch-up records it", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
@@ -256,7 +254,7 @@ test("while a turn holds the lease the ingest-time marker is skipped, and the tu
     edit({ container: CH, ts: "60.0", text: "elsewhere edited" }),
   ];
   await cache.ingest(events);
-  await recordMessageRevisions(sessions, events, NO_WAIT);
+  await recordMessageRevisions(sessions, events);
   assert.equal(revisions(await sessions.getItems(session.id)).length, 0, "a busy session records nothing yet");
 
   const recorded = await reconcileMessageRevisions({
@@ -324,7 +322,7 @@ test("the catch-up ignores the bot's own edits and non-Slack sessions", async ()
 test("an edit whose marker is already recorded never takes the backfill lease", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
-  await recordMessageRevisions(sessions, [edit()], NO_WAIT);
+  await recordMessageRevisions(sessions, [edit()]);
   const acquires: string[] = [];
   const spied = {
     ...sessions,
@@ -333,7 +331,7 @@ test("an edit whose marker is already recorded never takes the backfill lease", 
       return sessions.acquireLease(id, holder);
     },
   };
-  await recordMessageRevisions(spied, [edit()], NO_WAIT);
+  await recordMessageRevisions(spied, [edit()]);
   assert.deepEqual(acquires, [], "a no-op revision is decided from a plain read");
   assert.equal(revisions(await sessions.getItems(session.id)).length, 1);
 });
@@ -343,7 +341,7 @@ test("the anchor is the last conversation entry, skipping system entries such as
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
   const conversationAt = (await sessions.getItems(session.id)).at(-1)!.createdAt;
   await sleep(5);
-  await recordMessageRevisions(sessions, [edit()], NO_WAIT);
+  await recordMessageRevisions(sessions, [edit()]);
   const { lease } = await sessions.acquireLease(session.id, "turn");
   await sessions.append(lease!, {
     kind: "Wake",

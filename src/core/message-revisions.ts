@@ -4,7 +4,6 @@ import type { Lease, SessionStore } from "../sessions/session-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import { sleep } from "../util/async.ts";
 
 export interface MessageRevisionPayload {
   action: "edited" | "deleted";
@@ -116,43 +115,30 @@ async function recordRevision(
   return true;
 }
 
-export interface IdleRetry {
-  attempts: number;
-  retryMs: number;
-}
-
-const DEFAULT_IDLE_RETRY: IdleRetry = { attempts: 4, retryMs: 3_000 };
-
 async function recordWhenIdle(
   sessions: RevisionSessions,
   session: RevisionSession,
   source: MessageRevisionSource,
-  retry: IdleRetry,
 ): Promise<void> {
   if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
-  for (let attempt = 0; attempt < retry.attempts; attempt++) {
-    if (attempt > 0) await sleep(retry.retryMs, { unref: true });
-    const { lease } = await sessions.acquireLease(session.id, "append");
-    if (!lease) continue;
-    try {
-      await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);
-      return;
-    } finally {
-      await sessions.releaseLease(lease);
-    }
+  const { lease } = await sessions.acquireLease(session.id, "append");
+  if (!lease) return;
+  try {
+    await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);
+  } finally {
+    await sessions.releaseLease(lease);
   }
 }
 
 export async function recordMessageRevisions(
   sessions: RevisionSessions,
   events: readonly IngestEvent[],
-  retry: IdleRetry = DEFAULT_IDLE_RETRY,
 ): Promise<void> {
   for (const event of events.filter(isRevisionEvent)) {
     const refs = await sessions.sessionsByThreadRefs(
       slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined),
     );
-    for (const ref of refs) await recordWhenIdle(sessions, ref, event, retry);
+    for (const ref of refs) await recordWhenIdle(sessions, ref, event);
   }
 }
 
