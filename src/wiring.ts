@@ -360,6 +360,8 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import type { ContextRequestEvent } from "./api/app-types.ts";
 
+import type { Gates, Late } from "./wiring/late.ts";
+
 export interface Runtime {
   start(): void;
   startBackground(): void;
@@ -498,24 +500,28 @@ export interface BuiltApp {
   chatSurfaces: SurfaceRegistry;
 }
 
-export function buildApp(
-  config: Config,
-  overrides: {
-    securityScreener?: SecurityScreener;
-    credentialBrokers?: Record<string, AwsRoleBroker>;
-    modelCredentialFetch?: typeof fetch;
-    harness?: Harness;
-    env?: NodeJS.ProcessEnv;
-  } = {},
-): BuiltApp {
-  let backgroundAdmission = () => !config.backgroundDeploymentId;
-  let backgroundActive = () => false;
+export interface AppOverrides {
+  securityScreener?: SecurityScreener;
+  credentialBrokers?: Record<string, AwsRoleBroker>;
+  modelCredentialFetch?: typeof fetch;
+  harness?: Harness;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp {
+  // Switches the background lifecycle flips at runtime; modules read them through this object.
+  const gates: Gates = {
+    backgroundAdmission: () => !config.backgroundDeploymentId,
+    backgroundActive: () => false,
+    inlineShutdown: new AbortController(),
+  };
   const admittedWork = createAdmittedWork({
-    canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
+    canStart: () => !config.backgroundDeploymentId || gates.backgroundAdmission(),
   });
-  let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
+  // Values built later in buildApp that earlier modules reach through closures.
+  const late = {} as Late;
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
   const connectorSecretKey = config.connectorSecretKey;
@@ -597,6 +603,7 @@ export function buildApp(
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const directory = createPostgresDirectoryStore(databaseUrl);
+  const environments = createPostgresEnvironmentStore(databaseUrl);
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -748,7 +755,7 @@ export function buildApp(
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
   });
-  const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
+  const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => late.memoryTidy.ensure(scope));
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const sandboxOnError = (
@@ -882,7 +889,7 @@ export function buildApp(
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
     beforeRetire: async (record) => {
-      if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
+      if ((await late.processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
     provisionOptions: async (scopeId) => {
@@ -1207,7 +1214,7 @@ export function buildApp(
     if (!sessionIds.length) return new Set();
     const wanted = new Set(sessionIds);
     return new Set(
-      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
+      (await late.approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
         .filter(
           (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
         )
@@ -1271,6 +1278,7 @@ export function buildApp(
   const ledger = runStore.ledger;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
+  late.processes = processes;
 
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
@@ -1401,11 +1409,11 @@ export function buildApp(
       createWebSurface(transcripts),
       slackSurface,
       ...(config.chatSurfaces ?? []).map((surface) =>
-        createHttpChatSurface(surface, { mirror: (events) => app.ingestSurfaceEvents(events, surface.surface) }),
+        createHttpChatSurface(surface, { mirror: (events) => late.app.ingestSurfaceEvents(events, surface.surface) }),
       ),
     ],
     outbound,
-    turn: (request) => app.turn(request),
+    turn: (request) => late.app.turn(request),
   });
   const deployService = createDeployService({
     outbound,
@@ -1465,7 +1473,6 @@ export function buildApp(
         }
       : {}),
   });
-  const environments = createPostgresEnvironmentStore(databaseUrl);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const cronOwnerCache = new Map<string, string>();
   const publishInboxEvent = (event: LedgerEvent): void => {
@@ -1483,7 +1490,7 @@ export function buildApp(
     publishInboxEvent,
   );
   const recordInboxEvent: InboxEventSink = async (item, event) => {
-    if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
+    if (await inboxItems.recordEvent(item, event)) await late.scheduler.runNow(item.cronId);
   };
   const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
@@ -1494,17 +1501,17 @@ export function buildApp(
     ...cronsBase,
     async create(input) {
       const cron = await cronsBase.create(input);
-      scheduler.notifyChanged(cron.id);
+      late.scheduler.notifyChanged(cron.id);
       return cron;
     },
     async update(id, patch) {
       const cron = await cronsBase.update(id, patch);
-      scheduler.notifyChanged(id);
+      late.scheduler.notifyChanged(id);
       return cron;
     },
     async setEnabled(id, enabled) {
       await cronsBase.setEnabled(id, enabled);
-      scheduler.notifyChanged(id);
+      late.scheduler.notifyChanged(id);
     },
     async delete(id) {
       await cronsBase.delete(id);
@@ -1549,6 +1556,7 @@ export function buildApp(
     surfaces: chatSurfaces,
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
   });
+  late.approvals = approvals;
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -1612,9 +1620,9 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
     conversations: {
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
-      list: (actorId) => app.listSessions(actorId),
-      start: (actorId, input) => startSession(app, sessions, actorId, input),
+      search: ({ query, principals, limit }) => late.app.searchConversations(query, principals, limit),
+      list: (actorId) => late.app.listSessions(actorId),
+      start: (actorId, input) => startSession(late.app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
       await resolveRuntimeChoiceDurable(
@@ -1667,7 +1675,7 @@ export function buildApp(
     surfaceCache,
     surfaceLabel: chatSurfaces.label,
     installSharedCanvas: async (actorId, fileId, where) => {
-      const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
+      const canvas = await installSharedCanvas(uiState, actorId, await late.app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
       auditLog.record({
         at: Date.now(),
@@ -1842,7 +1850,7 @@ export function buildApp(
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
-    shutdown: () => inlineShutdown.signal,
+    shutdown: () => gates.inlineShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
@@ -1917,6 +1925,7 @@ export function buildApp(
     providerKeys,
     runWaitMs: config.runWaitMs,
   });
+  late.app = app;
   const inboxRealtime = createInboxRealtime({
     crons,
     items: inboxItems,
@@ -2096,6 +2105,7 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  late.memoryTidy = memoryTidy;
   const jobs = createJobWorker(databaseUrl);
   const scheduler = createScheduler({
     admittedWork,
@@ -2107,6 +2117,7 @@ export function buildApp(
     jobs,
     fireConcurrency: config.cronFireConcurrency,
   });
+  late.scheduler = scheduler;
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,
@@ -2173,7 +2184,7 @@ export function buildApp(
         store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
-        active: () => backgroundActive(),
+        active: () => gates.backgroundActive(),
       }
     : undefined;
   const instanceRegistry: InstanceRegistry =
@@ -2185,7 +2196,7 @@ export function buildApp(
         })
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
-  const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
+  const canClaimRuns = () => gates.backgroundAdmission() && drain.canClaim();
   const turnReady = turnLedger
     ? createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness")
     : undefined;
@@ -2348,7 +2359,7 @@ export function buildApp(
     return draining;
   }
   async function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
+    gates.inlineShutdown.abort();
     await Promise.all([
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
@@ -2359,7 +2370,7 @@ export function buildApp(
   }
   const runtime: Runtime = {
     start() {
-      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      if (gates.inlineShutdown.signal.aborted) gates.inlineShutdown = new AbortController();
       void blobTransfer
         .ensureExpiry?.(1)
         .catch(reportFailureAs("blob-transfer: S3 lifecycle expiry install (sweep is the fallback)", undefined));
@@ -2368,8 +2379,8 @@ export function buildApp(
     },
     startBackground,
     setBackgroundAdmission(canClaim, active) {
-      backgroundAdmission = canClaim;
-      backgroundActive = active;
+      gates.backgroundAdmission = canClaim;
+      gates.backgroundActive = active;
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
