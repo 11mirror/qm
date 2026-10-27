@@ -8,7 +8,9 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { reportFailure, swallow } from "../util/errors.ts";
-import { type ToolContextRef } from "./agent-tools.ts";
+import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
+import type { ModelCallLog } from "./model-call-log.ts";
+import type { TurnRequestSettings } from "./turn-request.ts";
 import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
 import { gatewayAttemptHeaders } from "./call-telemetry.ts";
@@ -35,7 +37,6 @@ import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts
 
 export interface TurnSession {
   agentSession: AgentSession;
-  ref: ToolContextRef & { effortLevel?: string };
   composedPromptTokens: number;
   cwd: string;
   agentDir: string;
@@ -179,10 +180,10 @@ async function openAgentSession(
 }
 export function createTurnTools(
   opts: CoreToolOptions | undefined,
-  ref: ToolContextRef,
+  state: TurnToolState,
   turn: HarnessTurnInput,
 ): ToolDefinition[] {
-  return createAgentTools(ref, {
+  return createAgentTools(state, {
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
     execTimeoutMs: opts?.execTimeoutMs,
@@ -209,7 +210,10 @@ export interface TurnSessionInput {
   modelGateway: ModelGatewayTransportConfig | undefined;
   tempDirPrefix: string;
   captureRequests: boolean;
-  ref: TurnSession["ref"];
+  calls: ModelCallLog;
+  request: TurnRequestSettings;
+  halt: Pick<TurnHalt, "stopsTools">;
+  abortSignal: () => AbortSignal | undefined;
   tools: ToolDefinition[];
   loadImage: ReplayImageLoader | undefined;
 }
@@ -224,7 +228,10 @@ export async function createTurnSession({
   modelGateway,
   tempDirPrefix,
   captureRequests,
-  ref,
+  calls,
+  request,
+  halt,
+  abortSignal,
   tools,
   loadImage,
 }: TurnSessionInput): Promise<TurnSession> {
@@ -265,24 +272,17 @@ export async function createTurnSession({
   if (agent) {
     const prior = agent.onPayload;
     agent.onPayload = async (payload, model) => {
-      ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-      (ref.modelDispatch ??= []).push({
-        start: Date.now(),
-        ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
-        ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-      });
-      ref.pendingPrepareNextTurn = undefined;
-      ref.pendingTransformContext = undefined;
-      applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-      applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+      calls.dispatched();
+      applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
+      applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
       const result = prior ? await prior(payload, model) : payload;
       const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
       let finalPayload = await withDocumentInputs(
         result ?? payload,
         model as DocumentModel,
-        ref.documents ?? [],
-        ref.abortSignal,
-        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+        request.documents() ?? [],
+        abortSignal(),
+        request.documentsStubbed() ? documentsDroppedNote(request.documents() ?? []) : undefined,
       );
       const guarded = guardOutputBudget(finalPayload, model);
       if (guarded.kind === "raised") {
@@ -296,35 +296,29 @@ export async function createTurnSession({
       } catch (e) {
         swallow("pi: request byte budget", e);
       }
-      if (captureRequests) ref.llmCapture?.push(capturedPayload!);
+      if (captureRequests) calls.capture(capturedPayload!);
       return finalPayload;
     };
     const priorResponse = agent.onResponse;
     agent.onResponse = async (response, model) => {
-      const last = ref.modelDispatch?.at(-1);
-      if (last && last.first === undefined) {
-        last.first = Date.now();
-        const gateway = gatewayAttemptHeaders(response.headers);
-        if (gateway) last.gateway = gateway;
-      }
+      calls.responded(() => gatewayAttemptHeaders(response.headers));
       if (priorResponse) await priorResponse(response, model);
     };
     const priorTransform = agent.transformContext;
     agent.transformContext = async (messages, signal) => {
-      ref.pendingTransformContext = Date.now();
+      calls.markTransformContext();
       return priorTransform ? await priorTransform(messages, signal) : messages;
     };
-    agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+    agent.afterToolCall = pauseStampAfterToolCall(halt, agent.afterToolCall);
     const priorPrepare = agent.prepareNextTurn;
     agent.prepareNextTurn = async (signal) => {
-      ref.pendingPrepareNextTurn = Date.now();
+      calls.markPrepareNextTurn();
       return priorPrepare ? await priorPrepare(signal) : undefined;
     };
   }
 
   return {
     agentSession: session,
-    ref,
     composedPromptTokens: countTokens(composedPrompt),
     cwd: dirs.cwd,
     agentDir: dirs.agentDir,

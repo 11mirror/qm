@@ -1,5 +1,6 @@
 import { createAdminCall } from "../../../src/tools/admin.ts";
 import { createAgentTools } from "../../../src/harness/agent-tools.ts";
+import { createTurnToolState } from "../../../src/harness/turn-tool-state.ts";
 import type { ToolContext } from "../../../src/tools/primitives.ts";
 import "../../support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
@@ -284,7 +285,7 @@ test("native admin tools use the authenticated handler, including its live autho
   try {
     const call = createAdminCall(s.base, await capFor("admin-alice"));
     const tool = createAgentTools(
-      { current: { admin: { call, operationsAvailable: true } } as ToolContext },
+      createTurnToolState({ current: { admin: { call, operationsAvailable: true } } as ToolContext }),
       { controlTools: true },
     ).find((t) => t.name === "admin")!;
     await s.built.memory.capture(target, ["draft fixture"], Date.UTC(2026, 0, 2));
