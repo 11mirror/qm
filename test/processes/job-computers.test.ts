@@ -109,7 +109,8 @@ test("the job sweep retires a job computer only after its jobs end and write bac
   assert.deepEqual(f.errors, []);
 });
 
-test("a job computer with no job yet gets a grace period from when the sweep first sees it ready", async () => {
+test("a job computer with no job yet gets a grace period from when the sweep first sees it ready", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
   const f = fixture();
   await f.sweep();
   assert.ok(!f.retired.includes("job-new"));
@@ -120,6 +121,12 @@ test("a job computer with no job yet gets a grace period from when the sweep fir
   await f.sweep();
   assert.ok(f.retired.includes("job-new"));
   assert.deepEqual(f.provisions, []);
+  assert.ok(
+    logs.mock.calls.some(
+      (c) =>
+        c.arguments[0] === "[job-computers] retired job-new in channel:room: 150s after its jobs were seen to exit",
+    ),
+  );
 });
 
 test("a job computer stuck provisioning is retired after the limit, and a failed destroy is retried every five minutes", async () => {
