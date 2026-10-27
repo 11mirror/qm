@@ -134,6 +134,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ["plugins/web-ui/src/**/*.{ts,js}", "plugins/portal/**/*.ts"],
+    rules: {
+      "max-lines": ["error", 800],
+      "max-lines-per-function": ["error", 150],
+    },
+  },
+  {
     files: [
       "plugins/**/*.ts",
       "src/config.ts",
