@@ -144,11 +144,11 @@ export type RunsModule = ReturnType<typeof buildRuns>;
 function buildRunStreams(deps: RunsInputs, runs: RunStore) {
   const { sandbox } = deps.sandbox;
   const { databaseUrl } = deps.stores;
-  const { late } = deps;
+  const { late, config } = deps;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
   late.processes = processes;
-  const appPageViews = createPostgresAppPageViewLog(databaseUrl);
+  const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
