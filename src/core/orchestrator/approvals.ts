@@ -17,7 +17,6 @@ import { rosterIds, samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
-import { headSlice } from "../../util/text.ts";
 import { approvalGrantId } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -316,7 +315,7 @@ export async function consumeApprovalDecision(args: {
         {
           kind: "UserMessage",
           hidden: true,
-          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
+          text: `The requesting human denied this pending operation, so it did not run: ${p.summary ?? deniedCommandLabel(p.command)}\nDo not retry it unless they ask again.`,
         },
       ];
   const [written] = await args.withRosterVersion(() => deps.sessions.appendMany(lease, items));
@@ -324,4 +323,10 @@ export async function consumeApprovalDecision(args: {
   await args.mirror(written!);
   if (!decision.approved) return denied(p.command);
   return approved(p.command, scope, p.approvalKey);
+}
+
+export function deniedCommandLabel(command: string): string {
+  const lines = command.split("\n");
+  if (lines.length === 1) return command;
+  return `${lines[0]} … (${lines.length} lines, ${Buffer.byteLength(command)} bytes in all)`;
 }
