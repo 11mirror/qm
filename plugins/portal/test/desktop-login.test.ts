@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { runInNewContext } from "node:vm";
 import { mintDesktopLogin, openDesktopLogin } from "../src/desktop-login.ts";
 import { deriveKey, seal } from "../../chassis/src/signed-token.ts";
-import { openSession, type SessionClaims } from "../../chassis/src/portal-identity.ts";
+import { openSession, type SessionClaims } from "../../chassis/src/portal-session.ts";
 
 const secret = "desktop-login-test-session-secret-long-enough";
 const origin = "http://127.0.0.1:19997";

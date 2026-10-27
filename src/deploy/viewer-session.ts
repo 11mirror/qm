@@ -1,4 +1,4 @@
-import { openSession, portalSessionKey } from "../../plugins/chassis/src/portal-identity.ts";
+import { openSession, portalSessionKey } from "../../plugins/chassis/src/portal-session.ts";
 
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 

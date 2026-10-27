@@ -17,7 +17,12 @@ export function mintSignedPayload(value: unknown, secret: string): Promise<strin
 
 export async function verifySignedPayload(token: string, secret: string | string[]): Promise<unknown | null> {
   const secrets = Array.isArray(secret) ? secret : [secret];
-  if (token.split(".").length !== 3) return open(token, secrets);
+  if (token.split(".").length !== 3)
+    return open(
+      token,
+      secrets.map((s) => Buffer.from(s)),
+      ["base64url", "hex"],
+    );
   let kid: string | undefined;
   try {
     kid = decodeProtectedHeader(token).kid;

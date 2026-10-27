@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveKey, seal, open } from "../../chassis/src/signed-token.ts";
-import { openSession, type SessionClaims } from "../../chassis/src/portal-identity.ts";
+import { deriveKey, seal, open, safeEqual } from "../../chassis/src/signed-token.ts";
+import { openSession, type SessionClaims } from "../../chassis/src/portal-session.ts";
 import {
   openImpersonation,
   openTmp,
@@ -9,7 +9,6 @@ import {
   sessionCookieHeaders,
   clearCookie,
   readCookie,
-  safeEqual,
   sanitizeReturnTo,
   type ImpersonationClaims,
   type TmpClaims,
@@ -31,6 +30,11 @@ test("seal/open round-trips a payload and rejects tampering", () => {
   assert.equal(open(token, deriveKey("other-secret", "portal.session.v1")), null);
   assert.equal(open("not-a-token", sessionKey), null);
   assert.equal(open(null, sessionKey), null);
+  assert.equal(open(`${token}.extra`, sessionKey), null);
+
+  const hex = `${body}.${Buffer.from(sig ?? "", "base64url").toString("hex")}`;
+  assert.equal(open(hex, sessionKey), null);
+  assert.deepEqual(open(hex, sessionKey, ["base64url", "hex"]), { hello: "world", n: 1 });
 });
 
 test("domain-separated keys make session and tmp tokens non-interchangeable", () => {

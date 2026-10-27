@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { open } from "../../chassis/src/signed-token.ts";
 
 export interface ImpersonationClaims {
@@ -100,12 +100,6 @@ export function readCookie(header: string | undefined, name: string): string | n
 
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("hex");
-}
-
-export function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 function sanitizeAppsReturnTo(value: string, appsDomain: string): string | null {
