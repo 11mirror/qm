@@ -78,11 +78,10 @@ import { createSkillPackStore } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMapFactory } from "./persistence/durable-map.ts";
 import { createUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type { ScopeId, Session, TurnRequest } from "./types.ts";
@@ -512,7 +511,7 @@ export function buildApp(
   });
   mkdirSync(config.dataDir, { recursive: true });
 
-  const pgArtifactMap = createPostgresMapFactory(databaseUrl);
+  const pgPool = createPgPool(databaseUrl, []);
   registerAbsurdSchema(databaseUrl);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
@@ -545,14 +544,14 @@ export function buildApp(
       };
     },
   };
-  const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
+  const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgPool);
   const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(databaseUrl, {
     directorySyncProtected: config.emailAuthPrincipals,
     principalLinks,
   });
-  const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
+  const leaderLease: LeaderLease = createPostgresLeaderLease(pgPool);
   const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
     databaseUrl,
@@ -989,7 +988,7 @@ export function buildApp(
   const modelGateway = createModelGateway();
 
   const toolOutput = createPostgresToolOutputStore({
-    pool: pgArtifactMap.pool,
+    pool: pgPool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
   const runStoreKind = config.runStore;
@@ -1483,10 +1482,10 @@ export function buildApp(
       await inboxItems.deleteByCron(id);
     },
   };
-  pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
-  pgArtifactMap.pool.registerMigration(inboxConversationKeyMigration());
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
+  pgPool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
+  pgPool.registerMigration(inboxConversationKeyMigration());
+  pgPool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     // The first release also dropped approved_harness_configs; that moved to CONTRACT_MIGRATIONS so older images still boot.
     acceptedChecksums: ["2e7a8523090c84d00b557197f2e3038b5b2fd418e6b3b4b08c10ef0cf596a792"],
@@ -1497,13 +1496,13 @@ export function buildApp(
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
     ],
   });
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration({
     id: "runtime/0003-promote-legacy-base-models",
     statements: [
       `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = json || '{"orgRevision":0}'::jsonb WHERE json ? 'modelId' AND NOT json ? 'orgRevision'; END IF; END $$`,
     ],
   });
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration({
     id: "durable-map/swarms/0002-drop",
     // The first release also dropped the swarms table; that moved to CONTRACT_MIGRATIONS so older images still boot.
     acceptedChecksums: ["6fd03996fb6c9b0b5ea06db198f83a16cf39dafbf7bc9fddb8965e54b3030635"],
@@ -1812,7 +1811,7 @@ export function buildApp(
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     shutdown: () => inlineShutdown.signal,
-    resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
+    resourceSearch: createPostgresResourceSearch(pgPool),
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
@@ -2149,7 +2148,7 @@ export function buildApp(
     : undefined;
   const instanceRegistry: InstanceRegistry =
     !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
-      ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
+      ? createPostgresInstanceRegistry(pgPool, {
           instanceId: randomUUID(),
           buildSha: config.buildSha,
           startedAt: Date.now(),
@@ -2448,7 +2447,7 @@ export function buildApp(
   return {
     app,
     checkReadiness: async (signal) => {
-      await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      await pgPool.q("SELECT 1", [], { signal });
     },
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient, tenantCols } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 import type { TurnResult } from "../types.ts";
 import type { EnqueueInput, EnqueueResult, Run, RunPriority, RunStop } from "../runs/run-store.ts";
 import { PARKED, releasesDedupKey, withTraceCarrier } from "../runs/run-store.ts";

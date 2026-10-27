@@ -2,68 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;
-  test(
-    `batch map mutations serialize duplicates and concurrent writers, and roll back: ${backend}`,
-    { skip },
-    async () => {
-      const factory = backend === "postgres" ? createPostgresMapFactory(process.env.DATABASE_URL!) : null;
-      const map = factory?.map<{ n: number }>(`batch_${randomUUID().replaceAll("-", "")}`) ?? testMap<{ n: number }>();
-      try {
-        const increment = (value: { n: number } | null) => ({ n: (value?.n ?? 0) + 1 });
-        assert.deepEqual(
-          await map.mutateMany([
-            { id: "a", apply: increment },
-            { id: "a", apply: increment },
-          ]),
-          [{ n: 1 }, { n: 2 }],
-        );
-        await Promise.all(
-          Array.from({ length: 10 }, () =>
-            map.mutateMany([
-              { id: "a", apply: increment },
-              { id: "b", apply: increment },
-            ]),
-          ),
-        );
-        await Promise.all([map.mutateMany([{ id: "a", apply: increment }]), map.update!("a", increment)]);
-        assert.deepEqual(await map.get("a"), { n: 14 });
-        assert.deepEqual(await map.get("b"), { n: 10 });
-        await assert.rejects(
-          map.mutateMany([
-            {
-              id: "a",
-              apply: (value) => {
-                value!.n = 999;
-                return value!;
-              },
-            },
-            {
-              id: "c",
-              apply: () => {
-                throw new Error("rollback");
-              },
-            },
-          ]),
-          /rollback/,
-        );
-        assert.deepEqual(await map.get("a"), { n: 14 });
-        assert.equal(await map.get("c"), null);
-        assert.deepEqual(await map.mutateMany([]), []);
-      } finally {
-        await factory?.pool.close();
-      }
-    },
-  );
-
   test(`batch appends keep order, roll back atomically and check leases: ${backend}`, { skip }, async () => {
     const store =
       backend === "memory"

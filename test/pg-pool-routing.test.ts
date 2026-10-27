@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
 
 const direct = process.env.DATABASE_URL;
@@ -76,11 +75,11 @@ test("pooled credentials cannot silently change company identity", { skip }, () 
 test("one session slot can hold a lock while a transaction uses the query pool", { skip }, async () => {
   const a = createPgPool(direct!);
   const lock = createPostgresAdvisoryLock(a);
-  const map = createPostgresMap<{ n: number }>(a, "pgbouncer_lock_write_test");
   try {
     await lock.withLock("pgbouncer-write", async () => {
-      await map.put("one", { n: 42 });
-      assert.deepEqual(await map.get("one"), { n: 42 });
+      await a.q("CREATE TABLE IF NOT EXISTS pgbouncer_lock_write_test (id text PRIMARY KEY, n int)");
+      await a.q("INSERT INTO pgbouncer_lock_write_test VALUES ('one', 42) ON CONFLICT (id) DO UPDATE SET n = 42");
+      assert.deepEqual(await a.q("SELECT n FROM pgbouncer_lock_write_test WHERE id = 'one'"), [{ n: 42 }]);
     });
   } finally {
     await a.close();
@@ -133,7 +132,7 @@ test("dynamic migration waits for its prerequisite schema on a fresh database", 
 
 test("cron queue shares the query pool and stopping it preserves other stores", { skip, timeout: 30_000 }, async () => {
   const { cronJobQueue } = await import("../src/cron/job-queue.ts");
-    const { createJobWorker } = await import("../src/jobs/job-worker.ts");
+  const { createJobWorker } = await import("../src/jobs/job-worker.ts");
   const store = createPgPool(direct!);
   const queue = cronJobQueue(createJobWorker(direct!), 1);
   let fired = false;

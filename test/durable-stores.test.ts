@@ -1,15 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { markFired } from "./support/cron-slots.ts";
 
-test("crons persist to the backing map (a second store instance reads them back)", async () => {
+test("crons persist across store instances", async () => {
   const url = testDatabaseUrl();
   const s1 = createCronStore(url);
   const c = await s1.create({
@@ -72,114 +71,4 @@ test("deployments persist with immutable versions across store instances", async
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);
   assert.equal((await s2.versionOf(d.id, 1))?.snapshotDir, "/snap/1");
-});
-
-test("map iteration is deterministic id order — metadata updates (recordUse-style merges) must not reorder", async () => {
-  const map = testMap<{ name: string; lastUsedAt?: number }>();
-  await map.put("b", { name: "beta" });
-  await map.put("c", { name: "gamma" });
-  await map.put("a", { name: "alpha" });
-  await map.merge("b", { lastUsedAt: Date.now() });
-  assert.deepEqual(
-    (await map.all()).map((v) => v.name),
-    ["alpha", "beta", "gamma"],
-  );
-  assert.deepEqual(
-    (await map.entries()).map(([id]) => id),
-    ["a", "b", "c"],
-  );
-});
-
-interface SelectRow {
-  id: string;
-  owner: string;
-  secretEnc?: string;
-  nested: { keep: string };
-}
-
-test("map select filters case-insensitively on one field and strips omitted top-level keys", async () => {
-  const map = testMap<SelectRow>();
-  await map.put("b", { id: "b", owner: "U1", secretEnc: "enc-b", nested: { keep: "b" } });
-  await map.put("a", { id: "a", owner: "u1", secretEnc: "enc-a", nested: { keep: "a" } });
-  await map.put("c", { id: "c", owner: "Alice@X.com", secretEnc: "enc-c", nested: { keep: "c" } });
-
-  const mine = await map.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U1"] } });
-  assert.deepEqual(mine, [
-    { id: "a", owner: "u1", nested: { keep: "a" } },
-    { id: "b", owner: "U1", nested: { keep: "b" } },
-  ]);
-
-  const alice = await map.select({ where: { field: "owner", anyOfFold: ["alice@x.COM"] } });
-  assert.equal(alice.length, 1);
-  assert.equal(alice[0]!.secretEnc, "enc-c", "without omit the full value comes back");
-
-  assert.deepEqual(await map.select({ where: { field: "owner", anyOfFold: [] } }), []);
-  assert.equal((await map.select({})).length, 3, "no filter and no projection reads everything");
-});
-
-test("select sweeps non-ASCII field values into the candidate set — SQL and JS case folding disagree there, so the caller's exact refilter decides", async () => {
-  const map = testMap<SelectRow>();
-  await map.put("t", { id: "t", owner: "İstanbul@X.com", nested: { keep: "t" } });
-  await map.put("u", { id: "u", owner: "U1", nested: { keep: "u" } });
-  const candidates = await map.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } });
-  assert.deepEqual(
-    candidates.map((r) => r.id),
-    ["t"],
-    "a non-ASCII value is never silently dropped by the fold prefilter",
-  );
-});
-
-test("map select returns clones — mutating a result cannot poison the store", async () => {
-  const map = testMap<SelectRow>();
-  await map.put("x", { id: "x", owner: "U1", nested: { keep: "x" } });
-  const [row] = await map.select({ where: { field: "owner", anyOfFold: ["u1"] } });
-  row!.nested.keep = "EVIL";
-  assert.equal((await map.get("x"))!.nested.keep, "x");
-});
-
-test("the Postgres map select projects and filters inside SQL, never fetching the omitted key", async () => {
-  const reads: Array<{ sql: string; params?: unknown[] }> = [];
-  const pg = {
-    query: async () => ({ rows: [] }),
-    q: async (sql: string, params?: unknown[]) => {
-      reads.push({ sql, params });
-      return [];
-    },
-    registerMigration: () => {},
-    migrate: async () => {},
-  };
-  const map = createPostgresMap<SelectRow>(pg as never, "select_probe");
-  await map.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U1", "Alice@X.com"] } });
-  assert.equal(reads.length, 1);
-  assert.match(
-    reads[0]!.sql,
-    /^SELECT id, json - \$1::text\[\] AS json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>'owner'\) = ANY\(\$2::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>'owner' ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
-  );
-  assert.deepEqual(reads[0]!.params, [["secretEnc"], ["u1", "alice@x.com"]]);
-
-  await map.select({});
-  assert.match(reads[1]!.sql, /^SELECT id, json - \$1::text\[\] AS json FROM select_probe ORDER BY id$/);
-  assert.deepEqual(reads[1]!.params, [[]]);
-  await map.select({ where: { field: "owner", anyOfFold: ["U1"] }, limit: 16, afterId: "previous" });
-  assert.match(reads[2]!.sql, /\) AND id > \$3 ORDER BY id LIMIT \$4$/);
-  assert.deepEqual(reads[2]!.params, [[], ["u1"], "previous", 16]);
-});
-
-test("the Postgres map reads with ORDER BY id — heap order is not a contract", async () => {
-  const selects: string[] = [];
-  const pg = {
-    query: async () => ({ rows: [] }),
-    q: async (sql: string) => {
-      selects.push(sql);
-      return [];
-    },
-    registerMigration: () => {},
-    migrate: async () => {},
-  };
-  const map = createPostgresMap<{ x: number }>(pg as never, "order_probe");
-  await map.all();
-  await map.entries();
-  const rowReads = selects.filter((sql) => sql.includes("FROM order_probe"));
-  assert.ok(rowReads.length > 0, "the map must actually read its table");
-  for (const sql of rowReads) assert.match(sql, /ORDER BY id/);
 });
