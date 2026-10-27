@@ -119,13 +119,8 @@ export const wakeOriginLabel = (trigger: unknown) =>
 export const destinationSummary = (dest: Row | null | undefined) =>
   dest ? (dest.type || "destination") + " -> " + (dest.target || "-") : "None";
 
-export function destinationDetails(dest: Row | null | undefined) {
-  if (!dest) return "No delivery destination";
-  const bits = [];
-  if (dest.audienceScopeId) bits.push(dest.audienceScopeId);
-  if (dest.onBehalfOf) bits.push("on behalf of " + dest.onBehalfOf);
-  return bits.join(" / ");
-}
+export const destinationDetails = (dest: Row | null | undefined) =>
+  [dest?.audienceScopeId, dest?.onBehalfOf && "on behalf of " + dest.onBehalfOf].filter(Boolean).join(" / ");
 
 export function packRepoLabel(url: string | null | undefined) {
   return (

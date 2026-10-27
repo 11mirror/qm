@@ -90,25 +90,11 @@ export function searchField({
   return el("div.shell-search admin-search", {}, input, icon, clear);
 }
 
-export function backArrow() {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  for (const [k, v] of Object.entries({
-    width: "15",
-    height: "15",
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-    "aria-hidden": "true",
-  }))
-    svg.setAttribute(k, v);
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "m12 19-7-7 7-7M5 12h14");
-  svg.appendChild(path);
-  return svg;
-}
+export const backArrow = () =>
+  el("span", {
+    innerHTML:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7M5 12h14"/></svg>',
+  }).firstElementChild!;
 
 export interface ErrorRow {
   message?: string;
