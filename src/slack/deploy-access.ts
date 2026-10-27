@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { App } from "../api/app-types.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -9,19 +10,16 @@ import { registerDecisionButtons, type ActionApp } from "./messaging.ts";
 const ACTIONS = ["deploy_access_approve", "deploy_access_decline"] as const;
 type Request = NonNullable<Destination["deploymentAccess"]>;
 
+const DEPLOY_ACCESS_REQUEST = z.strictObject({
+  deploymentId: z.guid(),
+  requesterId: z.string().regex(/^[^\s\p{Cc}<>|:]{1,320}$/u),
+});
+
 export function parseDeployAccess(value: string): Request {
   if (value.length > 2000) throw new Error("Invalid access request.");
-  const r = JSON.parse(value) as Request;
-  if (
-    !r ||
-    Object.keys(r).length !== 2 ||
-    typeof r.deploymentId !== "string" ||
-    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(r.deploymentId) ||
-    typeof r.requesterId !== "string" ||
-    !/^[^\s\p{Cc}<>|:]{1,320}$/u.test(r.requesterId)
-  )
-    throw new Error("Invalid access request.");
-  return r;
+  const parsed = DEPLOY_ACCESS_REQUEST.safeParse(JSON.parse(value));
+  if (!parsed.success) throw new Error("Invalid access request.");
+  return parsed.data;
 }
 
 export function deployAccessMessage(

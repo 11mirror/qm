@@ -100,10 +100,7 @@ export interface GoalNoticeView {
 }
 
 export function renderGoalNotice(goal: GoalNoticeView): string {
-  const oneLine = goal.objective
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const oneLine = goal.objective.replace(/\s+/g, " ").trim();
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
   const objective = escapeSlackText(bounded);
   const ended = { complete: "✓ Goal complete", cancelled: "✕ Goal cancelled", paused: "⏸ Goal paused", active: "" };

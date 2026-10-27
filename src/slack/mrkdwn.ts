@@ -6,7 +6,7 @@ export function escapeSlackText(text: string): string {
 }
 
 export function decodeSlackEntities(text: string): string {
-  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return text.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
 }
 
 const SLACK_MENTION = /(?<!<)<+@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
@@ -140,7 +140,7 @@ export function toSlackMrkdwn(md: string): string {
   const stash: string[] = [];
   const keep = (s: string): string => `${STASH_OPEN}${stash.push(s) - 1}${STASH_OPEN}`;
 
-  let text = md.replace(/\r\n/g, "\n");
+  let text = md.replaceAll("\r\n", "\n");
 
   text = stashFencedBlocks(text, keep);
   text = text.replace(/`[^`\n]+`/g, keep);
@@ -259,7 +259,7 @@ export function slackSectionBlocks(text: string, opts?: { code?: boolean }): Arr
   if (!opts?.code)
     return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
   const blocks: Array<Record<string, unknown>> = [];
-  let rest = text.replace(/`/g, "'");
+  let rest = text.replaceAll("`", "'");
   while (rest) {
     let cut = rest.length > 2_800 ? safeCutIndex(rest, 2_800) : rest.length;
     while (xmlEscape(rest.slice(0, cut)).length > 2_990) cut = safeCutIndex(rest, Math.floor(cut * 0.8));
