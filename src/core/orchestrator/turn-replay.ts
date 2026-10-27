@@ -10,8 +10,6 @@ import { errMessage } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
-const DETECT_HISTORY_TAIL = 400;
-
 export async function findRecordedTurn(ctx: TurnCtx, session: Session): Promise<RecordedTurn | null> {
   const { deps, input } = ctx;
   if (!input.runId || !deps.runs) return null;
@@ -73,7 +71,7 @@ export async function detectAmbientDecline(
       (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).items, input.runId))
     )
   ) {
-    const detectHistory = filterHistory((await historyWindow()).items.slice(-DETECT_HISTORY_TAIL));
+    const detectHistory = filterHistory((await historyWindow()).items);
     const decision = await deps.harness.models
       .shouldRespond({
         session,

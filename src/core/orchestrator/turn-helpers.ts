@@ -10,6 +10,7 @@ import {
   turnSource,
 } from "../../types.ts";
 import { isOverheard, isReply, isUserMessage, type Item } from "../../sessions/items.ts";
+import { forModelContext } from "../../harness/context-compaction.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
@@ -112,7 +113,7 @@ export function visibleTitleItemText(item: Item): string | undefined {
 
 export function renderTitleTranscript(entries: Item[]): string {
   const lines: string[] = [];
-  for (const e of entries) {
+  for (const e of forModelContext([...entries])) {
     const user = isUserMessage(e);
     if (!user && !isReply(e)) continue;
     if (isOverheard(e)) continue;
@@ -121,7 +122,6 @@ export function renderTitleTranscript(entries: Item[]): string {
     const text = user ? stripTurnBoilerplate(raw) : raw;
     if (!text) continue;
     lines.push(`${user ? "User" : "Assistant"}:\n${text}`);
-    if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
 }
