@@ -696,3 +696,11 @@ test("existing inbox items gain the conversation key their source adapter reads"
     await pool.end();
   }
 });
+
+test("the person's new message reaches the item chat prompt once", async () => {
+  const { item, chat } = await seeded();
+  reply = "Sure.";
+  await chat.followUp(ITEM_CHAT_CRON, item, "zebra-unique-ask", "owner@example.com");
+  const input = specs.at(-1)!.input as string;
+  assert.equal(input.split("zebra-unique-ask").length - 1, 1);
+});

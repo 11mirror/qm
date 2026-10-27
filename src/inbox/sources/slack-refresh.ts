@@ -40,12 +40,14 @@ export function createSlackRefresher(
       if (!isObj(error)) throw error;
       if (error.code === ErrorCode.RateLimitedError) {
         rateLimit(Number(error.retryAfter));
-        throw kit.failure(new Error(`slack ${method}: HTTP 429`));
+        throw kit.failure(new Error(`slack ${method}: HTTP 429`, { cause: error }));
       }
       if (error.code === ErrorCode.HTTPError)
-        throw kit.failure(new Error(`slack ${method}: HTTP ${String(error.statusCode)}`));
+        throw kit.failure(new Error(`slack ${method}: HTTP ${String(error.statusCode)}`, { cause: error }));
       if (error.code === ErrorCode.PlatformError)
-        throw kit.failure(new Error(`slack ${method}: ${slackErrorCode(error) ?? "Invalid response"}`));
+        throw kit.failure(
+          new Error(`slack ${method}: ${slackErrorCode(error) ?? "Invalid response"}`, { cause: error }),
+        );
       throw error;
     }
     if (!isObj(result)) throw kit.failure(new Error(`slack ${method}: Invalid response`));
