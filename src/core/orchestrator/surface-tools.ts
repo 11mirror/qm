@@ -45,7 +45,8 @@ import { parseDeliveryTarget } from "../../slack/delivery.ts";
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
-const SURFACE_FILE_MAX_CHARS = 100_000;
+const SURFACE_FILE_PAGE_CHARS = 20_000;
+const REACH_POSTS_PER_TURN = 5;
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -245,7 +246,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
-      if (spine.crossConversationPosts >= 5) return { ok: false, message: "outbound limit reached for this turn" };
+      if (spine.crossConversationPosts >= REACH_POSTS_PER_TURN)
+        return {
+          ok: false,
+          message: `outbound limit reached for this turn (${REACH_POSTS_PER_TURN} posts to other conversations)`,
+        };
       const selectors = [
         target.channel !== undefined,
         target.recipient !== undefined,
@@ -340,11 +345,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         undefined,
       );
       const coverage = await coverageForTurn();
+      const capped =
+        msgs.length >= SURFACE_READ_MAX ? `Counts cover only the newest ${SURFACE_READ_MAX} messages.` : undefined;
+      const message = [result.note, capped].filter(Boolean).join(" ");
       return {
         ok: true,
         hereNew,
         activeSubConversations: otherRoots.size,
-        ...(result.note ? { message: result.note } : {}),
+        ...(message ? { message } : {}),
         ...(latest ? { latest } : {}),
         ...(coverage ? { coverageSince: coverage } : {}),
       };
@@ -440,11 +448,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
+      const scanned = result.messages ?? [];
+      const capped =
+        scanned.length >= SURFACE_READ_MAX ? `Searched only the newest ${SURFACE_READ_MAX} messages.` : undefined;
+      const message = [result.note, capped].filter(Boolean).join(" ");
       return withCoverage({
         ok: true,
-        hits: shapeHits(result.messages ?? []),
+        hits: shapeHits(scanned),
         source: "live",
-        ...(result.note ? { message: result.note } : {}),
+        ...(message ? { message } : {}),
       });
     },
     readMembers: async () => {
@@ -452,7 +464,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!roster.length) return { ok: true, members: [] };
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
     },
-    readFile: async (ref: string) => {
+    readFile: async (ref: string, offset = 0) => {
       const id = ref.trim();
       if (!/^[0-9a-f]{32}$/.test(id))
         return {
@@ -477,9 +489,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!headLooksLikeText(bytes.subarray(0, 8000)))
         return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
       const decoded = bytes.toString("utf8");
-      const content =
-        decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
-      return { ok: true, content, sizeBytes: blob.sizeBytes };
+      const start = Math.max(0, Math.min(offset, decoded.length));
+      const end = Math.min(decoded.length, start + SURFACE_FILE_PAGE_CHARS);
+      return {
+        ok: true,
+        content: decoded.slice(start, end),
+        sizeBytes: blob.sizeBytes,
+        ...(end < decoded.length ? { nextOffset: end, totalChars: decoded.length } : {}),
+      };
     },
     getChannelBehavior: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "channel settings aren't available on this turn" };

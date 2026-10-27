@@ -330,7 +330,11 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async readMembers() {
       return { ok: true, members: [{ displayName: "Ada" }, { displayName: "Bob" }] };
     },
-    async readFile(ref) {
+    async readFile(ref, offset) {
+      if (ref === "dddddddddddddddddddddddddddddddd")
+        return offset
+          ? { ok: true, content: "page two", sizeBytes: 30 }
+          : { ok: true, content: "page one", sizeBytes: 30, nextOffset: 8, totalChars: 16 };
       if (ref === "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         return { ok: true, content: "hello from the file", sizeBytes: 19 };
       if (ref === "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -1038,6 +1042,10 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   const bin = textOf(await call(slack, { action: "read_file", ref: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
   assert.match(bin, /not text/);
   assert.doesNotMatch(bin, /hello from the file/);
+  const first = textOf(await call(slack, { action: "read_file", ref: "dddddddddddddddddddddddddddddddd" }));
+  assert.match(first, /page one\n\[showing up to character 8 of 16 — read_file again with offset 8 for more\]/);
+  const second = textOf(await call(slack, { action: "read_file", ref: "dddddddddddddddddddddddddddddddd", offset: 8 }));
+  assert.equal(second, "page two");
   const gone = textOf(await call(slack, { action: "read_file", ref: "cccccccccccccccccccccccccccccccc" }));
   assert.match(gone, /couldn't read that file/);
 

@@ -422,6 +422,8 @@ interface SurfaceMembersResult {
 interface SurfaceFileResult {
   ok: boolean;
   content?: string;
+  nextOffset?: number;
+  totalChars?: number;
   name?: string;
   sizeBytes?: number;
   contentType?: string;
@@ -451,7 +453,7 @@ export interface SurfaceToolDeps {
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
-  readFile(ref: string): Promise<SurfaceFileResult>;
+  readFile(ref: string, offset?: number): Promise<SurfaceFileResult>;
   getChannelBehavior(): Promise<ChannelBehaviorResult>;
   setChannelBehavior(bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null): Promise<ChannelBehaviorResult>;
 }
@@ -1450,7 +1452,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
-    readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
+    readFile: (ref, offset) => surfaceOp((s) => s.readFile(ref, offset)),
     getChannelBehavior: () => surfaceOp((s) => s.getChannelBehavior()),
     setChannelBehavior: (bots, ambientEnabled) => surfaceOp((s) => s.setChannelBehavior(bots, ambientEnabled)),
     attach: (files, sandboxId) =>
