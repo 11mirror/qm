@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startLeaseKeepalive } from "../src/core/orchestrator/lease-keepalive.ts";
-import { wallClockTurnFailure } from "../src/harness/pi-harness.ts";
+import { wallClockTurnFailure } from "../src/harness/pi-turn-clock.ts";
 import type { Lease } from "../src/sessions/session-store.ts";
 import { settle } from "./support/settle.ts";
 

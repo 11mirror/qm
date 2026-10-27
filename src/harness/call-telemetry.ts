@@ -10,7 +10,7 @@ import { swallow } from "../util/errors.ts";
 import type { GapPhase, GapPhases, LlmCallUsage } from "../sessions/session-store.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { calculateCost, type Api, type Model, type Usage } from "@earendil-works/pi-ai";
-import { FAST_COST_MULTIPLIER, scaleCost } from "./pi-harness.ts";
+import { FAST_COST_MULTIPLIER, scaleCost } from "./pi-model-runtime.ts";
 
 export interface PerCallStat {
   ttftMs: number | null;

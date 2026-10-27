@@ -6,7 +6,7 @@ import {
   guardOutputBudget,
   OUTPUT_BUDGET_FLOOR_TOKENS,
   OUTPUT_GUARD_SAFETY_TOKENS,
-} from "../src/harness/pi-harness.ts";
+} from "../src/harness/pi-payload.ts";
 
 const FABLE = { contextWindow: 200_000, maxTokens: 64_000 };
 

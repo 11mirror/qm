@@ -11,7 +11,7 @@ import type { TurnStop } from "./turn-signals.ts";
 import { sumCacheUsage, type PerCallStat } from "./call-telemetry.ts";
 import { bankGoalTurn } from "./goal.ts";
 import { recordStoppedTurn } from "./harness-shared.ts";
-import { textFromContent } from "./pi-harness.ts";
+import { textFromContent } from "./pi-payload.ts";
 import { piLastAssistantTextOrThrow } from "./turn-recovery.ts";
 
 /**
