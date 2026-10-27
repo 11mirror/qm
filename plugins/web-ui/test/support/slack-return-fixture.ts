@@ -1,7 +1,7 @@
-import { item } from "./item-fixture.ts";
+import { item } from "../item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness } from "../deep-link-boot-fixture.ts";
 
 export function slackReturnTest(outcome: "success" | "expired" | "cancelled" | "wrong-account", session = false) {
   test(`Slack callback survives real router boot: ${outcome}`, async () => {
