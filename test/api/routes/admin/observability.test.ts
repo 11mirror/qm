@@ -1,13 +1,13 @@
-import "./support/auto-fake-sprites.ts";
+import "../../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { SECURITY_SCREEN_STEP } from "../src/security/security-screen.ts";
+import { createInsecureTestServer } from "../../../../src/api/server.ts";
+import { buildApp } from "../../../support/build-app.ts";
+import { scopeId, type TurnRequest } from "../../../../src/types.ts";
+import { testConfig } from "../../../support/test-config.ts";
+import { SECURITY_SCREEN_STEP } from "../../../../src/security/security-screen.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ ...overrides });

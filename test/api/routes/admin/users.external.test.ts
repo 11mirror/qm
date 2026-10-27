@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
-import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
-import "./support/auto-fake-sprites.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../../plugins/chassis/src/core-client.ts";
+import { mintSignedPayload, verifySignedPayload } from "../../../../src/auth/signed-token.ts";
+import "../../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
-import type { Mailer } from "../plugins/chassis/src/resend.ts";
-import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
-import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { createInsecureTestServer, createServer } from "../../../../src/api/server.ts";
+import { buildApp } from "../../../support/build-app.ts";
+import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../../src/admin/invite-email.ts";
+import type { Mailer } from "../../../../plugins/chassis/src/resend.ts";
+import { adminStatusFromGrants } from "../../../../src/admin/admin-service.ts";
+import { coreEmailAdmission, coreEmailAllowed } from "../../../../plugins/chassis/src/external-members.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../../../src/auth/capability-token.ts";
+import { scopeId, type TurnRequest } from "../../../../src/types.ts";
+import { testConfig } from "../../../support/test-config.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";

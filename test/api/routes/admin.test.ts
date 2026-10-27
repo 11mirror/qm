@@ -1,29 +1,29 @@
-import { createAdminCall } from "../src/tools/admin.ts";
-import { adminRoutes } from "../src/api/routes/admin.ts";
-import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
-import type { ToolContext } from "../src/tools/primitives.ts";
-import "./support/auto-fake-sprites.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { createAdminCall } from "../../../src/tools/admin.ts";
+import { adminRoutes } from "../../../src/api/routes/admin.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "../../../src/api/control-service.ts";
+import { createAgentTools } from "../../../src/harness/agent-tools.ts";
+import type { ToolContext } from "../../../src/tools/primitives.ts";
+import "../../support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createKeychain } from "../src/credentials/keychain.ts";
-import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { createServer } from "../../../src/api/server.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
+import { scopeId, type TurnRequest } from "../../../src/types.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   EGRESS_PROXY_AUD,
-} from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+} from "../../../src/auth/capability-token.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { mintSignedPayload } from "../../../src/auth/signed-token.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "../../support/test-database.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
