@@ -18,6 +18,8 @@ import { TURN_QUEUES } from "../turns/absurd-schema.ts";
 import { RUN_MAX_CLAIMS, type Worker, createWorker, createRunPreemption } from "../runs/worker.ts";
 import { type ProcessReaper, createProcessReaper, createReaperKillHook } from "../processes/process-reaper.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
+import { createJobComputerSweep } from "../processes/job-computers.ts";
+import { errMessage } from "../util/errors.ts";
 import type { ComposioReturn } from "../api/routes/composio.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
@@ -52,6 +54,7 @@ export function buildWorkers(
     createSweeper,
     processes,
     sandbox,
+    sandboxResources,
     finishCredentials,
   } = w;
 
@@ -115,7 +118,25 @@ export function buildWorkers(
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         ...(supportsProcessSessions(sandbox)
-          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          ? {
+              kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              afterSweep: createJobComputerSweep({
+                resources: sandboxResources,
+                sandbox,
+                processes,
+                finish: finishCredentials,
+                onError: (error, scopeId) =>
+                  errors.record(
+                    {
+                      category: "process_session",
+                      code: "job_computer_retire_failed",
+                      message: errMessage(error),
+                      scopeLabel: scopeId,
+                    },
+                    error,
+                  ),
+              }),
+            }
           : {}),
       })
     : null;

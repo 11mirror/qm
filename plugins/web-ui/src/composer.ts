@@ -120,6 +120,7 @@ export class Composer implements ComposerSurface {
     this.loadout = loadLoadout(this.loadoutKey);
     window.addEventListener("model-account-changed", this.refreshAccount);
     document.addEventListener("visibilitychange", this.revalidateRuntime);
+    window.addEventListener("online", this.revalidateRuntime);
     this.modelPicker = composerPicker(this);
     window.addEventListener("qm:prepare-update", this.preventUnsafeUpdate);
     this.attachments = createComposerAttachments(this);
@@ -586,6 +587,7 @@ export class Composer implements ComposerSurface {
     if (!this.pendingSubmissions) window.removeEventListener("qm:prepare-update", this.preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", this.refreshAccount);
     document.removeEventListener("visibilitychange", this.revalidateRuntime);
+    window.removeEventListener("online", this.revalidateRuntime);
     this.modelPicker.dispose();
     this.unsubscribeRuntime?.();
     ++this.runtimeRequest;

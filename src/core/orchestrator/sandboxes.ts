@@ -5,7 +5,11 @@ import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
-import { accessConversationSandbox, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
+import {
+  accessConversationSandbox,
+  type SandboxAccessPlan,
+  type SandboxResource,
+} from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
@@ -23,7 +27,6 @@ import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
-import { BROKER_ENV_KEYS } from "./credential-registry.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -42,25 +45,22 @@ export interface TurnSandboxContext {
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
-  openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
-  ownerAuthAvailable: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const t = createTurnSandboxState(ctx);
-  const { box, scratch, ownerAuth, resourceHandles, resourcePendingHandles, laidTrees } = t;
+  const { box, scratch, resourceHandles, resourcePendingHandles, laidTrees } = t;
   return {
     scratchBox: scratch.state,
-    ownerAuthBox: ownerAuth.state,
-    ownerAuthCommand: ctx.ownerAuthAvailable ? ownerAuthCommand.bind(null, t) : undefined,
     provision: provision.bind(null, t),
     provisionScratch: scratch.provision,
     accessResource: accessResource.bind(null, t),
     provisionResource: provisionResource.bind(null, t),
-    provisionOwnerAuth: ctx.ownerAuthAvailable ? provisionOwnerAuth.bind(null, t) : undefined,
+    provisionJobComputer: provisionJobComputer.bind(null, t),
+    provisionJobSandbox: provisionJobSandbox.bind(null, t),
     useSkill: useSkill.bind(null, t),
     provisionForReach: provisionForReach.bind(null, t),
     reclaimBox: reclaimBox.bind(null, t),
@@ -74,31 +74,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       laidTrees.clear();
     },
   };
-}
-
-const unsetBrokerEnv = (env: Record<string, string>): string => {
-  const keys = BROKER_ENV_KEYS.filter((key) => !(key in env));
-  return keys.length ? `unset ${keys.join(" ")}; ` : "";
-};
-
-function ownerAuthCommand(t: TurnSandboxState, command: string, env: Record<string, string> = {}): string {
-  const { deps, actor, scopeId, openSpeakerKeychain } = t;
-  if (openSpeakerKeychain)
-    deps.auditLog.record({
-      at: Date.now(),
-      principalId: actor.id,
-      action: "keychain.open_speaker_use",
-      resource: "isolated owner execution",
-      scopeLabel: scopeId,
-    });
-  return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN; ${unsetBrokerEnv(env)}${command}`;
-}
-
-async function provisionOwnerAuth(t: TurnSandboxState): Promise<SandboxHandle> {
-  const { deps, actor, scopeId, openSpeakerKeychain, ownerAuth } = t;
-  if (openSpeakerKeychain && !(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)))
-    throw new Error("Open speaker keychain access is no longer authorized");
-  return ownerAuth.provision();
 }
 
 type SandboxBase = TurnSandboxContext & { onSandboxStatus?: (text: string) => void };
@@ -132,7 +107,6 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
     },
     turnKey,
     scratch: disposableBox(base, "scratch", turnKey, connectorEnv),
-    ownerAuth: disposableBox(base, "owner_auth", `owner-auth:${session.id}:${transferId}`),
     resourceHandles: new Map<string, SandboxHandle>(),
     resourcePolicy: new Map<string, string>(),
     resourcePendingHandles: new Map<string, SandboxHandle>(),
@@ -144,7 +118,7 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
   };
 }
 
-function disposableBox(t: SandboxBase, kind: "scratch" | "owner_auth", key: string, env?: Record<string, string>) {
+function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Record<string, string>) {
   const { deps, input, actor, session, resolution, scopeId, memoryScopeId, egressTokenForTurn, onSandboxStatus } = t;
   const state: {
     handle: SandboxHandle | null;
@@ -469,6 +443,25 @@ async function accessResource(t: TurnSandboxState, id: string): Promise<SandboxA
   };
 }
 
+function jobComputerPlan(t: TurnSandboxState, resource: SandboxResource): SandboxAccessPlan {
+  return { resource, crossScope: false, egress: t.resolution.egress, commandPolicy: null };
+}
+
+/** A fresh job-only computer for a background job that names private credentials in a shared scope. */
+async function provisionJobComputer(t: TurnSandboxState): Promise<SandboxHandle> {
+  const { deps, actor, memoryScopeId } = t;
+  const resources = deps.sandboxResources!;
+  const backend = (await resources.resolve(memoryScopeId))?.backend ?? resources.defaultBackend();
+  const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
+  return provisionResource(t, jobComputerPlan(t, resource));
+}
+
+/** Reattaches a background job's computer; job-only computers skip the conversation access check. */
+async function provisionJobSandbox(t: TurnSandboxState, id: string): Promise<SandboxHandle> {
+  const resource = await t.deps.sandboxResources!.get(id);
+  return resource.jobOnly ? provisionResource(t, jobComputerPlan(t, resource)) : provisionResource(t, id);
+}
+
 async function provisionResource(
   t: TurnSandboxState,
   input: string | SandboxAccessPlan,
@@ -628,7 +621,6 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
     scopeId,
     box,
     scratch,
-    ownerAuth,
     resourceHandles,
     resourcePendingHandles,
     resourcePending,
@@ -645,7 +637,7 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
         .catch((error: unknown) => reportSandboxError(t, "reach_teardown_failed", error));
     }),
   );
-  const disposableFailures = (await Promise.allSettled([ownerAuth.release(), scratch.release()])).flatMap((r) =>
+  const disposableFailures = (await Promise.allSettled([scratch.release()])).flatMap((r) =>
     r.status === "rejected" ? [r.reason as unknown] : [],
   );
   await Promise.allSettled(resourcePending.values());

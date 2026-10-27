@@ -22,7 +22,6 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!run ",
   "!execute ",
   "!scratch ",
-  "!owner ",
   "!reach ",
   "!paused-approval ",
   "!collect-approval ",
@@ -343,28 +342,23 @@ export function createMockHarness(): Harness {
         const params = JSON.parse(cmd.slice(cmd.indexOf("!execute ") + 9)) as {
           command: string;
           credentials?: string[];
-          ownerAuth?: boolean;
+          scratch?: boolean;
           sandboxId?: string;
         };
         const result = await turn.tools.execute(params.command, {
           credentials: params.credentials,
-          ownerAuth: params.ownerAuth,
+          scratch: params.scratch,
           sandboxId: params.sandboxId,
         });
         await turn.emit({ kind: "ToolResult", body: { ...result } });
         usedTool = true;
         reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-      } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ") || command0.startsWith("!owner ")) {
-        let tag = "!run ";
-        if (command0.startsWith("!scratch ")) tag = "!scratch ";
-        else if (command0.startsWith("!owner ")) tag = "!owner ";
+      } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ")) {
+        const tag = command0.startsWith("!scratch ") ? "!scratch " : "!run ";
         const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
         const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
         await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
-        let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
-        if (tag === "!scratch ") opts = { scratch: true };
-        else if (tag === "!owner ") opts = { ownerAuth: true };
-        const result = await turn.tools.execute(command, opts);
+        const result = await turn.tools.execute(command, tag === "!scratch " ? { scratch: true } : undefined);
         await turn.emit({ kind: "ToolResult", body: { ...result } });
         usedTool = true;
         reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;

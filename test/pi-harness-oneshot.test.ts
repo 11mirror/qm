@@ -80,9 +80,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
         apiKeyHeader: "api-key",
         models: { "claude-opus-5": "router/opus" },
       },
-      piSystemCacheSplit: true,
 
-      scratchExecEnabled: true,
       reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
@@ -100,8 +98,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       apiKeyHeader: "api-key",
       models: { "claude-opus-5": "router/opus" },
     },
-    systemCacheSplit: true,
-    scratchExec: true,
     reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,

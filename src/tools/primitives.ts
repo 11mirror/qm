@@ -121,7 +121,7 @@ export interface ReachedProvenance {
 
 export interface CommandCredential {
   handle: string;
-  scope?: "scoped" | "owner";
+  scratchOnly?: boolean;
   env?: Array<{ key: string; value: string; secret?: boolean }>;
   resolve?: () => Promise<{
     commit?: () => Promise<void>;
@@ -158,12 +158,11 @@ export interface ToolContext extends SurfaceToolDeps {
       timeoutSeconds?: number;
       sandboxId?: string;
       scratch?: boolean;
-      ownerAuth?: boolean;
       reachTarget?: string;
       signal?: AbortSignal;
       credentials?: string[];
     },
-  ): Promise<ExecResult & { reached?: ReachedProvenance }>;
+  ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
     input?: { backend?: string; name?: string; sandboxId?: string | null },
@@ -206,7 +205,7 @@ export interface ToolContext extends SurfaceToolDeps {
   backgroundStart(
     command: string,
     opts: { purpose: string; ttlSeconds?: number; sandboxId?: string; credentials?: string[] },
-  ): Promise<BackgroundStartResult>;
+  ): Promise<BackgroundStartResult & { jobComputer?: boolean }>;
   backgroundPoll(
     processId: string,
     opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },

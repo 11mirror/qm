@@ -14,7 +14,7 @@ export function runtimeTools(kit: ToolKit) {
     name: "context",
     label: "context",
     description:
-      "Reduce this conversation's model context without calling a summarizer. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
+      "Shrink model context to recent entries, the saved summary if it fits, and goal state (stored history is untouched). The unfinished request then resumes; do not repeat completed actions. Call it alone after other tools finish.",
     parameters: Type.Object({ action: Type.Literal("compact"), mode: Type.Literal("recent") }),
     async execute(callId, params) {
       await recordCall(callId, { tool: "context", ...params });
@@ -35,12 +35,12 @@ export function runtimeTools(kit: ToolKit) {
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
+      "Inspect or change your model, effort and fast mode. get: active runtime and choices. set: change it (omitted settings kept). inherit: back to the scope default (with lifetime scope, clears the scope override). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
-      model: optionalString("Model ID or exact display name from get, such as Astra."),
+      model: optionalString("Model ID or exact display name from get."),
       effort: optionalString(
-        "Use modelCatalog[modelId].effortLevels from get. adaptive = native Auto; default = provider default; auto = legacy default, not adaptive reasoning.",
+        "A level from get's modelCatalog[model].effortLevels. adaptive = native Auto; default = provider default; auto = legacy default.",
       ),
       fastMode: Type.Optional(Type.Boolean()),
       lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),

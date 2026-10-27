@@ -18,7 +18,6 @@ export const EXEC_TIMEOUT_MAX_MS = 300_000;
 
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const {
-    scratchExec,
     reachExec,
     controlTools,
     surfaceTools,
@@ -47,7 +46,6 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   return {
     ref,
     opts,
-    scratchExec,
     reachExec,
     controlTools,
     surfaceTools,
@@ -77,7 +75,6 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
 
 /** The tool options and limits every tool builder reads. */
 function kitSettings(opts?: AgentToolsOptions) {
-  const scratchExec = !!opts?.scratchExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -89,9 +86,8 @@ function kitSettings(opts?: AgentToolsOptions) {
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
   const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;
-  const capabilityExpiry = `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
+  const capabilityExpiry = `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
   return {
-    scratchExec,
     reachExec,
     controlTools,
     surfaceTools,

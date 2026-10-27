@@ -97,7 +97,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   );
   if (
     !strictReadOnly &&
-    deps.eagerProvision &&
     sessionUsedTools &&
     !isPollFire &&
     (await deps.sandboxResources?.resolve(memoryScopeId)) !== null

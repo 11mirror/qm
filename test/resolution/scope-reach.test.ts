@@ -220,45 +220,15 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
 
 test("reachExec OFF: the execute scope never accepts a room", () => {
   const ref: ToolContextRef = { current: null };
-  const [scopedOnly] = createAgentTools(ref);
-  const scopedSchema = (scopedOnly as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
+  const [execute] = createAgentTools(ref);
+  const scopeSchema = (execute as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
     .parameters.properties.scope;
-  assert.ok(Array.isArray(scopedSchema?.anyOf), "default scope is a closed union (scoped|owner), not a room string");
-  const [scratchOnly] = createAgentTools(ref, { scratchExec: true });
-  const scopeSchema = (scratchOnly as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
-    .parameters.properties.scope;
-  assert.ok(
-    Array.isArray(scopeSchema?.anyOf),
-    "scratch-only scope is a closed union (scratch|scoped), not a free room string",
-  );
+  assert.ok(Array.isArray(scopeSchema?.anyOf), "without reach, scope is a closed union, not a free room string");
 });
 
-test("reachExec ON (no scratch): scope is a free string; a room routes to reachTarget; default is scoped", async () => {
+test("reachExec ON: scope accepts scoped, scratch, AND a room", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { reachExec: true });
-  assert.deepEqual(schemaProps(execute!), [
-    "command",
-    "background",
-    "sandbox_id",
-    "purpose",
-    "timeout_seconds",
-    "credentials",
-    "scope",
-    "retrySafe",
-  ]);
-  await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });
-  assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#project-alpha" });
-  await call(execute, { command: "echo hi", purpose: "Run test command" });
-  assert.deepEqual(seen.at(-1)!.opts, undefined, "omitted scope = the scoped box");
-  await call(execute, { command: "echo hi", scope: "scoped", purpose: "Run test command" });
-  assert.deepEqual(seen.at(-1)!.opts, undefined);
-  const err = textOf(await call(execute, { command: "x", scope: "scratch", purpose: "Run test command" }));
-  assert.match(err, /scratch box isn't available here/);
-});
-
-test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true, scratchExec: true });
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -281,7 +251,7 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
 
 test("reachExec ON: the scoped/scratch keywords match case-insensitively, never routed as a room", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true, scratchExec: true });
+  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
   await call(execute, { command: "x", scope: "Scoped", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, undefined, '"Scoped" is the scoped box, not a reach target');
   await call(execute, { command: "x", scope: "SCRATCH", purpose: "Run test command" });

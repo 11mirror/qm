@@ -30,6 +30,7 @@ export function createCatalogState(
   strictReadOnly: boolean,
   openSpeakerKeychain: boolean,
   openAutomationKeychain: boolean,
+  sharedScope: boolean,
 ) {
   const { deps, input, actor, conversation, external, liveTurn, resolution, scopeId } = ctx;
   return {
@@ -37,7 +38,8 @@ export function createCatalogState(
     strictReadOnly,
     openSpeakerKeychain,
     openAutomationKeychain,
-    isolateOwnerKeychain: !external && (openSpeakerKeychain || openAutomationKeychain),
+    ownCredentialsAllowed: scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain,
+    sharedScope,
     brokerAvailable: Boolean(deps.signingSecret && deps.apiBaseUrl),
     orgWideAudience:
       conversation.audience.length > 0 &&
@@ -73,9 +75,25 @@ type AddCredential = (
 
 async function authorizeOwnerCredentials(c: CatalogState): Promise<void> {
   const { openSpeakerKeychain, openAutomationKeychain, isCurrentSharedScopeMember, actor, scopeId } = c;
-  if ((openSpeakerKeychain || openAutomationKeychain) && !(await isCurrentSharedScopeMember(actor.id, scopeId))) {
+  if (!openSpeakerKeychain && !openAutomationKeychain) return;
+  if (!(await isCurrentSharedScopeMember(actor.id, scopeId))) {
     throw new Error("Open speaker keychain access is no longer authorized");
   }
+  c.deps.auditLog.record({
+    at: Date.now(),
+    principalId: actor.id,
+    action: "keychain.open_speaker_use",
+    resource: "scratch execution",
+    scopeLabel: scopeId,
+  });
+}
+
+/** In a shared scope, a credential that is not a brokered org service runs only on the turn's scratch computer. */
+export function placeCredential(
+  c: Pick<CatalogState, "sharedScope">,
+  credential: CommandCredential,
+): CommandCredential {
+  return { ...credential, scratchOnly: c.sharedScope && credential.scratchOnly !== false };
 }
 
 export function credentialBroker(c: CatalogState, requested: readonly string[]) {
@@ -154,14 +172,8 @@ export function addCredentialToCatalog(
     return;
   }
   credentialIdentities.set(credential.handle, identity);
-  commandCredentials.push(credential);
-  credentialDescriptions.push({
-    handle: credential.handle,
-    ownerId,
-    description,
-    credentialId,
-    scope: credential.scope ?? "scoped",
-  });
+  commandCredentials.push(placeCredential(c, credential));
+  credentialDescriptions.push({ handle: credential.handle, ownerId, description, credentialId });
 }
 
 export async function registerKeychainCredentials(
@@ -169,7 +181,7 @@ export async function registerKeychainCredentials(
   addCredential: AddCredential,
   broker: CredentialBroker,
 ): Promise<void> {
-  const { deps, actor, scopeId, external, strictReadOnly, brokerAvailable, isolateOwnerKeychain } = c;
+  const { deps, actor, scopeId, external, strictReadOnly, brokerAvailable, ownCredentialsAllowed } = c;
   if (external || strictReadOnly || !deps.keychain) return;
   const keychain = deps.keychain;
   for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
@@ -195,8 +207,7 @@ export async function registerKeychainCredentials(
       credential.id,
     );
   }
-  const ownAllowed = scopeId === personalScope(actor.id) || isolateOwnerKeychain;
-  if (ownAllowed) {
+  if (ownCredentialsAllowed) {
     for (const credential of await keychain.listByOwner(actor.id)) {
       if (credential.kind === "broker" || isBackendCredential(credential)) continue;
       const connector = connectorOf(credential);
@@ -205,7 +216,6 @@ export async function registerKeychainCredentials(
       addCredential(
         {
           handle: credentialHandle(credential),
-          scope: isolateOwnerKeychain ? "owner" : "scoped",
           resolve: async () => {
             await authorizeOwnerCredentials(c);
             return resolvedCredential(
@@ -229,15 +239,8 @@ export async function registerConnectorCredentials(
   addCredential: AddCredential,
   broker: CredentialBroker,
 ): Promise<void> {
-  const { deps, actor, scopeId, external, strictReadOnly, brokerAvailable, isolateOwnerKeychain } = c;
-  const { openSpeakerKeychain, openAutomationKeychain } = c;
-  if (
-    !external &&
-    !strictReadOnly &&
-    brokerAvailable &&
-    deps.connectorTokens &&
-    (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
-  ) {
+  const { deps, actor, external, strictReadOnly, brokerAvailable, ownCredentialsAllowed } = c;
+  if (!external && !strictReadOnly && brokerAvailable && deps.connectorTokens && ownCredentialsAllowed) {
     const tokens = deps.connectorTokens;
     const inventory = tokens.listConnectorsByOwners
       ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
@@ -256,7 +259,6 @@ export async function registerConnectorCredentials(
         addCredential(
           {
             handle,
-            scope: isolateOwnerKeychain ? "owner" : "scoped",
             resolve: async () => {
               await authorizeOwnerCredentials(c);
               if (!(await tokens.connectorAccessToken(host, actor.id, accountType)))
@@ -379,6 +381,7 @@ export async function registerServiceCredentials(
       addCredential(
         {
           handle: credential.slug,
+          scratchOnly: false,
           resolve: async () => {
             await authorizeServiceCredential(c, credential.slug);
             const record = (await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId)).find(

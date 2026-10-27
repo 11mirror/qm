@@ -23,6 +23,12 @@ import {
 import { type ToolContextDeps } from "./tool-context.ts";
 
 /** How the turn reaches computers: the writable scope, memory view, sandbox access plans, command authorization and provisioning. */
+export const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =>
+  credentials
+    .filter((credential) => credential.scratchOnly)
+    .map((credential) => credential.handle)
+    .join(", ");
+
 export function sandboxAccess(deps: ToolContextDeps) {
   const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
   const memory =
@@ -134,7 +140,16 @@ export function sandboxAccess(deps: ToolContextDeps) {
       authorizeExecution(command, current, policy());
     });
   };
-  return { writableScopeId, memory, fallbackMounts, persistExclude, accessSandbox, machine, provisionForCommand };
+  return {
+    writableScopeId,
+    memory,
+    fallbackMounts,
+    persistExclude,
+    accessSandbox,
+    machine,
+    provisionForCommand,
+    authorizeExecution,
+  };
 }
 
 /** Per-call timing, the durable once-per-call ledger, and the control-plane and surface call wrappers. */
@@ -193,7 +208,7 @@ export function credentialStaging(
   deps: ToolContextDeps,
   { writableScopeId }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId">,
 ) {
-  const selectCredentials = async (handles: readonly string[], ownerAuth: boolean) => {
+  const selectCredentials = async (handles: readonly string[]) => {
     const available = new Map(
       (
         (handles.length ? await deps.resolveCommandCredentials?.(handles) : undefined) ??
@@ -204,8 +219,6 @@ export function credentialStaging(
     return handles.map((handle) => {
       const credential = available.get(handle);
       if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
-      if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped"))
-        throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
       return credential;
     });
   };

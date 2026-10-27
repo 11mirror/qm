@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import pg from "pg";
-import { pgCaOptions } from "../persistence/pg-pool.ts";
+import { pgConnectionOptions } from "../persistence/pg-pool.ts";
 import { TENANCY_EXCLUDED_TABLES } from "../persistence/tenancy.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SqlRunner } from "./registry.ts";
@@ -48,8 +48,7 @@ function describeDatabase(url: string): string {
 
 async function connect(url: string, readOnly = false): Promise<pg.Client> {
   const client = new pg.Client({
-    connectionString: url,
-    ...pgCaOptions(),
+    ...pgConnectionOptions(url),
     ...(readOnly ? { options: "-c default_transaction_read_only=on" } : {}),
   });
   await client.connect();

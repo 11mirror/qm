@@ -180,7 +180,6 @@ async function openAgentSession(
 export function createTurnTools(ctx: PiHarnessContext, ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
   const { opts } = ctx;
   return createAgentTools(ref, {
-    scratchExec: opts?.scratchExec,
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
     execTimeoutMs: opts?.execTimeoutMs,
@@ -209,7 +208,7 @@ export async function createTurnSession(
   tools: ToolDefinition[],
   loadImage: ReplayImageLoader | undefined,
 ): Promise<TurnSession> {
-  const { tempDirPrefix, resolveProviderKeys, modelGateway, captureRequests, systemCacheSplit } = ctx;
+  const { tempDirPrefix, resolveProviderKeys, modelGateway, captureRequests } = ctx;
   let reconstructed: PiReplayMessage[] | null;
   try {
     reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -223,7 +222,7 @@ export async function createTurnSession(
   const modelRuntime = await buildModelRuntime(
     turnProviderKeys ?? (await resolveProviderKeys()),
     turnProviderKeys ? undefined : modelGateway,
-    systemCacheSplit ? "long" : undefined,
+    "long",
   );
   const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
     model,
