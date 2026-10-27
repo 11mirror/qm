@@ -542,7 +542,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             throw e;
           },
         );
-      starting.catch(() => {});
+      starting.catch(() => {}); // ready() rethrows; already reported
     },
     async ready() {
       await starting;
@@ -555,7 +555,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       stopSignal.resolve();
       const guard = leaseGuard.stop();
       pausing = (async () => {
-        await starting?.catch(() => {});
+        await starting?.catch(() => {}); // start failure already reported
         await deps.jobQueue.stopClaims();
         await guard;
         stopFailed = false;
@@ -580,7 +580,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       started = false;
       const sweeps = [leaseGuard.stop()];
       stopping = (async () => {
-        await starting?.catch(() => {});
+        await starting?.catch(() => {}); // start failure already reported
         await deps.jobQueue.stopClaims();
         await pausing;
         await Promise.all(sweeps);

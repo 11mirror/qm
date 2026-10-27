@@ -638,6 +638,7 @@ export function createPgPool(
           (lateClient) => lateClient.release(error instanceof Error ? error : new Error(String(error))),
           () => undefined,
         )
+        // The caller gets the original error; a client that connects late is only released.
         .catch(() => undefined);
       throw error;
     } finally {
@@ -671,7 +672,7 @@ export function createPgPool(
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    await readyP?.catch(() => {});
+    await readyP?.catch(() => {}); // ready() callers saw the failure
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),

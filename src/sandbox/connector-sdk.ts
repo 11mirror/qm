@@ -70,6 +70,7 @@ export async function installConnectorSdk(
         `rm -f ${shq(stage)}/sdk.cjs ${shq(stage)}/LICENSES.txt ${shq(link)}; rmdir ${shq(stage)} 2>/dev/null || true`,
         60,
       )
+      // Best-effort cleanup of a partial install; the install error below is what matters.
       .catch(() => {});
     throw error;
   }

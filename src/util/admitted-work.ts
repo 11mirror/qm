@@ -29,6 +29,7 @@ export function createAdmittedWork(options: { paused?: boolean; canStart?: () =>
           admission.active = false;
           pending.delete(task);
         })
+        // The caller receives task and its rejection; this chain only does bookkeeping.
         .catch(() => {});
       return task;
     },

@@ -135,11 +135,11 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     toggle.dataset.on = on ? "1" : "0";
     toggle.setAttribute("aria-expanded", String(on));
     window.dispatchEvent(new CustomEvent("qm:chat-open", { detail: on }));
-    try { localStorage.setItem(openKey, on ? "1" : "0"); } catch {}
+    try { localStorage.setItem(openKey, on ? "1" : "0"); } catch { /* storage blocked: the panel state is not remembered */ }
   };
   toggle.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
   let wantOpen = false;
-  try { wantOpen = localStorage.getItem(openKey) === "1"; } catch {}
+  try { wantOpen = localStorage.getItem(openKey) === "1"; } catch { /* storage blocked: start closed */ }
   if (wantOpen) setOpen(true);
 
   drag.addEventListener("pointerdown", (e) => {
@@ -178,7 +178,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       if (loc.href === "about:blank" || loc.href === lastHref) return;
       lastHref = loc.href;
       history.replaceState(null, "", loc.pathname + loc.search + loc.hash);
-    } catch {}
+    } catch { /* cross-origin page in the app frame: keep the last synced title and URL */ }
   };
   setInterval(sync, 500);
   app.addEventListener("load", sync);
@@ -202,7 +202,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
         if (panel.classList.contains("open")) reloadApp(d.version);
         else upd.classList.add("show");
       }
-    } catch {}
+    } catch { /* version poll failed: retried in 5 seconds */ }
   };
   void poll();
   setInterval(poll, 5000);

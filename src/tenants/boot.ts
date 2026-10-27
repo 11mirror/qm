@@ -139,12 +139,10 @@ export async function bootTenant(
     const stopPeriodic = () => {
       activationEpoch++;
       periodicStop = built.scheduler.stopClaims();
-      void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
-      void built.runtime
-        .stopBackgroundClaims()
-        .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
+      void periodicStop.catch(reportFailureAs("qm: periodic background stop", undefined));
+      void built.runtime.stopBackgroundClaims().catch(reportFailureAs("qm: background claim stop", undefined));
       for (const runtime of [slackRuntime, ...slackAccountRuntimes])
-        void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
+        void runtime.stop().catch(reportFailureAs("qm: Slack background stop", undefined));
     };
     backgroundController = createBackgroundController({
       store: built.backgroundOwnership.store,
