@@ -1,7 +1,7 @@
 import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { swallowAs } from "../util/errors.ts";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
@@ -174,23 +174,14 @@ export const HANDLED_EVENTS_MIGRATION = mapToTableMigration("slack/handled-event
 });
 
 export function createHandledEvents(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [HANDLED_EVENTS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [HANDLED_EVENTS_MIGRATION]);
+  const table = typedTable<{ at: number }>(pg, HANDLED_EVENTS);
   return {
-    async has(key: string): Promise<boolean> {
-      return (await q(`SELECT 1 FROM slack_handled_events WHERE id = $1`, [key])).length > 0;
-    },
-    async record(key: string, at: number): Promise<void> {
-      await q(
-        `INSERT INTO slack_handled_events (id, at) VALUES ($1, $2)
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET at = EXCLUDED.at`,
-        [key, at],
-      );
-    },
-    async forget(key: string): Promise<void> {
-      await q(`DELETE FROM slack_handled_events WHERE id = $1`, [key]);
-    },
+    has: async (key: string) => (await table.get(key)) !== null,
+    record: (key: string, at: number) => table.put(key, { at }),
+    forget: table.delete,
     async deleteBefore(at: number): Promise<number> {
-      return (await q(`DELETE FROM slack_handled_events WHERE at < $1 RETURNING id`, [at])).length;
+      return (await pg.q(`DELETE FROM slack_handled_events WHERE at < $1 RETURNING id`, [at])).length;
     },
   };
 }

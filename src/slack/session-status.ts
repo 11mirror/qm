@@ -1,8 +1,7 @@
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { lockedRow } from "../persistence/locked-row.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
@@ -56,29 +55,19 @@ const SESSION_STATUS: TableSpec = {
 
 export const SESSION_STATUS_MIGRATION = mapToTableMigration("slack/session-status/0001-typed", SESSION_STATUS);
 
-const codec = tableCodec<SlackSessionStatusState>(SESSION_STATUS);
-
 export function createSessionStatusStore(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [SESSION_STATUS_MIGRATION]);
-  const { q } = pg;
-  const modify = lockedRow<SlackSessionStatusState>(pg, SESSION_STATUS);
+  const { get, insert, modify } = typedTable<SlackSessionStatusState>(pg, SESSION_STATUS);
   return {
-    async get(id: string): Promise<SlackSessionStatusState | null> {
-      return codec.rows(await q(`SELECT ${codec.columns} FROM slack_session_status WHERE id = $1`, [id]))[0] ?? null;
-    },
-    async putIfAbsent(id: string, state: SlackSessionStatusState): Promise<void> {
-      await q(
-        `INSERT INTO slack_session_status (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
-        codec.values(id, state),
-      );
-    },
+    get,
+    putIfAbsent: insert,
     update: (id: string, fn: (row: SlackSessionStatusState) => SlackSessionStatusState) =>
       modify(id, (row) => row && fn(row)),
     async deleteIf(id: string, predicate: (row: SlackSessionStatusState) => boolean): Promise<void> {
       await modify(id, (row) => (row && predicate(row) ? null : row));
     },
     async forAccount(account: string): Promise<string[]> {
-      const rows = await q(`SELECT id FROM slack_session_status WHERE account = $1 ORDER BY id`, [account]);
+      const rows = await pg.q(`SELECT id FROM slack_session_status WHERE account = $1 ORDER BY id`, [account]);
       return rows.map((r) => String(r.id));
     },
   };

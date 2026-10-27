@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { OutboundPost } from "./outbound.ts";
 
 export interface QueuedPost {
@@ -16,25 +16,16 @@ const QUEUED_POSTS: TableSpec = {
 
 export const QUEUED_POSTS_MIGRATION = mapToTableMigration("surfaces/queued-posts/0001-typed", QUEUED_POSTS);
 
-const codec = tableCodec<QueuedPost>(QUEUED_POSTS);
-
 export function createQueuedPosts(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [QUEUED_POSTS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [QUEUED_POSTS_MIGRATION]);
+  const { put, delete: remove, codec } = typedTable<QueuedPost>(pg, QUEUED_POSTS);
   return {
-    async put(key: string, queued: QueuedPost): Promise<void> {
-      await q(
-        `INSERT INTO queued_posts (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(key, queued),
-      );
-    },
+    put,
     async entries(): Promise<Array<[string, QueuedPost]>> {
-      const rows = await q(`SELECT ${codec.columns} FROM queued_posts ORDER BY first_failed_at, id`);
+      const rows = await pg.q(`SELECT ${codec.columns} FROM queued_posts ORDER BY first_failed_at, id`);
       return rows.map((r) => [String(r.id), codec.row(r)]);
     },
-    async delete(key: string): Promise<void> {
-      await q(`DELETE FROM queued_posts WHERE id = $1`, [key]);
-    },
+    delete: remove,
   };
 }
 

@@ -1,8 +1,8 @@
 import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
 import type { SurfaceRegistry } from "../chat-surface/registry.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
 
@@ -27,39 +27,28 @@ export const APPROVALS_MIGRATION = mapToTableMigration("core/approvals/0001-type
   statements: [`CREATE INDEX IF NOT EXISTS approvals_session ON approvals (session_id)`],
 });
 
-const codec = tableCodec<PendingApprovalRecord>(APPROVALS);
-const entries = (rows: Record<string, unknown>[]): Array<[string, PendingApprovalRecord]> =>
-  rows.map((r) => [String(r.id), codec.row(r)]);
-
 export function createApprovalRecords(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [APPROVALS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [APPROVALS_MIGRATION]);
+  const { get, put, delete: remove, codec } = typedTable<PendingApprovalRecord>(pg, APPROVALS);
+  const entries = (rows: Record<string, unknown>[]): Array<[string, PendingApprovalRecord]> =>
+    rows.map((r) => [String(r.id), codec.row(r)]);
   return {
-    async get(id: string): Promise<PendingApprovalRecord | null> {
-      return codec.rows(await q(`SELECT ${codec.columns} FROM approvals WHERE id = $1`, [id]))[0] ?? null;
-    },
-    async put(id: string, record: PendingApprovalRecord): Promise<void> {
-      await q(
-        `INSERT INTO approvals (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(id, record),
-      );
-    },
-    async delete(id: string): Promise<void> {
-      await q(`DELETE FROM approvals WHERE id = $1`, [id]);
-    },
+    get,
+    put,
+    delete: remove,
     async entries(): Promise<Array<[string, PendingApprovalRecord]>> {
-      return entries(await q(`SELECT ${codec.columns} FROM approvals ORDER BY id`));
+      return entries(await pg.q(`SELECT ${codec.columns} FROM approvals ORDER BY id`));
     },
     async forSessions(sessionIds: readonly string[]): Promise<Array<[string, PendingApprovalRecord]>> {
       if (!sessionIds.length) return [];
       return entries(
-        await q(`SELECT ${codec.columns} FROM approvals WHERE session_id = ANY($1::text[]) ORDER BY id`, [
+        await pg.q(`SELECT ${codec.columns} FROM approvals WHERE session_id = ANY($1::text[]) ORDER BY id`, [
           [...sessionIds],
         ]),
       );
     },
     async blockingSessionIds(): Promise<string[]> {
-      const rows = await q(`SELECT DISTINCT session_id FROM approvals WHERE blocks_input IS NOT FALSE`);
+      const rows = await pg.q(`SELECT DISTINCT session_id FROM approvals WHERE blocks_input IS NOT FALSE`);
       return rows.map((r) => String(r.session_id));
     },
   };

@@ -4,10 +4,12 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import {
   createSessionStatusStore,
+  SESSION_STATUS_MIGRATION,
   createSlackSessionStatus,
   type SlackSessionStatusState,
 } from "../src/slack/session-status.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { typedTable } from "../src/persistence/typed-table.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
@@ -27,11 +29,7 @@ function fixture() {
   let at = 1_000;
   const url = testDatabaseUrl();
   const store = createSessionStatusStore(url);
-  const { q } = createPgPool(url);
-  const all = async (): Promise<SlackSessionStatusState[]> => {
-    const ids = await q(`SELECT id FROM slack_session_status ORDER BY id`);
-    return (await Promise.all(ids.map((r) => store.get(String(r.id))))).filter((row) => row !== null);
-  };
+  const { all } = typedTable<SlackSessionStatusState>(createPgPool(url), SESSION_STATUS_MIGRATION.spec);
   const flags = createFeatureFlagStore(url);
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];

@@ -4,9 +4,11 @@ import {
   createEnvelopeStaging,
   createStagedEnvelopes,
   envelopeKey,
+  STAGED_ENVELOPES_MIGRATION,
   type StagedEnvelope,
 } from "../src/slack/envelope-staging.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { typedTable } from "../src/persistence/typed-table.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
@@ -25,25 +27,16 @@ async function cleared(read: () => Promise<unknown>): Promise<unknown> {
 
 function stagedMap() {
   const url = testDatabaseUrl();
-  const { q } = createPgPool(url);
+  const table = typedTable<StagedEnvelope>(createPgPool(url), STAGED_ENVELOPES_MIGRATION.spec);
   const store = createStagedEnvelopes(url);
+  const change = (key: string, patch: Partial<StagedEnvelope>) =>
+    table.modify(key, (row) => row && { ...row, ...patch });
   return {
     ...store,
-    async get(key: string) {
-      const rows = await q(`SELECT attempts, claimed_until FROM slack_staged_envelopes WHERE id = $1`, [key]);
-      return rows[0] ? { attempts: Number(rows[0].attempts), claimedUntil: rows[0].claimed_until } : null;
-    },
-    put: (key: string, value: StagedEnvelope) => store.stage(key, value),
-    async setReceivedAt(key: string, receivedAt: number) {
-      await q(`UPDATE slack_staged_envelopes SET received_at = $2 WHERE id = $1`, [key, receivedAt]);
-    },
-    async setClaim(key: string, attempts: number, claimedUntil: number) {
-      await q(`UPDATE slack_staged_envelopes SET attempts = $2, claimed_until = $3 WHERE id = $1`, [
-        key,
-        attempts,
-        claimedUntil,
-      ]);
-    },
+    get: table.get,
+    put: store.stage,
+    setReceivedAt: (key: string, receivedAt: number) => change(key, { receivedAt }),
+    setClaim: (key: string, attempts: number, claimedUntil: number) => change(key, { attempts, claimedUntil }),
   };
 }
 
@@ -64,7 +57,7 @@ test("staging lands within its budget, or reports that it did not", async () => 
   assert.equal(await staging.stage("k1", envelope("message", "1.0")), true);
   assert.ok(await map.get("k1"));
   const slow = createEnvelopeStaging(
-    { ...map, stage: () => new Promise<void>(() => {}) },
+    { ...map, stage: () => new Promise<boolean>(() => {}) },
     {
       account: "acct",
       stageTimeoutMs: 20,
@@ -137,7 +130,7 @@ test("gate: when the cap fires first, the envelope is staged before the ack; lat
 test("gate: when staging cannot land before the cap, the ack is withheld so Slack redelivers", async () => {
   const map = stagedMap();
   const slow = createEnvelopeStaging(
-    { ...map, stage: () => new Promise<void>(() => {}) },
+    { ...map, stage: () => new Promise<boolean>(() => {}) },
     {
       account: "acct",
       stageTimeoutMs: 10,
@@ -239,7 +232,7 @@ test("the sweep skips a row another sweeper claimed between the read and the cla
       return map.claim(key, at, claimedUntil);
     },
   };
-  const staging = createEnvelopeStaging(racing, { account: "acct", now: () => now, staleAfterMs: 1_000 });
+  const staging = createEnvelopeStaging(racing, { account: "acct", now: () => now, staleAfterMs: 1_000, ...LANDS });
   await staging.stage("k", envelope("message", "1.0"));
   now += 5_000;
   let replays = 0;

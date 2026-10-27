@@ -21,10 +21,10 @@ function fixture() {
   const url = testDatabaseUrl();
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    store: createKeychainStore(testDatabaseUrl()),
+    store: createKeychainStore(url),
     key: deriveConnectorKey("composio-test"),
   });
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(url));
   const app = { getSessionForViewer: async (_id: string, _viewer: string): Promise<unknown> => null };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
@@ -1061,7 +1061,7 @@ test("authorization failures keep a redacted upstream cause for operators", asyn
 async function slackReplyFixture() {
   const f = fixture();
   await f.own();
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(f.url);
   const session = await sessions.getOrCreateByThread(
     "ch:C123:123.456",
     "channel",

@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface ComposioReturn {
   url: string | null;
@@ -36,49 +36,24 @@ export const COMPOSIO_RETURNS_MIGRATION = mapToTableMigration(
 );
 export const SLACK_ACCOUNTS_MIGRATION = mapToTableMigration("connectors/slack-accounts/0001-typed", SLACK_ACCOUNTS);
 
-const returns = tableCodec<ComposioReturn>(COMPOSIO_RETURNS);
-const accounts = tableCodec<SlackAccountLink>(SLACK_ACCOUNTS);
-
 export function createComposioReturns(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [COMPOSIO_RETURNS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [COMPOSIO_RETURNS_MIGRATION]);
+  const table = typedTable<ComposioReturn>(pg, COMPOSIO_RETURNS);
   return {
-    async put(key: string, value: ComposioReturn): Promise<void> {
-      await q(
-        `INSERT INTO composio_returns (${returns.columns}) VALUES (${returns.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${returns.updates}`,
-        returns.values(key, value),
-      );
-    },
+    put: table.put,
     async take(key: string): Promise<ComposioReturn | null> {
-      const row = returns.rows(
-        await q(`DELETE FROM composio_returns WHERE id = $1 RETURNING ${returns.columns}`, [key]),
-      )[0];
+      const row = await table.take(key);
       return row ? { ...row, url: row.url ?? null } : null;
     },
     async deleteExpired(now: number): Promise<void> {
-      await q(`DELETE FROM composio_returns WHERE expires_at <= $1`, [now]);
+      await pg.q(`DELETE FROM composio_returns WHERE expires_at <= $1`, [now]);
     },
   };
 }
 
 export function createSlackAccounts(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [SLACK_ACCOUNTS_MIGRATION]);
-  return {
-    async get(principalId: string): Promise<SlackAccountLink | null> {
-      return (
-        accounts.rows(
-          await q(`SELECT ${accounts.columns} FROM slack_accounts WHERE principal_id = $1`, [principalId]),
-        )[0] ?? null
-      );
-    },
-    async put(link: SlackAccountLink): Promise<void> {
-      await q(
-        `INSERT INTO slack_accounts (${accounts.columns}) VALUES (${accounts.placeholders})
-         ON CONFLICT (${tenantCols("principal_id")}) DO UPDATE SET ${accounts.updates}`,
-        accounts.values(link.principalId, link),
-      );
-    },
-  };
+  const table = typedTable<SlackAccountLink>(createPgPool(databaseUrl, [SLACK_ACCOUNTS_MIGRATION]), SLACK_ACCOUNTS);
+  return { get: table.get, put: (link: SlackAccountLink) => table.put(link.principalId, link) };
 }
 
 export type ComposioReturns = ReturnType<typeof createComposioReturns>;

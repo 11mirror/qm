@@ -1,6 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { lockedRow } from "../persistence/locked-row.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { ErrorCode } from "@slack/web-api";
 import { SLACK_AUTH_ERRORS, slackErrorCode } from "../slack/payloads.ts";
@@ -97,8 +96,6 @@ export const SLACK_INSTALLATION_MIGRATION = mapToTableMigration(
   SLACK_INSTALLATION,
 );
 
-const codec = tableCodec<StoredSlackInstallation>(SLACK_INSTALLATION);
-
 export function createSlackInstallationStore(
   orgId: string,
   databaseUrl: string,
@@ -106,9 +103,7 @@ export function createSlackInstallationStore(
 ): SlackInstallationStore {
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
   const pg = createPgPool(databaseUrl, [SLACK_INSTALLATION_MIGRATION]);
-  const modify = lockedRow<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
-  const read = async (): Promise<StoredSlackInstallation | null> =>
-    codec.rows(await pg.q(`SELECT ${codec.columns} FROM slack_installation WHERE org_id = $1`, [orgId]))[0] ?? null;
+  const { get: read, modify } = typedTable<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
       ? {
@@ -123,7 +118,7 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
-      const record = await read();
+      const record = await read(orgId);
       if (!record || record.disabled) return null;
       return {
         botToken: decryptSecret(record.botTokenEnc, key),
@@ -139,7 +134,7 @@ export function createSlackInstallationStore(
       };
     },
     async status() {
-      return publicStatus(await read());
+      return publicStatus(await read(orgId));
     },
     async set(input) {
       const updatedAt = Date.now();

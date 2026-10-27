@@ -9,8 +9,8 @@ import type {
 } from "../../types.ts";
 import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
-import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
+import { createPgPool } from "../../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../../persistence/typed-table.ts";
 import type { ApprovalRecords } from "../approval-store.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { rosterIds, samePerson } from "../../directory/person.ts";
@@ -140,25 +140,18 @@ export const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-gran
   statements: [`CREATE INDEX IF NOT EXISTS approval_grants_actor ON approval_grants (lower(btrim(actor_id)))`],
 });
 
-const grantCodec = tableCodec<CommandApprovalGrant>(APPROVAL_GRANTS);
-
 export function createApprovalGrants(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [APPROVAL_GRANTS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [APPROVAL_GRANTS_MIGRATION]);
+  const { put, codec } = typedTable<CommandApprovalGrant>(pg, APPROVAL_GRANTS);
   return {
-    async put(id: string, grant: CommandApprovalGrant): Promise<void> {
-      await q(
-        `INSERT INTO approval_grants (${grantCodec.columns}) VALUES (${grantCodec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${grantCodec.updates}`,
-        grantCodec.values(id, grant),
-      );
-    },
+    put,
     async forActor(actorId: string): Promise<CommandApprovalGrant[]> {
       const keys = [...new Set(rosterIds(actorId).map((id) => id.toLowerCase()))];
-      const rows = await q(
-        `SELECT ${grantCodec.columns} FROM approval_grants WHERE lower(btrim(actor_id)) = ANY($1::text[]) ORDER BY id`,
+      const rows = await pg.q(
+        `SELECT ${codec.columns} FROM approval_grants WHERE lower(btrim(actor_id)) = ANY($1::text[]) ORDER BY id`,
         [keys],
       );
-      return grantCodec.rows(rows).filter((grant) => samePerson(grant.actorId, actorId));
+      return codec.rows(rows).filter((grant) => samePerson(grant.actorId, actorId));
     },
   };
 }

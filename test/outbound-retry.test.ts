@@ -15,12 +15,13 @@ const queued = async (retries: QueuedPosts, key: string) =>
   (await retries.entries()).find(([id]) => id === key)?.[1] ?? null;
 
 function rig() {
-  const retries = createQueuedPosts(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const retries = createQueuedPosts(url);
   const sent: string[] = [];
   const after: string[] = [];
   let failure: Error | null = null;
   const outbound = createOutbound({
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(url),
     retries,
     afterSend: (p) => after.push(p.idempotencyKey),
   });
