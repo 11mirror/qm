@@ -8,7 +8,7 @@ import {
   SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { swallow } from "../util/errors.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
 import { type ToolContextRef } from "./agent-tools.ts";
 import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
@@ -23,7 +23,6 @@ import { createAgentTools, pauseStampAfterToolCall } from "./agent-tools.ts";
 import { planColdStartSeed, reconstructMessagesFromHistory, replayPreamble, seedPriorTurns } from "./replay.ts";
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { countTokens } from "../util/tokens.ts";
-import { errMessage } from "../util/errors.ts";
 import {
   GATEWAY_REQUEST_MAX_BYTES,
   trimPayloadToByteBudget,
@@ -214,7 +213,7 @@ export async function createTurnSession(
   try {
     reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
   } catch (err) {
-    console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
+    reportFailure("pi-harness: history reconstruction (falling back)", err);
     reconstructed = null;
   }
   const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
@@ -240,9 +239,9 @@ export async function createTurnSession(
         structured ? reconstructed! : seedPriorTurns(priorTurns!, []).map(toPiMessage),
       );
     } catch (err) {
-      console.error(
-        `[pi-harness] failed to seed ${structured ? "reconstructed history (continuing without it)" : "prior turns (continuing without them)"}:`,
-        errMessage(err),
+      reportFailure(
+        `pi-harness: seed ${structured ? "reconstructed history" : "prior turns"} (continuing without it)`,
+        err,
       );
     }
   }

@@ -35,7 +35,7 @@ import {
   safeAttachmentName,
 } from "../attachments.ts";
 import { runtimeSwitchNote } from "../turn-resume.ts";
-import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
@@ -602,7 +602,7 @@ export async function runSegments(
           try {
             await postToDefault(deps.outbound, defaultDestination, fallback);
           } catch (e) {
-            console.error(`[orchestrator] shed-reply fallback delivery failed session=${session.id}:`, errMessage(e));
+            reportFailure("orchestrator: shed-reply fallback delivery", e, `session=${session.id}`);
           }
         } else {
           console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
