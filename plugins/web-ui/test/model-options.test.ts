@@ -1,8 +1,8 @@
-import { applyRuntimeOptions } from "./runtime-fixture.ts";
+import { applyRuntimeOptions } from "./support/runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { defaultModelValue, getModelOptions, runtimeModelOptions, transcriptModel } from "../src/model-options.ts";
-import { metadata } from "./model-metadata.ts";
+import { metadata } from "./support/model-metadata.ts";
 
 const catalog = { future: metadata("future", "Future API Model"), custom: metadata("custom", "Custom", "gateway") };
 

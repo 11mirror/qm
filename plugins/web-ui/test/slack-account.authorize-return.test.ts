@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness } from "./support/deep-link-boot-fixture.ts";
 
 test("Slack authorization returns to the page where the account card was clicked", async () => {
   const h = await harness({ path: "/settings" });

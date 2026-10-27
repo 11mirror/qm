@@ -1,5 +1,5 @@
 import type { Item } from "../src/items.ts";
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import assert from "node:assert/strict";
 import { afterEach, test, mock } from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";

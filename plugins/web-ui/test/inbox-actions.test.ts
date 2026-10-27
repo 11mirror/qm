@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ComposerSurface } from "../src/conv-types.ts";
-import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./support/inbox-composer-fixture.ts";
 
 test("a submission freezes the edited draft before upload and never retries a conflicting blur save", async () => {
   const state = globalThis as typeof globalThis & { inboxTestComposer?: ComposerSurface };

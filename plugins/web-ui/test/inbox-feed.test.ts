@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { VirtualConsole } from "jsdom";
-import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
-import { shellCss } from "./shell-css.ts";
+import { createInboxFixture, until } from "./support/inbox-composer-fixture.ts";
+import { shellCss } from "./support/shell-css.ts";
 
 const filterNames: Record<string, string> = {
   all: "All emails",

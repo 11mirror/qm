@@ -1,4 +1,4 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { Agent } from "@earendil-works/pi-agent-core";

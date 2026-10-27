@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { browserEnv } from "./browser-env.ts";
+import { browserEnv } from "./support/browser-env.ts";
 import type { SessionTool, SessionTopbarOpts } from "../src/session-scope.ts";
 
 const requests: string[] = [];

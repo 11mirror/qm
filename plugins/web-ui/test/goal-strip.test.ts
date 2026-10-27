@@ -1,5 +1,5 @@
 import type { Item } from "../src/items.ts";
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { goalElapsedLabel, goalWorkedLabel, goalFloorLabel, goalObjectiveLabel } from "../src/goal-strip.ts";

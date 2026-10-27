@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness } from "./support/deep-link-boot-fixture.ts";
 
 test("Slack account linking selects native OAuth and preserves the conversation return path", async () => {
   const h = await harness({ path: "/settings" });

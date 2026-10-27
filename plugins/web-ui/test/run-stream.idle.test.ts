@@ -1,5 +1,5 @@
 import { activitySeq } from "../src/items.ts";
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import { buildTimeline } from "../src/timeline.ts";
 import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";

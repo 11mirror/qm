@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./support/inbox-composer-fixture.ts";
 
 const entries = [
   {

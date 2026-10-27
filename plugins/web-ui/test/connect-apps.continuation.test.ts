@@ -1,7 +1,7 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness, SESSION } from "./deep-link-boot-fixture.ts";
+import { harness, SESSION } from "./support/deep-link-boot-fixture.ts";
 
 test("connection continuation waits for scoped runtime settings before submitting", async () => {
   const h = await harness({

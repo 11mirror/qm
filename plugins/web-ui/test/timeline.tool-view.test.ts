@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sessionToolView as viewOf } from "../src/timeline.ts";
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 
 const sessions = [{ id: "child-123", title: "bug 1" }];
 

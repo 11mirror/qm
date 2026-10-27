@@ -1,4 +1,4 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import { streamingTextTail } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";

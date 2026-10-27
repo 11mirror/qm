@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { createServer } from "vite";
-import { createInboxFixture, inboxRuntime } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime } from "./support/inbox-composer-fixture.ts";
 import type { LedgerItem } from "../src/inbox-model.ts";
 
 test("sent view pages Gmail messages and opens the matching Google account", async () => {

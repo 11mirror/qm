@@ -1,7 +1,7 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { harness, SESSION } from "./deep-link-boot-fixture.ts";
+import { harness, SESSION } from "./support/deep-link-boot-fixture.ts";
 
 for (const count of [1, 2]) {
   test(`${count} tool items use only useful activity folds`, async () => {

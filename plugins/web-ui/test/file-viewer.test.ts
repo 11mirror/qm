@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, until } from "./support/inbox-composer-fixture.ts";
 
 test("file preview escapes CSV cells, preserves truncation warnings, copies raw text and restores focus", async () => {
   const { dom, vite, host, close } = await createInboxFixture();

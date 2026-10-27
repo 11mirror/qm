@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness, type Harness } from "./deep-link-boot-fixture.ts";
+import { harness, type Harness } from "./support/deep-link-boot-fixture.ts";
 
 async function waitForText(h: Harness, text: RegExp): Promise<void> {
   for (let i = 0; i < 100 && !text.test(h.mainText()); i++) await new Promise((resolve) => setTimeout(resolve, 5));

@@ -1,5 +1,5 @@
-import { applyRuntimeOptions } from "./runtime-fixture.ts";
-import { metadata } from "./model-metadata.ts";
+import { applyRuntimeOptions } from "./support/runtime-fixture.ts";
+import { metadata } from "./support/model-metadata.ts";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";

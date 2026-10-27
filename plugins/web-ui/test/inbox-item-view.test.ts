@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { createServer } from "vite";
-import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./support/inbox-composer-fixture.ts";
 
 test("conversation details include the waiting message after prior context with correctly routed attachments", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {

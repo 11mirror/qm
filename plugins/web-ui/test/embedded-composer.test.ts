@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./support/inbox-composer-fixture.ts";
 
 test("draft stays outside AI chat and Send it submits the combined instruction", async () => {
   const { dom, vite, host, close } = await createInboxFixture();

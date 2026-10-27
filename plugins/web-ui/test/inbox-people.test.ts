@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxFixture } from "./inbox-composer-fixture.ts";
+import { createInboxFixture } from "./support/inbox-composer-fixture.ts";
 
 test("Slack feed avatars use stable identities and fall back to initials when a photo fails", async () => {
   const f = await createInboxFixture();

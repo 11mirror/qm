@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness } from "./support/deep-link-boot-fixture.ts";
 
 test("a recalled app picker owns its return even when a Slack widget mounts first", async () => {
   const h = await harness({

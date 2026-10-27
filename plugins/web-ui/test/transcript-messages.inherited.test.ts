@@ -1,5 +1,5 @@
 import type { Item } from "../src/items.ts";
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import { activitySeq } from "../src/items.ts";
 import { buildTimeline } from "../src/timeline.ts";
 import { test } from "node:test";
