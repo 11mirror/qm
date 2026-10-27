@@ -30,7 +30,11 @@ available until the new revision has passed operational checks.
 
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
-checksums to bypass this check.
+checksums to bypass this check. Startup checks every recorded checksum, the pending
+migrations and the baseline decision before it changes anything, so a refused upgrade
+leaves the database as it was. When a released id has to change, the new definition
+lists the old checksum in `acceptedChecksums` and a follow-up migration brings
+databases that ran the old one to the same end state.
 
 The schema starts from `src/persistence/schema-baseline.sql`, which folds every
 migration released up to qm main 9be16d35 (the list is in
