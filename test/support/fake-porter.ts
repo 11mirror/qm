@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { NotFoundError } from "porter-sandbox";
 import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/deploy/porter-client.ts";
+import { escapeRe } from "./fake-provider-kit.ts";
 
 export interface FakePorterBody {
   name: string;
@@ -52,226 +53,246 @@ interface BodyRecord {
   networking?: PorterSandboxSpec["networking"];
 }
 
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (guestPath: string): RegExp => new RegExp(`${escapeRe(guestPath)}(?![A-Za-z0-9._-])`, "g");
 
-export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
-  const root = mkdtempSync(join(tmpdir(), "fake-porter-"));
-  const volumes = new Map<string, { id: string; dir: string }>();
-  const bodies = new Map<string, BodyRecord>();
-  const execScripts: string[] = [];
-  let volumeSeq = 0;
-  let bodySeq = 0;
-  let statusReads = 0;
+interface PorterState {
+  opts: FakePorterOptions;
+  root: string;
+  volumes: Map<string, { id: string; dir: string }>;
+  bodies: Map<string, BodyRecord>;
+  execScripts: string[];
+  seq: { volume: number; body: number; statusReads: number };
+}
 
-  const settle = (b: BodyRecord): void => {
-    if (b.phase !== "terminating") return;
+function observe(b: BodyRecord | undefined): BodyRecord | undefined {
+  if (b && b.phase === "terminating") {
     if (b.terminatingTicks > 0) b.terminatingTicks -= 1;
     if (b.terminatingTicks === 0) b.phase = "terminated";
-  };
-  const observe = (b: BodyRecord | undefined): BodyRecord | undefined => {
-    if (b) settle(b);
-    return b;
-  };
-  const volumeById = (id: string): { id: string; dir: string } | undefined =>
-    [...volumes.values()].find((v) => v.id === id);
+  }
+  return b;
+}
 
-  const bodyById = (id: string): [string, BodyRecord] | undefined => [...bodies.entries()].find(([, b]) => b.id === id);
+const volumeById = (st: PorterState, id: string): { id: string; dir: string } | undefined =>
+  [...st.volumes.values()].find((v) => v.id === id);
 
-  const remap = (b: BodyRecord, script: string): string => {
-    const remapTmp = new RegExp(`${escapeRe(GUEST_HOME)}/tmp/|/tmp/`, "g");
-    let out = script
-      .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
-      .replace(remapTmp, `${b.tmp}/`)
-      .replace(pathRe(GUEST_HOME), b.home)
-      .replace(pathRe(GUEST_APP), b.app);
-    for (const [guest, dir] of Object.entries(b.mounts))
-      if (guest !== GUEST_HOME) out = out.replace(pathRe(guest), dir);
-    return `export HOME=${JSON.stringify(b.home)}; ${out}`;
-  };
+function bodyById(st: PorterState, id: string): BodyRecord {
+  const found = [...st.bodies.values()].find((b) => b.id === id);
+  if (!found) throw new NotFoundError(`fake porter: no sandbox ${id}`);
+  return found;
+}
 
-  const killApp = (b: BodyRecord): void => {
-    const pidFile = join(b.tmp, PID_FILE);
-    if (!existsSync(pidFile)) return;
-    const pid = readFileSync(pidFile, "utf8").trim();
-    if (!/^\d+$/.test(pid)) return;
-    spawnSync("sh", [
-      "-c",
-      `kill -TERM -${pid} 2>/dev/null; pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null; true`,
-    ]);
-  };
+const attachedTo = (st: PorterState, dir: string): BodyRecord | undefined =>
+  [...st.bodies.values()].find((b) => b.phase !== "terminated" && Object.values(b.mounts).includes(dir));
 
-  const retire = (b: BodyRecord): void => {
-    if (b.phase === "terminated" || b.phase === "terminating") return;
-    killApp(b);
-    rmSync(b.tmp, { recursive: true, force: true });
-    rmSync(b.app, { recursive: true, force: true });
-    if (!volumeById(b.tags["qm-volume-id"] ?? "")) rmSync(b.home, { recursive: true, force: true });
-    if ((opts.terminateLag ?? 0) > 0) {
-      b.phase = "terminating";
-      b.terminatingTicks = opts.terminateLag ?? 0;
-    } else {
-      b.phase = "terminated";
-    }
-  };
+function remap(b: BodyRecord, script: string): string {
+  const remapTmp = new RegExp(`${escapeRe(GUEST_HOME)}/tmp/|/tmp/`, "g");
+  let out = script
+    .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
+    .replace(remapTmp, `${b.tmp}/`)
+    .replace(pathRe(GUEST_HOME), b.home)
+    .replace(pathRe(GUEST_APP), b.app);
+  for (const [guest, dir] of Object.entries(b.mounts)) if (guest !== GUEST_HOME) out = out.replace(pathRe(guest), dir);
+  return `export HOME=${JSON.stringify(b.home)}; ${out}`;
+}
 
-  const sandboxOf = (name: string, statusKnown = true): PorterSandboxLike => {
-    let known = statusKnown;
-    return {
-      id: bodies.get(name)!.id,
-      get phase() {
-        return known ? (bodies.get(name)?.phase ?? "terminated") : null;
-      },
-      get tags() {
-        return bodies.get(name)?.tags ?? null;
-      },
-      async refresh() {
-        known = true;
-        const cur = observe(bodies.get(name));
-        const internal = cur?.networking?.[0]?.internal ? cur.networking[0].port : undefined;
-        return { name, host: cur?.host ?? "", ...(internal ? { internal_address: `127.0.0.1:${internal}` } : {}) };
-      },
-      async terminate() {
-        const cur = bodies.get(name);
-        if (cur) retire(cur);
-      },
-    };
-  };
+function killApp(b: BodyRecord): void {
+  const pidFile = join(b.tmp, PID_FILE);
+  if (!existsSync(pidFile)) return;
+  const pid = readFileSync(pidFile, "utf8").trim();
+  if (!/^\d+$/.test(pid)) return;
+  spawnSync("sh", [
+    "-c",
+    `kill -TERM -${pid} 2>/dev/null; pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null; true`,
+  ]);
+}
 
-  const client: PorterClientLike = {
-    sandboxes: {
-      async create(spec) {
-        if (bodies.has(spec.name!)) throw new Error("could not create sandbox: sandbox not running");
-        const wanted = spec.networking?.[0]?.domains?.[0]?.domain;
-        if (wanted && [...bodies.values()].some((b) => b.phase !== "terminated" && b.host === wanted)) {
-          throw new Error(`fake porter: domain ${wanted} is held by a live sandbox`);
-        }
-        const mounts: Record<string, string> = {};
-        for (const [guest, volId] of Object.entries(spec.volume_mounts ?? {})) {
-          const vol = volumeById(volId);
-          if (!vol) throw new Error(`fake porter: unknown volume ${volId}`);
-          const holder = [...bodies.values()].find(
-            (b) => b.phase !== "terminated" && Object.values(b.mounts).includes(vol.dir),
-          );
-          if (holder) throw new Error(`fake porter: volume ${volId} is still attached to a ${holder.phase} sandbox`);
-          mounts[guest] = vol.dir;
-        }
-        const homeVolumeId = spec.volume_mounts?.[GUEST_HOME];
-        const home = mounts[GUEST_HOME] ?? join(root, `${spec.name}-home`);
-        const app = join(root, `${spec.name}-app`);
-        mkdirSync(home, { recursive: true });
-        mkdirSync(app, { recursive: true });
-        const exposed = spec.networking?.[0];
-        const named = opts.assignHost === false ? undefined : `${spec.name}.fake.test`;
-        const host = exposed && !exposed.internal ? (exposed.domains?.[0]?.domain ?? named ?? "") : "";
-        bodies.set(spec.name!, {
-          id: `sb-${++bodySeq}`,
-          phase: "running",
-          terminatingTicks: 0,
-          tags: { ...spec.tags, ...(homeVolumeId ? { "qm-volume-id": homeVolumeId } : {}) },
-          home,
-          app,
-          tmp: join(root, `${spec.name}-tmp`),
-          mounts,
-          host,
-          ...(spec.egress ? { egress: spec.egress.allowed_destinations } : {}),
-          ...(spec.env ? { env: spec.env } : {}),
-          ...(spec.networking ? { networking: spec.networking } : {}),
-        });
-        return sandboxOf(spec.name!, false);
-      },
-      async get(name) {
-        if (!bodies.has(name)) throw new NotFoundError(`fake porter: no body ${name}`);
-        return sandboxOf(name);
-      },
-      async list(options) {
-        const tags = options?.tags ?? {};
-        for (const b of bodies.values()) observe(b);
-        const matching = [...bodies.keys()].filter((name) =>
-          Object.entries(tags).every(([k, v]) => bodies.get(name)!.tags[k] === v),
-        );
-        const pageSize = opts.pageSize ?? matching.length;
-        const page = options?.page ?? 1;
-        return matching.slice((page - 1) * pageSize, page * pageSize).map((name) => sandboxOf(name));
-      },
-      raw: {
-        async get(id) {
-          statusReads += 1;
-          const found = bodyById(id);
-          if (!found) throw new NotFoundError(`fake porter: no sandbox ${id}`);
-          const [, cur] = found;
-          observe(cur);
-          return { phase: cur.phase, host: cur.host };
-        },
-        async exec(id, body, _options) {
-          const found = bodyById(id);
-          if (!found) throw new NotFoundError(`fake porter: no sandbox ${id}`);
-          const [, cur] = found;
-          if (cur.phase !== "running") throw new Error(`fake porter: exec on ${cur.phase} body`);
-          const script = body.command[body.command.length - 1] ?? "";
-          execScripts.push(script);
-          mkdirSync(cur.tmp, { recursive: true });
-          const child = spawn("sh", ["-c", remap(cur, script)], {
-            env: { ...process.env, ...cur.env, COPYFILE_DISABLE: "1" },
-          });
-          const stdout: Buffer[] = [];
-          const stderr: Buffer[] = [];
-          child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-          child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-          const [code, sig] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
-            child.on("error", reject);
-            child.on("close", (c, s) => resolve([c, s]));
-          });
-          return {
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-            exit_code: code ?? (sig ? 137 : -1),
-          };
-        },
-      },
-    },
-    volumes: {
-      async create(body) {
-        const name = body.name ?? `vol-anon-${++volumeSeq}`;
-        let v = volumes.get(name);
-        if (!v) {
-          v = { id: `vol-${++volumeSeq}`, dir: join(root, `vol-${name}`) };
-          mkdirSync(v.dir, { recursive: true });
-          volumes.set(name, v);
-        }
-        return { id: v.id };
-      },
-      async get(name) {
-        const v = volumes.get(name);
-        if (!v) throw new NotFoundError(`fake porter: no volume ${name}`);
-        return { id: v.id };
-      },
-      async delete(name) {
-        const v = volumes.get(name);
-        if (!v) return;
-        const attached = [...bodies.values()].some(
-          (b) => b.phase !== "terminated" && Object.values(b.mounts).includes(v.dir),
-        );
-        if (attached) throw new Error("volume is attached to a sandbox");
-        rmSync(v.dir, { recursive: true, force: true });
-        volumes.delete(name);
-      },
-      raw: {
-        async writeFile(id, body, options) {
-          const v = volumeById(id);
-          if (!v) throw new NotFoundError(`fake porter: no volume ${id}`);
-          const target = join(v.dir, options.path);
-          mkdirSync(dirname(target), { recursive: true });
-          writeFileSync(target, body);
-        },
-      },
-    },
-  };
+function retire(st: PorterState, b: BodyRecord): void {
+  if (b.phase === "terminated" || b.phase === "terminating") return;
+  killApp(b);
+  rmSync(b.tmp, { recursive: true, force: true });
+  rmSync(b.app, { recursive: true, force: true });
+  if (!volumeById(st, b.tags["qm-volume-id"] ?? "")) rmSync(b.home, { recursive: true, force: true });
+  if ((st.opts.terminateLag ?? 0) > 0) {
+    b.phase = "terminating";
+    b.terminatingTicks = st.opts.terminateLag ?? 0;
+  } else {
+    b.phase = "terminated";
+  }
+}
 
+function sandboxOf(st: PorterState, name: string, statusKnown = true): PorterSandboxLike {
+  let known = statusKnown;
   return {
-    client,
+    id: st.bodies.get(name)!.id,
+    get phase() {
+      return known ? (st.bodies.get(name)?.phase ?? "terminated") : null;
+    },
+    get tags() {
+      return st.bodies.get(name)?.tags ?? null;
+    },
+    async refresh() {
+      known = true;
+      const cur = observe(st.bodies.get(name));
+      const internal = cur?.networking?.[0]?.internal ? cur.networking[0].port : undefined;
+      return { name, host: cur?.host ?? "", ...(internal ? { internal_address: `127.0.0.1:${internal}` } : {}) };
+    },
+    async terminate() {
+      const cur = st.bodies.get(name);
+      if (cur) retire(st, cur);
+    },
+  };
+}
+
+function mountVolumes(st: PorterState, spec: PorterSandboxSpec): Record<string, string> {
+  const mounts: Record<string, string> = {};
+  for (const [guest, volId] of Object.entries(spec.volume_mounts ?? {})) {
+    const vol = volumeById(st, volId);
+    if (!vol) throw new Error(`fake porter: unknown volume ${volId}`);
+    const holder = attachedTo(st, vol.dir);
+    if (holder) throw new Error(`fake porter: volume ${volId} is still attached to a ${holder.phase} sandbox`);
+    mounts[guest] = vol.dir;
+  }
+  return mounts;
+}
+
+function createBody(st: PorterState, spec: PorterSandboxSpec): PorterSandboxLike {
+  if (st.bodies.has(spec.name!)) throw new Error("could not create sandbox: sandbox not running");
+  const wanted = spec.networking?.[0]?.domains?.[0]?.domain;
+  if (wanted && [...st.bodies.values()].some((b) => b.phase !== "terminated" && b.host === wanted)) {
+    throw new Error(`fake porter: domain ${wanted} is held by a live sandbox`);
+  }
+  const mounts = mountVolumes(st, spec);
+  const homeVolumeId = spec.volume_mounts?.[GUEST_HOME];
+  const home = mounts[GUEST_HOME] ?? join(st.root, `${spec.name}-home`);
+  const app = join(st.root, `${spec.name}-app`);
+  mkdirSync(home, { recursive: true });
+  mkdirSync(app, { recursive: true });
+  const exposed = spec.networking?.[0];
+  const named = st.opts.assignHost === false ? undefined : `${spec.name}.fake.test`;
+  const host = exposed && !exposed.internal ? (exposed.domains?.[0]?.domain ?? named ?? "") : "";
+  st.bodies.set(spec.name!, {
+    id: `sb-${++st.seq.body}`,
+    phase: "running",
+    terminatingTicks: 0,
+    tags: { ...spec.tags, ...(homeVolumeId ? { "qm-volume-id": homeVolumeId } : {}) },
+    home,
+    app,
+    tmp: join(st.root, `${spec.name}-tmp`),
+    mounts,
+    host,
+    ...(spec.egress ? { egress: spec.egress.allowed_destinations } : {}),
+    ...(spec.env ? { env: spec.env } : {}),
+    ...(spec.networking ? { networking: spec.networking } : {}),
+  });
+  return sandboxOf(st, spec.name!, false);
+}
+
+async function execBody(st: PorterState, id: string, command: string[]) {
+  const cur = bodyById(st, id);
+  if (cur.phase !== "running") throw new Error(`fake porter: exec on ${cur.phase} body`);
+  const script = command[command.length - 1] ?? "";
+  st.execScripts.push(script);
+  mkdirSync(cur.tmp, { recursive: true });
+  const child = spawn("sh", ["-c", remap(cur, script)], {
+    env: { ...process.env, ...cur.env, COPYFILE_DISABLE: "1" },
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  const [code, sig] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (c, s) => resolve([c, s]));
+  });
+  return {
+    stdout: Buffer.concat(stdout).toString("utf8"),
+    stderr: Buffer.concat(stderr).toString("utf8"),
+    exit_code: code ?? (sig ? 137 : -1),
+  };
+}
+
+function sandboxesApi(st: PorterState): PorterClientLike["sandboxes"] {
+  return {
+    async create(spec) {
+      return createBody(st, spec);
+    },
+    async get(name) {
+      if (!st.bodies.has(name)) throw new NotFoundError(`fake porter: no body ${name}`);
+      return sandboxOf(st, name);
+    },
+    async list(options) {
+      const tags = options?.tags ?? {};
+      for (const b of st.bodies.values()) observe(b);
+      const matching = [...st.bodies.keys()].filter((name) =>
+        Object.entries(tags).every(([k, v]) => st.bodies.get(name)!.tags[k] === v),
+      );
+      const pageSize = st.opts.pageSize ?? matching.length;
+      const page = options?.page ?? 1;
+      return matching.slice((page - 1) * pageSize, page * pageSize).map((name) => sandboxOf(st, name));
+    },
+    raw: {
+      async get(id) {
+        st.seq.statusReads += 1;
+        const cur = bodyById(st, id);
+        observe(cur);
+        return { phase: cur.phase, host: cur.host };
+      },
+      async exec(id, body, _options) {
+        return execBody(st, id, body.command);
+      },
+    },
+  };
+}
+
+function volumesApi(st: PorterState): PorterClientLike["volumes"] {
+  return {
+    async create(body) {
+      const name = body.name ?? `vol-anon-${++st.seq.volume}`;
+      let v = st.volumes.get(name);
+      if (!v) {
+        v = { id: `vol-${++st.seq.volume}`, dir: join(st.root, `vol-${name}`) };
+        mkdirSync(v.dir, { recursive: true });
+        st.volumes.set(name, v);
+      }
+      return { id: v.id };
+    },
+    async get(name) {
+      const v = st.volumes.get(name);
+      if (!v) throw new NotFoundError(`fake porter: no volume ${name}`);
+      return { id: v.id };
+    },
+    async delete(name) {
+      const v = st.volumes.get(name);
+      if (!v) return;
+      if (attachedTo(st, v.dir)) throw new Error("volume is attached to a sandbox");
+      rmSync(v.dir, { recursive: true, force: true });
+      st.volumes.delete(name);
+    },
+    raw: {
+      async writeFile(id, body, options) {
+        const v = volumeById(st, id);
+        if (!v) throw new NotFoundError(`fake porter: no volume ${id}`);
+        const target = join(v.dir, options.path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, body);
+      },
+    },
+  };
+}
+
+export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
+  const st: PorterState = {
+    opts,
+    root: mkdtempSync(join(tmpdir(), "fake-porter-")),
+    volumes: new Map(),
+    bodies: new Map(),
+    execScripts: [],
+    seq: { volume: 0, body: 0, statusReads: 0 },
+  };
+  return {
+    client: { sandboxes: sandboxesApi(st), volumes: volumesApi(st) },
     bodies: () =>
-      [...bodies.entries()].map(([name, b]) => ({
+      [...st.bodies.entries()].map(([name, b]) => ({
         name,
         phase: b.phase,
         tags: b.tags,
@@ -280,21 +301,21 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         ...(b.env ? { env: b.env } : {}),
         ...(b.networking ? { networking: b.networking } : {}),
       })),
-    hostOf: (name) => bodies.get(name)?.host ?? "",
-    statusReads: () => statusReads,
+    hostOf: (name) => st.bodies.get(name)?.host ?? "",
+    statusReads: () => st.seq.statusReads,
     volumeDir: (volumeName) => {
-      const v = volumes.get(volumeName);
+      const v = st.volumes.get(volumeName);
       if (!v || !existsSync(v.dir)) throw new Error(`fake porter: no volume ${volumeName}`);
       return v.dir;
     },
-    volumeNames: () => [...volumes.keys()],
+    volumeNames: () => [...st.volumes.keys()],
     terminateAll: () => {
-      for (const [, b] of bodies) retire(b);
+      for (const [, b] of st.bodies) retire(st, b);
     },
-    execScripts: () => execScripts,
+    execScripts: () => st.execScripts,
     cleanup: () => {
-      for (const [, b] of bodies) killApp(b);
-      rmSync(root, { recursive: true, force: true });
+      for (const [, b] of st.bodies) killApp(b);
+      rmSync(st.root, { recursive: true, force: true });
     },
   };
 }

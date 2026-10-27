@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import pg from "pg";
@@ -22,6 +22,7 @@ import {
   migrateRegisteredPgSchemas,
 } from "../../src/persistence/pg-pool.ts";
 import { settle } from "../support/settle.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", "test/lazy/0001", ["SELECT 1"]);
@@ -459,4 +460,40 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
       return true;
     });
   });
+});
+
+test("pg pool: a failed init is retried with a fresh attempt (rejection not cached)", async () => {
+  const pg = createPgPool("postgres://127.0.0.1:9/nope", "test/retry/unreachable/0001", ["SELECT 1"]);
+  const first = await pg.q("SELECT 1").catch((e: unknown) => e);
+  const second = await pg.q("SELECT 1").catch((e: unknown) => e);
+  assert.ok(first instanceof Error);
+  assert.ok(second instanceof Error);
+  assert.notEqual(first, second, "each call gets a fresh attempt, not the same cached rejection");
+  await pg.close();
+});
+
+test("pg pool: an idle-client 'error' is logged, not fatal", async () => {
+  const pg = createPgPool(testDatabaseUrl(), "test/retry/live/0001", ["SELECT 1"]);
+  const pool = await pg.pool();
+  assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
+  assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
+  await pg.close();
+});
+
+test("pg pool: a timeoutMs query gives the connection back usable, not poisoned", async () => {
+  const pg = createPgPool(testDatabaseUrl(), "test/retry/timeout/0001", ["SELECT 1"]);
+  await assert.rejects(
+    () => pg.q("SELECT pg_sleep(5)", [], { timeoutMs: 150 }),
+    /statement timeout/i,
+    "a query past its budget is cancelled by Postgres instead of hanging",
+  );
+  assert.deepEqual(await pg.q("SELECT 1 AS one"), [{ one: 1 }], "the pool keeps serving after a timeout");
+  assert.deepEqual(
+    await pg.q("SELECT 2 AS two", [], { timeoutMs: 5_000 }),
+    [{ two: 2 }],
+    "a query inside its budget returns normally",
+  );
+  const [row] = await pg.q("SHOW statement_timeout");
+  assert.equal(row!.statement_timeout, "0", "the budget does not leak onto the next borrower of the connection");
+  await pg.close();
 });

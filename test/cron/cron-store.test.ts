@@ -770,3 +770,22 @@ test("cron runtime rejects malformed settings and tasks that would ignore them",
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 }, runtime });
   await assert.rejects(store.update(cron.id, { action: "" }), /runtime overrides require/);
 });
+
+test("crons persist across store instances", async () => {
+  const url = testDatabaseUrl();
+  const s1 = createCronStore(url);
+  const c = await s1.create({
+    schedule: { everyMs: 60_000 },
+    action: "summarize signups",
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    destination: { type: "dm", target: "U1" },
+  });
+  await markFired(s1, c.id, 123);
+
+  const s2 = createCronStore(url);
+  const got = await s2.get(c.id);
+  assert.equal(got?.action, "summarize signups");
+  assert.equal(got?.lastFiredAt, 123);
+});

@@ -1,6 +1,10 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { PersistedInstructions, PersistedInstructionsRevision } from "../../src/resolution/config-store.ts";
+import type {
+  PersistedInstructions,
+  PersistedInstructionsRevision,
+  PersistedBaseModel,
+} from "../../src/resolution/config-store.ts";
 import { CONFIG_TABLES } from "../../src/resolution/config-tables.ts";
 import { typedTable } from "../../src/persistence/typed-table.ts";
 import { mkdtempSync } from "node:fs";
@@ -17,11 +21,11 @@ import { resolveTurnFastMode } from "../../src/core/turn-options.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";
 import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../src/resolution/config-instructions.ts";
-import { scopeId } from "../../src/types.ts";
+import { scopeId, type ScopeId } from "../../src/types.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, failTableWrites } from "../support/test-database.ts";
 import { listenLocal } from "../support/listen-local.ts";
 
 function tables() {
@@ -545,4 +549,150 @@ test("every instructions write path refuses content over the limit with payload_
     1,
     "the limit itself is allowed",
   );
+});
+
+const org = scopeId("org", "default-org");
+const cron = { modelId: "cron-model" };
+const pick = { modelId: "org-model" };
+
+function servers() {
+  const databaseUrl = testDatabaseUrl();
+  return {
+    rows: typedTable<PersistedBaseModel>(createPgPool(databaseUrl), CONFIG_TABLES.baseModels),
+    left: testConfigStore("default-org", { databaseUrl }),
+    right: testConfigStore("default-org", { databaseUrl }),
+  };
+}
+
+test("an org runtime change and a cron runtime saved at once on two servers both persist", async () => {
+  const { rows, left, right } = servers();
+  await Promise.all([left.setRuntimeSelection(org, pick), right.setPurposeRuntime("cron", cron)]);
+  const row = await rows.get(org);
+  assert.equal(row?.modelId, "org-model");
+  assert.deepEqual(row?.cronRuntime, cron);
+});
+
+test("concurrent org runtime changes on two servers get distinct revisions", async () => {
+  const { rows, left, right } = servers();
+  await rows.put(org, { scopeId: org, modelId: "seed", revision: 1, orgRevision: 1 });
+  await Promise.all([left.setRuntimeSelection(org, pick), right.setRuntimeSelection(org, { modelId: "other" })]);
+  assert.equal((await rows.get(org))?.revision, 3);
+});
+
+test("acknowledging the org runtime on one server keeps a scope runtime another server just chose", async () => {
+  const { rows, left, right } = servers();
+  const channel = scopeId("channel", "c1");
+  await rows.put(channel, { scopeId: channel, modelId: "old", orgRevision: 0 });
+  await rows.put(org, { scopeId: org, modelId: "org-model", revision: 4, orgRevision: 4 });
+  await Promise.all([
+    left.acknowledgeRuntimeSelection(channel),
+    right.setRuntimeSelection(channel, { modelId: "new" }),
+  ]);
+  const row = await rows.get(channel);
+  assert.equal(row?.modelId, "new");
+  assert.equal(row?.orgRevision, 4);
+});
+
+test("clearing the org runtime keeps purpose runtimes and removes an empty row", async () => {
+  const { rows, left: store } = servers();
+  await store.setRuntimeSelection(org, pick);
+  await store.setPurposeRuntime("cron", cron);
+  await store.setRuntimeSelection(org, null);
+  assert.deepEqual(await rows.get(org), { scopeId: org, cronRuntime: cron });
+  await store.clearPurposeRuntime("cron");
+  assert.equal(await rows.get(org), null);
+  assert.equal(store.getRuntimeSelection(org), null);
+});
+
+const channel = scopeId("channel", "C1");
+
+test("a config write resolves only after another instance can read it from the store", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const writer = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore("default-org", { databaseUrl });
+
+  await writer.setSetting("orgAmbient", false);
+
+  assert.equal(await reader.settingDurable("orgAmbient"), false);
+});
+
+test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const config = testConfigStore("default-org", { databaseUrl });
+  await config.hydrate!();
+  await failTableWrites(databaseUrl, "egress_policies");
+
+  await assert.rejects(
+    config.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: [] }, channel),
+    /forced durable write failure/,
+  );
+
+  assert.equal(config.setting("egress", channel), null);
+  assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM egress_policies"), []);
+});
+
+const acmeOrg = scopeId("org", "acme");
+const pinChannel = "channel:C123" as ScopeId;
+const otherChannel = "channel:C456" as ScopeId;
+
+async function freshStore() {
+  const store = testConfigStore("acme", {});
+  await store.hydrate!();
+  return store;
+}
+
+test("channel header pin defaults off with no org setting", async () => {
+  const store = await freshStore();
+  assert.equal(store.setting("channelHeaderPin", pinChannel), false);
+  assert.equal(await store.settingDurable("channelHeaderPin", pinChannel), false);
+  assert.equal(await store.settingDurable("channelHeaderPin"), false);
+});
+
+test("an org default of on applies to channels without an explicit choice", async () => {
+  const store = await freshStore();
+  await store.setSetting("channelHeaderPin", true, acmeOrg);
+  assert.equal(store.setting("channelHeaderPin", pinChannel), true);
+  assert.equal(await store.settingDurable("channelHeaderPin", pinChannel), true);
+  assert.equal(await store.settingDurable("channelHeaderPin"), true);
+  assert.equal(await store.settingOwnDurable("channelHeaderPin", pinChannel), null);
+});
+
+test("an explicit channel off beats an org default of on", async () => {
+  const store = await freshStore();
+  await store.setSetting("channelHeaderPin", true, acmeOrg);
+  await store.setSetting("channelHeaderPin", false, pinChannel);
+  assert.equal(store.setting("channelHeaderPin", pinChannel), false);
+  assert.equal(await store.settingDurable("channelHeaderPin", pinChannel), false);
+  assert.equal(await store.settingOwnDurable("channelHeaderPin", pinChannel), false);
+  // other channels still follow the default
+  assert.equal(await store.settingDurable("channelHeaderPin", otherChannel), true);
+});
+
+test("clearing a channel override reverts it to the org default", async () => {
+  const store = await freshStore();
+  await store.setSetting("channelHeaderPin", true, acmeOrg);
+  await store.setSetting("channelHeaderPin", false, pinChannel);
+  await store.setSetting("channelHeaderPin", null, pinChannel);
+  assert.equal(await store.settingDurable("channelHeaderPin", pinChannel), true);
+  assert.equal(await store.settingOwnDurable("channelHeaderPin", pinChannel), null);
+});
+
+test("changing the org default notifies listeners with the org scope", async () => {
+  const store = await freshStore();
+  const seen: ScopeId[] = [];
+  store.onChannelHeaderPinChanged((id) => seen.push(id));
+  await store.setSetting("channelHeaderPin", true, acmeOrg);
+  await store.setSetting("channelHeaderPin", true, pinChannel);
+  assert.deepEqual(seen, [acmeOrg, pinChannel]);
+});
+
+test("explicit overrides survive a scope refresh", async () => {
+  const store = await freshStore();
+  await store.setSetting("channelHeaderPin", true, acmeOrg);
+  await store.setSetting("channelHeaderPin", false, pinChannel);
+  await store.refreshScope(pinChannel);
+  assert.equal(store.setting("channelHeaderPin", pinChannel), false);
+  await store.setSetting("channelHeaderPin", null, pinChannel);
+  await store.refreshScope(pinChannel);
+  assert.equal(store.setting("channelHeaderPin", pinChannel), true);
 });

@@ -1,0 +1,439 @@
+import "../support/auto-fake-sprites.ts";
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { createTurnStream, goalView } from "../../src/runs/turn-stream.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
+import { settledRun } from "../support/turns.ts";
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+test("accumulates deltas per run and isolates runs", () => {
+  const s = createTurnStream();
+  assert.equal(s.snapshot("r1"), null, "unknown run has no partial");
+  s.publish("r1", "Hel");
+  s.publish("r1", "lo");
+  s.publish("r2", "world");
+  assert.equal(s.snapshot("r1"), "Hello");
+  assert.equal(s.snapshot("r2"), "world");
+});
+
+test("ignores empty deltas", () => {
+  const s = createTurnStream();
+  s.publish("r1", "");
+  assert.equal(s.snapshot("r1"), null);
+  s.publish("r1", "x");
+  s.publish("r1", "");
+  assert.equal(s.snapshot("r1"), "x");
+});
+
+test("publishBlockStart() joins text blocks with a paragraph break, never leads or doubles", () => {
+  const s = createTurnStream();
+  s.publishBlockStart("r1");
+  assert.equal(s.snapshot("r1"), null, "a boundary before any text is a no-op");
+  s.publish("r1", "First block.");
+  s.publishBlockStart("r1");
+  s.publishBlockStart("r1");
+  s.publish("r1", "Second block.");
+  assert.equal(s.snapshot("r1"), "First block.\n\nSecond block.", "blocks join with one break");
+  s.publish("r1", "\n\n");
+  s.publishBlockStart("r1");
+  s.publish("r1", "Third.");
+  assert.equal(s.snapshot("r1"), "First block.\n\nSecond block.\n\nThird.", "no double break after trailing one");
+});
+
+test("begin() marks a run replying BEFORE any token, without producing a partial", () => {
+  const s = createTurnStream();
+  assert.equal(s.replying("r1"), false, "unknown run is not replying");
+  s.begin("r1");
+  assert.equal(s.replying("r1"), true, "begin() commits to a reply");
+  assert.equal(s.snapshot("r1"), null, "no partial yet — begin() is text-free");
+  s.publish("r1", "Hi");
+  assert.equal(s.replying("r1"), true);
+  assert.equal(s.snapshot("r1"), "Hi", "the deferred text streams into the same entry");
+});
+
+test("a streamed delta implies replying even without an explicit begin()", () => {
+  const s = createTurnStream();
+  s.publish("r1", "Hello");
+  assert.equal(s.replying("r1"), true, "a delta means the agent is replying");
+});
+
+test("begin() is idempotent and never clobbers buffered text", () => {
+  const s = createTurnStream();
+  s.publish("r1", "Hello");
+  s.begin("r1");
+  assert.equal(s.snapshot("r1"), "Hello");
+  assert.equal(s.replying("r1"), true);
+});
+
+test("caps a run's buffer at maxChars", () => {
+  const s = createTurnStream({ maxChars: 5 });
+  s.publish("r1", "abc");
+  s.publish("r1", "defghij");
+  assert.equal(s.snapshot("r1"), "ij", "buffer retains the newest text past the cap");
+  assert.equal(s.startOffset("r1"), 8);
+});
+
+test("end() evicts a finished run's buffer after the grace period", async () => {
+  const s = createTurnStream({ graceMs: 20 });
+  s.publish("r1", "done reply");
+  s.end("r1");
+  assert.equal(s.snapshot("r1"), "done reply", "buffer survives during grace so a final poll catches up");
+  await sleep(40);
+  assert.equal(s.snapshot("r1"), null, "buffer evicted after grace");
+});
+
+test("a late delta after end() cancels eviction and keeps streaming", async () => {
+  const s = createTurnStream({ graceMs: 20 });
+  s.publish("r1", "a");
+  s.end("r1");
+  s.publish("r1", "b");
+  await sleep(40);
+  assert.equal(s.snapshot("r1"), "ab", "eviction was cancelled by the late delta");
+});
+
+test("markReplyDone flags the reply as final independently of the run lifecycle", () => {
+  const s = createTurnStream();
+  assert.equal(s.isReplyDone("r1"), false, "unknown run: reply not done");
+  s.publish("r1", "the answer");
+  assert.equal(s.isReplyDone("r1"), false, "streaming text alone doesn't mark the reply final");
+  s.markReplyDone("r1");
+  assert.equal(s.isReplyDone("r1"), true, "explicitly marked final");
+  assert.equal(s.snapshot("r1"), "the answer", "the buffered reply is still readable");
+});
+
+test("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t1" },
+      text: "hello",
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    const run = await built.app.getRun(ack.runId!);
+    assert.equal(run?.replyComplete, true, "a completed reply is flagged replyComplete");
+    assert.notEqual(run?.alive, true, "a finished turn is not reported alive");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a queued tool-using run surfaces its activity + timings via getRun()", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
+  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t1" },
+      text: "!run echo hi",
+      async: true,
+    });
+    assert.equal(ack.status, "queued");
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+
+    const run = await built.app.getRun(ack.runId!);
+    const kinds = (run?.activity ?? []).map((a) => ("item" in a ? a.item.kind : a.marker));
+    assert.ok(kinds.includes("ToolCall"), "the execute tool call was mirrored to the run's activity");
+    assert.ok(kinds.includes("ToolResult"), "the execute tool result was mirrored too");
+    assert.equal(typeof run?.startedAt, "number", "getRun surfaces when the run started");
+    assert.equal(typeof run?.finishedAt, "number", "getRun surfaces when the run finished");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t1" },
+      text: "hello",
+      async: true,
+    });
+    assert.equal(ack.status, "queued");
+    assert.ok(ack.runId);
+
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+
+    const run = await built.app.getRun(ack.runId!);
+    assert.ok(run?.partial, "the agent's reply was streamed to the run");
+    assert.equal(run!.partial, finished.result?.reply, "streamed partial matches the final reply");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("first block: captured until noteToolCall closes it; later text never leaks in", () => {
+  const s = createTurnStream();
+  assert.equal(s.firstBlock("r1"), null, "unknown run has no first block");
+  s.publish("r1", "On it — ");
+  s.publish("r1", "checking the logs.");
+  assert.deepEqual(s.firstBlock("r1"), { text: "On it — checking the logs.", closed: false }, "open until a tool call");
+  s.noteToolCall("r1");
+  assert.deepEqual(
+    s.firstBlock("r1"),
+    { text: "On it — checking the logs.", closed: true },
+    "the first tool call closes it",
+  );
+  s.publishBlockStart("r1");
+  s.publish("r1", "Found it: deploy #4819.");
+  assert.deepEqual(
+    s.firstBlock("r1"),
+    { text: "On it — checking the logs.", closed: true },
+    "post-tool text stays out",
+  );
+});
+
+test("first block: a second text block before any tool call disqualifies the harvest", () => {
+  const s = createTurnStream();
+  s.publish("r1", "First thought.");
+  s.publishBlockStart("r1");
+  s.publish("r1", "Second thought.");
+  s.noteToolCall("r1");
+  assert.deepEqual(
+    s.firstBlock("r1"),
+    { text: "First thought.", closed: false },
+    "never closed — not a preamble to work",
+  );
+});
+
+test("first block: a turn that goes straight to tools has none", () => {
+  const s = createTurnStream();
+  s.noteToolCall("r1");
+  s.publishBlockStart("r1");
+  s.publish("r1", "The answer.");
+  assert.equal(s.firstBlock("r1"), null, "no text before the tool call → nothing to harvest");
+});
+
+test("surfacePosted: false until marked, then sticky for the run", () => {
+  const s = createTurnStream();
+  assert.equal(s.surfacePosted("r1"), false);
+  s.markSurfacePosted("r1");
+  assert.equal(s.surfacePosted("r1"), true);
+  assert.equal(s.surfacePosted("r2"), false, "isolated per run");
+});
+
+test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-fb" },
+      text: "!preamble On it — checking.",
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    const run = await built.app.getRun(ack.runId!);
+    assert.equal(run?.firstBlock, "On it — checking.", "the opening block is exposed for the surface to harvest");
+    assert.equal(run?.firstBlockClosed, true, "the tool call closed it");
+    assert.ok(run?.partial?.includes("All clear — nothing broke."), "the final reply still streams as partial");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a harvested first block is stripped from the final reply (never shown twice)", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-strip" },
+      text: "!preamble On it — checking.",
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true, "Slack engagement survives outside the worker stream");
+    assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a long first block is harvested too (no length gate) and stripped from the reply", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const long = "x".repeat(400);
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-held" },
+      text: `!preamble ${long}`,
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.equal(
+      finished.result?.reply,
+      "All clear — nothing broke.",
+      "the long acked preamble is stripped like any other",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a non-slack surface never strips the first block from the reply", async () => {
+  const built = buildApp(testConfig({ workers: 1, reaperIntervalMs: 60_000 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-web" },
+      text: "!preamble On it — checking.",
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.ok(
+      finished.result?.reply?.startsWith("On it — checking."),
+      "no ack was posted on this surface, so nothing is stripped",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("subscribe leaks nothing for a run this instance is not executing", () => {
+  const stream = createTurnStream();
+  let posted = false;
+  const unsubscribe = stream.subscribe("other-instance-run", { onSurfacePosted: () => (posted = true) });
+  assert.equal(stream.replying("other-instance-run"), false, "only begin() may assert that a turn is under way here");
+  unsubscribe();
+  assert.equal(stream.replying("other-instance-run"), false);
+  stream.subscribe("local-run", { onSurfacePosted: () => (posted = true) });
+  stream.begin("local-run");
+  stream.markSurfacePosted("local-run");
+  assert.equal(posted, true, "listeners still fire for a run this instance executes");
+});
+
+test("a stale double-unsubscribe cannot evict a newer subscriber's listener set", () => {
+  const stream = createTurnStream();
+  const unsubscribe = stream.subscribe("r1", { onSurfacePosted: () => {} });
+  unsubscribe();
+  let posted = false;
+  stream.subscribe("r1", { onSurfacePosted: () => (posted = true) });
+  unsubscribe();
+  stream.begin("r1");
+  stream.markSurfacePosted("r1");
+  assert.equal(posted, true, "the newer subscriber must still hear events after a stale unsubscribe fires twice");
+});
+
+test("turn-stream: noteGoal/goal snapshots", () => {
+  const stream = createTurnStream();
+  stream.begin("r1");
+  assert.equal(stream.goal("r1"), null);
+  const goal = { objective: "ship it", status: "active" as const, createdAt: 1, updatedAt: 1 };
+  stream.noteGoal("r1", goal);
+  assert.deepEqual(stream.goal("r1"), goal);
+  stream.noteGoal("r1", { ...goal, status: "complete" });
+  assert.equal(stream.goal("r1")?.status, "complete");
+});
+
+test("goalView renders a goal record's status and floor", () => {
+  const record = {
+    objective: "work for a while",
+    status: "active" as const,
+    floor: { minMs: 1_800_000, minTurns: 3 },
+    tokensUsed: 0,
+    createdAt: 10,
+    updatedAt: 20,
+  };
+  assert.deepEqual(goalView(record), {
+    objective: "work for a while",
+    status: "active",
+    floor: "30m, 3 turns",
+    createdAt: 10,
+    updatedAt: 20,
+  });
+  const { floor: _floor, ...bare } = record;
+  assert.deepEqual(goalView({ ...bare, status: "paused" }), {
+    objective: "work for a while",
+    status: "paused",
+    createdAt: 10,
+    updatedAt: 20,
+  });
+});
+
+test("monitor wakes persist engagement after the reply gate", async () => {
+  const built = buildApp(testConfig({ workers: 1 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      origin: { kind: "direct" },
+      surface: "monitor",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-monitor" },
+      text: "!preamble Checking background results.",
+      async: true,
+    });
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("reasoning streams per block beside the reply text, capped, and settles when persisted", () => {
+  const published: Array<{ step: string; index: number; text: string; offset: number }> = [];
+  const s = createTurnStream({
+    onReasoning: (_runId, block, text, offset) => published.push({ ...block, text, offset }),
+  });
+  s.publishReasoning("r1", "step-a", 0, "**Plan**");
+  s.publishReasoning("r1", "step-a", 0, " the fix");
+  s.publishReasoning("r1", "step-a", 2, "second block");
+  s.publish("r1", "Answer");
+  assert.equal(s.snapshot("r1"), "Answer", "reasoning never enters the reply text");
+  assert.deepEqual(s.reasoning("r1"), [
+    { step: "step-a", index: 0, text: "**Plan** the fix" },
+    { step: "step-a", index: 2, text: "second block" },
+  ]);
+  assert.deepEqual(
+    published.map(({ index, offset }) => [index, offset]),
+    [
+      [0, 0],
+      [0, 8],
+      [2, 0],
+    ],
+  );
+  s.settleReasoning("r1", "step-a", 0);
+  assert.deepEqual(s.reasoning("r1"), [{ step: "step-a", index: 2, text: "second block" }]);
+  s.publishReasoning("r1", "step-b", 0, "x".repeat(25_000));
+  s.publishReasoning("r1", "step-b", 0, "more");
+  assert.equal(s.reasoning("r1").find((b) => b.step === "step-b")?.text.length, 20_000);
+  assert.equal(published.at(-1)?.text.length, 20_000, "nothing is published past the cap");
+  s.end("r1");
+  s.begin("r1");
+  assert.deepEqual(s.reasoning("r1"), [], "a retried attempt never serves the previous attempt's blocks");
+});

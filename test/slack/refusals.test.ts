@@ -2,6 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../../src/slack/refusals.ts";
 import { SESSION_BUSY_USER_TEXT } from "../../src/core/failure-copy.ts";
+import { createApp, type AppDeps } from "../../src/api/app.ts";
+import { createTurnRunner } from "../../src/turns/turn-runner.ts";
+import { TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
+import type { ErrorLog } from "../../src/admin/error-log.ts";
+import type { Conversation, Principal } from "../../src/types.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { settledRun, testRunStore } from "../support/turns.ts";
+import { buildBareOrchestrator } from "../support/bare-orchestrator.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -122,4 +130,52 @@ test("refusalNote: boundary copy follows the typed refusal kind, not the reason 
   assert.equal(dm, "I can't respond just now — guests cannot use this.");
   const untyped = refusalNote({ status: "refused", reason: "internal-only lookalike", adminUrl: ADMIN_URL }, "dm");
   assert.match(untyped, /Full error/);
+});
+
+const ADMIN = "https://portal.example.com";
+const actor: Principal = { id: "U1", type: "internal" };
+
+test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async (t) => {
+  // The session store checks the turn's fence, so it must share the ledger's database.
+  const { runs, ledger, databaseUrl } = testRunStore();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const orchestrator = buildBareOrchestrator({ sessions });
+  const recorded: string[] = [];
+  const errors = { record: (e) => recorded.push(e.message) } as Partial<ErrorLog> as ErrorLog;
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, errors, pollMs: 50 });
+  runner.start();
+  t.after(() => runner.stopClaims());
+
+  const threadRef = "ch:C_UUID_FIXTURE:100.1";
+  const request = {
+    surface: "test",
+    actor,
+    conversation: { kind: "channel", threadRef, audience: [actor] } as Conversation,
+    origin: { kind: "direct" as const },
+    text: "!boom",
+  };
+  const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
+
+  const stored = await settledRun(runs, run.id);
+  assert.ok(
+    recorded.some((message) => /boom/.test(message)),
+    `the failure was recorded: ${recorded.join("; ")}`,
+  );
+  assert.equal(stored?.result?.status, "failed");
+  assert.equal(stored?.result?.sessionId, threadRef, "raw stored result holds the threadRef");
+
+  const session = await sessions.getByThread(threadRef);
+  assert.ok(session, "session row exists for the threadRef");
+
+  const app = createApp({ sessions, runs, publicWebUrl: ADMIN } as unknown as AppDeps);
+  const got = await app.getRun(run.id);
+  assert.equal(got?.result?.sessionId, session!.id, "getRun resolved threadRef → real UUID");
+  assert.notEqual(got?.result?.sessionId, threadRef);
+  assert.equal(got?.result?.adminUrl, `${ADMIN}/settings/history/s/${session!.id}`);
+
+  const note = refusalNote(got!.result!, "channel");
+  console.log("\n  Slack would post:\n  " + note + "\n");
+  assert.equal(note.split("Full error: ")[1], `${ADMIN}/settings/history/s/${session!.id} Try again, or DM me.`);
+  assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
+  assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
 });

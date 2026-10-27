@@ -1,7 +1,6 @@
 import "../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createControlService } from "../../../src/api/control-service.ts";
@@ -18,6 +17,7 @@ import { buildApp } from "../../support/build-app.ts";
 import { settle, runNowSettled } from "../../support/settle.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
+import { listen } from "../../support/project-routes.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -308,11 +308,6 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
 
 const PROJECT_TRIGGER_AUTH_SECRET = "project-trigger-secret".repeat(3);
 
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
-
 function signed(method: string, path: string, body = ""): Record<string, string> {
   const ts = Math.floor(Date.now() / 1000);
   return {
@@ -320,6 +315,15 @@ function signed(method: string, path: string, body = ""): Record<string, string>
     "x-timestamp": String(ts),
     "x-signature": signRequest(PROJECT_TRIGGER_AUTH_SECRET, ts, `${method}\n${path}\n${body}`),
   };
+}
+
+async function signedStatus(base: string, method: string, path: string, body = ""): Promise<number> {
+  return (await fetch(`${base}${path}`, { method, headers: signed(method, path, body), ...(body ? { body } : {}) }))
+    .status;
+}
+
+async function capabilityStatus(base: string, capability: string): Promise<number> {
+  return (await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": capability } })).status;
 }
 
 function claims(actorId: string): CapabilityClaims {
@@ -407,33 +411,17 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok(currentVersion);
   const projectToken = await token("member", project.scopeId, currentVersion);
   const slackToken = await token("member", slackScope);
-  assert.equal(
-    (await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": staleOwnerToken } })).status,
-    403,
-  );
-  assert.equal(
-    (await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": projectToken } })).status,
-    200,
-  );
+  assert.equal(await capabilityStatus(base, staleOwnerToken), 403);
+  assert.equal(await capabilityStatus(base, projectToken), 200);
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
   await runNowSettled(built.scheduler, projectCron.id);
   assert.equal(await built.crons.get(projectCron.id), null, "a Project cron is deleted once its owner leaves");
 
-  assert.equal(
-    (await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": projectToken } })).status,
-    403,
-  );
-  assert.equal(
-    (
-      await fetch(`${base}/v1/instructions`, {
-        headers: { "x-agent-capability": await token("member", `personal:member`) },
-      })
-    ).status,
-    200,
-  );
-  assert.equal((await fetch(`${base}/v1/instructions`, { headers: { "x-agent-capability": slackToken } })).status, 200);
+  assert.equal(await capabilityStatus(base, projectToken), 403);
+  assert.equal(await capabilityStatus(base, await token("member", `personal:member`)), 200);
+  assert.equal(await capabilityStatus(base, slackToken), 200);
 
   const listedCrons = await built.app.listCronsForViewer("member");
   assert.ok(!listedCrons.owned.some((cron) => cron.id === projectCron.id));
@@ -463,26 +451,17 @@ test("Project trigger access follows current membership while Slack-group owner 
     `/v1/crons/${projectCron.id}?principalId=member`,
     `/v1/crons/${projectCron.id}/runs?principalId=member`,
   ]) {
-    assert.equal((await fetch(`${base}${suffix}`, { headers: signed("GET", suffix) })).status, 404);
+    assert.equal(await signedStatus(base, "GET", suffix), 404);
   }
   const projectPatchPath = `/v1/crons/${projectCron.id}?principalId=member`;
   const projectPatchBody = JSON.stringify({ title: "hijack" });
-  assert.equal(
-    (
-      await fetch(`${base}${projectPatchPath}`, {
-        method: "PATCH",
-        headers: signed("PATCH", projectPatchPath, projectPatchBody),
-        body: projectPatchBody,
-      })
-    ).status,
-    404,
-  );
+  assert.equal(await signedStatus(base, "PATCH", projectPatchPath, projectPatchBody), 404);
   const slackGetPath = `/v1/crons/${slackCron.id}?principalId=member`;
-  assert.equal((await fetch(`${base}${slackGetPath}`, { headers: signed("GET", slackGetPath) })).status, 200);
+  assert.equal(await signedStatus(base, "GET", slackGetPath), 200);
   const publicGetPath = `/v1/crons/${publicCron.id}?principalId=member`;
-  assert.equal((await fetch(`${base}${publicGetPath}`, { headers: signed("GET", publicGetPath) })).status, 200);
+  assert.equal(await signedStatus(base, "GET", publicGetPath), 200);
   const publicRunsPath = `/v1/crons/${publicCron.id}/runs?principalId=member`;
-  assert.equal((await fetch(`${base}${publicRunsPath}`, { headers: signed("GET", publicRunsPath) })).status, 404);
+  assert.equal(await signedStatus(base, "GET", publicRunsPath), 404);
 
   const webhookListPath = "/v1/webhooks?viewer=member";
   const webhookList = await fetch(`${base}${webhookListPath}`, { headers: signed("GET", webhookListPath) });
@@ -491,23 +470,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok(webhookBody.webhooks.some((webhook) => webhook.id === slackWebhook.id));
 
   const projectDisablePath = `/v1/webhooks/${projectWebhook.id}/disable?principalId=member`;
-  assert.equal(
-    (
-      await fetch(`${base}${projectDisablePath}`, {
-        method: "POST",
-        headers: signed("POST", projectDisablePath),
-      })
-    ).status,
-    404,
-  );
+  assert.equal(await signedStatus(base, "POST", projectDisablePath), 404);
   const slackDisablePath = `/v1/webhooks/${slackWebhook.id}/disable?principalId=member`;
-  assert.equal(
-    (
-      await fetch(`${base}${slackDisablePath}`, {
-        method: "POST",
-        headers: signed("POST", slackDisablePath),
-      })
-    ).status,
-    200,
-  );
+  assert.equal(await signedStatus(base, "POST", slackDisablePath), 200);
 });

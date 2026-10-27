@@ -1,7 +1,6 @@
-import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   ModalNameConflictError,
   ModalSandboxGoneError,
@@ -9,6 +8,7 @@ import {
   type ModalCommandResult,
   type ModalSession,
 } from "../../src/sandbox/modal-client.ts";
+import { latestByName, readHostFile, remapScript, runShell, textResult, writeHostFile } from "./fake-provider-kit.ts";
 
 interface FakeRecord {
   sandboxId: string;
@@ -39,197 +39,191 @@ export interface FakeModal {
   cleanup(): void;
 }
 
-export function installFakeModal(): FakeModal {
-  const root = mkdtempSync(join(tmpdir(), "fake-modal-"));
-  const records = new Map<string, FakeRecord>();
-  const execScripts: string[] = [];
-  let nextId = 1;
-  let clock = 0;
-  let terminateFailures = 0;
-  let nameHold = 0;
-  const heldNames = new Map<string, number>();
-  let restoreFailures = 0;
-  let snapshots = 0;
-  let snapshotHook: (() => Promise<void>) | null = null;
+interface ModalState {
+  root: string;
+  records: Map<string, FakeRecord>;
+  execScripts: string[];
+  heldNames: Map<string, number>;
+  seq: { id: number; clock: number };
+  faults: { terminate: number; restore: number; nameHold: number };
+  snap: { count: number; hook: (() => Promise<void>) | null };
+}
 
-  const byName = (name: string): FakeRecord | undefined => {
-    const all = [...records.values()].filter((r) => r.name === name).sort((a, b) => b.createdAt - a.createdAt);
-    return all.find((r) => r.state === "running") ?? all[0];
-  };
+const GUEST_ROOT = /\/root(?![A-Za-z0-9_-])/;
 
-  const remap = (r: FakeRecord, script: string): string => {
-    const homeRe = r.home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const remapPath = new RegExp(`${homeRe}/tmp/|${homeRe}(?![A-Za-z0-9._-])|/tmp/`, "g");
-    return (
-      `export HOME=${JSON.stringify(r.home)}; ` +
-      script
-        .replace(/\btimeout \d+ /g, "")
-        .replace(/\/root(?![A-Za-z0-9_-])/g, r.home)
-        .replace(remapPath, (mm) => (mm.startsWith(r.home) ? mm : `${r.home}/tmp/`))
-    );
-  };
+const byName = (st: ModalState, name: string): FakeRecord | undefined =>
+  latestByName(
+    st.records.values(),
+    (r) => r.name === name,
+    (r) => r.state === "running",
+  );
 
-  const alive = (r: FakeRecord): void => {
-    if (r.state === "terminated") throw new ModalSandboxGoneError(r.sandboxId, "sandbox has been terminated");
-  };
+const hostPath = (r: FakeRecord, absPath: string): string =>
+  absPath.replace(new RegExp(`^${GUEST_ROOT.source}`), r.home);
 
-  const kill = (r: FakeRecord): void => {
-    if (nameHold > 0 && r.name) heldNames.set(r.name, nameHold);
-    nameHold = 0;
-    r.state = "terminated";
-    rmSync(r.home, { recursive: true, force: true });
-  };
+function alive(r: FakeRecord): void {
+  if (r.state === "terminated") throw new ModalSandboxGoneError(r.sandboxId, "sandbox has been terminated");
+}
 
-  const session = (r: FakeRecord): ModalSession => ({
+function kill(st: ModalState, r: FakeRecord): void {
+  if (st.faults.nameHold > 0 && r.name) st.heldNames.set(r.name, st.faults.nameHold);
+  st.faults.nameHold = 0;
+  r.state = "terminated";
+  rmSync(r.home, { recursive: true, force: true });
+}
+
+function modalSession(st: ModalState, r: FakeRecord): ModalSession {
+  return {
     sandboxId: r.sandboxId,
     async snapshotHome(): Promise<string> {
       alive(r);
-      snapshots++;
-      await snapshotHook?.();
-      const imageId = `im-${nextId++}`;
-      cpSync(r.home, join(root, imageId), { recursive: true });
+      st.snap.count++;
+      await st.snap.hook?.();
+      const imageId = `im-${st.seq.id++}`;
+      cpSync(r.home, join(st.root, imageId), { recursive: true });
       return imageId;
     },
     async restoreHome(imageId: string): Promise<void> {
       alive(r);
-      if (restoreFailures > 0) {
-        restoreFailures--;
+      if (st.faults.restore > 0) {
+        st.faults.restore--;
         throw new Error("simulated restore outage");
       }
       rmSync(r.home, { recursive: true, force: true });
-      cpSync(join(root, imageId), r.home, { recursive: true });
+      cpSync(join(st.root, imageId), r.home, { recursive: true });
     },
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
       alive(r);
-      execScripts.push(command);
+      st.execScripts.push(command);
       mkdirSync(join(r.home, "tmp"), { recursive: true });
-      const spawned = spawnSync("sh", ["-c", remap(r, command)], {
-        encoding: "buffer",
-        maxBuffer: 128 * 1024 * 1024,
-        env: { ...process.env, ...runOpts?.env, COPYFILE_DISABLE: "1" },
-      });
-      return {
-        stdout: (spawned.stdout ?? Buffer.alloc(0)).toString("utf8"),
-        stderr: (spawned.stderr ?? Buffer.alloc(0)).toString("utf8"),
-        exitCode: spawned.status ?? (spawned.signal ? 137 : -1),
-      };
+      const script = remapScript(command, { home: r.home, guest: new RegExp(GUEST_ROOT.source, "g") });
+      return textResult(runShell(script, { ...(runOpts?.env ? { env: runOpts.env } : {}) }));
     },
     async readFileBytes(absPath): Promise<Uint8Array | null> {
       alive(r);
-      const hostPath = absPath.replace(/^\/root(?![A-Za-z0-9_-])/, r.home);
-      if (!existsSync(hostPath)) return null;
-      return new Uint8Array(readFileSync(hostPath));
+      return readHostFile(hostPath(r, absPath));
     },
     async writeFileBytes(absPath, data): Promise<void> {
       alive(r);
-      const hostPath = absPath.replace(/^\/root(?![A-Za-z0-9_-])/, r.home);
-      mkdirSync(dirname(hostPath), { recursive: true });
-      writeFileSync(hostPath, Buffer.from(data));
+      writeHostFile(hostPath(r, absPath), data);
     },
     async terminate(): Promise<void> {
-      if (terminateFailures > 0) {
-        terminateFailures--;
+      if (st.faults.terminate > 0) {
+        st.faults.terminate--;
         throw new Error("simulated terminate outage");
       }
-      kill(r);
+      kill(st, r);
     },
-  });
-
-  const spawn = (name: string | undefined, tags: Record<string, string>): FakeRecord => {
-    const id = `sb-${nextId++}`;
-    const r: FakeRecord = {
-      sandboxId: id,
-      ...(name ? { name } : {}),
-      tags,
-      state: "running",
-      home: join(root, id),
-      createdAt: ++clock,
-    };
-    mkdirSync(r.home, { recursive: true });
-    records.set(id, r);
-    return r;
   };
+}
 
-  const client: ModalClient = {
+function spawnRecord(st: ModalState, name: string | undefined, tags: Record<string, string>): FakeRecord {
+  const id = `sb-${st.seq.id++}`;
+  const r: FakeRecord = {
+    sandboxId: id,
+    ...(name ? { name } : {}),
+    tags,
+    state: "running",
+    home: join(st.root, id),
+    createdAt: ++st.seq.clock,
+  };
+  mkdirSync(r.home, { recursive: true });
+  st.records.set(id, r);
+  return r;
+}
+
+function modalClient(st: ModalState): ModalClient {
+  return {
     lifetimeMs: 24 * 3600_000,
     async create(opts): Promise<ModalSession> {
       if (opts.name) {
-        const held = heldNames.get(opts.name) ?? 0;
+        const held = st.heldNames.get(opts.name) ?? 0;
         if (held > 0) {
-          heldNames.set(opts.name, held - 1);
+          st.heldNames.set(opts.name, held - 1);
           throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
         }
-        const existing = byName(opts.name);
+        const existing = byName(st, opts.name);
         if (existing && existing.state === "running") {
           throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
         }
       }
-      return session(spawn(opts.name, opts.tags ?? {}));
+      return modalSession(st, spawnRecord(st, opts.name, opts.tags ?? {}));
     },
     async fromId(sandboxId): Promise<ModalSession> {
-      const r = records.get(sandboxId);
+      const r = st.records.get(sandboxId);
       if (!r || r.state === "terminated") throw new ModalSandboxGoneError(sandboxId, "sandbox not found");
-      return session(r);
+      return modalSession(st, r);
     },
     async fromName(name): Promise<ModalSession | null> {
-      const r = byName(name);
+      const r = byName(st, name);
       if (!r || r.state === "terminated") return null;
-      return session(r);
+      return modalSession(st, r);
     },
     async terminate(sandboxId): Promise<void> {
-      const r = records.get(sandboxId);
+      const r = st.records.get(sandboxId);
       if (!r) return;
-      kill(r);
+      kill(st, r);
     },
     async *listRunning(tags): AsyncIterable<string> {
-      for (const r of records.values()) {
+      for (const r of st.records.values()) {
         if (r.state !== "running") continue;
         if (Object.entries(tags).every(([k, v]) => r.tags[k] === v)) yield r.sandboxId;
       }
     },
   };
+}
 
+export function installFakeModal(): FakeModal {
+  const st: ModalState = {
+    root: mkdtempSync(join(tmpdir(), "fake-modal-")),
+    records: new Map(),
+    execScripts: [],
+    heldNames: new Map(),
+    seq: { id: 1, clock: 0 },
+    faults: { terminate: 0, restore: 0, nameHold: 0 },
+    snap: { count: 0, hook: null },
+  };
   return {
-    client,
+    client: modalClient(st),
     current: (name) => {
-      const r = byName(name);
+      const r = byName(st, name);
       return r && r.state === "running" ? { sandboxId: r.sandboxId, state: r.state } : null;
     },
-    createdCount: (name) => [...records.values()].filter((r) => r.name === name).length,
-    totalCreated: () => records.size,
-    runningCount: () => [...records.values()].filter((r) => r.state === "running").length,
+    createdCount: (name) => [...st.records.values()].filter((r) => r.name === name).length,
+    totalCreated: () => st.records.size,
+    runningCount: () => [...st.records.values()].filter((r) => r.state === "running").length,
     homeDir: (name) => {
-      const r = byName(name);
+      const r = byName(st, name);
       if (!r) throw new Error(`fake-modal: no sandbox named ${name}`);
       return r.home;
     },
     terminate: (name) => {
-      const r = byName(name);
-      if (r) kill(r);
+      const r = byName(st, name);
+      if (r) kill(st, r);
     },
     terminateAllRunning: () => {
-      for (const r of records.values()) if (r.state === "running") kill(r);
+      for (const r of st.records.values()) if (r.state === "running") kill(st, r);
     },
     failTerminateOnce: () => {
-      terminateFailures++;
+      st.faults.terminate++;
     },
     holdNameAfterTerminate: (createAttempts) => {
-      nameHold = createAttempts;
+      st.faults.nameHold = createAttempts;
     },
-    execScripts: () => [...execScripts],
+    execScripts: () => [...st.execScripts],
     tagsOf: (sandboxId) => {
-      const r = records.get(sandboxId);
+      const r = st.records.get(sandboxId);
       if (!r) throw new Error(`fake-modal: no sandbox ${sandboxId}`);
       return { ...r.tags };
     },
-    createUntracked: (tags) => spawn(undefined, tags).sandboxId,
+    createUntracked: (tags) => spawnRecord(st, undefined, tags).sandboxId,
     onSnapshot: (hook) => {
-      snapshotHook = hook;
+      st.snap.hook = hook;
     },
-    snapshotCount: () => snapshots,
+    snapshotCount: () => st.snap.count,
     failRestoreOnce: () => {
-      restoreFailures++;
+      st.faults.restore++;
     },
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => rmSync(st.root, { recursive: true, force: true }),
   };
 }

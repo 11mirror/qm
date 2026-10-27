@@ -1,10 +1,6 @@
-// QA: end-to-end custom-provider lifecycle against a REAL fake upstream.
-// Boots the app, registers a provider pointing at a local OpenAI-compatible
-// server, and proves: validation, catalog surfacing, key hygiene, a real
-// model call leaving QM and hitting the endpoint, edit-without-key, delete.
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../../src/api/server.ts";
@@ -21,14 +17,14 @@ import { listenLocal } from "../support/listen-local.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
-  // --- fake OpenAI-compatible upstream ---
-  const seen: Array<{ path: string; auth: string | undefined; model?: string }> = [];
+type SeenRequest = { path: string; auth: string | undefined; model?: string };
+
+async function qaOpenAiUpstream(seen: SeenRequest[]): Promise<Server> {
   const upstream = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
-      const record = { path: req.url ?? "", auth: req.headers.authorization as string | undefined } as (typeof seen)[0];
+      const record = { path: req.url ?? "", auth: req.headers.authorization as string | undefined } as SeenRequest;
       if (req.url?.endsWith("/models")) {
         seen.push(record);
         if (record.auth !== "Bearer sk-qa-good") {
@@ -55,6 +51,12 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     });
   });
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  return upstream;
+}
+
+test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
+  const seen: SeenRequest[] = [];
+  const upstream = await qaOpenAiUpstream(seen);
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
 
   const built = buildApp(testConfig());
@@ -68,64 +70,48 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
   });
   const base = listenLocal(server);
   const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
+  const put = (slug: string, body: object) =>
+    api(`/v1/admin/custom-providers/${slug}`, { method: "PUT", body: JSON.stringify(body) });
 
   try {
-    // 1. empty list
     let r = await api("/v1/admin/custom-providers");
     assert.equal(r.status, 200);
     assert.deepEqual(((await r.json()) as { providers: unknown[] }).providers, []);
 
-    // 2. guardrails
-    r = await api("/v1/admin/custom-providers/openai", {
-      method: "PUT",
-      body: JSON.stringify({
-        name: "X",
-        protocol: "openai",
-        baseUrl: upstreamUrl,
-        apiKey: "sk-qa-good",
-        models: [{ id: "m" }],
-      }),
+    r = await put("openai", {
+      name: "X",
+      protocol: "openai",
+      baseUrl: upstreamUrl,
+      apiKey: "sk-qa-good",
+      models: [{ id: "m" }],
     });
     assert.equal(r.status, 400, "reserved slug refused");
-    r = await api("/v1/admin/custom-providers/qa", {
-      method: "PUT",
-      body: JSON.stringify({
-        name: "QA",
-        protocol: "openai",
-        baseUrl: "ftp://nope",
-        apiKey: "sk-qa-good",
-        models: [{ id: "m" }],
-      }),
+    r = await put("qa", {
+      name: "QA",
+      protocol: "openai",
+      baseUrl: "ftp://nope",
+      apiKey: "sk-qa-good",
+      models: [{ id: "m" }],
     });
     assert.equal(r.status, 400, "non-http url refused");
-    r = await api("/v1/admin/custom-providers/qa", {
-      method: "PUT",
-      body: JSON.stringify({ name: "QA", protocol: "openai", baseUrl: upstreamUrl, apiKey: "sk-qa-good", models: [] }),
-    });
+    r = await put("qa", { name: "QA", protocol: "openai", baseUrl: upstreamUrl, apiKey: "sk-qa-good", models: [] });
     assert.equal(r.status, 400, "no models refused");
-    r = await api("/v1/admin/custom-providers/qa", {
-      method: "PUT",
-      body: JSON.stringify({
-        name: "QA",
-        protocol: "openai",
-        baseUrl: upstreamUrl,
-        apiKey: "sk-wrong",
-        models: [{ id: "qa-chat" }],
-      }),
+    r = await put("qa", {
+      name: "QA",
+      protocol: "openai",
+      baseUrl: upstreamUrl,
+      apiKey: "sk-wrong",
+      models: [{ id: "qa-chat" }],
     });
     assert.equal(r.status, 400, "bad key rejected by REAL upstream 401");
     assert.equal(((await r.json()) as { error: string }).error, "invalid_api_key");
 
-    // 3. register for real — validation hits the live upstream
-    r = await api("/v1/admin/custom-providers/qa", {
-      method: "PUT",
-      body: JSON.stringify({
-        name: "QA Provider",
-        protocol: "openai",
-        baseUrl: upstreamUrl,
-        apiKey: "sk-qa-good",
-        models: [{ id: "qa-chat", name: "QA Chat", contextWindow: 64000, maxTokens: 4096, reasoning: true }],
-      }),
+    r = await put("qa", {
+      name: "QA Provider",
+      protocol: "openai",
+      baseUrl: upstreamUrl,
+      apiKey: "sk-qa-good",
+      models: [{ id: "qa-chat", name: "QA Chat", contextWindow: 64000, maxTokens: 4096, reasoning: true }],
     });
     assert.equal(r.status, 200);
     assert.ok(
@@ -133,13 +119,11 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
       "validation actually reached the upstream",
     );
 
-    // 4. list: keyConfigured true, key NEVER present anywhere in the payload
     r = await api("/v1/admin/custom-providers");
     const listing = JSON.stringify(await r.json());
     assert.ok(listing.includes('"hasKey":true'));
     assert.ok(!listing.includes("sk-qa-good"), "key never readable");
 
-    // 5. model resolves like a built-in and is catalog-visible
     const model = resolveModel("custom/qa/qa-chat");
     assert.ok(model, "custom model resolves");
     assert.equal(model!.provider, "qa");
@@ -148,7 +132,6 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(modelSupported("custom/qa/qa-chat"), true);
     assert.equal(modelServiceable("custom/qa/qa-chat", { anthropic: false, openai: false, openrouter: false }), true);
 
-    // 6. REAL model call through QM's pi path → fake upstream answers
     const reply = await complete(model as unknown as Model<Api>, { qa: "sk-qa-good" }, "you are terse", "say anything");
     assert.equal(reply, "QA UPSTREAM REPLY");
     const call = seen.find((s) => s.path.endsWith("/chat/completions"));
@@ -156,28 +139,22 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(call!.model, "qa-chat");
     assert.equal(call!.auth, "Bearer sk-qa-good", "stored key was sent to the custom endpoint");
 
-    // 7. edit WITHOUT key keeps the stored key
-    r = await api("/v1/admin/custom-providers/qa", {
-      method: "PUT",
-      body: JSON.stringify({
-        name: "QA Provider v2",
-        protocol: "openai",
-        baseUrl: upstreamUrl,
-        models: [{ id: "qa-chat" }],
-      }),
+    r = await put("qa", {
+      name: "QA Provider v2",
+      protocol: "openai",
+      baseUrl: upstreamUrl,
+      models: [{ id: "qa-chat" }],
     });
     assert.equal(r.status, 200);
     r = await api("/v1/admin/custom-providers");
     assert.ok(JSON.stringify(await r.json()).includes('"hasKey":true'), "key survives keyless edit");
 
-    // 8. delete: models leave the registry
     r = await api("/v1/admin/custom-providers/qa", { method: "DELETE" });
     assert.equal(r.status, 200);
     assert.equal(resolveModel("custom/qa/qa-chat"), undefined, "model gone after delete");
     r = await api("/v1/admin/custom-providers/qa", { method: "DELETE" });
     assert.equal(r.status, 404, "second delete 404s");
 
-    // 9. non-admin cannot touch any of it
     r = await fetch(`${base}/v1/admin/custom-providers`, { headers: { "content-type": "application/json" } });
     assert.notEqual(r.status, 200, "unauthenticated read refused");
   } finally {
@@ -352,12 +329,10 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
     "sk-live-key",
     "admin-alice@default-org",
   );
-  // "restart": brand-new store instance over the same backing
   const second = createCustomProviderStore({ databaseUrl, keyMaterial: secret });
   const enabled = await second.enabled();
   assert.equal(enabled[0]?.id, "survivor", "spec survives the restart");
   assert.equal(await second.resolveKey("survivor"), "sk-live-key", "key decrypts after restart with the same secret");
-  // and the hydration path wires it into the runtime registry
   setCustomProviders(enabled);
   assert.ok(resolveModel("custom/survivor/survivor-model"), "hydrated model resolves");
   setCustomProviders([]);
@@ -377,7 +352,6 @@ test("QA: a corrupt stored key degrades that provider only — admin surface sta
     "sk-will-be-unreadable",
     "admin-alice@default-org",
   );
-  // reboot with a DIFFERENT secret: the stored key is undecryptable
   const reader = createCustomProviderStore({ databaseUrl, keyMaterial: "other-secret-other-secret-other-secret-2" });
   await assert.rejects(reader.resolveKey("corrupted"), "decryption fails with the wrong secret");
   const statuses = await reader.statuses();

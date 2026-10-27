@@ -1,4 +1,9 @@
-import { SandboxProvisionCleanupError } from "../../src/sandbox/sandbox.ts";
+import {
+  SandboxProvisionCleanupError,
+  execFailureDetail,
+  supportsProcessSessions,
+  type Sandbox,
+} from "../../src/sandbox/sandbox.ts";
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -15,12 +20,10 @@ import {
 } from "../../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
-import { execFailureDetail, supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
 import { sleep } from "../../src/util/async.ts";
 import { scopeId } from "../../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "../support/fake-sprites.ts";
-import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testSandboxBodies } from "../support/test-database.ts";
 
@@ -722,4 +725,28 @@ test("failed scratch initialization and deletion retain a safe retryable identit
   assert.ok(pending);
   await box.teardown(pending, { destroy: true });
   assert.ok(!fake.names().includes(pending.id));
+});
+
+test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent dir and refusing root", async () => {
+  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
+  await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
+  await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
+  await sandbox.writeFileBytes(handle, "keep.txt", new Uint8Array(Buffer.from("keep")));
+  assert.equal((await sandbox.listDir(handle, "spool")).length, 2);
+
+  await sandbox.removeDir(handle, "spool");
+  assert.deepEqual(await sandbox.listDir(handle, "spool"), []);
+  assert.equal(await sandbox.readFile(handle, "keep.txt"), "keep");
+
+  await sandbox.removeDir(handle, "spool");
+  await sandbox.removeDir(handle, "");
+  assert.equal(await sandbox.readFile(handle, "keep.txt"), "keep");
+});
+
+test("a binary file round-trips through the sandbox (base64-over-exec) without utf8 corruption", async () => {
+  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
+  const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
+  await sandbox.writeFileBytes(handle, "keep.bin", raw);
+  const read = await sandbox.readFileBytes(handle, "keep.bin");
+  assert.deepEqual(new Uint8Array(read!), raw);
 });

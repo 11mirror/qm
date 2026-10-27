@@ -517,3 +517,7 @@ test("pg directory: one store keeps each tenant's roster to itself", async () =>
   assert.equal(await withTenant(beta, () => store.get("U-only-alpha")), null);
   assert.equal((await withTenant(beta, () => store.resolve("Only Alpha"))).kind, "none");
 });
+
+test("released directory migrations still match their pinned source checksums", () => {
+  assert.doesNotThrow(() => createPostgresDirectoryStore("postgres://migration-pin.invalid"));
+});

@@ -2,7 +2,7 @@ import type { OrchestratorInput } from "../../../src/core/orchestrator/types.ts"
 import { createSessionMethods } from "../../../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../../../src/files/durable-byte-store.ts";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -99,27 +99,7 @@ test("work phases and approval decisions remain outside the shared message snaps
   );
 });
 
-test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const url = testDatabaseUrl();
-  const store = createSessionShareStore(url);
-  const bytes = createMemoryDurableByteStore();
-  let puts = 0;
-  const countedBytes = {
-    ...bytes,
-    put: async (...args: Parameters<typeof bytes.put>) => {
-      puts++;
-      return bytes.put(...args);
-    },
-  };
-  const identity = createIdentityService(testDatabaseUrl());
-  const { runs, ledger } = testRunStore();
-  const original = [
-    ...entries,
-    entry({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
-  ];
-  let visible = original;
-  let accessible = true;
-  let fileData: string | null = "<script>attachment contents</script>";
+async function startShareRouteServer(t: TestContext, deps: object, app: object): Promise<string> {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
     const parts = url.pathname.split("/");
@@ -148,32 +128,60 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       params: { id: "s1", token: parts[3], fileId: parts[5] },
       body: body ? JSON.parse(body) : null,
       actor: null,
-      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, runs },
-      app: {
-        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
-          accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
-        getSessionForViewer: async (_id: string, user: string) =>
-          accessible && user === "alice"
-            ? {
-                session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
-                items: visible,
-              }
-            : null,
-        openFileForViewer: async (id: string, user: string) =>
-          id === "f1" && user === "alice" && fileData !== null
-            ? {
-                name: "example.html",
-                mimetype: "text/html",
-                sizeBytes: Buffer.byteLength(fileData),
-                stream: Readable.from(fileData),
-              }
-            : null,
-      },
+      deps,
+      app,
     } as unknown as ApiCtx);
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   t.after(() => server.close());
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  return `http://localhost:${(server.address() as AddressInfo).port}`;
+}
+
+test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
+  const url = testDatabaseUrl();
+  const store = createSessionShareStore(url);
+  const bytes = createMemoryDurableByteStore();
+  let puts = 0;
+  const countedBytes = {
+    ...bytes,
+    put: async (...args: Parameters<typeof bytes.put>) => {
+      puts++;
+      return bytes.put(...args);
+    },
+  };
+  const identity = createIdentityService(testDatabaseUrl());
+  const { runs, ledger } = testRunStore();
+  const original = [
+    ...entries,
+    entry({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
+  ];
+  let visible = original;
+  let accessible = true;
+  let fileData: string | null = "<script>attachment contents</script>";
+  const base = await startShareRouteServer(
+    t,
+    { identity, sessionShares: store, sessionShareBytes: countedBytes, runs },
+    {
+      canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
+        accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
+      getSessionForViewer: async (_id: string, user: string) =>
+        accessible && user === "alice"
+          ? {
+              session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
+              items: visible,
+            }
+          : null,
+      openFileForViewer: async (id: string, user: string) =>
+        id === "f1" && user === "alice" && fileData !== null
+          ? {
+              name: "example.html",
+              mimetype: "text/html",
+              sizeBytes: Buffer.byteLength(fileData),
+              stream: Readable.from(fileData),
+            }
+          : null,
+    },
+  );
   const create = (audience = "internal", principalId = "alice") =>
     fetch(`${base}/v1/sessions/s1/share`, { method: "POST", body: JSON.stringify({ audience, principalId }) });
   const read = (token: string, audience = "internal", tail = "", viewer = "bob") =>

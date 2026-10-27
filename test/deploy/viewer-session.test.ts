@@ -143,6 +143,88 @@ function httpPost(
   });
 }
 
+async function deployedApp(
+  databaseUrl: string,
+  o: { port: () => number; externalSharing: boolean; dir: string; name: string; outbound?: unknown },
+) {
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const identity = createIdentityService(databaseUrl);
+  const deploy = createDeployService({
+    ...singleProcessDeps(),
+    externalSharingAllowed: async () => o.externalSharing,
+    deployStore: createDeployStore(testDeployBackings()),
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: o.port() }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
+      destroy: async () => {},
+    },
+    auditLog,
+    acl,
+    deployDir: mkdtempSync(join(tmpdir(), o.dir)),
+  });
+  const app = createApp({
+    deploy,
+    acl,
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity,
+    ...(o.outbound ? { outbound: o.outbound } : {}),
+  } as unknown as Parameters<typeof createApp>[0]);
+  const deployment = await app.deploy({
+    ownerScopeId: scopeId("personal", "alice@example.com"),
+    createdBy: "alice@example.com",
+    entrypoint: "x",
+    files: [],
+    name: o.name,
+  });
+  return { app, identity, deployment };
+}
+
+const signedIn = (host: string, who: string) => ({ Host: host, Cookie: `portal_session=${mintPortalSession(who)}` });
+
+async function strangerIsDeniedButCanAsk(
+  port: number,
+  host: string,
+  app: Awaited<ReturnType<typeof deployedApp>>["app"],
+  outbound: ReturnType<typeof recordingOutbound>,
+): Promise<void> {
+  const stranger = await httpGet(port, "/consultants", {
+    ...signedIn(host, "mallory@example.com"),
+    Accept: "text/html",
+  });
+  assert.equal(stranger.status, 403, "a signed-in stranger is denied");
+  assert.match(stranger.body, /hasn&#39;t been shared with you|hasn't been shared with you/);
+  assert.match(String(stranger.headers["content-type"]), /text\/html/, "denial is a friendly page, not bare JSON");
+
+  const strangerXhr = await httpGet(port, "/consultants", {
+    ...signedIn(host, "mallory@example.com"),
+    Accept: "application/json",
+  });
+  assert.equal(strangerXhr.status, 403, "non-HTML denial stays JSON");
+
+  assert.match(stranger.body, /Request access/, "the denial page offers a request-access button");
+  const asked = await httpPost(port, "/__claw__/request-access", { ...signedIn(host, "mallory@example.com") });
+  assert.equal(asked.status, 200, "a denied visitor can ask the owner for access");
+  const again = await httpPost(port, "/__claw__/request-access", { ...signedIn(host, "mallory@example.com") });
+  assert.equal(again.status, 200, "asking twice is idempotent, not an error");
+  const posts = outbound.posts;
+  assert.equal(posts.length, 1, "the same visitor+app+day request posts to the owner once");
+  assert.match(posts[0]!.text, /mallory@example\.com is asking for access/);
+  assert.match(posts[0]!.text, /mysite/);
+  assert.deepEqual(posts[0]!.destination, {
+    type: "principal",
+    target: "alice@example.com",
+    audienceScopeId: "personal:alice@example.com",
+    onBehalfOf: "mallory@example.com",
+    deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
+  });
+
+  const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
+  assert.equal(signedOutAsk.status, 401, "a signed-out visitor cannot send access requests");
+}
+
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   const databaseUrl = testDatabaseUrl();
   let upstreamCookie: string | undefined = "unset";
@@ -161,37 +243,13 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const deployStore = createDeployStore(testDeployBackings());
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    externalSharingAllowed: async () => true,
-    deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
-      resolveEndpoint: async (d) => d.endpoint,
-      logs: async () => null,
-      destroy: async () => {},
-    },
-    auditLog,
-    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
-    deployDir: mkdtempSync(join(tmpdir(), "signin-")),
-  });
   const outbound = recordingOutbound();
-  const app = createApp({
-    deploy,
-    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
-    directory: createPostgresDirectoryStore(databaseUrl),
-    sessions: createPostgresSessionStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
-    outbound,
-  } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
+  const { app } = await deployedApp(databaseUrl, {
+    port: () => upstreamPort,
+    externalSharing: true,
+    dir: "signin-",
     name: "mysite",
+    outbound,
   });
   const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
@@ -232,9 +290,8 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(upstreamIdentity, undefined, "an anonymous request forwards no viewer identity");
 
     const signedInPublicVisitor = await httpGet(port, "/consultants", {
-      Host: host,
+      ...signedIn(host, "mallory@example.com"),
       Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
     assert.equal(signedInPublicVisitor.status, 200);
     assert.equal(
@@ -251,41 +308,33 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
-      Host: host,
+      ...signedIn(host, "alice@example.com"),
       Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
     });
     assert.equal(backFromLogin.status, 302, "landing back from sign-in redirects to the clean URL");
     assert.equal(backFromLogin.headers.location, "/consultants?x=1", "the dpl_signin marker leaves the address bar");
 
     const owner = await httpGet(port, "/consultants?x=1", {
-      Host: host,
+      ...signedIn(host, "alice@example.com"),
       Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
     });
     assert.equal(owner.status, 200, "the signed-in owner reaches the app with no capability link");
     assert.equal(owner.body, "UPSTREAM OK");
     assert.equal(upstreamCookie, undefined, "the portal session cookie never reaches the app");
     assert.equal(upstreamUrl, "/consultants?x=1", "the app sees the clean URL");
     for (const origin of ["https://sibling.apps.example.com", "https://portal.example.com", "null"]) {
-      const denied = await httpPost(port, "/api/update", {
-        Host: host,
-        Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
-        Origin: origin,
-      });
+      const denied = await httpPost(port, "/api/update", { ...signedIn(host, "alice@example.com"), Origin: origin });
       assert.equal(denied.status, 403);
     }
     const sameApp = await httpPost(port, "/api/update", {
-      Host: host,
-      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+      ...signedIn(host, "alice@example.com"),
       Origin: `https://${host}`,
       "Sec-Fetch-Site": "same-origin",
     });
     assert.equal(sameApp.status, 200);
     for (const site of ["same-site", "cross-site"]) {
       const denied = await httpPost(port, "/api/update", {
-        Host: host,
-        Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+        ...signedIn(host, "alice@example.com"),
         "Sec-Fetch-Site": site,
       });
       assert.equal(denied.status, 403);
@@ -297,47 +346,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       "an app cannot set or clear the gateway's cookies on the visitor",
     );
 
-    const stranger = await httpGet(port, "/consultants", {
-      Host: host,
-      Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
-    });
-    assert.equal(stranger.status, 403, "a signed-in stranger is denied");
-    assert.match(stranger.body, /hasn&#39;t been shared with you|hasn't been shared with you/);
-    assert.match(String(stranger.headers["content-type"]), /text\/html/, "denial is a friendly page, not bare JSON");
-
-    const strangerXhr = await httpGet(port, "/consultants", {
-      Host: host,
-      Accept: "application/json",
-      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
-    });
-    assert.equal(strangerXhr.status, 403, "non-HTML denial stays JSON");
-
-    assert.match(stranger.body, /Request access/, "the denial page offers a request-access button");
-    const asked = await httpPost(port, "/__claw__/request-access", {
-      Host: host,
-      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
-    });
-    assert.equal(asked.status, 200, "a denied visitor can ask the owner for access");
-    const again = await httpPost(port, "/__claw__/request-access", {
-      Host: host,
-      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
-    });
-    assert.equal(again.status, 200, "asking twice is idempotent, not an error");
-    const posts = outbound.posts;
-    assert.equal(posts.length, 1, "the same visitor+app+day request posts to the owner once");
-    assert.match(posts[0]!.text, /mallory@example\.com is asking for access/);
-    assert.match(posts[0]!.text, /mysite/);
-    assert.deepEqual(posts[0]!.destination, {
-      type: "principal",
-      target: "alice@example.com",
-      audienceScopeId: "personal:alice@example.com",
-      onBehalfOf: "mallory@example.com",
-      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
-    });
-
-    const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
-    assert.equal(signedOutAsk.status, 401, "a signed-out visitor cannot send access requests");
+    await strangerIsDeniedButCanAsk(port, host, app, outbound);
 
     const forged = await httpGet(port, "/consultants", {
       Host: host,
@@ -347,9 +356,8 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(forged.status, 302, "a forged session is just a signed-out visitor");
 
     const crafted = await httpGet(port, "//evil.com?dpl_signin=1", {
-      Host: host,
+      ...signedIn(host, "alice@example.com"),
       Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
     });
     assert.equal(crafted.status, 302);
     assert.equal(crafted.headers.location, "/", "a scheme-relative pathname never enters a gateway redirect");
@@ -363,35 +371,14 @@ test("org-wide app access admits only signed-in org members", async () => {
   const databaseUrl = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
-  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
-  const identity = createIdentityService(databaseUrl);
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    externalSharingAllowed: async () => false,
-    deployStore: createDeployStore(testDeployBackings()),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
-      resolveEndpoint: async (d) => d.endpoint,
-      logs: async () => null,
-      destroy: async () => {},
-    },
-    auditLog,
-    acl,
-    deployDir: mkdtempSync(join(tmpdir(), "org-access-")),
-  });
-  const app = createApp({
-    deploy,
-    acl,
-    directory: createPostgresDirectoryStore(databaseUrl),
-    sessions: createPostgresSessionStore(databaseUrl),
+  const {
+    app,
     identity,
-  } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
+    deployment: d,
+  } = await deployedApp(databaseUrl, {
+    port: () => (upstream.address() as AddressInfo).port,
+    externalSharing: false,
+    dir: "org-access-",
     name: "teamsite",
   });
   const server = createInsecureTestServer(app, {
@@ -428,34 +415,10 @@ test("org-wide app access admits only signed-in org members", async () => {
 
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
   const databaseUrl = testDatabaseUrl();
-  const deployStore = createDeployStore(testDeployBackings());
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    externalSharingAllowed: async () => true,
-    deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 1 }),
-      resolveEndpoint: async (d) => d.endpoint,
-      logs: async () => null,
-      destroy: async () => {},
-    },
-    auditLog,
-    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
-    deployDir: mkdtempSync(join(tmpdir(), "signin-off-")),
-  });
-  const app = createApp({
-    deploy,
-    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
-    directory: createPostgresDirectoryStore(databaseUrl),
-    sessions: createPostgresSessionStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
-  } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
+  const { app } = await deployedApp(databaseUrl, {
+    port: () => 1,
+    externalSharing: true,
+    dir: "signin-off-",
     name: "mysite",
   });
   const server = createInsecureTestServer(app, {

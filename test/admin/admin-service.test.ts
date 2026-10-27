@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
 import { signRequest } from "../../src/auth/source-auth.ts";
 import { buildApp } from "../support/build-app.ts";
-import { createAdminService } from "../../src/admin/admin-service.ts";
+import { createAdminService, parseAdminGrants } from "../../src/admin/admin-service.ts";
+import { createAdminGrantStore } from "../../src/admin/admin-grant-store.ts";
+import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
+import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
@@ -133,4 +136,37 @@ test("adminStatusOf reads the grant list directly (org_admin reported; non-admin
   assert.deepEqual(await svc.adminStatusOf(alice), { isAdmin: true, role: "org_admin", scopeId: "org:default-org" });
   const nobody = svc.resolveActor("U-nobody@default-org")!;
   assert.deepEqual(await svc.adminStatusOf(nobody), { isAdmin: false });
+});
+
+test("parseAdminGrants: unset keeps the seeded defaults (returns undefined)", () => {
+  assert.equal(parseAdminGrants(undefined, "default-org"), undefined);
+});
+
+test("parseAdminGrants: parses org_admin grants and skips malformed / removed-role entries", () => {
+  const grants = parseAdminGrants(
+    "U1:org_admin, U2:team_admin:team-eng, bad, U3:notarole, U5:org_admin",
+    "default-org",
+  );
+  assert.deepEqual(grants, [
+    { principalId: "U1", scopeId: scopeId("org", "default-org"), role: "org_admin" },
+    { principalId: "U5", scopeId: scopeId("org", "default-org"), role: "org_admin" },
+  ]);
+  assert.deepEqual(parseAdminGrants("", "default-org"), []);
+});
+
+test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", async () => {
+  const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+    seed: parseAdminGrants("U1:org_admin", "default-org"),
+  });
+  const svc = createAdminService(store);
+  const u1 = svc.resolveActor("U1@default-org");
+  const u2 = svc.resolveActor("U2@default-org");
+  assert.ok(u1 && u2);
+  assert.equal(await svc.canAdminister(u1, scopeId("org", "default-org")), true);
+  assert.equal(await svc.canAdminister(u1, scopeId("channel", "eng")), true);
+  assert.equal(await svc.canAdminister(u2, scopeId("org", "default-org")), false);
+  assert.equal(
+    await svc.canAdminister(svc.resolveActor("admin-alice@default-org")!, scopeId("org", "default-org")),
+    false,
+  );
 });

@@ -1,0 +1,49 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { assertRuntimeHandoff } from "./runtime-handoff.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
+
+const item = (fields: NewItem): Item => storedItem(fields, { sessionId: "s", seq: 0, createdAt: 0 });
+const call = (callId: string, action: string) => item({ kind: "ToolCall", tool: "runtime", callId, body: { action } });
+const result = (callId: string, fields: Record<string, unknown>) =>
+  item({ kind: "ToolResult", tool: "runtime", callId, isError: false, text: "…[output cut]…", body: fields });
+const choice = { modelId: "another-model" };
+const handoff = result("set-1", { ok: true, runtimeHandoff: { lifetime: "task", choice } });
+const inspection = result("get-1", { ok: true, runtimeActive: choice });
+const evidence = () => [call("set-1", "set"), handoff, call("get-1", "get"), inspection];
+
+test("runtime handoff qualification reads the persisted runtime fields, not the shown result text", () => {
+  assert.deepEqual(assertRuntimeHandoff(evidence()), choice);
+});
+
+test("runtime handoff qualification rejects prose, uncorrelated results, errors, and wrong actions", () => {
+  const invalid = [
+    [item({ kind: "AgentMessage", text: JSON.stringify(handoff) })],
+    [handoff, call("get-1", "get"), inspection],
+    [call("set-1", "get"), handoff, call("get-1", "get"), inspection],
+    [call("set-1", "set"), { ...handoff, isError: true }, call("get-1", "get"), inspection],
+    [
+      call("set-1", "set"),
+      result("set-1", { ok: false, runtimeHandoff: { lifetime: "task", choice } }),
+      call("get-1", "get"),
+      inspection,
+    ],
+  ];
+  for (const entries of invalid) assert.throws(() => assertRuntimeHandoff(entries), /handoff recorded/);
+});
+
+test("runtime inspection must follow the handoff and confirm the selected model", () => {
+  assert.throws(() => assertRuntimeHandoff(evidence().slice(0, 2)), /inspection after handoff/);
+  assert.throws(
+    () => assertRuntimeHandoff([call("get-1", "get"), inspection, call("set-1", "set"), handoff]),
+    /inspection after handoff/,
+  );
+  assert.throws(() =>
+    assertRuntimeHandoff([
+      call("set-1", "set"),
+      handoff,
+      call("get-1", "get"),
+      result("get-1", { ok: true, runtimeActive: { ...choice, modelId: "old-model" } }),
+    ]),
+  );
+});

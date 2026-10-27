@@ -325,6 +325,41 @@ test("gateway parser keeps app-only authority and rejects malformed signed marke
     assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
 });
 
+function gatewayRequest(
+  port: number,
+  cookie: string,
+  name: string,
+  path: string,
+  method: string,
+): Promise<{ status: number; body: string }> {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method,
+        headers: {
+          host: `${name}.apps.example.test`,
+          cookie,
+          "sec-fetch-dest": "document",
+          accept: "application/json",
+          "x-portal-identity": "forged",
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode!, body }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
   const databaseUrl = testDatabaseUrl();
   const dir = mkdtempSync(join(tmpdir(), "app-only-gateway-"));
@@ -393,33 +428,7 @@ test("app-only gateway checks exact current personal read grants without inherit
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const cookie = `portal_session=${token()}`;
-  const get = (name: string, path = "/", method = "GET") =>
-    new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const req = request(
-        {
-          host: "127.0.0.1",
-          port,
-          path,
-          method,
-          headers: {
-            host: `${name}.apps.example.test`,
-            cookie,
-            "sec-fetch-dest": "document",
-            accept: "application/json",
-            "x-portal-identity": "forged",
-          },
-        },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk) => {
-            body += chunk;
-          });
-          res.on("end", () => resolve({ status: res.statusCode!, body }));
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
+  const get = (name: string, path = "/", method = "GET") => gatewayRequest(port, cookie, name, path, method);
   try {
     assert.equal((await get("shared")).status, 403);
     assert.equal((await get("org-app")).status, 403, "org ownership is not an app-only entitlement");

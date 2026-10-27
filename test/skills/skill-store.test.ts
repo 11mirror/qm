@@ -1,6 +1,6 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "node:test";
 import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { encodeRef, skillRef, parseRef } from "../../src/acl/resource-ref.ts";
@@ -17,6 +17,7 @@ import { scopeId, type ScopeId, type Principal } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 
 function freshApp() {
   const config: Config = testConfig({ orgId: "acme", seedSkills: false });
@@ -375,5 +376,33 @@ test("the credential-backed Composio skill needs no dedicated OAuth configuratio
       (entry) => entry.skill?.manifest.name,
     ),
     ["composio"],
+  );
+});
+
+test("skill mutations reject names that could escape or collide when materialized", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
+  const manifest = (name: string) => ({ name, description: "d", requiredCapabilities: [], body: "b" });
+  for (const name of ["..", "foo/bar", "foo\\bar", "foo bar", ".hidden", "foo."]) {
+    await assert.rejects(
+      () => skills.create({ scopeId: scopeId("personal", "U1"), manifest: manifest(name), createdBy: "U1" }),
+      /skill name must/,
+    );
+  }
+
+  const legacy = await skills.create({
+    scopeId: scopeId("personal", "U1"),
+    manifest: manifest("safe-name"),
+    createdBy: "U1",
+  });
+  await createPgPool(databaseUrl).q(`UPDATE skills SET manifest = $2, status = 'reviewed' WHERE id = $1`, [
+    legacy.id,
+    manifest("foo/bar"),
+  ]);
+  await assert.rejects(() => skills.publish(legacy.id), /skill name must/);
+  assert.equal(
+    (await skills.visibleFor([scopeId("personal", "U1")])).length,
+    0,
+    "legacy unsafe records never reach materialization",
   );
 });
