@@ -23,6 +23,7 @@ import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
+import { connectorToolsNote, deferredMcpTools } from "../harness/deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   CommandApprovalGrant,
@@ -3339,6 +3340,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 })
               : undefined;
           const goalInbox = swarmHandoff?.inbox;
+          const mcpTools = await mcpToolsReady;
+          const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           const turnResult = await deps.harness.turns.runTurn({
             session,
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
@@ -3646,10 +3649,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
             },
-            systemPrompt,
+            systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
             history: continuation?.history ?? history,
             tools,
-            ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
+            ...(mcpTools ? { mcpTools } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
