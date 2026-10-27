@@ -156,10 +156,9 @@ async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
               origin: input.origin.kind,
             }),
         )
-      : { metas: [], images: [], tooMany: [], unavailable: [] };
+      : { metas: [], images: [], unavailable: [] };
   const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
   const inboundIssues = inboundIssueList({
-    tooMany: inbound.tooMany,
     unavailable: inbound.unavailable,
     surfaceNotes: [
       ...(input.inboundNotes ?? []),

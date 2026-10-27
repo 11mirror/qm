@@ -8,7 +8,6 @@ import {
   type OutboundFile,
   type OpenStoredFile,
   discardOutbound,
-  MAX_OUTBOUND_FILES,
   type ArtifactRegistration,
 } from "../attachments.ts";
 
@@ -47,30 +46,24 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
     const paths = [...keyed.values()];
     const keys = [...keyed.keys()];
     if (!paths.length) return { ok: false, message: "attach needs at least one file" };
-    const resulting = new Set([...staged.keys(), ...keys]);
-    if (resulting.size > MAX_OUTBOUND_FILES)
-      return {
-        ok: false,
-        message: `too many files — a reply carries at most ${MAX_OUTBOUND_FILES}, and ${staged.size} ${staged.size === 1 ? "is" : "are"} already staged`,
-      };
     const register = { ...ctx.fileRegistration, seed: `${ctx.fileRegistration.seed}:attach:${calls}` };
     calls += 1;
-    const keptNames = [...staged.entries()]
-      .filter(([path]) => !keys.includes(path))
-      .map(([, entry]) => entry.attachment.name);
+    const kept = [...staged.entries()].filter(([path]) => !keys.includes(path)).map(([, entry]) => entry.attachment);
     const r = await collectNamedOutbound(
       ctx.sandbox,
       () => ctx.provision(sandboxId),
       paths,
       ctx.blobTransfer,
       register,
-      keptNames,
+      kept.map((attachment) => attachment.name),
       ctx.openStored,
+      kept.reduce((sum, attachment) => sum + attachment.sizeBytes, 0),
     );
     const bad = [
       ...r.missing.map((p) => `${p} (not found)`),
       ...r.empty.map((p) => `${p} (empty)`),
       ...r.oversized.map((p) => `${p} (too large)`),
+      ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
     ];
     if (bad.length)
       return {
