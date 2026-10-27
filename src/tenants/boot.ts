@@ -31,9 +31,6 @@ export async function bootTenant(
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl) await ensureTenantQueues(config.databaseUrl);
-  const rewrittenCredentials = (await built.keychain?.rewriteTargetUsernameCredentials()) ?? 0;
-  if (rewrittenCredentials > 0)
-    console.log(`[qm] rewrote ${rewrittenCredentials} keychain credential(s) to the current shape`);
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" = slackConfig ? "configured" : "absent";
   if (!slackConfig && (env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN)) slackEnvironmentState = "partial";
