@@ -17,7 +17,7 @@ export function listBackLink(label: string, onBack: () => void): TemplateResult 
 export function iconBtn(
   label: string,
   node: IconNode,
-  onClick?: () => void,
+  onClick?: (e: Event) => void,
   o: { aria?: string; size?: number; cls?: string; disabled?: boolean; submit?: boolean } = {},
 ): TemplateResult {
   return html`<button
