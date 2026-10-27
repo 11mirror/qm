@@ -53,6 +53,17 @@ const CLEANUP_BATCH = 1000;
 
 const clampConcurrency = (n: number) => Math.min(MAX_CONCURRENCY, Math.max(1, Math.trunc(n)));
 
+function serializeStart(worker: JobWorker): JobWorker {
+  let starting: Promise<void> | null = null;
+  const { start, stopClaims, stop } = worker;
+  const started = () => starting?.catch(() => {});
+  return Object.assign(worker, {
+    start: () => (starting ??= start().finally(() => (starting = null))),
+    stopClaims: async () => (await started(), stopClaims()),
+    stop: async () => (await started(), stop()),
+  });
+}
+
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const limit = MAX_CONCURRENCY;
@@ -154,7 +165,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     loop = null;
   }
 
-  const jobWorker: JobWorker = {
+  const jobWorker = serializeStart({
     handle(name, run, opts = {}) {
       handlers.set(name, { run, concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY), running: 0 });
     },
@@ -198,7 +209,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       await stopClaims();
       while (active.size) await Promise.allSettled([...active]);
     },
-  };
+  });
   // Finished and failed jobs (spent cron slots, webhook fires, start-up runs) are dropped after a week.
   jobWorker.every("jobs:cleanup", 60 * 60_000, async () => {
     while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
