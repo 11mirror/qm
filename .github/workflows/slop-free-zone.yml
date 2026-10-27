@@ -26,7 +26,12 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check size limits and new legacy names, flags and modes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/code-ratchets.ts --base "$BASE_SHA"
       - name: Review changed code with the Wall of shame lenses
+        if: ${{ !cancelled() }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
