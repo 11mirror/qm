@@ -5,7 +5,6 @@ import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { buildTurnTools } from "./turn-tools.ts";
 import type { SecurityObserver } from "./security-screen.ts";
 import type { Session } from "../../types.ts";
-import { MAX_TURN_DOCUMENTS } from "../document-inputs.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import { documentText, historicalDocumentMetas, loadDocumentInputs } from "../document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment } from "../document-kinds.ts";
@@ -158,10 +157,9 @@ async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
               origin: input.origin.kind,
             }),
         )
-      : { metas: [], images: [], tooMany: [], unavailable: [] };
+      : { metas: [], images: [], unavailable: [] };
   const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
   const inboundIssues = inboundIssueList({
-    tooMany: inbound.tooMany,
     unavailable: inbound.unavailable,
     surfaceNotes: [
       ...(input.inboundNotes ?? []),
@@ -264,7 +262,6 @@ async function loadTurnDocuments(
   const remainingDocumentBytes =
     MAX_DOCUMENT_BYTES -
     documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
-  const remainingDocumentCount = MAX_TURN_DOCUMENTS - documentInputs.documents.length;
   const remainingDocumentTokens = documentBudget - documentInputs.tokens;
   return {
     history,
@@ -272,7 +269,7 @@ async function loadTurnDocuments(
     contextRecovered,
     observeDocuments,
     remainingDocumentBytes,
-    remainingDocumentCount,
+    remainingDocumentCount: Number.POSITIVE_INFINITY,
     remainingDocumentTokens,
   };
 }
@@ -294,7 +291,7 @@ function observeTurnDocuments(
       );
       if (turnAbort.signal.aborted) return;
       if (!extracted) continue;
-      for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text))
+      for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted))
         void observeSecurityData(chunk, actor.id, scopeId, {
           ...screenTrace,
           sessionId: session.id,

@@ -101,7 +101,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
       },
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
   } as unknown as SurfaceToolsContext);
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
   assert.equal(r.ok, false);
@@ -126,7 +126,7 @@ test("surface channel settings preserve and reset the stored ambient reply polic
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
   } as unknown as SurfaceToolsContext)!;
 
   await tools.setChannelBehavior(undefined, true);
@@ -212,7 +212,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
   } as unknown as SurfaceToolsContext)!;
   const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
   assert.equal(r.ok, true);
@@ -293,15 +293,10 @@ test("workspace staging selects the requested sandbox and never falls back on re
   assert.deepEqual(selected, ["one", "two", "denied"]);
 });
 
-test("stored file validation rejects malformed inputs, excessive counts and oversized streams", async () => {
-  for (const input of [
-    [{}],
-    [{ file_id: "" }],
-    [{ file_id: "id", path: "ambiguous" }],
-    [12],
-    Array(21).fill({ file_id: "id" }),
-  ])
+test("stored file validation rejects malformed inputs and oversized streams", async () => {
+  for (const input of [[{}], [{ file_id: "" }], [{ file_id: "id", path: "ambiguous" }], [12]])
     assert.equal(parseOutboundFiles(input).ok, false);
+  assert.equal(parseOutboundFiles(Array(21).fill({ file_id: "id" })).ok, true);
   let opened = 0;
   const transfer = createMemoryBlobTransferStore();
   const result = await collectNamedOutbound(
@@ -376,4 +371,68 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   await staging.attach(["report.txt"]);
   assert.equal(staging.staged().length, 2);
   assert.ok(await store.open(id), "the staged file ID remains readable");
+});
+
+function pagedSurface(messages: Array<{ ts: string; text: string }>, pageSize: number) {
+  const pulls: Array<{ before?: string; match?: string }> = [];
+  const pull = async (_source: string, query: { before?: string; match?: string; count?: number }) => {
+    pulls.push({ ...(query.before ? { before: query.before } : {}), ...(query.match ? { match: query.match } : {}) });
+    const older = query.before ? messages.filter((m) => m.ts < query.before!) : messages;
+    const page = older.slice(-pageSize);
+    const hasMore = page.length < older.length;
+    return { messages: page, hasMore, ...(hasMore ? { nextBefore: page[0]!.ts } : {}), selfTs: [] };
+  };
+  const tools = createSurfaceToolDeps({
+    deps: { outbound: {}, surfaceContext: { pull } },
+    input: { surfaceTools: true, surface: "web" },
+    actor: { id: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1" },
+    session: { id: "S1" },
+    scopeId: "personal:U1",
+    defaultDestination: { type: "web", target: "dm:U1" },
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  return { tools, pulls };
+}
+
+test("whatsNew pages back through the surface until it reaches the caller's checkpoint", async () => {
+  const messages = Array.from({ length: 1000 }, (_, i) => ({ ts: String(1000 + i).padStart(6, "0"), text: `m${i}` }));
+  const { tools, pulls } = pagedSurface(messages, 200);
+  const result = await tools.whatsNew({ since: "001300" });
+  assert.ok(result.ok);
+  assert.equal(result.hereNew, 699);
+  assert.equal(result.message, undefined, "every message after the checkpoint was counted");
+  assert.equal(pulls.length, 4);
+  const unanchored = await pagedSurface(messages, 200).tools.whatsNew();
+  assert.ok(unanchored.ok);
+  assert.match(unanchored.message!, /Counts cover only the newest 200 messages\./);
+});
+
+test("live search pages back until it has the requested number of hits, and says when it stopped short", async () => {
+  const messages = Array.from({ length: 1000 }, (_, i) => ({
+    ts: String(1000 + i).padStart(6, "0"),
+    text: i % 150 === 0 ? `needle ${"x".repeat(900)} ${i}` : `hay ${i}`,
+  }));
+  const { tools, pulls } = pagedSurface(messages, 200);
+  const result = await tools.search("needle", { limit: 3 });
+  assert.ok(result.ok);
+  assert.equal(result.hits!.length, 3);
+  assert.ok(
+    result.hits!.every((hit) => hit.snippet.length > 900),
+    "hits carry the whole message, not a clipped snippet",
+  );
+  assert.equal(pulls.length, 2);
+  assert.match(result.message!, /Searched only the newest 400 messages\./);
+  const everything = await pagedSurface(messages, 200).tools.search("needle", { limit: 50 });
+  assert.ok(everything.ok);
+  assert.equal(everything.hits!.length, 7);
+  assert.equal(everything.message, undefined);
 });
