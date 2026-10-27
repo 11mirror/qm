@@ -1,7 +1,7 @@
 import { type ScopeId } from "../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { isOverheard, isUserMessage } from "../sessions/items.ts";
-import { securityScreenPayload } from "../security/security-screen.ts";
+import { securityScreenChunks } from "../security/security-screen.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -89,19 +89,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   };
   const orchestrator: Orchestrator = {
     observeSecuritySteer({ payload, actor, conversation, sessionId }) {
-      const bounded = securityScreenPayload({
-        surface: "external",
-        text: "",
-        origin: { kind: "automation", screenData: payload },
-      });
-      if (!bounded || bounded.truncated) return;
-      void observeSecurityData(bounded.content, actor.id, deps.resolution.scopeFor(conversation, actor), {
-        hook: "user_input",
-        surface: "steer",
-        origin: "ambient",
-        thread: conversation.threadRef,
-        ...(sessionId ? { sessionId } : {}),
-      });
+      for (const chunk of securityScreenChunks("external", payload))
+        void observeSecurityData(chunk, actor.id, deps.resolution.scopeFor(conversation, actor), {
+          hook: "user_input",
+          surface: "steer",
+          origin: "ambient",
+          thread: conversation.threadRef,
+          ...(sessionId ? { sessionId } : {}),
+        });
     },
 
     async regenerateTitle(sessionId, principalId, participantIds) {
