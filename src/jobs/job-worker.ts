@@ -15,7 +15,7 @@ import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { tenantLockKey } from "../persistence/pg-pool.ts";
-import { withTenant } from "../tenant.ts";
+import { withoutTenant, withTenant } from "../tenant.ts";
 import { activeTenant, activeTenants } from "../tenants/directory.ts";
 
 /**
@@ -26,18 +26,18 @@ export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
 
+export interface EveryOptions {
+  immediate?: boolean;
+  shared?: boolean;
+}
+
 /** Background jobs on the Absurd `jobs` queue: named handlers, keyed spawns, claimed by background owners. */
 export interface JobWorker {
   /** Register a handler; `concurrency` caps how many of this job run at once in this process. */
   handle(name: string, handler: JobHandler, opts?: { concurrency?: number }): void;
   /** Durably queue a job; a key already live is a no-op, a released one is re-armed. */
   spawn(name: string, params: unknown, key: string): Promise<void>;
-  /**
-   * Run `fn` about every `everyMs` on one background owner: a self-rescheduling `every:<name>` job, spawned by
-   * `start` and run first right after its first spawn. A failed run is reported and the next one still comes.
-   * `immediate` also runs it once whenever a worker starts after that, outside the cadence.
-   */
-  every(name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }): void;
+  every(name: string, everyMs: number, fn: () => unknown, opts?: EveryOptions): void;
   start(): Promise<void>;
   healthy(): boolean;
   stopClaims(): Promise<void>;
@@ -113,6 +113,14 @@ async function runJob(db: AbsurdDb, handlers: JobHandlers, task: ClaimedRun): Pr
   } finally {
     if (handler && !busy) handler.running--;
     clearInterval(keepAlive);
+  }
+}
+
+async function runRecurring(job: string, fn: () => unknown, context?: string): Promise<void> {
+  try {
+    await fn();
+  } catch (e) {
+    if (!(e instanceof WorkAdmissionClosed)) reportFailure(`jobs: ${job}`, e, context);
   }
 }
 
@@ -203,20 +211,16 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       recurring.push({ job, immediate: opts.immediate ?? false });
       handlers.set(job, {
         run: async (params) => {
-          const owners = await activeTenants().catch((e: unknown) => {
-            reportFailure(`jobs: ${job} tenants`, e);
-            return [];
-          });
-          await Promise.all(
-            owners.map(async (owner) => {
-              try {
-                await withTenant(owner, fn);
-              } catch (e) {
-                if (!(e instanceof WorkAdmissionClosed))
-                  reportFailure(`jobs: ${job}`, e, `tenant=${owner.slug ?? "home"}`);
-              }
-            }),
-          );
+          if (opts.shared) await runRecurring(job, () => withoutTenant(fn));
+          else {
+            const owners = await activeTenants().catch((e: unknown) => {
+              reportFailure(`jobs: ${job} tenants`, e);
+              return [];
+            });
+            await Promise.all(
+              owners.map((owner) => runRecurring(job, () => withTenant(owner, fn), `tenant=${owner.slug ?? "home"}`)),
+            );
+          }
           return (params as { once?: boolean } | null)?.once ? "done" : Date.now() + everyMs;
         },
         concurrency: 1,
@@ -228,13 +232,15 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       const pool = await db.pool();
       await pool.query("SELECT 1").catch(noteError);
       const start = `${worker}:${++starts}`;
-      for (const { job, immediate } of recurring) {
-        const created = await spawnKeyed(job, null, job, null);
-        if (immediate && !created) await spawnKeyed(job, { once: true }, `${job}:start:${start}`, 1);
-      }
+      await withoutTenant(async () => {
+        for (const { job, immediate } of recurring) {
+          const created = await spawnKeyed(job, null, job, null);
+          if (immediate && !created) await spawnKeyed(job, { once: true }, `${job}:start:${start}`, 1);
+        }
+      });
       started = true;
       lastErrorAt = 0;
-      loop = poll();
+      loop = withoutTenant(() => poll());
     },
     healthy() {
       return started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS;
@@ -246,8 +252,13 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     },
   });
   // Finished and failed jobs (spent cron slots, webhook fires, start-up runs) are dropped after a week.
-  jobWorker.every("jobs:cleanup", 60 * 60_000, async () => {
-    while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
-  });
+  jobWorker.every(
+    "jobs:cleanup",
+    60 * 60_000,
+    async () => {
+      while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
+    },
+    { shared: true },
+  );
   return jobWorker;
 }

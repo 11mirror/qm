@@ -102,7 +102,7 @@ export function buildRuns(deps: RunsInputs) {
   every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
     immediate: true,
   });
-  every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
+  every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup(), { shared: true });
   const {
     turnStream,
     runActivity,
