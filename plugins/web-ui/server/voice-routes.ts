@@ -28,10 +28,10 @@ const SPOOL_DIR = join(tmpdir(), "qm-dictation");
 const STALE_SPOOL_MS = 3_600_000;
 
 export async function sweepDictationSpool(nowMs = Date.now()): Promise<void> {
-  const names = await readdir(SPOOL_DIR).catch(() => []);
+  const names = await readdir(SPOOL_DIR).catch(() => []); // no spool dir yet means nothing to sweep
   for (const name of names) {
     const file = join(SPOOL_DIR, name);
-    const info = await stat(file).catch(() => null);
+    const info = await stat(file).catch(() => null); // removed by its request since readdir
     if (info && nowMs - info.mtimeMs > STALE_SPOOL_MS) await rm(file, { force: true }).catch(() => undefined);
   }
 }
@@ -44,7 +44,7 @@ async function spool(req: IncomingMessage, signal: AbortSignal): Promise<{ file:
   try {
     await pipeline(req, out, { signal });
   } catch (error) {
-    await rm(file, { force: true }).catch(() => undefined);
+    await rm(file, { force: true }).catch(() => undefined); // the sweep removes leftovers
     throw error;
   }
   return { file, size: out.bytesWritten };

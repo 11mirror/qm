@@ -1,6 +1,6 @@
 import type * as Sentry from "@sentry/node";
 import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
-import { swallow } from "./errors.ts";
+import { asError, errDetail, failureCode, swallow } from "./errors.ts";
 
 const FLUSH_MS = 2_000;
 const UNTRACED_PATHS = new Set(["/healthz", "/readyz"]);
@@ -296,4 +296,33 @@ export async function flushErrorReporting(): Promise<void> {
   } catch {
     return;
   }
+}
+
+const reportedErrors = new WeakSet<object>();
+
+export function markErrorReported(e: unknown): void {
+  if (typeof e === "object" && e !== null) reportedErrors.add(e);
+}
+
+export function errorAlreadyReported(e: unknown): boolean {
+  return typeof e === "object" && e !== null && reportedErrors.has(e);
+}
+
+export function reportFailure(context: string, e: unknown, detail?: string): void {
+  const interrupted = e instanceof Error && ["AbortError", "WorkAdmissionClosed"].includes(e.name);
+  const reportable = !interrupted && !errorAlreadyReported(e);
+  if (reportable) markErrorReported(e);
+  const eventId = reportable
+    ? reportBackendError(asError(e), failureCode(context), detail ? { detail } : undefined)
+    : undefined;
+  console.error(
+    `[failed] ${context}${detail ? ` (${detail})` : ""}${eventId ? ` [sentry=${eventId}]` : ""}: ${errDetail(e)}`,
+  );
+}
+
+export function reportFailureAs<T>(context: string, fallback: T, detail?: string): (e: unknown) => T {
+  return (e) => {
+    reportFailure(context, e, detail);
+    return fallback;
+  };
 }

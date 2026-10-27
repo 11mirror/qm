@@ -1,4 +1,4 @@
-import { errMessage } from "../../chassis/src/errors.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 import { type ServerResponse } from "node:http";
 
 import { coreFetch, fetchCoreGet, tryParse } from "./core-relay.ts";
@@ -83,7 +83,7 @@ export async function consumeCoreFeed(
             try {
               onEvent(JSON.parse(data));
             } catch (error) {
-              console.warn(`[web-ui] ${eventName} feed: dropped a malformed frame: ${errMessage(error)}`);
+              swallow(`web-ui: ${eventName} feed dropped a malformed frame`, error);
             }
           }
         }
@@ -91,7 +91,7 @@ export async function consumeCoreFeed(
       } else console.warn(`[web-ui] ${eventName} feed returned HTTP ${r.status}; reconnecting`);
       dropped = true;
     } catch (error) {
-      console.warn(`[web-ui] ${eventName} feed dropped: ${errMessage(error)}; reconnecting`);
+      swallow(`web-ui: ${eventName} feed dropped (reconnecting)`, error);
       dropped = true;
     }
     await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));

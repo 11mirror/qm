@@ -1,7 +1,7 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
-import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { flushErrorReporting, reportBackendError, reportFailure } from "../../chassis/src/error-reporting.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -284,7 +284,7 @@ async function userPermissions(): Promise<string[]> {
     const j = (await r.json()) as { permissions?: unknown };
     return Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [];
   } catch (error) {
-    console.warn(`[web-ui] permission lookup failed: ${errMessage(error)}`);
+    reportFailure("web-ui: permission lookup", error);
     return [];
   }
 }
@@ -706,7 +706,7 @@ export const apiRoutes: readonly WebRoute[] = [
     try {
       canvas = (JSON.parse(r.text) as { canvas?: { js?: unknown; rev?: unknown } }).canvas;
     } catch (error) {
-      console.error("[web-ui] canvas script: bad core response", errMessage(error));
+      reportFailure("web-ui: canvas script bad core response", error);
       return json(res, 502, { error: "bad_core_response", message: errMessage(error) });
     }
     if (typeof canvas?.js !== "string") return json(res, 404, { error: "not_found" });
@@ -1245,7 +1245,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
           `[web-ui] ${provider} OAuth callback: core returned HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`,
         );
     } catch (error) {
-      console.warn(`[web-ui] ${provider} OAuth callback: core unreachable: ${errMessage(error)}`);
+      reportFailure("web-ui: OAuth callback core unreachable", error, provider);
       ok = false;
     }
     const q = `view=keychain&connector=${enc(provider)}&status=${ok ? "connected" : "error"}`;

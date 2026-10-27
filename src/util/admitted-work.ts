@@ -5,6 +5,7 @@ export class WorkAdmissionClosed extends Error {
     super("This deployment is not accepting synchronous work");
   }
 }
+WorkAdmissionClosed.prototype.name = "WorkAdmissionClosed";
 
 export function createAdmittedWork(options: { paused?: boolean; canStart?: () => boolean } = {}) {
   const context = new AsyncLocalStorage<{ active: boolean }>();
