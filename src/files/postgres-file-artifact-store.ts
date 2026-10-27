@@ -1,5 +1,5 @@
 import { likeContains } from "../persistence/like.ts";
-import { createPgPool, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, tenantCols, type PgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
@@ -36,6 +36,71 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
   };
 }
 
+async function listFiles(
+  q: PgPool["q"],
+  scopes: readonly ScopeId[],
+  opts?: ListOwnedOptions,
+  sharedRefs?: readonly FileArtifactRef[],
+): Promise<FilePage> {
+  if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
+  const limit = clampLimit(opts?.limit);
+  const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
+  const params: unknown[] = [scopes as string[]];
+  let access = (t: string) => `${t}.owner_scope_id = ANY($1::text[])`;
+  if (sharedRefs !== undefined) {
+    params.push(
+      sharedRefs.map((r) => r.ownerScopeId),
+      sharedRefs.map((r) => r.id),
+    );
+    const own = access;
+    access = (t) =>
+      `(${own(t)} OR (${t}.enabled = TRUE AND (${t}.owner_scope_id, ${t}.id) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
+  }
+  const filters: Array<(t: string) => string> = [access];
+  if (!opts?.includeDisabled) filters.push((t) => `${t}.enabled = TRUE`);
+  if (opts?.createdInScope != null) {
+    params.push(opts.createdInScope);
+    const n = params.length;
+    filters.push((t) => `${t}.created_in_scope = $${n}::text`);
+  }
+  if (opts?.nameQuery != null) {
+    params.push(likeContains(opts.nameQuery));
+    const n = params.length;
+    filters.push((t) => `${t}.name ILIKE $${n}::text ESCAPE '\\'`);
+  }
+  const visibleTo = (t: string) => filters.map((f) => f(t)).join(" AND ");
+  // A shared listing shows one row per document: copies with the same bytes created in the same
+  // scope collapse to the caller's own copy, else the oldest. A row is kept when no visible copy
+  // outranks it, so the page is cut straight from the created_at order without sorting every file.
+  const owned = (t: string) => `(${t}.owner_scope_id = ANY($1::text[]))`;
+  const representative =
+    sharedRefs === undefined
+      ? ""
+      : ` AND (f.sha256 IS NULL OR NOT EXISTS (
+      SELECT 1 FROM file_artifacts c
+      WHERE ${visibleTo("c")}
+        AND c.sha256 = f.sha256
+        AND COALESCE(c.created_in_scope, c.owner_scope_id) = COALESCE(f.created_in_scope, f.owner_scope_id)
+        AND c.id <> f.id
+        AND (${owned("c")} > ${owned("f")}
+             OR (${owned("c")} = ${owned("f")} AND (c.created_at, c.id) < (f.created_at, f.id)))))`;
+  let pageFilter = "";
+  if (cursor) {
+    params.push(cursor.createdAt, cursor.id);
+    pageFilter = ` AND (f.created_at, f.id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
+  }
+  params.push(limit + 1);
+  const rows = await q(
+    `SELECT f.* FROM file_artifacts f WHERE ${visibleTo("f")}${representative}${pageFilter}
+    ORDER BY f.created_at DESC, f.id DESC LIMIT $${params.length}`,
+    params,
+  );
+  const all = rows.map(rowToArtifact);
+  const files = all.slice(0, limit);
+  const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
+  return { files, ...(nextCursor ? { nextCursor } : {}) };
+}
+
 export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
@@ -53,70 +118,6 @@ export function createPostgresFileArtifactStore(
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
     return rows.length ? rowToArtifact(rows[0]!) : null;
-  }
-
-  async function listFiles(
-    scopes: readonly ScopeId[],
-    opts?: ListOwnedOptions,
-    sharedRefs?: readonly FileArtifactRef[],
-  ): Promise<FilePage> {
-    if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
-    const limit = clampLimit(opts?.limit);
-    const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-    const params: unknown[] = [scopes as string[]];
-    let access = (t: string) => `${t}.owner_scope_id = ANY($1::text[])`;
-    if (sharedRefs !== undefined) {
-      params.push(
-        sharedRefs.map((r) => r.ownerScopeId),
-        sharedRefs.map((r) => r.id),
-      );
-      const own = access;
-      access = (t) =>
-        `(${own(t)} OR (${t}.enabled = TRUE AND (${t}.owner_scope_id, ${t}.id) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
-    }
-    const filters: Array<(t: string) => string> = [access];
-    if (!opts?.includeDisabled) filters.push((t) => `${t}.enabled = TRUE`);
-    if (opts?.createdInScope != null) {
-      params.push(opts.createdInScope);
-      const n = params.length;
-      filters.push((t) => `${t}.created_in_scope = $${n}::text`);
-    }
-    if (opts?.nameQuery != null) {
-      params.push(likeContains(opts.nameQuery));
-      const n = params.length;
-      filters.push((t) => `${t}.name ILIKE $${n}::text ESCAPE '\\'`);
-    }
-    const visibleTo = (t: string) => filters.map((f) => f(t)).join(" AND ");
-    // A shared listing shows one row per document: copies with the same bytes created in the same
-    // scope collapse to the caller's own copy, else the oldest. A row is kept when no visible copy
-    // outranks it, so the page is cut straight from the created_at order without sorting every file.
-    const owned = (t: string) => `(${t}.owner_scope_id = ANY($1::text[]))`;
-    const representative =
-      sharedRefs === undefined
-        ? ""
-        : ` AND (f.sha256 IS NULL OR NOT EXISTS (
-        SELECT 1 FROM file_artifacts c
-        WHERE ${visibleTo("c")}
-          AND c.sha256 = f.sha256
-          AND COALESCE(c.created_in_scope, c.owner_scope_id) = COALESCE(f.created_in_scope, f.owner_scope_id)
-          AND c.id <> f.id
-          AND (${owned("c")} > ${owned("f")}
-               OR (${owned("c")} = ${owned("f")} AND (c.created_at, c.id) < (f.created_at, f.id)))))`;
-    let pageFilter = "";
-    if (cursor) {
-      params.push(cursor.createdAt, cursor.id);
-      pageFilter = ` AND (f.created_at, f.id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
-    }
-    params.push(limit + 1);
-    const rows = await q(
-      `SELECT f.* FROM file_artifacts f WHERE ${visibleTo("f")}${representative}${pageFilter}
-      ORDER BY f.created_at DESC, f.id DESC LIMIT $${params.length}`,
-      params,
-    );
-    const all = rows.map(rowToArtifact);
-    const files = all.slice(0, limit);
-    const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
-    return { files, ...(nextCursor ? { nextCursor } : {}) };
   }
 
   return {
@@ -189,9 +190,9 @@ export function createPostgresFileArtifactStore(
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },
 
-    listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
+    listOwnedByScopes: (scopes, opts) => listFiles(q, scopes, opts),
 
-    listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
+    listDocuments: (scopes, sharedRefs, opts) => listFiles(q, scopes, opts, sharedRefs),
 
     async resolveByIds(refs) {
       if (refs.length === 0) return [];

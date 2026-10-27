@@ -480,6 +480,16 @@ function nextLayerRecord(
   };
 }
 
+function liveDeploymentLayer(runtime: DeploymentLayerRuntime): ReturnType<DeploymentLayerStore["live"]> {
+  if (!runtime.dir) return { source: "none", contentHash: null, resolved: null };
+  const durable = runtime.dir.startsWith("durable:");
+  return {
+    source: durable ? "durable" : "filesystem",
+    contentHash: durable ? runtime.dir.slice("durable:".length) : null,
+    resolved: publicResolved(runtime),
+  };
+}
+
 export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): DeploymentLayerStore {
   const now = opts.now ?? Date.now;
   const layer = typedTable<StoredDeploymentLayer>(
@@ -561,15 +571,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
         return false;
       }
     },
-    live: () => {
-      if (!opts.runtime.dir) return { source: "none", contentHash: null, resolved: null };
-      const durable = opts.runtime.dir.startsWith("durable:");
-      return {
-        source: durable ? "durable" : "filesystem",
-        contentHash: durable ? opts.runtime.dir.slice("durable:".length) : null,
-        resolved: publicResolved(opts.runtime),
-      };
-    },
+    live: () => liveDeploymentLayer(opts.runtime),
     hydrate: () =>
       queue(CURRENT, () =>
         withFleetLock(async () => {

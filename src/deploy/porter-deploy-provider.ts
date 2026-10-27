@@ -81,6 +81,77 @@ export interface PorterDeployProviderOptions {
   onError?: AppErrorSink;
 }
 
+const endpointOf = (body: { host: string; port?: number }): DeployEndpoint =>
+  body.port
+    ? { host: body.host, port: body.port }
+    : { host: body.host, port: ENDPOINT_PORT, tls: true, publicUrl: `https://${body.host}/` };
+
+async function addressOf(
+  d: Deployment,
+  sb: PorterSandboxLike,
+  visibility: "public" | "private" | "internal",
+  domainOf: (d: Deployment) => string | undefined,
+): Promise<{ host: string; port?: number }> {
+  const status = await sb.refresh();
+  if (visibility === "internal") {
+    const address = status.internal_address ?? "";
+    const split = address.lastIndexOf(":");
+    const port = Number(address.slice(split + 1));
+    if (split <= 0 || !Number.isInteger(port) || port <= 0) {
+      throw new Error(
+        `porter deploy ${d.id}: the cluster reported no internal address for the app (${JSON.stringify(address)}) — internal visibility needs sandbox-api 0.1.58 or newer`,
+      );
+    }
+    return { host: address.slice(0, split), port };
+  }
+  const host = status.host || domainOf(d);
+  if (!host) {
+    throw new Error(
+      `porter deploy ${d.id}: the cluster named no host for the app — its sandbox ingress has no root domain, so set PORTER_DEPLOY_APPS_DOMAIN to a domain whose wildcard resolves to that ingress (docs/porter.md)`,
+    );
+  }
+  return { host };
+}
+
+type PorterExecRaw = ReturnType<typeof createPorterExec>["execRaw"];
+
+async function unpackTree(
+  client: PorterClientLike,
+  execRaw: PorterExecRaw,
+  sandboxId: string,
+  volumeId: string,
+  guestDir: string,
+  dir: string,
+): Promise<void> {
+  const entries = await bundleEntries(dir);
+  if (!entries.length) return;
+  const bundle = `${BUNDLE_DIR}/${randomUUID()}.tar`;
+  await client.volumes.raw.writeFile(
+    volumeId,
+    await makeTar(entries),
+    { path: `/${bundle}` },
+    { timeoutMs: BUNDLE_UPLOAD_TIMEOUT_MS },
+  );
+  const guestBundle = posixJoin(DATA_DIR, bundle);
+  const r = await execRaw(
+    sandboxId,
+    extractBundle(guestBundle, guestDir, `rmdir ${shq(posixJoin(DATA_DIR, BUNDLE_DIR))} 2>/dev/null`),
+    BUNDLE_EXTRACT_TIMEOUT_SEC,
+  );
+  if (r.code !== 0) throw execFailure(`porter deploy: unpacking into ${guestDir}`, r);
+}
+
+async function materialize(
+  client: PorterClientLike,
+  execRaw: PorterExecRaw,
+  sandboxId: string,
+  volumeId: string,
+  version: DeploymentVersion,
+): Promise<void> {
+  await unpackTree(client, execRaw, sandboxId, volumeId, APP_DIR, version.snapshotDir);
+  if (version.homeDir) await unpackTree(client, execRaw, sandboxId, volumeId, HOME_DIR, version.homeDir);
+}
+
 export function createPorterDeployProvider(opts: PorterDeployProviderOptions): DeployProvider {
   const appsDomain = opts.appsDomain;
   const image = opts.runnerImage ?? DEFAULT_RUNNER_IMAGE;
@@ -108,10 +179,6 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const volumeName = (d: Deployment): string => `${baseName(d)}-data`;
   const domainOf = (d: Deployment): string | undefined =>
     appsDomain && visibility !== "internal" ? `${porterDnsLabel(d.name ?? d.id)}.${appsDomain}` : undefined;
-  const endpointOf = (body: { host: string; port?: number }): DeployEndpoint =>
-    body.port
-      ? { host: body.host, port: body.port }
-      : { host: body.host, port: ENDPOINT_PORT, tls: true, publicUrl: `https://${body.host}/` };
 
   const serialized = <T>(d: Deployment, fn: () => Promise<T>): Promise<T> =>
     queue(d.id, () => advisoryLock.withLock(`porter-deploy:${d.id}`, fn));
@@ -129,30 +196,6 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     return declaredAppEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
   }
 
-  async function unpackTree(sandboxId: string, volumeId: string, guestDir: string, dir: string): Promise<void> {
-    const entries = await bundleEntries(dir);
-    if (!entries.length) return;
-    const bundle = `${BUNDLE_DIR}/${randomUUID()}.tar`;
-    await client.volumes.raw.writeFile(
-      volumeId,
-      await makeTar(entries),
-      { path: `/${bundle}` },
-      { timeoutMs: BUNDLE_UPLOAD_TIMEOUT_MS },
-    );
-    const guestBundle = posixJoin(DATA_DIR, bundle);
-    const r = await execRaw(
-      sandboxId,
-      extractBundle(guestBundle, guestDir, `rmdir ${shq(posixJoin(DATA_DIR, BUNDLE_DIR))} 2>/dev/null`),
-      BUNDLE_EXTRACT_TIMEOUT_SEC,
-    );
-    if (r.code !== 0) throw execFailure(`porter deploy: unpacking into ${guestDir}`, r);
-  }
-
-  async function materialize(sandboxId: string, volumeId: string, version: DeploymentVersion): Promise<void> {
-    await unpackTree(sandboxId, volumeId, APP_DIR, version.snapshotDir);
-    if (version.homeDir) await unpackTree(sandboxId, volumeId, HOME_DIR, version.homeDir);
-  }
-
   async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
@@ -167,28 +210,6 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       windowSec: readyWindowSec,
       report: appReporter(opts.onError, d, version.env),
     });
-  }
-
-  async function addressOf(d: Deployment, sb: PorterSandboxLike): Promise<{ host: string; port?: number }> {
-    const status = await sb.refresh();
-    if (visibility === "internal") {
-      const address = status.internal_address ?? "";
-      const split = address.lastIndexOf(":");
-      const port = Number(address.slice(split + 1));
-      if (split <= 0 || !Number.isInteger(port) || port <= 0) {
-        throw new Error(
-          `porter deploy ${d.id}: the cluster reported no internal address for the app (${JSON.stringify(address)}) — internal visibility needs sandbox-api 0.1.58 or newer`,
-        );
-      }
-      return { host: address.slice(0, split), port };
-    }
-    const host = status.host || domainOf(d);
-    if (!host) {
-      throw new Error(
-        `porter deploy ${d.id}: the cluster named no host for the app — its sandbox ingress has no root domain, so set PORTER_DEPLOY_APPS_DOMAIN to a domain whose wildcard resolves to that ingress (docs/porter.md)`,
-      );
-    }
-    return { host };
   }
 
   async function liveStored(d: Deployment): Promise<StoredPorterDeployBody | null> {
@@ -227,8 +248,8 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         });
         try {
           await waitPorterRunning(name, sb);
-          const address = await addressOf(d, sb);
-          await materialize(sb.id, volumeId, version);
+          const address = await addressOf(d, sb, visibility, domainOf);
+          await materialize(client, execRaw, sb.id, volumeId, version);
           await startApp(d, sb.id, version);
           await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, ...address, createdAtMs: Date.now() });
           return endpointOf(address);

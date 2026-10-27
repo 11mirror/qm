@@ -88,13 +88,9 @@ interface GitResult {
   stdout: Buffer;
 }
 
-export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGitStore {
-  const repoRoot = opts.repoRoot ?? DEFAULT_REPO_ROOT;
-  const gitBin = opts.gitBin ?? "git";
-  const archiveStore = opts.archiveStore;
-  const archiveBytes = opts.archiveBytes;
-  const repoPath = (deploymentId: string): string => join(repoRoot, `${safeRepoName(deploymentId)}.git`);
+type GitOptions = { cwd?: string; okExitCodes?: number[] };
 
+function gitRunner(gitBin: string) {
   async function gitResult(args: string[], options: { cwd?: string; okExitCodes?: number[] } = {}): Promise<GitResult> {
     const ok = new Set(options.okExitCodes ?? [0]);
     return new Promise((resolveGit, rejectGit) => {
@@ -112,6 +108,18 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   }
   const git = async (args: string[], options: { cwd?: string; okExitCodes?: number[] } = {}): Promise<Buffer> =>
     (await gitResult(args, options)).stdout;
+  return { gitResult, git };
+}
+
+function archiveOps(ctx: {
+  repoRoot: string;
+  archiveStore: DeployGitArchiveStore | undefined;
+  archiveBytes: DurableByteStore | undefined;
+  repoPath: (deploymentId: string) => string;
+  git: (args: string[], options?: GitOptions) => Promise<Buffer>;
+  gitResult: (args: string[], options?: GitOptions) => Promise<GitResult>;
+}) {
+  const { repoRoot, archiveStore, archiveBytes, repoPath, git, gitResult } = ctx;
 
   async function localArchiveEtag(repo: string): Promise<string | null> {
     try {
@@ -200,6 +208,18 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     await git(["--git-dir", repo, "symbolic-ref", "HEAD", CURRENT_REF]);
     return repo;
   }
+  return { persistArchive, ensureRepo };
+}
+
+export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGitStore {
+  const repoRoot = opts.repoRoot ?? DEFAULT_REPO_ROOT;
+  const gitBin = opts.gitBin ?? "git";
+  const archiveStore = opts.archiveStore;
+  const archiveBytes = opts.archiveBytes;
+  const repoPath = (deploymentId: string): string => join(repoRoot, `${safeRepoName(deploymentId)}.git`);
+
+  const { gitResult, git } = gitRunner(gitBin);
+  const { persistArchive, ensureRepo } = archiveOps({ repoRoot, archiveStore, archiveBytes, repoPath, git, gitResult });
 
   async function checkoutForCommit(
     deploymentId: string,

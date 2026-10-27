@@ -94,6 +94,44 @@ function stateFromRow(status: ProcessStatus): ProcessState {
   return { state: "exited", code: status === "reaped" ? 143 : 0 };
 }
 
+async function findLiveDuplicate(
+  deps: BackgroundExecBrokerDeps,
+  handle: SandboxHandle,
+  sandboxId: string,
+  normalized: string,
+  redacted: string,
+  credentials: BackgroundCredentials | undefined,
+  exited: (handle: SandboxHandle, processId: string) => Promise<void>,
+): Promise<string | null> {
+  let processId: string | null =
+    redacted === normalized && !credentials
+      ? ((await deps.registry.listByScope(deps.scopeId)).find(
+          (r) =>
+            r.kind === "background" && r.command === redacted && r.status === "running" && r.sandboxId === sandboxId,
+        )?.processId ?? null)
+      : null;
+
+  if (processId) {
+    const existingProcessId = processId;
+    try {
+      const read = await deps.sandbox.readProcess(handle, existingProcessId, {
+        sinceCursor: 0,
+        maxBytes: 1,
+        waitMs: 0,
+      });
+      if (read.status.state === "exited") {
+        await exited(handle, existingProcessId);
+        processId = null;
+      }
+    } catch (error) {
+      if (!(error instanceof ProcessSessionGoneError)) throw error;
+      await deps.registry.delete(existingProcessId);
+      processId = null;
+    }
+  }
+  return processId;
+}
+
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
   const POLL_MS = deps.pollMs ?? 5_000;
   const defaultTtlMs = deps.ttlMs ?? BACKGROUND_JOB_TTL_MS;
@@ -126,35 +164,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const normalized = `bg: ${command.replace(/\s+/g, " ").trim()}`;
       const redacted = redactCommand(normalized, handle.env);
 
-      let processId =
-        redacted === normalized && !credentials
-          ? ((await deps.registry.listByScope(deps.scopeId)).find(
-              (r) =>
-                r.kind === "background" &&
-                r.command === redacted &&
-                r.status === "running" &&
-                r.sandboxId === sandboxId,
-            )?.processId ?? null)
-          : null;
-
-      if (processId) {
-        const existingProcessId = processId;
-        try {
-          const read = await deps.sandbox.readProcess(handle, existingProcessId, {
-            sinceCursor: 0,
-            maxBytes: 1,
-            waitMs: 0,
-          });
-          if (read.status.state === "exited") {
-            await exited(handle, existingProcessId);
-            processId = null;
-          }
-        } catch (error) {
-          if (!(error instanceof ProcessSessionGoneError)) throw error;
-          await deps.registry.delete(existingProcessId);
-          processId = null;
-        }
-      }
+      let processId = await findLiveDuplicate(deps, handle, sandboxId, normalized, redacted, credentials, exited);
 
       if (processId) {
         const read = await deps.sandbox.readProcess(handle, processId, {
