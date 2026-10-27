@@ -11,10 +11,26 @@ const SIZE_RULES: Record<string, ["error", { max: number }]> = {
   "max-lines": ["error", { max: 800 }],
   "max-lines-per-function": ["error", { max: 150 }],
 };
-const EXEMPT = [":!*.md", ":!*.sql", ":!**/test/**", ":!*.test.*", ":!**/vendor/**", ":!docs/", ":!adrs/", ":!*.json"];
+const EXEMPT = [
+  ":!*.md",
+  ":!test/",
+  ":!**/test/**",
+  ":!*.test.*",
+  ":!**/vendor/**",
+  ":!docs/",
+  ":!adrs/",
+  ":!*.json",
+  ":!scripts/code-ratchets.ts",
+];
 export const NAME_RULES = [
   { label: "legacy identifier", grep: ["-i", "-e", "legacy"], match: /[\w$-]*legacy[\w$-]*/gi, code: true },
   { label: "*_MODE env name", grep: ["-e", "_MODE"], match: /\b[A-Z][A-Z0-9_]*_MODE\b/g, code: false },
+  {
+    label: "key-value store helper",
+    grep: ["-i", "-e", "map", "-e", "kv", "-e", "keyvalue"],
+    match: /\b\w*(?:DurableMap|durableMap|[Kk]vStore|[Kk]eyValue|createMap|artifactMap|testMap)\w*/g,
+    code: true,
+  },
   {
     label: "flag env name",
     grep: ["-e", "ENABLE"],
@@ -30,6 +46,26 @@ const git = (...args: string[]) => {
 };
 
 export const withoutStrings = (line: string) => line.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""');
+
+export function blobTables(source: string, path: string) {
+  const found = new Set<string>();
+  for (const create of source.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?([\w."${}]+)\s*\(/gi)) {
+    const parts = [""];
+    let depth = 1;
+    for (const ch of source.slice(create.index + create[0].length)) {
+      depth += ch === "(" ? 1 : ch === ")" ? -1 : 0;
+      if (!depth) break;
+      if (ch === "," && depth === 1) parts.push("");
+      else parts[parts.length - 1] += ch;
+    }
+    const columns = parts
+      .map((part) => part.trim().replaceAll('"', "").split(/\s+/))
+      .filter(([name]) => !/^(primary|unique|constraint|foreign|check|exclude|tenant_id|\w+_at)$/i.test(name!));
+    if (columns.length === 2 && columns.filter(([, type]) => /^jsonb?$/i.test(type ?? "")).length === 1)
+      found.add(create[1]!.includes("${") ? `${path}:${create[1]}` : create[1]!.replaceAll('"', "").toLowerCase());
+  }
+  return found;
+}
 
 export function names(text: string, rule: (typeof NAME_RULES)[number]) {
   const source = rule.code ? text.split("\n").map(withoutStrings).join("\n") : text;
@@ -47,16 +83,33 @@ function newNames(base: string) {
   const added = (label: string, before: Set<string>, after: Set<string>) =>
     [...after].filter((n) => !before.has(n)).map((n) => `New ${label}: ${n}`);
   const flags = (rev: string) => featureFlags(git("show", `${rev}:src/feature-flags.ts`));
+  const tables = (rev: string) =>
+    new Set(
+      git("grep", "-ilI", "create table", rev, "--", "*.sql", "*.ts", "*.mjs", ...EXEMPT)
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((file) => [...blobTables(git("show", file), file.slice(rev.length + 1))]),
+    );
   return [
     ...NAME_RULES.flatMap((rule) => {
       const at = (rev: string) =>
         names(
-          git("grep", "-hI", ...rule.grep, rev, "--", ...(rule.code ? ["*.ts", "*.tsx", "*.mjs"] : ["."]), ...EXEMPT),
+          git(
+            "grep",
+            "-hI",
+            ...rule.grep,
+            rev,
+            "--",
+            ...(rule.code ? ["*.ts", "*.tsx", "*.mjs"] : ["."]),
+            ...EXEMPT,
+            ":!*.sql",
+          ),
           rule,
         );
       return added(rule.label, at(base), at("HEAD"));
     }),
     ...added("feature flag", flags(base), flags("HEAD")),
+    ...added("JSON blob table", tables(base), tables("HEAD")),
   ];
 }
 

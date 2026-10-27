@@ -6,7 +6,7 @@ To run and test, see [`README.md`](./README.md).
 
 ## Slop-free zone
 
-The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings: the `Slop-free zone` CI check fails a PR when a model review with every lens finds anything in a zone file it touches, or anything new that it adds outside the zone. Run `node scripts/zone-review.ts --base origin/main` before pushing, or `node scripts/zone-review.ts` to re-read the whole zone; both need a model provider key (`OPENAI_API_KEY` by default). The same check runs `node scripts/code-ratchets.ts --base origin/main`: zone files may not have a function over 150 lines or a file over 800, the count of those elsewhere may not rise above `scripts/size-ratchet.json` (lower it when you shrink one), and no PR may add a new `legacy` identifier, feature flag, or `*_MODE`/`*_ENABLED` env name.
+The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings: the `Slop-free zone` CI check fails a PR when a model review with every lens finds anything in a zone file it touches, or anything new that it adds outside the zone. Run `node scripts/zone-review.ts --base origin/main` before pushing, or `node scripts/zone-review.ts` to re-read the whole zone; both need a model provider key (`OPENAI_API_KEY` by default). The same check runs `node scripts/code-ratchets.ts --base origin/main`: zone files may not have a function over 150 lines or a file over 800, the count of those elsewhere may not rise above `scripts/size-ratchet.json` (lower it when you shrink one), and no PR may add a new `legacy` identifier, feature flag, `*_MODE`/`*_ENABLED` env name, id-plus-JSON blob table, or key-value store helper.
 
 ## Working on the code
 
@@ -83,6 +83,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
 - **Disclose configuration changes in the PR description.** Name added, removed,
   or changed settings, flags, modes, and providers, including defaults, precedence,
   and supported combinations. Explain why; keep this proportional to the change.
+- **Postgres is not a key-value store.** Tables declare typed columns: no new id-plus-JSON blob tables and no generic key-value helpers (DurableMap-style) over them; use `typedTable` from `src/persistence/typed-table.ts`.
 - **Keep humans in the loop on schema and data types.** Humans must see and review
   changes to tables and persisted/API payload shapes. Surface them in chat and the
   PR description as you make them: complete affected old and new shapes, including
