@@ -149,7 +149,7 @@ async function openTurn(o: OrchestratorInstance, requested: OrchestratorInput) {
     emitGapWork,
   });
   const { provision, reclaimBox } = sandboxes;
-  const held = await holdTurnLease(ctx, { session, run });
+  const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return { done: true as const, result: held.refused };
   const { lease, turnAbort, catchUpMessageRevisions, stopLeaseKeepalive, leaseState } = held;
   const cleanup = { tailOwns: false };
