@@ -402,14 +402,14 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), "recorded");
   const entries = await sessions.getItems(session.id);
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.kind, "Error");
   assert.equal(entries[0]!.errorCode, "turn_failure");
   assert.equal(entries[0]!.text, "I couldn't finish that turn: something went wrong on my end");
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), "present", "recording is idempotent");
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
@@ -425,7 +425,7 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   });
   await sessions.releaseLease(lease!);
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), "present");
   assert.equal((await sessions.getItems(session.id)).length, 1, "no duplicate entry");
 });
 
@@ -441,14 +441,14 @@ test("a failure entry recorded for another run does not suppress this run's entr
   });
   await sessions.releaseLease(lease!);
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), "recorded");
   assert.equal((await sessions.getItems(session.id)).length, 2);
 });
 
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
-  assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
+  assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), "unneeded");
   assert.equal((await sessions.getItems(session.id)).length, 0);
 });
 
@@ -479,6 +479,82 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const pending = await outbound.pending("slack");
   assert.equal(pending.length, 1, "the Slack note still goes out alongside the entry");
   assert.match(pending[0]!.text, /couldn't finish/);
+});
+
+test("onTerminal: a failed run is not settled while its session is busy, so the sweep still owes its entry", async (t) => {
+  const { sessions, session } = await failureSessions();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
+  const outbound = recordingOutbound();
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
+  await finishTurn(
+    (await claimTurn(ledger, parked.id))!,
+    { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+    "failed",
+  );
+  await settle();
+  assert.deepEqual(await outbound.pending("slack"), [], "the Slack note waits on the durable entry");
+  assert.equal(
+    (await runs.get(parked.id))?.deliveryState?.settledAt,
+    undefined,
+    "the run is not settled ahead of its entry",
+  );
+
+  await sessions.releaseLease(lease!);
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 2);
+  assert.equal((await sessions.getItems(session.id)).length, 1);
+  assert.equal((await outbound.pending("slack")).length, 1);
+});
+
+test("sweep: a failed run whose process died before recording its failure gets the entry from the sweep", async (t) => {
+  const { sessions, session } = await failureSessions();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
+  const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
+  await finishTurn(
+    (await claimTurn(ledger, parked.id))!,
+    { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+    "failed",
+  );
+  const outbound = recordingOutbound();
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  assert.equal((await sessions.getItems(session.id)).length, 0, "wired after the fact: nothing recorded");
+
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 2, "the entry and the Slack note were both recovered");
+  const entries = await sessions.getItems(session.id);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.errorCode, "turn_failure");
+  assert.equal(entries[0]!.turnId, parked.id);
+  assert.equal((await outbound.pending("slack")).length, 1);
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "settled: nothing left to recover");
+  assert.equal((await sessions.getItems(session.id)).length, 1, "no duplicate entry");
+});
+
+test("sweep: a busy session leaves the failed run unsettled so a later sweep records the entry", async (t) => {
+  const { sessions, session } = await failureSessions();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
+  const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
+  await finishTurn(
+    (await claimTurn(ledger, parked.id))!,
+    { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+    "failed",
+  );
+  const outbound = recordingOutbound();
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
+  assert.equal((await sessions.getItems(session.id)).length, 0);
+  assert.deepEqual(await outbound.pending("slack"), [], "nothing is posted while the entry is still owed");
+  assert.equal((await runs.get(parked.id))?.deliveryState?.settledAt, undefined, "the run stays unsettled");
+
+  await sessions.releaseLease(lease!);
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 2);
+  assert.equal((await sessions.getItems(session.id)).length, 1);
+  assert.equal((await runs.get(parked.id))?.deliveryState?.settledAt !== undefined, true);
 });
 
 test("a run result post identifies its source session and assistant entry", () => {
