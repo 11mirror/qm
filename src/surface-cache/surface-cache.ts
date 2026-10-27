@@ -52,6 +52,12 @@ function rowToMessage(r: Record<string, unknown>): CachedMessage {
   };
 }
 
+const STALE_CONTENT = `(EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0))`;
+const unlessStale = (column: string): string =>
+  `CASE WHEN ${STALE_CONTENT} THEN channel_messages.${column} ELSE COALESCE(EXCLUDED.${column}, channel_messages.${column}) END`;
+const stickyFlag = (column: string): string =>
+  `channel_messages.${column} OR (NOT ${STALE_CONTENT} AND EXCLUDED.${column})`;
+
 async function ingestEvents(pool: PgPool["pool"], events: IngestEvent[]): Promise<{ upserted: number }> {
   if (!events.length) return { upserted: 0 };
   const now = Date.now();
@@ -66,17 +72,17 @@ async function ingestEvents(pool: PgPool["pool"], events: IngestEvent[]): Promis
         `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, surface)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21)
              ON CONFLICT (${tenantCols("org_id, container, ts")}) DO UPDATE SET
-               sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
-               subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
-               broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
-               bot_id = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.bot_id ELSE COALESCE(EXCLUDED.bot_id, channel_messages.bot_id) END,
-               author_id = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_id ELSE COALESCE(EXCLUDED.author_id, channel_messages.author_id) END,
-               author_name = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_name ELSE COALESCE(EXCLUDED.author_name, channel_messages.author_name) END,
-               text = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.text ELSE EXCLUDED.text END,
-               mentions = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.mentions ELSE COALESCE(EXCLUDED.mentions, channel_messages.mentions) END,
-               self = channel_messages.self OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.self),
-               bot = channel_messages.bot OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.bot),
-               mentions_self = channel_messages.mentions_self OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.mentions_self),
+               sub = CASE WHEN ${STALE_CONTENT} OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
+               subtype = ${unlessStale("subtype")},
+               broadcast = CASE WHEN ${STALE_CONTENT} OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
+               bot_id = ${unlessStale("bot_id")},
+               author_id = ${unlessStale("author_id")},
+               author_name = ${unlessStale("author_name")},
+               text = CASE WHEN ${STALE_CONTENT} THEN channel_messages.text ELSE EXCLUDED.text END,
+               mentions = ${unlessStale("mentions")},
+               self = ${stickyFlag("self")},
+               bot = ${stickyFlag("bot")},
+               mentions_self = ${stickyFlag("mentions_self")},
                edited_at = CASE WHEN channel_messages.deleted OR EXCLUDED.deleted THEN channel_messages.edited_at ELSE GREATEST(COALESCE(EXCLUDED.edited_at, 0), COALESCE(channel_messages.edited_at, 0)) END,
                deleted = channel_messages.deleted OR EXCLUDED.deleted,
                deleted_at = COALESCE(channel_messages.deleted_at, EXCLUDED.deleted_at),
@@ -193,7 +199,7 @@ function surfaceMessageReads(q: PgPool["q"], liveFallback: LiveFallback | undefi
     },
 
     async readMessages(container, opts = {}) {
-      const limit = clampLimit(opts.limit, DEFAULT_READ_LIMIT);
+      const limit = opts.timestamps?.length ?? clampLimit(opts.limit, DEFAULT_READ_LIMIT);
       const conds = ["org_id = $1", "container = $2"];
       const args: unknown[] = [tenant().orgId, container];
       if (opts.at) {
@@ -201,7 +207,6 @@ function surfaceMessageReads(q: PgPool["q"], liveFallback: LiveFallback | undefi
         conds.push(`ts = $${args.length}`);
       }
       if (opts.timestamps !== undefined) {
-        if (opts.timestamps.length > MAX_READ_LIMIT) throw new RangeError("At most 500 message timestamps are allowed");
         if (!opts.timestamps.length) return [];
         args.push(opts.timestamps);
         conds.push(`ts = ANY($${args.length}::text[])`);
@@ -318,8 +323,8 @@ function surfaceContainerReads(q: PgPool["q"]) {
       };
     },
 
-    async listContainers(opts = {}) {
-      const limit = opts.limit === undefined ? null : Math.max(1, Math.floor(opts.limit));
+    async listContainers(opts) {
+      const limit = Math.max(1, Math.floor(opts.limit));
       const rows = await q(
         `SELECT s.*,
                 (SELECT COUNT(*)::int FROM channel_messages m

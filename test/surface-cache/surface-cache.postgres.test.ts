@@ -34,12 +34,12 @@ test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", a
   }
 });
 
-test("pg surface-cache: listContainers returns every container unless the caller pages", async () => {
+test("pg surface-cache: listContainers returns the page the caller asks for", async () => {
   const cache = createPostgresSurfaceCache(URL);
   try {
     const containers = Array.from({ length: 520 }, (_, i) => `WIDE${i}`);
     await cache.ingest(containers.map((container, i) => ({ container, ts: "1.0", text: "hi", createdAt: i + 1 })));
-    const all = await cache.listContainers();
+    const all = await cache.listContainers({ limit: 100_000 });
     assert.equal(containers.filter((c) => all.some((row) => row.container === c)).length, 520);
     assert.equal((await cache.listContainers({ limit: 7 })).length, 7);
   } finally {
@@ -107,7 +107,7 @@ test("pg surface-cache: tsvector search + membership", async () => {
     assert.equal(st?.name, "launch");
     assert.equal(st?.kind, "channel", "the container kind round-trips through the store");
     assert.equal(st?.lastTs, "4.0");
-    assert.equal((await cache.listContainers()).find((c) => c.container === "CS1")?.kind, "channel");
+    assert.equal((await cache.listContainers({ limit: 100_000 })).find((c) => c.container === "CS1")?.kind, "channel");
   } finally {
     await cache.close();
   }
@@ -409,7 +409,10 @@ test("cache selects exact timestamps and oldest pages with live reply counts", a
       ["1.0", "4.0"],
     );
     assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
-    await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
+    assert.deepEqual(
+      (await cache.readMessages(container, { timestamps: [...Array(600).fill("missing"), "1.0"] })).map((m) => m.ts),
+      ["1.0"],
+    );
     const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
     assert.equal(oldest?.ts, "1.0");
     assert.equal(oldest?.replyCount, 1);
@@ -509,11 +512,11 @@ test("pg surface-cache: each surface's conversations stay out of another surface
       [["forum:prod:42", "forum"]],
     );
     assert.equal(
-      (await cache.listContainers()).some((c) => c.container === "forum:prod:42"),
+      (await cache.listContainers({ limit: 100_000 })).some((c) => c.container === "forum:prod:42"),
       false,
     );
     assert.deepEqual(
-      (await cache.listContainers({ surface: "forum" })).map((c) => c.container),
+      (await cache.listContainers({ surface: "forum", limit: 100_000 })).map((c) => c.container),
       ["forum:prod:42"],
     );
     const [dm] = await cache.readMessages("forum:prod:42", { noFallback: true });

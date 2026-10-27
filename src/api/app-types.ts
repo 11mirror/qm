@@ -474,7 +474,7 @@ export interface App {
   ): Promise<{ upserted: number }>;
   searchSurface(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
   readSurfaceMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
-  listSurfaceContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
+  listSurfaceContainers(opts: { limit: number }): Promise<ContainerSummary[]>;
   judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;

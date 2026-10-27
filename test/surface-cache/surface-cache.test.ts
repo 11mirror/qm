@@ -98,7 +98,7 @@ test("eager membership maintenance: ingest keeps a container's members fresh, un
   assert.equal(st?.name, "general");
   assert.equal(st?.kind, "channel", "the container kind round-trips and a body-only event leaves it intact");
   assert.equal(st?.lastTs, "2.0", "the coverage watermark advances to the latest ts");
-  assert.equal((await cache.listContainers()).find((c) => c.container === "C1")?.kind, "channel");
+  assert.equal((await cache.listContainers({ limit: 100_000 })).find((c) => c.container === "C1")?.kind, "channel");
 });
 
 test("oldest_ts is the numeric floor of ingested ts — compared numerically, not lexically", async () => {
@@ -423,7 +423,10 @@ test("cache selects exact timestamps and oldest pages with live reply counts", a
       ["1.0", "4.0"],
     );
     assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
-    await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
+    assert.deepEqual(
+      (await cache.readMessages(container, { timestamps: [...Array(600).fill("missing"), "1.0"] })).map((m) => m.ts),
+      ["1.0"],
+    );
     const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
     assert.equal(oldest?.ts, "1.0");
     assert.equal(oldest?.replyCount, 1);
