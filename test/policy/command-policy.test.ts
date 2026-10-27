@@ -343,6 +343,9 @@ test("literal stdin executed by a shell and simple command variables stay inside
   for (const command of [
     `printf 'rm -rf /tmp/x\\n' | bash`,
     `printf 'rm %s\\n' '-rf /tmp/x' | bash -`,
+    `printf '%s ' rm -rf /tmp/x | bash`,
+    `printf '%-4s%.3s %s' rm -rfv /tmp/x | bash`,
+    `printf '%*s -rf /tmp/x' 3 rm | bash`,
     `echo 'rm -rf /tmp/x' | env bash /dev/stdin`,
     `printf '%s\\n' 'rm -rf /tmp/x' | sudo sh /proc/self/fd/0`,
     `command printf 'rm -rf /tmp/x\\n' | bash`,
@@ -850,6 +853,29 @@ test("a grant for one gated command never covers a different gated command in th
   const denied = evaluateCommand("rm -rf tmp && mkfs.ext4 /dev/sda", p);
   assert.equal(denied.decision, "deny");
   assert.equal(denied.approvalKey, "builtin:mkfs-or-fork-bomb");
+});
+
+test("destructive SQL is read from SQL tokens, not from quoted text or comments", () => {
+  const p = defaultOrgPolicy();
+  for (const cmd of [
+    `psql -c "INSERT INTO notes VALUES ('drop table users')"`,
+    `psql -c "SELECT 1 -- drop table users"`,
+    `psql -c "SELECT 1 /* truncate table users */"`,
+    `psql -c 'SELECT "drop" FROM "table"'`,
+    `mysql -e "SELECT TRUNCATE(1.5, 0)"`,
+    `psql -c "SELECT E'it\\'s drop table'"`,
+  ]) {
+    assert.equal(evaluateCommand(cmd, p).decision, "allow", `false positive on: ${cmd}`);
+  }
+  for (const cmd of [
+    'psql -c "TRUNCATE events"',
+    'psql -c "truncate only events, logs"',
+    'psql -c "DROP TABLE IF EXISTS users"',
+    `psql -c 'DO $$ BEGIN DROP TABLE t; END $$'`,
+    `psql -c 'DO $body$ BEGIN TRUNCATE t; END $body$'`,
+  ]) {
+    assert.equal(evaluateCommand(cmd, p).reason, "destructive SQL", `expected gate on: ${cmd}`);
+  }
 });
 
 test("SQL client payloads survive option clusters and embedded newlines", () => {

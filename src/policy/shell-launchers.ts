@@ -320,13 +320,60 @@ export function producerOutput(inner: string[]): { output: string; leftover: str
   }
   if (executable !== "printf" || args.length === 0) return undefined;
   const [format, ...values] = args;
-  let valueIndex = 0;
-  const output = decodeAnsiC(format!).replace(/%([%sb])/g, (_match, conversion: string) => {
-    if (conversion === "%") return "%";
-    const value = values[valueIndex++] ?? "";
-    return conversion === "b" ? decodeAnsiC(value) : value;
-  });
-  return { output, leftover: [...values.slice(valueIndex), args.join(" ")] };
+  const { output, consumed } = printfOutput(decodeAnsiC(format!), values);
+  return { output, leftover: [...values.slice(consumed), args.join(" ")] };
+}
+
+const PRINTF_FLAGS = "-+ #0";
+const isDigit = (ch: string): boolean => ch >= "0" && ch <= "9";
+
+function printfPass(format: string, values: readonly string[], from: number): { text: string; next: number } {
+  let text = "";
+  let next = from;
+  const take = () => values[next++] ?? "";
+  const count = (at: number): { value: number | undefined; end: number } => {
+    if (format.charAt(at) === "*") return { value: Number.parseInt(take(), 10) || 0, end: at + 1 };
+    let end = at;
+    while (isDigit(format.charAt(end))) end += 1;
+    return { value: end > at ? Number(format.slice(at, end)) : undefined, end };
+  };
+  let i = 0;
+  while (i < format.length) {
+    const percent = format.indexOf("%", i);
+    if (percent < 0 || percent === format.length - 1) {
+      text += format.slice(i);
+      break;
+    }
+    text += format.slice(i, percent);
+    let at = percent + 1;
+    while (PRINTF_FLAGS.includes(format.charAt(at)) && at < format.length) at += 1;
+    const leftAligned = format.slice(percent + 1, at).includes("-");
+    const width = count(at);
+    const precision = format.charAt(width.end) === "." ? count(width.end + 1) : { value: undefined, end: width.end };
+    const conversion = format.charAt(precision.end);
+    i = precision.end + 1;
+    if (conversion === "%") {
+      text += "%";
+      continue;
+    }
+    const raw = take();
+    let value: string = conversion === "b" ? decodeAnsiC(raw) : conversion === "c" ? raw.charAt(0) : raw;
+    if (precision.value !== undefined && "sbq".includes(conversion)) value = value.slice(0, precision.value);
+    const separated = (width.value ?? 0) > value.length ? " " : "";
+    text += leftAligned ? value + separated : separated + value;
+  }
+  return { text, next };
+}
+
+function printfOutput(format: string, values: readonly string[]): { output: string; consumed: number } {
+  let { text: output, next } = printfPass(format, values, 0);
+  while (next > 0 && next < values.length) {
+    const pass = printfPass(format, values, next);
+    if (pass.next === next) break;
+    output += pass.text;
+    next = pass.next;
+  }
+  return { output, consumed: next };
 }
 
 export function decodeAnsiC(value: string): string {
