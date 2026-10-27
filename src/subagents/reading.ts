@@ -3,6 +3,7 @@ import { sleep } from "../util/async.ts";
 import { isReply, proseText } from "../sessions/items.ts";
 import type { Item } from "../sessions/items.ts";
 import type { Session } from "../types.ts";
+import { contextSummary } from "../sessions/session-store.ts";
 import { itemVisibleToAll, assertAudienceCompatible } from "./audience.ts";
 import type { SessionReadInput, SessionChildSummary, SessionReadResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
@@ -28,28 +29,26 @@ async function* newestFirst(ctx: TurnContext, target: Session): AsyncGenerator<I
   }
 }
 
-const LAST_SAID_PAGE = 40;
+function stoppedNote(stop: Item, before: Item | undefined): string {
+  const partial = before && isReply(before) ? itemText(before) : "";
+  const reason = stop.body.reason;
+  return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
+}
 
 async function lastAssistantText(ctx: TurnContext, child: Session): Promise<string | undefined> {
   let newer: Item | undefined;
-  let beforeSeq: number | undefined;
-  for (;;) {
-    const page = await ctx.visibleHistory(child, LAST_SAID_PAGE, beforeSeq);
-    if (!page.length) return undefined;
+  for await (const page of newestFirst(ctx, child)) {
     for (let i = page.length - 1; i >= 0; i--) {
       const e = page[i]!;
-      if (newer?.kind === "Stop") {
-        const partial = isReply(e) ? itemText(e) : "";
-        const reason = newer.body.reason;
-        return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
-      }
+      if (newer?.kind === "Stop") return stoppedNote(newer, e);
+      if (contextSummary(e)) return undefined;
       newer = e;
       if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
       const text = itemText(e);
       if (text) return text;
     }
-    beforeSeq = page[0]!.seq;
   }
+  return newer?.kind === "Stop" ? stoppedNote(newer, undefined) : undefined;
 }
 
 async function readableLines(ctx: TurnContext, target: Session, limit: number, maxChars: number): Promise<string[]> {
