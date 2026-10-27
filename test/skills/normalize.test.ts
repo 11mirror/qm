@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSkill, isOrgEligibleScope, type NormalizedSkill } from "../src/skills/normalize.ts";
+import { normalizeSkill, isOrgEligibleScope, type NormalizedSkill } from "../../src/skills/normalize.ts";
 
 const ok = (r: ReturnType<typeof normalizeSkill>): NormalizedSkill => {
   assert.ok(!("skip" in r), "expected a normalized skill, got skip");

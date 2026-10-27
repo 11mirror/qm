@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFrontmatter, parseSeedSkillFrontmatter } from "../src/skills/frontmatter.ts";
+import { parseFrontmatter, parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
 
 test("parses plain and quoted scalars", () => {
   const { attrs, body } = parseFrontmatter(`---

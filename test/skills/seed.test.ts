@@ -1,20 +1,30 @@
-import "./support/auto-fake-sprites.ts";
-
-import { test } from "node:test";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+  existsSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
-import { materializeSkillTree } from "../src/skills/materialize.ts";
-import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { buildApp } from "./support/build-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { test, after } from "node:test";
+import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
+import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import { materializeSkillTree } from "../../src/skills/materialize.ts";
+import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../../src/skills/seed.ts";
+import { createSkillStore, safeSkillFilePath, type Skill } from "../../src/skills/skill-store.ts";
+import { scopeId, type TurnRequest } from "../../src/types.ts";
+import { buildApp } from "../support/build-app.ts";
+import { selectDefaultSandbox } from "../support/default-sandbox.ts";
+import { testConfig } from "../support/test-config.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 test("seed skill parser reads the repo frontmatter subset", () => {
   const manifest = parseSeedSkill(`---
@@ -83,7 +93,7 @@ test("every licence shipped with a seed skill is MIT, and no tracked source carr
 
   const tracked = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
   const offenders = tracked.filter((path) => {
-    if (path.endsWith("package-lock.json") || path === "test/skills-seed.test.ts") return false;
+    if (path.endsWith("package-lock.json") || path === "test/skills/seed.test.ts") return false;
     let text: string;
     try {
       text = readFileSync(path, "utf8");
@@ -319,4 +329,155 @@ test("installSeedSkills re-seeds when only a bundled asset changes", async () =>
   assert.deepEqual(rerun, { installed: [], updated: ["tooled"], skipped: [] });
   const tooled = (await skills.list()).find((s) => s.manifest.name === "tooled")!;
   assert.equal(tooled.manifest.files?.find((f) => f.path === "scripts/hello.py")?.content, "v2\n");
+});
+
+const SEED_DIR = join(process.cwd(), "skills-seed");
+
+function seedSkillFiles(): string[] {
+  if (!existsSync(SEED_DIR)) return [];
+  return readdirSync(SEED_DIR)
+    .map((entry) => join(SEED_DIR, entry, "SKILL.md"))
+    .filter((p) => existsSync(p) && statSync(p).isFile());
+}
+
+test("every seed SKILL.md parses with a name, description, and body", () => {
+  const files = seedSkillFiles();
+  assert.ok(files.length > 0, `expected at least one seed SKILL.md under ${SEED_DIR}`);
+  for (const path of files) {
+    const m = parseSeedSkill(readFileSync(path, "utf8"));
+    assert.ok(m.name && m.description && m.body.trim(), `${path} is missing a required field`);
+  }
+});
+
+test("admin and cloud skills distinguish system administration from resource ownership", () => {
+  for (const name of ["admin", "cloud-cli"]) {
+    const { body } = parseSeedSkill(readFileSync(join(SEED_DIR, name, "SKILL.md"), "utf8"));
+    assert.match(body, /including resources owned by other users/);
+    assert.match(body, /credential grants, provider permissions, explicit restrictions, and mutation approvals/);
+    assert.match(body, /not impersonation or circumvention/);
+  }
+});
+
+const URL = process.env.DATABASE_URL;
+const factory = URL ? createPostgresMapFactory(URL) : null;
+let tableSequence = 0;
+after(async () => {
+  await factory?.pool.close();
+});
+
+const shared = async (): Promise<{ backing: DurableMap<Skill>; lock: () => AdvisoryLock }> => {
+  if (!factory) {
+    const lock = testAdvisoryLock();
+    return { backing: testMap<Skill>(), lock: () => lock };
+  }
+  const table = `xsrv_skills_${process.pid}_${++tableSequence}`;
+  await factory.pool.query(`DROP TABLE IF EXISTS ${table}`);
+  return { backing: factory.map<Skill>(table), lock: () => createPostgresAdvisoryLock(factory.pool) };
+};
+
+const slowReads = (map: DurableMap<Skill>): DurableMap<Skill> => ({
+  ...map,
+  async all() {
+    const rows = await map.all();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return rows;
+  },
+});
+
+test("two servers seeding the same catalog at boot install each skill once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "seed-xsrv-"));
+  mkdirSync(join(dir, "hello"));
+  writeFileSync(join(dir, "hello", "SKILL.md"), "---\nname: hello\ndescription: Say hello.\n---\nSay hello.\n");
+  const { backing, lock } = await shared();
+  const left = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
+  const right = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
+  const org = scopeId("org", "default-org");
+
+  const seedModule = "../../src/skills/seed.ts";
+  type Seed = typeof import("../../src/skills/seed.ts");
+  const leftServer = (await import(`${seedModule}?server=left`)) as Seed;
+  const rightServer = (await import(`${seedModule}?server=right`)) as Seed;
+  await Promise.all([
+    leftServer.installSeedSkills(left, { dir, scopeId: org }),
+    rightServer.installSeedSkills(right, { dir, scopeId: org }),
+  ]);
+
+  const rows = (await backing.all()).filter((s) => s.manifest.name === "hello");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "published");
+});
+
+test("an admin archive racing another server's changed seed update leaves the skill archived", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "seed-archive-xsrv-"));
+  const { backing, lock } = await shared();
+  const copied: DurableMap<Skill> = {
+    ...backing,
+    get: async (id) => structuredClone(await backing.get(id)),
+    all: async () => structuredClone(await backing.all()),
+    put: (id, skill) => backing.put(id, structuredClone(skill)),
+  };
+  const seedWriting = Promise.withResolvers<void>();
+  const releaseSeed = Promise.withResolvers<void>();
+  const archiveLockEntered = Promise.withResolvers<void>();
+  const archiveLock = lock();
+  const left = createSkillStore({
+    backing: {
+      ...copied,
+      async put(id, skill) {
+        if (skill.status === "draft" && skill.manifest.body === "Updated instructions.\n") {
+          seedWriting.resolve();
+          await releaseSeed.promise;
+        }
+        await copied.put(id, skill);
+      },
+    },
+    advisoryLock: lock(),
+  });
+  const right = createSkillStore({
+    backing: copied,
+    advisoryLock: {
+      ...archiveLock,
+      withLock(key, fn) {
+        archiveLockEntered.resolve();
+        return archiveLock.withLock(key, fn);
+      },
+    },
+  });
+  const org = scopeId("org", "default-org");
+  const options = { dir, scopeId: org, respectArchived: true };
+  const pending: Promise<unknown>[] = [];
+  try {
+    mkdirSync(join(dir, "hello"));
+    const path = join(dir, "hello", "SKILL.md");
+    writeFileSync(path, "---\nname: hello\ndescription: Say hello.\n---\nOriginal instructions.\n");
+    await installSeedSkills(left, options);
+    const original = (await right.resolve("hello", [org])).skill!;
+    assert.ok(original);
+    writeFileSync(path, "---\nname: hello\ndescription: Say hello.\n---\nUpdated instructions.\n");
+
+    const seeding = installSeedSkills(left, options);
+    pending.push(seeding);
+    await Promise.race([
+      seedWriting.promise,
+      seeding.then(() => assert.fail("the changed seed did not reach the write barrier")),
+    ]);
+    const archiving = right.archive(original.id);
+    pending.push(archiving);
+    await Promise.race([archiving, archiveLockEntered.promise]);
+    releaseSeed.resolve();
+    await Promise.all([seeding, archiving]);
+
+    const rows = await backing.all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.id, original.id);
+    assert.equal(rows[0]!.status, "archived");
+    assert.equal(rows[0]!.manifest.body, "Updated instructions.\n");
+    assert.equal(rows[0]!.version, original.version + 1);
+    assert.equal((await left.resolve("hello", [org])).skill, null);
+    assert.equal((await right.resolve("hello", [org])).skill, null);
+  } finally {
+    releaseSeed.resolve();
+    await Promise.allSettled(pending);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

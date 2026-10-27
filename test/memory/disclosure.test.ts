@@ -1,12 +1,12 @@
-import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
-import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
+import { createSemanticMemoryService } from "../../src/memory/semantic-recall.ts";
+import { createCurrentScopeMembers } from "../../src/resolution/scope-membership.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
-import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
-import type { MemoryService } from "../src/memory/memory-service.ts";
-import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../../src/memory/disclosure.ts";
+import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../../src/memory/facts.ts";
+import type { MemoryService } from "../../src/memory/memory-service.ts";
+import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };

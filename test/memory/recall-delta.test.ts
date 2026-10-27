@@ -1,9 +1,9 @@
-import { compactTranscript } from "../src/harness/context-compaction.ts";
+import { compactTranscript } from "../../src/harness/context-compaction.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
-import { renderFacts, type MemoryFact } from "../src/memory/facts.ts";
-import { storedItem, type Item } from "../src/sessions/items.ts";
+import { memoryRecallDelta, shownFacts } from "../../src/memory/recall-delta.ts";
+import { renderFacts, type MemoryFact } from "../../src/memory/facts.ts";
+import { storedItem, type Item } from "../../src/sessions/items.ts";
 
 const alice = "personal:alice";
 const memoryFact = (id: string, text: string): MemoryFact => ({

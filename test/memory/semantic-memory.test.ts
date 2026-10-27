@@ -1,19 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSemanticMemory } from "../src/memory/semantic-memory.ts";
-import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createSweeper } from "../src/util/sweeper.ts";
-import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createSemanticMemoryService, memoryRecallQuery } from "../src/memory/semantic-recall.ts";
-import { createMemoryEmbedder, unitVector, type MemoryEmbedder } from "../src/model/embeddings.ts";
-import { recallAcrossScopes, renderRecall } from "../src/memory/cross-scope.ts";
-import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
+import { createSemanticMemory } from "../../src/memory/semantic-memory.ts";
+import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
+import { createSweeper } from "../../src/util/sweeper.ts";
+import { scoredMemoryIndex } from "../support/scored-memory-index.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { createSemanticMemoryService, memoryRecallQuery } from "../../src/memory/semantic-recall.ts";
+import { createMemoryEmbedder, unitVector, type MemoryEmbedder } from "../../src/model/embeddings.ts";
+import { recallAcrossScopes, renderRecall } from "../../src/memory/cross-scope.ts";
+import type { MemoryRecallContext, MemoryService } from "../../src/memory/memory-service.ts";
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
   (await recallAcrossScopes(memory, [scope], context)).map((fact) => fact.text).join("\n");
-import { storedItem } from "../src/sessions/items.ts";
+import { storedItem } from "../../src/sessions/items.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 

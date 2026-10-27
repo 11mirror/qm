@@ -4,8 +4,8 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createGitFetcher, resolvePackAuth } from "../src/skills/pack-fetcher.ts";
-import type { SkillPack } from "../src/skills/skill-pack-store.ts";
+import { createGitFetcher, resolvePackAuth } from "../../src/skills/pack-fetcher.ts";
+import type { SkillPack } from "../../src/skills/skill-pack-store.ts";
 
 function makeSourceRepo(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-src-fixture-"));

@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planIngest, importPack, type FetchedRepo } from "../src/skills/ingest.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
-import { createSkillPackStore } from "../src/skills/skill-pack-store.ts";
-import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { planIngest, importPack, type FetchedRepo } from "../../src/skills/ingest.ts";
+import { createSkillStore } from "../../src/skills/skill-store.ts";
+import { createSkillPackStore } from "../../src/skills/skill-pack-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 const md = (front: string, body = "# Body\ntext") => `---\n${front}\n---\n${body}`;
 

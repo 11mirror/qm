@@ -1,20 +1,20 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
-import type { Config } from "../src/config.ts";
-import type { TurnRequest } from "../src/types.ts";
-import { scopeId } from "../src/types.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { MemoryFactsMissing } from "../src/memory/facts.ts";
-import { testConfig } from "./support/test-config.ts";
-import { recallText } from "./support/recall-text.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { buildApp } from "../support/build-app.ts";
+import type { Config } from "../../src/config.ts";
+import type { TurnRequest } from "../../src/types.ts";
+import { scopeId } from "../../src/types.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { MemoryFactsMissing } from "../../src/memory/facts.ts";
+import { testConfig } from "../support/test-config.ts";
+import { recallText } from "../support/recall-text.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));

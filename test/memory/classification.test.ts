@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifiedMemory } from "../src/memory/classification.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPerTurnStrategy, type PendingCapture } from "../src/memory/strategies/per-turn.ts";
-import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { classifiedMemory } from "../../src/memory/classification.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { createPerTurnStrategy, type PendingCapture } from "../../src/memory/strategies/per-turn.ts";
+import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../../src/memory/facts.ts";
+import { testDatabaseUrl, testMap } from "../support/test-database.ts";
 
 const perTurn = (deps: Parameters<typeof createPerTurnStrategy>[0]) =>
   createPerTurnStrategy({ ...deps, memory: classifiedMemory(deps.memory, deps.harness) });

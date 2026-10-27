@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
-import { scopeId } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { createSkillPackStore, type NewSkillPack } from "../../src/skills/skill-pack-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { testMap } from "../support/test-database.ts";
 
 const base: NewSkillPack = {
   kind: "git",

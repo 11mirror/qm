@@ -5,7 +5,7 @@ import {
   persistedSkillRecordPaths,
   detectPathCollisions,
   SkillPackCollisionError,
-} from "../src/skills/skill-collision.ts";
+} from "../../src/skills/skill-collision.ts";
 
 test("skillRecordPaths mirrors materialize's validated skills/<name>/ layout", () => {
   assert.deepEqual(

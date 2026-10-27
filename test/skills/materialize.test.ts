@@ -1,17 +1,17 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { parseSeedSkill } from "../src/skills/seed.ts";
+import { parseSeedSkill } from "../../src/skills/seed.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../src/sandbox/sandbox.ts";
-import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
+import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import type { SkillFile, SkillResolution } from "../../src/skills/skill-store.ts";
 import {
   materializeSkillTree,
   rankedSkills,
   renderSkillBody,
   safeSkillDirName,
   skillsIndex,
-} from "../src/skills/materialize.ts";
-import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
+} from "../../src/skills/materialize.ts";
+import { computeBundleHash, type SkillBundle } from "../../src/skills/skill-bundle-store.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 const root = ".agent-turn/t1/skills";
@@ -211,10 +211,10 @@ test("an index over budget shortens descriptions, then drops them, then leaves t
 });
 
 test("the bundled skills fit the default index budget with full descriptions", () => {
-  const entries = readdirSync(new URL("../skills-seed/", import.meta.url), { withFileTypes: true })
+  const entries = readdirSync(new URL("../../skills-seed/", import.meta.url), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) => {
-      const path = new URL(`../skills-seed/${entry.name}/SKILL.md`, import.meta.url);
+      const path = new URL(`../../skills-seed/${entry.name}/SKILL.md`, import.meta.url);
       try {
         const manifest = parseSeedSkill(readFileSync(path, "utf8"));
         const result = res(manifest.name, manifest.body);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { memoryRecallLabels } from "../src/memory/recall-labels.ts";
+import { memoryRecallLabels } from "../../src/memory/recall-labels.ts";
 
 const project = "group:web-project-example";
 

@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createPerTurnStrategy } from "../../src/memory/strategies/per-turn.ts";
+import { createMockHarness } from "../support/mock-harness.ts";
 import {
   floorFailures,
   formatTable,
@@ -15,11 +15,11 @@ import {
   summarize,
   type BenchConversation,
   type BenchResult,
-} from "../src/memory/bench.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+} from "../../src/memory/bench.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
-const FIXTURE_DIR = fileURLToPath(new URL("./memory-bench/conversations/", import.meta.url));
+const FIXTURE_DIR = fileURLToPath(new URL("../memory-bench/conversations/", import.meta.url));
 
 test("every bench fixture parses and has at least two turns", () => {
   const files = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith(".json"));

@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
-import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { scoredMemoryIndex } from "../support/scored-memory-index.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { createSemanticMemoryService } from "../../src/memory/semantic-recall.ts";
+import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../../src/memory/cross-scope.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 
