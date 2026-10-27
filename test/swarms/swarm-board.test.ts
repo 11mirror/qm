@@ -5,6 +5,8 @@ import { createPostgresSwarmBoard } from "../../src/swarms/swarm-board.ts";
 import { swarmCall, type SwarmCallContext, type SwarmInput, type SwarmMemberOpen } from "../../src/swarms/swarm.ts";
 import type { SessionMailbox, SessionMessage } from "../../src/sessions/session-mailbox.ts";
 import type { Session } from "../../src/types.ts";
+import type { Run } from "../../src/runs/run-store.ts";
+import { createSwarmNoticeSweep } from "../../src/swarms/swarm-notices.ts";
 import pg from "pg";
 
 const URL = process.env.DATABASE_URL!;
@@ -133,8 +135,14 @@ test("members post, reply, search and read threads; subscribers are told about n
   assert.equal(missing.ok, false);
 });
 
-test("a post whose notices failed is redelivered on a later board action", async () => {
-  const w = world();
+async function ageBoardPost(id: string, ms: number): Promise<void> {
+  const client = new pg.Client({ connectionString: URL });
+  await client.connect();
+  await client.query("UPDATE swarm_board_posts SET created_at = created_at - $2 WHERE id = $1", [id, ms]);
+  await client.end();
+}
+
+const strandedPost = async (w: ReturnType<typeof world>) => {
   const coordinator = w.add("Coordinator");
   await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });
   const [a] = [...w.sessions.values()].filter((s) => s.parentSessionId === coordinator.id);
@@ -144,21 +152,66 @@ test("a post whose notices failed is redelivered on a later board action", async
   assert.equal(posted.notified, 0);
   assert.match(String(posted.notifyError), /mailbox unavailable/);
   w.mailboxDown.value = false;
-  await w.call(a!, { action: "channels" });
-  assert.equal(w.sent.length, 0, "a fresh post is left to its own delivery for the grace period");
-  const client = new pg.Client({ connectionString: URL });
-  await client.connect();
-  await client.query("UPDATE swarm_board_posts SET created_at = created_at - 120000 WHERE id = $1", [
-    (posted.post as { id: string }).id,
-  ]);
-  await client.end();
-  await w.call(a!, { action: "channels" });
+  return { coordinator, a: a!, postId: (posted.post as { id: string }).id };
+};
+
+const sweepFor = (w: ReturnType<typeof world>, author: Session) =>
+  createSwarmNoticeSweep({
+    board: w.board,
+    mailbox: w.ctx(author).mailbox,
+    sessions: { get: async (id: string) => w.sessions.get(id) ?? null },
+    runs: { latestForThread: async () => null },
+  });
+
+test("a post whose notices failed is redelivered by the background sweep from the author's own context", async () => {
+  const w = world();
+  const { coordinator, a, postId } = await strandedPost(w);
+  a.spawnMeta = { surface: "web", actor, conversation: { audience: [] } } as unknown as Session["spawnMeta"];
+  const sweep = sweepFor(w, a);
+  await w.call(a, { action: "channels" });
+  assert.equal(w.sent.length, 0, "board actions no longer carry redelivery");
+  assert.equal(await sweep.sweep(), 0, "a fresh post is left to its own delivery for the grace period");
+  await ageBoardPost(postId, 120_000);
+  assert.equal(await sweep.sweep(), 1);
   assert.deepEqual(
-    w.sent.map((m) => [m.recipientId, m.senderId]),
-    [[coordinator.id, a!.id]],
+    w.sent.map((m) => [m.recipientId, m.senderId, m.actor.id]),
+    [[coordinator.id, a.id, actor.id]],
   );
-  await w.call(a!, { action: "channels" });
-  assert.equal(w.sent.length, 1, "a delivered post is not sent again");
+  assert.equal(await sweep.sweep(), 0, "a delivered post is not sent again");
+  assert.equal(w.sent.length, 1);
+});
+
+test("the sweep prefers the author's latest run context and drops notices nobody can carry", async () => {
+  const w = world();
+  const { coordinator, a, postId } = await strandedPost(w);
+  await ageBoardPost(postId, 120_000);
+  const orphan = sweepFor(w, a);
+  assert.equal(await orphan.sweep(), 0, "an author with no context left is not notified from");
+  assert.equal(w.sent.length, 0);
+  assert.equal(await orphan.sweep(), 0, "the orphaned post is not re-examined every sweep");
+
+  const { postId: second } = await (async () => {
+    w.mailboxDown.value = true;
+    const posted = await w.call(a, { action: "post", text: "stranded again" });
+    w.mailboxDown.value = false;
+    return { postId: (posted.post as { id: string }).id };
+  })();
+  await ageBoardPost(second, 120_000);
+  const latestActor = { id: "bob@example.com" } as SwarmCallContext["actor"];
+  const sweep = createSwarmNoticeSweep({
+    board: w.board,
+    mailbox: w.ctx(a).mailbox,
+    sessions: { get: async (id: string) => w.sessions.get(id) ?? null },
+    runs: {
+      latestForThread: async () =>
+        ({ request: { actor: latestActor, conversation: { audience: [latestActor] } } }) as unknown as Run,
+    },
+  });
+  assert.equal(await sweep.sweep(), 1);
+  assert.deepEqual(
+    w.sent.map((m) => [m.recipientId, m.actor.id, m.audience.map((p) => p.id)]),
+    [[coordinator.id, latestActor.id, [latestActor.id]]],
+  );
 });
 
 test("start opens members concurrently and keeps their order", async () => {

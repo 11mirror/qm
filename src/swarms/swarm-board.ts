@@ -35,7 +35,7 @@ export interface SwarmBoard {
   thread(swarmId: string, rootId: string, after: number | undefined, limit: number): Promise<SwarmBoardPost[]>;
   post(swarmId: string, id: string): Promise<SwarmBoardPost | null>;
   insert(post: SwarmBoardPost): Promise<void>;
-  unnotified(swarmId: string, before: number): Promise<SwarmBoardPost[]>;
+  stranded(after: { createdAt: number; id: string }, before: number, limit: number): Promise<SwarmBoardPost[]>;
   markNotified(swarmId: string, id: string): Promise<void>;
   subscribe(swarmId: string, memberId: string, channel: string): Promise<void>;
   unsubscribe(swarmId: string, memberId: string, channel: string): Promise<boolean>;
@@ -178,11 +178,12 @@ export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
         [post.id, post.swarmId, post.channel, post.threadId, post.authorId, post.authorName, post.body, post.createdAt],
       );
     },
-    async unnotified(swarmId, before) {
+    async stranded(after, before, limit) {
       const rows = await pg.q(
         `SELECT ${POST_COLUMNS} FROM swarm_board_posts
-          WHERE swarm_id = $1 AND notify_pending AND created_at < $2 ORDER BY created_at LIMIT 50`,
-        [swarmId, before],
+          WHERE notify_pending AND created_at < $1 AND (created_at > $2 OR (created_at = $2 AND id > $3))
+          ORDER BY created_at, id LIMIT $4`,
+        [before, after.createdAt, after.id, limit],
       );
       return rows.map(toPost);
     },
