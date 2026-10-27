@@ -39,6 +39,11 @@ function sampleRows(spec: TableSpec, dropKeys: readonly string[]) {
 async function seedMap(pool: pg.Pool, table: string, seeds: readonly Seed[]) {
   await pool.query(`DROP TABLE IF EXISTS ${table} CASCADE`);
   await pool.query(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
+  await pool.query(`CREATE INDEX ${table}_ownerscopeid_fold ON ${table} USING hash (lower(json->>'ownerScopeId'))`);
+  await pool.query(
+    `CREATE INDEX ${table}_ownerscopeid_unicode ON ${table} (id) WHERE json->>'ownerScopeId' ~ '[^\\x01-\\x7f]'`,
+  );
+  await pool.query(`CREATE STATISTICS ${table}_ownerscopeid_stats ON (json->>'ownerScopeId') FROM ${table}`);
   await pool.query(`CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`);
   if (seeds[0]![0]) await applyTenancy(pool);
   for (const [tenant, rows] of seeds) {
