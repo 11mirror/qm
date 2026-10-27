@@ -1001,7 +1001,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   await crons.setEnabled(cron.id, false);
   assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
   delete sandbox.profile.spec;
-  crons.list = async () => {
+  crons.byOwner = async () => {
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");

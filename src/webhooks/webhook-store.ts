@@ -36,6 +36,7 @@ export interface WebhookStore {
   create(input: CreateWebhookInput): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
   list(): Promise<Webhook[]>;
+  byOwner(scopeId: string): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   update(id: string, patch: { action: string }): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
@@ -91,6 +92,7 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    byOwner: (scopeId) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [scopeId] } }),
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
     },

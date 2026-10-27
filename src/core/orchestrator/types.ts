@@ -186,7 +186,6 @@ export interface OrchestratorDeps {
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
-  scratchExec?: boolean;
   featureFlags?: FeatureFlagStore;
   installSharedCanvas?: (
     actorId: string,

@@ -52,28 +52,19 @@ export function headLooksLikeText(head: Buffer): boolean {
   return suspicious / head.length < 0.1;
 }
 
-const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
-  dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
-  "google-drive-sheets": "google",
-  "google-workspace": "google",
-  linear: "linear",
-  "morning-digest": "x",
-  "slack-drafts": "slack",
-  x: "x",
-  zoom: "zoom",
-};
+const CONNECTOR_CAPABILITY = "connector:";
 
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
 ): SkillResolution[] {
   const available = new Set(availableProviders);
-  return resolved.filter((entry) => {
-    const provider = entry.skill ? CONNECTOR_SKILL_PROVIDERS[entry.skill.manifest.name] : undefined;
-    return !provider || available.has(provider);
-  });
+  return resolved.filter((entry) =>
+    (entry.skill?.manifest.requiredCapabilities ?? []).every(
+      (capability) =>
+        !capability.startsWith(CONNECTOR_CAPABILITY) || available.has(capability.slice(CONNECTOR_CAPABILITY.length)),
+    ),
+  );
 }
 
 export async function loadActiveBundles(store: SkillBundleStore, resolved: SkillResolution[]): Promise<SkillBundle[]> {
@@ -146,17 +137,38 @@ function principalAssertion(p: Principal): ActorAssertion {
 }
 
 export function replayableRequest(input: OrchestratorInput): TurnRequest {
-  const c = input.conversation;
+  const {
+    modelAccount: _modelAccount,
+    surface,
+    privateSessionMessage,
+    sessionMessageDepth,
+    actor,
+    conversation: c,
+    origin,
+    runId: _runId,
+    attempt: _attempt,
+    resumeCause: _resumeCause,
+    runLeaseToken: _runLeaseToken,
+    turnFenceToken: _turnFenceToken,
+    runStartedAt: _runStartedAt,
+    finalAttempt: _finalAttempt,
+    background: _background,
+    cancel: _cancel,
+    shutdown: _shutdown,
+    sessionParticipantIds: _sessionParticipantIds,
+    wakeCause: _wakeCause,
+    trace: _trace,
+    approval: _approval,
+    slackSource: _slackSource,
+    source: _source,
+    ...request
+  } = input;
+  const source = turnSource(input);
   return {
-    surface: input.surface ?? "unknown",
-    ...(turnSource(input) ? { source: turnSource(input) } : {}),
-    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
-    ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
-    ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
-    ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
-    ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),
-    actor: principalAssertion(input.actor),
+    ...request,
+    surface: surface ?? "unknown",
+    ...(source ? { source } : {}),
+    actor: principalAssertion(actor),
     conversation: {
       kind: c.kind,
       threadRef: c.threadRef,
@@ -167,31 +179,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
       ...(c.isMpim !== undefined ? { isMpim: c.isMpim } : {}),
       ...(c.publishMembers ? { publishMembers: c.publishMembers.map(principalAssertion) } : {}),
     },
-    text: input.text,
-    ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
-    ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
-    ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
-    ...turnOriginRequestFields(input.origin),
-    ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
-    ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
-    ...(input.overheard?.length ? { overheard: input.overheard } : {}),
-    ...(input.detectContext ? { detectContext: input.detectContext } : {}),
-    ...(input.detectOpener ? { detectOpener: input.detectOpener } : {}),
-    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-    ...(input.model ? { model: input.model } : {}),
-    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-    ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
-    ...(input.readOnly ? { readOnly: true } : {}),
-    ...(input.privateSessionMessage
-      ? { privateSessionMessage: true as const, sessionMessageDepth: input.sessionMessageDepth }
-      : {}),
-    ...(input.skipMemory ? { skipMemory: true } : {}),
-    ...(input.surfaceTools ? { surfaceTools: true } : {}),
-    ...(input.addressed ? { addressed: true } : {}),
-    ...(input.envelopeWrapped ? { envelopeWrapped: true } : {}),
-    ...(input.displayText ? { displayText: input.displayText } : {}),
-    ...(typeof input.turnWallClockMs === "number" ? { turnWallClockMs: input.turnWallClockMs } : {}),
-    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...turnOriginRequestFields(origin),
+    ...(privateSessionMessage ? { privateSessionMessage: true as const, sessionMessageDepth } : {}),
   };
 }
 
