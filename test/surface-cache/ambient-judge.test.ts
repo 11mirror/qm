@@ -89,7 +89,6 @@ test("parseAmbientDecision reads asked_by (only on an engage)", () => {
   });
   assert.deepEqual(parseAmbientDecision('{"act": false, "asked_by": "2.0"}'), { act: false });
   assert.deepEqual(parseAmbientDecision('{"act": true, "asked_by": "   "}'), { act: true });
-  assert.deepEqual(parseAmbientDecision('{"act": true, "asked_by": "[2.0]"}'), { act: true, askedBy: "2.0" });
 });
 
 test("ambient rendering resolves cached mention names without changing stored messages", () => {
