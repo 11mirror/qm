@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { scopeId } from "../src/types.ts";
-import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sandbox-env.ts";
-import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createSpritesSandbox } from "../../src/sandbox/sprites-sandbox.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../../src/sandbox/sandbox-env.ts";
+import { installFakeSprites, type FakeSprites } from "../support/fake-sprites.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 let ff: FakeSprites;
 before(() => {

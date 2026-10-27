@@ -1,4 +1,4 @@
-import { pollProcess } from "../src/sandbox/process-poll.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, after, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -9,20 +9,20 @@ import {
   createModalSandbox,
   modalLegacyRecordMigration,
   type StoredModalSandbox,
-} from "../src/sandbox/modal-sandbox.ts";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
-import { tenant } from "../src/tenant.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
-import { MODAL_CHECKPOINT_RETENTION_MS, type ModalClient } from "../src/sandbox/modal-client.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
-import { testAdvisoryLock, testPgPool } from "./support/test-database.ts";
+} from "../../src/sandbox/modal-sandbox.ts";
+import { createPostgresMap } from "../../src/persistence/durable-map.ts";
+import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { scopeId } from "../../src/types.ts";
+import { tenant } from "../../src/tenant.ts";
+import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
+import { installFakeModal, type FakeModal } from "../support/fake-modal.ts";
+import { MODAL_CHECKPOINT_RETENTION_MS, type ModalClient } from "../../src/sandbox/modal-client.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testPgPool } from "../support/test-database.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;

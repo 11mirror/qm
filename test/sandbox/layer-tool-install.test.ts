@@ -5,8 +5,8 @@ import {
   layerToolContentSha,
   layerToolProbeScript,
   type LayerToolInstallIo,
-} from "../src/sandbox/layer-tool-install.ts";
-import type { LayerInstallFile } from "../src/deployment/load-layer.ts";
+} from "../../src/sandbox/layer-tool-install.ts";
+import type { LayerInstallFile } from "../../src/deployment/load-layer.ts";
 
 const SCRIPT = "#!/usr/bin/env node\nconsole.log('hi');\n";
 const LIB = "export const x = 1;\n";

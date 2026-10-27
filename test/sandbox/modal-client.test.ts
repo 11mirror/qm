@@ -2,9 +2,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
-import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { createE2bSandbox } from "../../src/sandbox/e2b-sandbox.ts";
+import { createModalSandbox } from "../../src/sandbox/modal-sandbox.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -15,16 +15,16 @@ import {
   MODAL_CHECKPOINT_RETENTION_MS,
   MODAL_EXEC_GRACE_MS,
   MODAL_MAX_EXEC_ARG_BYTES,
-} from "../src/sandbox/modal-client.ts";
+} from "../../src/sandbox/modal-client.ts";
 import {
   createSdkE2bClient,
   e2bEgressNetwork,
   E2B_EXEC_MARGIN_MS,
   E2bCommandLostError,
   E2bSandboxGoneError,
-} from "../src/sandbox/e2b-client.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
+} from "../../src/sandbox/e2b-client.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap } from "../support/test-database.ts";
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];

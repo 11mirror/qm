@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeTar, parseTar } from "../src/sandbox/tar.ts";
+import { makeTar, parseTar } from "../../src/sandbox/tar.ts";
 
 async function roundTrip(
   entries: Array<{ path: string; data: Buffer }>,

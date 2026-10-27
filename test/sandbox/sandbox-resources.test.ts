@@ -1,21 +1,25 @@
-import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import { createBackgroundBroker } from "../../src/connectors/background-exec-broker.ts";
+import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
-import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+} from "../../src/sandbox/sandbox-resources.ts";
+import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
   legacySandboxId,
   type LegacyRoute,
   type SandboxResourceUpgradeMarker,
-} from "../src/sandbox/sandbox-resource-upgrade.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import type { BackendSandbox, Sandbox } from "../src/sandbox/sandbox.ts";
-import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+} from "../../src/sandbox/sandbox-resource-upgrade.ts";
+import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
+import type { BackendSandbox, Sandbox } from "../../src/sandbox/sandbox.ts";
+import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "../support/test-database.ts";
 
 const processStubs = {
   async startProcess() {

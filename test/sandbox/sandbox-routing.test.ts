@@ -1,12 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxRouter, NoDefaultSandboxError, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
-import type { SandboxResource, SandboxResources } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createSandboxRouter,
+  NoDefaultSandboxError,
+  type SandboxBackendName,
+} from "../../src/sandbox/sandbox-routing.ts";
+import type { SandboxResource, SandboxResources } from "../../src/sandbox/sandbox-resources.ts";
 import {
   CapabilityUnsupportedError,
   SandboxProvisionCleanupError,
   supportsScopeProfile,
-} from "../src/sandbox/sandbox.ts";
+} from "../../src/sandbox/sandbox.ts";
 import type {
   BackendSandbox,
   Sandbox,
@@ -14,8 +18,8 @@ import type {
   ExecResult,
   AgentComputerProfile,
   ProvisionOptions,
-} from "../src/sandbox/sandbox.ts";
-import type { ScopeId, WorkspaceLayer } from "../src/types.ts";
+} from "../../src/sandbox/sandbox.ts";
+import type { ScopeId, WorkspaceLayer } from "../../src/types.ts";
 
 type Fake = BackendSandbox & {
   calls: string[];

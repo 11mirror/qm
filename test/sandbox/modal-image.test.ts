@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ModalClient } from "modal";
-import { MODAL_DEFAULT_IMAGE, MODAL_DEFAULT_IMAGE_SETUP, resolveModalImage } from "../src/sandbox/modal-image.ts";
+import { MODAL_DEFAULT_IMAGE, MODAL_DEFAULT_IMAGE_SETUP, resolveModalImage } from "../../src/sandbox/modal-image.ts";
 
 function client() {
   const calls: unknown[][] = [];

@@ -6,7 +6,7 @@ import {
   vmFetch,
   AwsApiError,
   type AwsMicrovmApi,
-} from "../src/sandbox/aws-microvm-api.ts";
+} from "../../src/sandbox/aws-microvm-api.ts";
 import { SignatureV4 } from "@smithy/signature-v4";
 import { Sha256 } from "@aws-crypto/sha256-js";
 

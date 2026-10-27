@@ -3,27 +3,27 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pollProcess } from "../src/sandbox/process-poll.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import {
   createManagedAgentsSandbox,
   QM_TEMPLATE_TOOLS,
   type StoredManagedAgentsSandbox,
-} from "../src/sandbox/managed-agents-sandbox.ts";
+} from "../../src/sandbox/managed-agents-sandbox.ts";
 import {
   managedAgentsEgressAllow,
   managedAgentsSessionState,
   ManagedAgentsHitlRejectedError,
-} from "../src/sandbox/managed-agents-client.ts";
-import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { scopeId } from "../src/types.ts";
-import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
-import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { testMap } from "./support/test-database.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
+} from "../../src/sandbox/managed-agents-client.ts";
+import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import { scopeId } from "../../src/types.ts";
+import { prepareExecutionFiles } from "../../src/credentials/execute-files.ts";
+import { installFakeManagedAgents, type FakeManagedAgents } from "../support/fake-managed-agents.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import { testMap } from "../support/test-database.ts";
+import { testAdvisoryLock } from "../support/test-database.ts";
 
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;

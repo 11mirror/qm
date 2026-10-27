@@ -1,22 +1,22 @@
-import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
-import { pollProcess } from "../src/sandbox/process-poll.ts";
+import { SandboxProvisionCleanupError } from "../../src/sandbox/sandbox.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createE2bSandbox, type StoredE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
-import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createE2bSandbox, type StoredE2bSandbox } from "../../src/sandbox/e2b-sandbox.ts";
+import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { supportsBlobStaging, supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
+import { scopeId } from "../../src/types.ts";
+import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
+import { installFakeE2b, type FakeE2b } from "../support/fake-e2b.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -713,7 +713,7 @@ test("failed scratch preparation retains the sandbox when rollback fails", async
       },
     },
   });
-  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  let pending: import("../../src/sandbox/sandbox.ts").SandboxHandle | undefined;
   await assert.rejects(box.provision(layers, { scratch: { key: "failed-preparation" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     pending = error.handle;

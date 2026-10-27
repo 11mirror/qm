@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { killableScript, killScript, pgidMarkerPath } from "../src/sandbox/exec-kill.ts";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
-import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { killableScript, killScript, pgidMarkerPath } from "../../src/sandbox/exec-kill.ts";
+import { createSpritesSandbox } from "../../src/sandbox/sprites-sandbox.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import { scopeId } from "../../src/types.ts";
+import { installFakeSprites, type FakeSprites } from "../support/fake-sprites.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 test("killableScript: records its PGID to the per-exec marker first, runs under setsid, preserves rc", () => {
   const s = killableScript("do_work", "abc");

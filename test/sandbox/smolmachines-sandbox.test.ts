@@ -1,23 +1,23 @@
-import { pollProcess } from "../src/sandbox/process-poll.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
-import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
+import { createSmolmachinesSandbox } from "../../src/sandbox/smolmachines-sandbox.ts";
+import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { scopeId } from "../../src/types.ts";
+import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
 import {
   installFakeSmolmachines,
   FAKE_SMOLMACHINES_TOKEN,
   type FakeSmolmachines,
-} from "./support/fake-smolmachines.ts";
-import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+} from "../support/fake-smolmachines.ts";
+import type { StoredSmolmachinesSandbox } from "../../src/sandbox/smolmachines-sandbox.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;

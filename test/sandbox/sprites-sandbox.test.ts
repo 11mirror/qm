@@ -1,5 +1,5 @@
-import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
-import { pollProcess } from "../src/sandbox/process-poll.ts";
+import { SandboxProvisionCleanupError } from "../../src/sandbox/sandbox.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -11,17 +11,17 @@ import {
   processKeepaliveScript,
   retrySpritesControl,
   spritesErrorDetail,
-} from "../src/sandbox/sprites-sandbox.ts";
-import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { execFailureDetail, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { sleep } from "../src/util/async.ts";
-import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
+} from "../../src/sandbox/sprites-sandbox.ts";
+import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { execFailureDetail, supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
+import { sleep } from "../../src/util/async.ts";
+import { scopeId } from "../../src/types.ts";
+import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
+import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "../support/fake-sprites.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap } from "../support/test-database.ts";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -700,7 +700,7 @@ test("failed scratch initialization and deletion retain a safe retryable identit
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
   let deletes = 0;
   fake.failNext(400, { match: (call) => call.method === "DELETE" && ++deletes === 2 });
-  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  let pending: import("../../src/sandbox/sandbox.ts").SandboxHandle | undefined;
   await assert.rejects(box.provision(layers, { scratch: { key: "failed-rollback" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     pending = error.handle;

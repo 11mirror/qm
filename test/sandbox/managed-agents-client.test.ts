@@ -13,9 +13,12 @@ import {
   ManagedAgentsCommandLostError,
   type ManagedAgentsClient,
   type ManagedAgentsSession,
-} from "../src/sandbox/managed-agents-client.ts";
-import { tunnelUrl, openManagedAgentsTunnel, SANDBOX_AGENT_PORT } from "../src/sandbox/managed-agents-tunnel.ts";
-import { startFakeManagedAgentsService, type FakeManagedAgentsService } from "./support/fake-managed-agents-service.ts";
+} from "../../src/sandbox/managed-agents-client.ts";
+import { tunnelUrl, openManagedAgentsTunnel, SANDBOX_AGENT_PORT } from "../../src/sandbox/managed-agents-tunnel.ts";
+import {
+  startFakeManagedAgentsService,
+  type FakeManagedAgentsService,
+} from "../support/fake-managed-agents-service.ts";
 
 let service: FakeManagedAgentsService;
 let client: ManagedAgentsClient;

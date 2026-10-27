@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createExecFileOps, posixJoin, workspacePathOf } from "../src/sandbox/exec-file-ops.ts";
+import { createExecFileOps, posixJoin, workspacePathOf } from "../../src/sandbox/exec-file-ops.ts";
 
 const exec = promisify(execFile);
 

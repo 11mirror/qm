@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pollProcess } from "../src/sandbox/process-poll.ts";
-import type { ProcessSandbox, ReadProcessResult, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { pollProcess } from "../../src/sandbox/process-poll.ts";
+import type { ProcessSandbox, ReadProcessResult, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace" };
 

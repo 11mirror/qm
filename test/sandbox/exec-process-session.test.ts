@@ -9,8 +9,8 @@ import {
   type ExecProcessIo,
   ProcessSessionGoneError,
   redactCommand,
-} from "../src/sandbox/exec-process-session.ts";
-import type { ExecResult, SandboxHandle } from "../src/sandbox/sandbox.ts";
+} from "../../src/sandbox/exec-process-session.ts";
+import type { ExecResult, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 
 function shellIo(home: string): ExecProcessIo {
   return {
