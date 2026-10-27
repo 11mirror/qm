@@ -1,4 +1,3 @@
-import { nonDeploymentCredential } from "./credentials/deployment-credentials.ts";
 import { type TeamStore } from "./teams/teams.ts";
 import { type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -13,7 +12,6 @@ import {
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
-import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
@@ -40,19 +38,18 @@ import { type ScopedConfigStore } from "./resolution/config-store.ts";
 import { type AclStore } from "./acl/acl-store.ts";
 import { type SkillStore } from "./skills/skill-store.ts";
 import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import { type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { type DurableMap } from "./persistence/durable-map.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
-import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type { CommandApprovalGrant, Session, SurfaceContextRequest, TurnRequest } from "./types.ts";
-import { personalScope, scopeId } from "./types.ts";
+import type { Session, TurnRequest } from "./types.ts";
+import { scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
+import { type BudgetTracker } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { type CronStore } from "./cron/cron-store.ts";
 import { type LedgerEventBus } from "./inbox/events.ts";
@@ -61,14 +58,11 @@ import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
 import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
 import { type Outbound } from "./surfaces/outbound.ts";
-import { wireRunResultPosts } from "./runs/run-results.ts";
-import { adminSessionUrl } from "./util/admin-links.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { type EnvironmentStore } from "./environments/environment-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createCurrentScopeMembers } from "./resolution/scope-membership.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -93,7 +87,6 @@ import {
 import { type SecretDropStore } from "./credentials/secret-drop.ts";
 import { type FeatureFlagStore } from "./feature-flags.ts";
 import { type OAuthClientResolver } from "./connectors/oauth.ts";
-import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { type BrowserSessionStore } from "./connectors/browser-session-store.ts";
 import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
@@ -108,7 +101,6 @@ import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-
 import { type ProviderKeys } from "./harness/pi-model-runtime.ts";
 import type { Harness } from "./harness/harness.ts";
 import { type SecurityScreener } from "./security/security-screener.ts";
-import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { createControlService } from "./api/control-service.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
@@ -117,15 +109,12 @@ import { TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./t
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
 import { repairStaleTurns } from "./turns/turn-engine.ts";
 import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
-import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./harness/agent-tools.ts";
-import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "./connectors/background-exec-broker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createReaper, REAPER_LEASE_KEY, RUN_MAX_AGE_MS, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { type ProcessRegistry } from "./processes/process-registry.ts";
 import {
@@ -140,19 +129,15 @@ import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { type SessionStateBus } from "./runs/session-state-bus.ts";
-import { createApp, type App } from "./api/app.ts";
+import { type App } from "./api/app.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { type SurfaceRegistry } from "./surfaces/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
-import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
-import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
-import { createPostgresChannelPolicyStore, type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
-import {
-  createPostgresAmbientJudgmentStore,
-  type AmbientJudgmentStore,
-} from "./surface-cache/ambient-judgment-store.ts";
-import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
+import { type SurfaceCache } from "./surface-cache/surface-cache.ts";
+import { type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
+import { type AmbientJudgmentStore } from "./surface-cache/ambient-judgment-store.ts";
+import { type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
 import { auxiliaryModelForProvider } from "./model/pi-models.ts";
 import { type AdminService } from "./admin/admin-service.ts";
 import { type ProjectStore } from "./projects/project-store.ts";
@@ -201,6 +186,12 @@ import { registerLegacyMigrations } from "./wiring/legacy-migrations.ts";
 import { buildCrons } from "./wiring/crons.ts";
 
 import { buildSessionSyscalls } from "./wiring/session-syscalls.ts";
+
+import { buildOrchestrator } from "./wiring/orchestrator.ts";
+
+import { buildAppServices } from "./wiring/app-services.ts";
+
+import { buildApiApp } from "./wiring/api-app.ts";
 
 export interface Runtime {
   start(): void;
@@ -615,63 +606,20 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     fallback,
     hydrateModelCatalog,
   });
-  const liveFallback = async (
-    container: string,
-    opts?: { limit?: number },
-  ): Promise<Array<{
-    container: string;
-    ts: string;
-    authorId?: string;
-    authorName?: string;
-    text: string;
-    createdAt: number;
-  }> | null> => {
-    const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
-    const result = await puller.pull("slack", {
-      conversationTarget: container,
-      ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
-    });
-    if (!result) return null;
-    return (result.messages as Array<Record<string, unknown>>).map((m) => ({
-      container,
-      ts: String(m.ts ?? ""),
-      ...(m.authorId ? { authorId: String(m.authorId) } : {}),
-      ...((m.author ?? m.authorName) ? { authorName: String(m.author ?? m.authorName) } : {}),
-      text: String(m.text ?? ""),
-      createdAt: Date.now(),
-    }));
-  };
-  const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
-  const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
-  const orchestratorDeps: OrchestratorDeps = {
-    channelPolicy,
-    surfaceCache,
-    surfaceLabel: chatSurfaces.label,
-    installSharedCanvas: async (actorId, fileId, where) => {
-      const canvas = await installSharedCanvas(uiState, actorId, await late.app.openFileForViewer(fileId, actorId));
-      if (typeof canvas === "string") return canvas;
-      auditLog.record({
-        at: Date.now(),
-        principalId: actorId,
-        action: "ui.canvas.install",
-        resource: `file:${fileId}`,
-        scopeLabel: personalScope(actorId),
-        detail: `rev ${canvas.rev}`,
-      });
-      sessionStateBus.emit({ ...where, participants: [actorId], state: "ui", at: Date.now(), ui: { kind: "canvas" } });
-      return null;
-    },
+  const { orchestrator, surfaceCache, channelPolicy, orchestratorDeps } = buildOrchestrator({
+    databaseUrl,
+    chatSurfaces,
+    uiState,
+    late,
+    auditLog,
     sessionStateBus,
-    externalSlackPolicies: config.externalSlackPolicies,
+    config,
     sessionSyscalls,
     refreshModels,
     identity,
     resolution,
-    config: configStore,
-    defaultTurnWallClockMs: config.turnWallClockMs,
+    configStore,
     userModelCredentials,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessions,
     workspace,
     files,
@@ -680,36 +628,16 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     sandboxResources,
     connectorTokens,
     modelGateway,
-    auditLog,
     rateLimiter,
     budget,
     harness,
     memory,
-    deploy: deployService,
+    deployService,
     acl,
     admin,
-    mcp: mcpToolService,
-    ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
-    execTimeoutMs: EXEC_TIMEOUT_DEFAULT_MS,
-    execTimeoutCeilingMs: EXEC_TIMEOUT_MAX_MS,
-    approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
-    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
-    ...(securityScreener ? { securityScreener } : {}),
-    backgroundJobTtlMs: BACKGROUND_JOB_TTL_MS,
-    backgroundJobTtlMaxMs: BACKGROUND_JOB_TTL_MAX_MS,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(gatewayTransport ? { sandboxModels: true } : {}),
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
-    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
-    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
+    mcpToolService,
+    securityScreener,
+    gatewayTransport,
     memoryStrategy,
     skills,
     skillBundles,
@@ -717,7 +645,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     advisoryLock,
     errors,
     ledger,
-    signals: runSignals,
+    runSignals,
     turnStream,
     runActivity,
     runs,
@@ -726,108 +654,60 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     teams,
     credentialUsage,
     connectorStatusCache,
-    resolveConnectorClient: resolveClient,
+    resolveClient,
     keychain,
     serviceCreds,
     outbound,
     recentDmPosts,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
-    ...(processes ? { processes } : {}),
+    artifactMap,
+    processes,
     monitors,
     crons,
     webhooks,
-    resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
+    orgBaseModelId,
+    fallback,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
-    managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
-    ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
-  };
-  const orchestrator = createOrchestrator(orchestratorDeps);
-
-  const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const recoveryAdminBase = config.publicWebUrl?.replace(/\/$/, "");
-  const recoveryAdminUrlFor = recoveryAdminBase
-    ? (sessionId: string): string | undefined =>
-        uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
-    : undefined;
-  const runResultRecovery = wireRunResultPosts(runs, outbound, {
-    ...(recoveryAdminUrlFor ? { adminUrlFor: recoveryAdminUrlFor } : {}),
+  });
+  const {
+    skillFetcher,
+    engaged,
+    pokeReaper,
+    screenSecurity,
+    ambientJudgments,
+    ackEmojiPicks,
+    providerKeys,
+    runResultRecovery,
+    reaper,
+  } = buildAppServices({
+    config,
+    runs,
+    outbound,
     sessions,
-    postsImmediately: chatSurfaces.receives,
-  });
-  const skillFetcher = createGitFetcher({
-    allowLocalRepos: !config.production,
-    resolveAuth: (pack) =>
-      resolvePackAuth(
-        {
-          serviceCredential: async (slug) => {
-            const record = nonDeploymentCredential(
-              await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
-            );
-            return record && record.delivery !== "env" ? record : undefined;
-          },
-          connectorToken: async (host, principalId) =>
-            (await keychain.connectorAccessToken(host, principalId)) ?? undefined,
-        },
-        pack,
-      ),
-  });
-  const reaper: Reaper = createReaper(runs, sessions, {
-    intervalMs: config.reaperIntervalMs,
+    chatSurfaces,
+    serviceCreds,
+    keychain,
     leaderLease,
-    maxAgeMs: RUN_MAX_AGE_MS,
     errors,
+    databaseUrl,
+    directProviderAvailability,
+    harness,
+    modelGateway,
+    budget,
   });
-  const engaged = createEngagedRegistry();
-  let reapInFlight = false;
-  let lastReapAt = 0;
-  const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
-  const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
-  const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
-  const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
-        harness.models.screenSecurity!({
-          payload,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void budget
-              ?.record(actorId, estimateCostUsd(rec.inputTokens))
-              .catch(swallowAs("budget: record screen spend", undefined));
-          },
-        })
-    : undefined;
-  const app = createApp({
+  const { app } = buildApiApp({
     teams,
-    externalSlackPolicies: config.externalSlackPolicies,
+    config,
     admittedWork,
-    shutdown: () => gates.inlineShutdown.signal,
-    resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
+    gates,
+    pgArtifactMap,
     identity,
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
     runs,
@@ -836,7 +716,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     turnStream,
     runStreamEvents,
     runActivity,
-    signals: runSignals,
+    runSignals,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -845,7 +725,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
-    ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
+    overrides,
     acl,
     admin,
     skills,
@@ -854,52 +734,38 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     skillBundles,
     advisoryLock,
     auditLog,
-    config: configStore,
+    configStore,
     crons,
     webhooks,
     outbound,
     directory,
-    ...(config.emailAuthPrincipals?.length
-      ? {
-          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
-            principalId,
-            displayName: principalId,
-            type: "internal" as const,
-          })),
-        }
-      : {}),
     projects,
     environments,
-    deploy: deployService,
-    deployAppsDomain: config.awsDeploy.appsDomain,
+    deployService,
     deploymentLayer,
-    ...(processes ? { processes } : {}),
+    processes,
     monitors,
     sandbox,
     files,
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    artifactMap,
     contextRequestEvents,
-    contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
+    connectorSecretKey,
     engaged,
-    reaperPoke: pokeReaper,
+    pokeReaper,
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
-      : {}),
-    ...(screenSecurity ? { screenSecurity } : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    harness,
+    screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
-    runtimeFallback: fallback,
+    fallback,
     providerKeys,
-    runWaitMs: config.runWaitMs,
+    late,
   });
-  late.app = app;
   const inboxRealtime = createInboxRealtime({
     crons,
     items: inboxItems,
