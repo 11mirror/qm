@@ -1,5 +1,8 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
+import type { PersistedInstructions, PersistedInstructionsRevision } from "../../src/resolution/config-store.ts";
+import { CONFIG_TABLES } from "../../src/resolution/config-tables.ts";
+import { typedTable } from "../../src/persistence/typed-table.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,10 +14,8 @@ import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 import { signRequest } from "../../src/auth/source-auth.ts";
 import { resolveTurnFastMode } from "../../src/core/turn-options.ts";
-import { CONFIG_TABLES, keyedTable } from "../../src/resolution/config-tables.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";
-import type { PersistedInstructions, PersistedInstructionsRevision } from "../../src/resolution/config-store.ts";
 import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../src/resolution/config-instructions.ts";
 import { scopeId } from "../../src/types.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
@@ -28,8 +29,8 @@ function tables() {
   const db = createPgPool(databaseUrl);
   return {
     open: () => testConfigStore("default-org", { databaseUrl }),
-    instructions: keyedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
-    legacyHistory: keyedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
+    instructions: typedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
+    legacyHistory: typedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
   };
 }
 

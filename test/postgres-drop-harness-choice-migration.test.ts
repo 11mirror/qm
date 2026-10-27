@@ -1,63 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import pg from "pg";
-import { migrate } from "./support/migrations.ts";
+import { CRONS_MIGRATION } from "../src/cron/cron-store.ts";
 import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
-import { tableCodec, type TableSpec } from "../src/persistence/typed-table.ts";
+import { asMapTables, migrate, skip, typedRows, withMigratedDatabase } from "./support/migrated-database.ts";
 
-const databaseUrl = process.env.DATABASE_URL;
-const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
 const JSON_TABLES = [
   "base_model_configs",
   "approved_harness_configs",
   "auto_flagger_configs",
-  "crons",
   "swarms",
   "feature_flags",
 ];
 
-async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `drop_harness_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
-  try {
-    await run(url.toString(), admin);
-  } finally {
-    await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
-  }
-}
-
-const rows = async (pool: pg.Pool, table: string) =>
-  Object.fromEntries(
-    (await pool.query(`SELECT id, json FROM ${table}`)).rows.map((row) => [row.id, row.json]),
-  ) as Record<string, Record<string, unknown>>;
-
-const typedRows = async (pool: pg.Pool, spec: TableSpec) => {
-  const codec = tableCodec<Record<string, unknown>>(spec);
-  const found = await pool.query(`SELECT ${codec.columns} FROM ${spec.table}`);
-  return Object.fromEntries(codec.rows(found.rows).map((row) => [row[spec.key], row]));
-};
-
-const asMapTables = async (pool: pg.Pool, specs: readonly TableSpec[]) => {
-  for (const { table } of specs) {
-    await pool.query(`DROP TABLE ${table}`);
-    await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [`typed/config/${table}/0001`]);
-  }
-};
-
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
-  await withDatabase(async (url, admin) => {
-    await migrate(url);
+  await withMigratedDatabase(async (url, admin) => {
     await admin.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed', 'triggers/crons/0001-typed')",
+      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed')",
     );
-    await admin.query("DROP TABLE feature_flags, crons");
+    await admin.query("DROP TABLE feature_flags");
     await asMapTables(admin, [CONFIG_TABLES.baseModels, CONFIG_TABLES.autoFlaggerConfigs]);
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
@@ -77,16 +37,14 @@ test("stored harness choices are dropped while their runtime selections stay rec
     await insert("base_model_configs", "personal:b", { scopeId: "personal:b", modelId: "legacy-only" });
     await insert("approved_harness_configs", "org:o", { scopeId: "org:o", ids: ["pi", "claude"] });
     await insert("auto_flagger_configs", "org:o", { scopeId: "org:o", harnessId: "claude", modelId: "m", rubric: "r" });
-    const cron = {
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      enabled: true,
-      createdAt: 1,
-      schedule: {},
-    };
-    await insert("crons", "c1", { id: "c1", ...cron, runtime: { harnessId: "claude", modelId: "m" } });
-    await insert("crons", "c2", { id: "c2", ...cron, runtime: null });
+    const cron = (id: string, runtime: unknown) =>
+      admin.query(
+        `INSERT INTO crons (id, owner_scope_id, owner, created_by, enabled, created_at, schedule, runtime)
+         VALUES ($1, 'org:o', 'a', 'a', true, 1, '{}', $2)`,
+        [id, runtime && JSON.stringify(runtime)],
+      );
+    await cron("c1", { harnessId: "claude", modelId: "m" });
+    await cron("c2", null);
     await insert("swarms", "s1", { id: "s1", template: { harness: "claude", model: "m" } });
     await insert("swarms", "s2", { id: "s2", template: { model: "m" } });
     await insert("feature_flags", "swarms", { featureName: "swarms", enabledScopes: [], updatedAt: 1, updatedBy: "a" });
@@ -115,9 +73,9 @@ test("stored harness choices are dropped while their runtime selections stay rec
       modelId: "m",
       rubric: "r",
     });
-    const crons = await rows(admin, "crons");
+    const crons = await typedRows(admin, CRONS_MIGRATION.spec);
     assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
-    assert.equal(crons.c2?.runtime, null);
+    assert.equal(crons.c2?.runtime, undefined);
     assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, "swarms");
     assert.equal((await admin.query("SELECT count(*)::int AS n FROM feature_flags")).rows[0].n, 0);
   });

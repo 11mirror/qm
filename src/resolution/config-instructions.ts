@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ScopeId } from "../types.ts";
 import type { createKeyedQueue } from "../util/async.ts";
-import type { KeyedTable } from "./config-tables.ts";
+import type { TypedTable } from "../persistence/typed-table.ts";
 import type { PersistedInstructions, PersistedInstructionsRevision, ScopedConfigStore } from "./config-store.ts";
 
 export const MAX_INSTRUCTIONS_CHARS = 100_000;
@@ -70,8 +70,8 @@ type InstructionsApi = Pick<
 
 export function createInstructions(
   org: ScopeId,
-  rows: KeyedTable<PersistedInstructions>,
-  separateRows: KeyedTable<PersistedInstructionsRevision>,
+  rows: TypedTable<PersistedInstructions>,
+  separateRows: TypedTable<PersistedInstructionsRevision>,
   queue: Queue,
 ) {
   const cache = new Map<ScopeId, { content: string; version: number }>([[org, DEFAULT_ORG_INSTRUCTIONS]]);
@@ -111,7 +111,7 @@ export function createInstructions(
     async setInstructions(id, content, updatedBy) {
       assertInstructionsSize(content);
       return queue(`instructions:${id}`, async () => {
-        const row = await rows.update(id, (current) =>
+        const row = await rows.modify(id, (current) =>
           withRevision(id, current, revisionOf(id, content, baseVersion(id, current) + 1, updatedBy)),
         );
         return saved(id, row!);
@@ -121,7 +121,7 @@ export function createInstructions(
       assertInstructionsSize(content);
       return queue(`instructions:${id}`, async () => {
         let accepted = false;
-        const row = await rows.update(id, (current) => {
+        const row = await rows.modify(id, (current) => {
           if (baseVersion(id, current) !== expectedVersion) return current;
           accepted = true;
           return withRevision(id, current, revisionOf(id, content, expectedVersion + 1, updatedBy));
@@ -162,7 +162,7 @@ export function createInstructions(
     async refresh(id: ScopeId) {
       const pending = separate.get(id) ?? [];
       const row = pending.length
-        ? await rows.update(id, (current) =>
+        ? await rows.modify(id, (current) =>
             current && current.history === undefined
               ? { ...current, history: mergeHistory(undefined, pending) }
               : current,
