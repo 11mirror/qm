@@ -405,7 +405,7 @@ test("monitor wakes persist engagement after the reply gate", async () => {
   }
 });
 
-test("reasoning streams per block beside the reply text, capped, and settles when persisted", () => {
+test("reasoning streams per block beside the reply text, whole, and settles when persisted", () => {
   const published: Array<{ step: string; index: number; text: string; offset: number }> = [];
   const s = createTurnStream({
     onReasoning: (_runId, block, text, offset) => published.push({ ...block, text, offset }),
@@ -431,8 +431,8 @@ test("reasoning streams per block beside the reply text, capped, and settles whe
   assert.deepEqual(s.reasoning("r1"), [{ step: "step-a", index: 2, text: "second block" }]);
   s.publishReasoning("r1", "step-b", 0, "x".repeat(25_000));
   s.publishReasoning("r1", "step-b", 0, "more");
-  assert.equal(s.reasoning("r1").find((b) => b.step === "step-b")?.text.length, 20_000);
-  assert.equal(published.at(-1)?.text.length, 20_000, "nothing is published past the cap");
+  assert.equal(s.reasoning("r1").find((b) => b.step === "step-b")?.text.length, 25_004);
+  assert.equal(published.at(-1)?.text, "more", "every delta is published");
   s.end("r1");
   s.begin("r1");
   assert.deepEqual(s.reasoning("r1"), [], "a retried attempt never serves the previous attempt's blocks");

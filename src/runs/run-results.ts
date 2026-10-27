@@ -11,13 +11,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
-function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
-  return tail.some((item) => {
-    if (item.kind !== "Error") return false;
-    if (item.turnId !== null) return item.turnId === note.runId;
-    return item.createdAt >= note.notBefore;
-  });
-}
+const turnRecordedFailure = (turnItems: readonly Item[]): boolean => turnItems.some((item) => item.kind === "Error");
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
@@ -98,7 +92,6 @@ export type TurnFailureSessions = Pick<
   "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getItems"
 >;
 
-const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
 export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
@@ -116,8 +109,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     return false;
   }
   try {
-    const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
-    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
+    if (turnRecordedFailure(await sessions.getItems(session.id, { turnId: run.id }))) return false;
     await sessions.append(
       lease,
       turnFailureItem(
