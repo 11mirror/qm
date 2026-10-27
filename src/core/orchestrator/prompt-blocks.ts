@@ -64,64 +64,53 @@ function cronSchedulePromptLabel(c: Cron, timezone: string): string {
   return `once at ${localIsoTime(timezone, schedule.firstFireAt ?? c.createdAt)}`;
 }
 
-const OBLIGATIONS_CAP = 30;
 export function renderStandingObligations(
   crons: Cron[],
   webhooks: Webhook[],
   monitors: Monitor[],
   timezone = DEFAULT_CRON_TIMEZONE,
 ): string {
-  const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
+  const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
   const lines = [
     ...crons
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((c) => `- ${c.title || "Untitled scheduled task"} — ${cronSchedulePromptLabel(c, timezone)}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${firstLine(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
-      .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
+      .map((m) => `- Job watch: ${firstLine(m.purpose ?? m.command)}`),
   ];
   return [
     "## Already scheduled here",
-    ...(lines.length ? lines.slice(0, OBLIGATIONS_CAP) : ["No active scheduled work was found for this conversation."]),
-    ...(lines.length > OBLIGATIONS_CAP
-      ? [`…and ${lines.length - OBLIGATIONS_CAP} more — list crons, webhooks or job watches to see them all.`]
-      : []),
+    ...(lines.length ? lines : ["No active scheduled work was found for this conversation."]),
   ].join("\n");
 }
 
-const REACH_ROSTER_CAP = 30;
 export function renderReachRoster(channels: DirectoryChannel[], displayName: string): string | null {
   if (channels.length === 0) return null;
   const shown = channels
     .toSorted((a, b) => a.channelId.localeCompare(b.channelId))
-    .slice(0, REACH_ROSTER_CAP)
     .map((c) => `#${c.name}`)
     .join(", ");
-  const more =
-    channels.length > REACH_ROSTER_CAP ? ` …and ${channels.length - REACH_ROSTER_CAP} more — name one to check` : "";
   return [
     "## Other computers you can reach",
-    `Rooms you and ${displayName} share: ${shown}${more}`,
+    `Rooms you and ${displayName} share: ${shown}`,
     "This conversation's computer is where you work. Other rooms' computers are places you visit:",
     'read, search, fetch — don\'t rearrange. Run a command there with execute(scope: "#room").',
     "Say where anything you bring back came from.",
   ].join("\n");
 }
 
-const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${m.displayName} (${m.principalId})`);
-  const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
-  return (
-    [
-      "## Who's in this conversation",
-      "The people party to this conversation, from the company directory. Each is a distinct, real person — when a request names someone, it means this specific person, not anyone who merely posted here:",
-      ...lines,
-    ].join("\n") + more
-  );
+  const lines = members
+    .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
+    .map((m) => `- ${m.displayName} (${m.principalId})`);
+  return [
+    "## Who's in this conversation",
+    "The people party to this conversation, from the company directory. Each is a distinct, real person — when a request names someone, it means this specific person, not anyone who merely posted here:",
+    ...lines,
+  ].join("\n");
 }
 
 export function currentTimeBlock(timezone: string, nowMs: number): string {
