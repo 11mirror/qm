@@ -253,6 +253,34 @@ test("pg surface-cache: revisedSince returns edits and deletions after the water
   }
 });
 
+test("pg surface-cache: revisedSince returns every revision after the watermark, however many there are", async () => {
+  const cache = createPostgresSurfaceCache(URL);
+  const container = `Cmany-${Date.now()}`;
+  const count = 1200;
+  try {
+    const ts = (i: number) => `${1000 + i}.0`;
+    await cache.ingest(
+      Array.from({ length: count }, (_, i) => ({ container, ts: ts(i), text: `m${i}`, createdAt: i })),
+    );
+    const before = Date.now();
+    await cache.ingest(
+      Array.from({ length: count }, (_, i) =>
+        i % 3 === 0
+          ? { container, ts: ts(i), deleted: true }
+          : { container, ts: ts(i), text: `e${i}`, editedAt: before + i },
+      ),
+    );
+    const revised = await cache.revisedSince(container, before);
+    assert.equal(revised.length, count);
+    assert.equal(new Set(revised.map((m) => m.ts)).size, count);
+    assert.equal(revised.filter((m) => m.deleted).length, Math.ceil(count / 3));
+    const known = await cache.revisedSince(container, before, { ts: [ts(1), ts(3), "9999.0"] });
+    assert.deepEqual(known.map((m) => m.ts).sort(), [ts(1), ts(3)]);
+  } finally {
+    await cache.close();
+  }
+});
+
 test("pg surface-cache: revisedSince includes self edits and scopes to a thread", async () => {
   const cache = createPostgresSurfaceCache(URL);
   const container = `Cthr-${Date.now()}`;
