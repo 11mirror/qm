@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Pool } from "pg";
-import { applyPgMigrations, definePgMigration, withPgTransaction } from "../../src/persistence/pg-pool.ts";
+import { withPgTransaction } from "../../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-migrations.ts";
 
 function fakePool(rollback: () => Promise<void>) {
   const released: unknown[] = [];
@@ -51,7 +52,7 @@ test("a migration whose ROLLBACK fails keeps its error and discards the connecti
     query: async (sql: string) => {
       if (sql === "SELECT broken_migration") throw new Error("migration failed");
       if (sql === "ROLLBACK") throw new Error("connection lost");
-      return { rows: sql.includes("pg_try_advisory_lock") ? [{ locked: true }] : [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
     },
     release: (value?: unknown) => {
       released.push(value);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { PgMigrationDefinition } from "../../src/persistence/pg-pool.ts";
+import type { PgMigrationDefinition } from "../../src/persistence/pg-migrations.ts";
 import { HELD_BACK_CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
 import { registerLegacyMigrations } from "../../src/wiring/legacy-migrations.ts";
 import type { StoresModule } from "../../src/wiring/stores.ts";

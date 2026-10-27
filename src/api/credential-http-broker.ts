@@ -8,7 +8,7 @@ import {
   recordBrokerOutcome,
   serviceCallDenial,
   serviceRequestHeaders,
-  upstreamFailureCode,
+  reportUpstreamFailure,
   upstreamUnreachable,
 } from "./credential-broker.ts";
 import { pipeToResponse } from "./http.ts";
@@ -212,7 +212,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
       ...(method !== "GET" && method !== "HEAD" ? { body: ctx.req } : {}),
     });
   } catch (error) {
-    const detail = upstreamFailureCode(error);
+    const detail = reportUpstreamFailure("credential-http-broker: upstream fetch", error, target.slug);
     record("error", target.slug, target.host, { detail });
     return reply(502, upstreamUnreachable(detail));
   }

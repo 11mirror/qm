@@ -63,7 +63,7 @@ const escapeAttr = (v: string): string =>
 
 const CSS_HOSTILE = /[<>{}"'();\\]/;
 const cssSafe = (v: string | undefined): v is string => !!v && !CSS_HOSTILE.test(v);
-const cssUrlSafe = (v: string | undefined): v is string => cssSafe(v) && /^https:\/\/\S+$/.test(v);
+export const cssUrlSafe = (v: string | undefined): v is string => cssSafe(v) && /^https:\/\/\S+$/.test(v);
 
 export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
   const { accent, mark, markUrl, selfLabel } = branding;

@@ -349,6 +349,7 @@ test("legacy paths, missing Files records and wrong-owner references never produ
       { ...fileGrantsGrant, ref: "missing" },
       { ...fileGrantsGrant, ownerScopeId: fileGrantsOrg },
     ],
+    forResource: async () => [],
     put: async () => assert.fail("read-only fixture"),
     remove: async () => assert.fail("read-only fixture"),
     replaceForResourceIfCurrent: async () => assert.fail("read-only fixture"),

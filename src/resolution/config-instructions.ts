@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ScopeId } from "../types.ts";
 import type { createKeyedQueue } from "../util/async.ts";
+import { withCleanup } from "../util/errors.ts";
 import type { TypedTable } from "../persistence/typed-table.ts";
 import type { PersistedInstructions, PersistedInstructionsRevision, ScopedConfigStore } from "./config-store.ts";
 
@@ -120,16 +121,18 @@ export function createInstructions(
     captureInstructionsSnapshot: (id) => queue(`instructions:${id}`, () => rows.get(id)),
     restoreInstructionsSnapshot: (id, snapshot) =>
       queue(`instructions:${id}`, async () => {
-        try {
-          if (snapshot) await rows.put(id, snapshot);
-          else await rows.delete(id);
-          const restored = await rows.get(id);
-          load(id, restored);
-          return isDeepStrictEqual(restored, snapshot);
-        } catch (error) {
-          load(id, await rows.get(id));
-          throw error;
-        }
+        let restored: Snapshot = null;
+        await withCleanup(
+          async () => {
+            if (snapshot) await rows.put(id, snapshot);
+            else await rows.delete(id);
+          },
+          async () => {
+            restored = await rows.get(id);
+            load(id, restored);
+          },
+        );
+        return isDeepStrictEqual(restored, snapshot);
       }),
     restoreInstructionsCacheSnapshot: (id, snapshot) => load(id, snapshot ? structuredClone(snapshot) : null),
   };

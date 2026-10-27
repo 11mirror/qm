@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hostMatches, isHostDenied, egressDecision } from "../../src/resolution/egress-policy.ts";
+import { hostMatches, isHostDenied, egressDecision, parseEgressPolicy } from "../../src/resolution/egress-policy.ts";
 import type { EgressPolicy } from "../../src/types.ts";
 
 test("hostMatches: exact + subdomain, not siblings or superstrings", () => {
@@ -64,4 +64,15 @@ test("egressDecision: a non-empty allowlist requires a match", () => {
   const policy: EgressPolicy = { allowedHosts: ["api.internal"], deniedHosts: [] };
   assert.equal(egressDecision("api.internal", policy).allow, true);
   assert.deepEqual(egressDecision("example.com", policy), { allow: false, verdict: "not_allowlisted" });
+});
+
+test("parseEgressPolicy accepts IP literals and rejects colon-bearing names that are not IPv6", () => {
+  assert.deepEqual(parseEgressPolicy({ allowedHosts: ["[2001:db8::1]", "10.0.0.1"], deniedHosts: [] }), {
+    policy: { allowedHosts: ["2001:db8::1", "10.0.0.1"], deniedHosts: [] },
+  });
+  for (const host of ["a:b:c", "evil.test::", "example.com:443"]) {
+    assert.deepEqual(parseEgressPolicy({ allowedHosts: [host], deniedHosts: [] }), {
+      error: `${host} includes a port; enter a host name only`,
+    });
+  }
 });

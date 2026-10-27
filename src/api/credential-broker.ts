@@ -140,7 +140,8 @@ export async function serviceCallDenial(
       };
 }
 
-export function upstreamFailureCode(error: unknown): string {
+export function reportUpstreamFailure(context: string, error: unknown, slug: string): string {
+  reportFailure(context, error, slug);
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
     const code = (cause as { code?: unknown }).code;
     if (typeof code === "string" && code) return code;
@@ -281,7 +282,7 @@ export async function brokerCredentialCall(
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
   } catch (error) {
-    const detail = upstreamFailureCode(error);
+    const detail = reportUpstreamFailure("credential-broker: upstream fetch", error, slug);
     recordBrokerOutcome(opts, claims, "broker", { slug, host: rec.host, status: "error", detail });
     return { status: 502, json: upstreamUnreachable(detail) };
   }

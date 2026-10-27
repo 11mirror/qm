@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration, type PgMigrationDefinition } from "../../src/persistence/pg-pool.ts";
+import {
+  applyPgMigrations,
+  definePgMigration,
+  type PgMigrationDefinition,
+} from "../../src/persistence/pg-migrations.ts";
 import { applyTenancy, TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
 import {
   columnName,
