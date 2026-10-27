@@ -1,4 +1,4 @@
-import { swallow } from "../util/errors.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { type GoalNoticeView } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -55,10 +55,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
           return;
         } catch (err) {
           if (attempt >= ACK_RETRY_DELAYS_MS.length) {
-            console.error(
-              `[slack-plugin] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
-              (err as Error).message,
-            );
+            reportFailure("slack: delivery ack (the poller re-delivers unacked runs)", err, runId);
             return;
           }
           await sleep(ACK_RETRY_DELAYS_MS[attempt]!);

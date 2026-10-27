@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { json, readBody } from "../../plugins/chassis/src/http.ts";
 import { sleep } from "../util/async.ts";
 
@@ -75,7 +75,7 @@ export function installDevIntrospection(
       });
     }
   } catch (err) {
-    console.warn(`[slack-plugin] dev-introspection: raw-frame tap failed (${errMessage(err)}) — degrading`);
+    swallow("slack: dev-introspection raw-frame tap (degrading)", err);
   }
 
   const canary = async (

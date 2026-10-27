@@ -1,4 +1,4 @@
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "../util/async.ts";
 import { perTenant } from "../tenant.ts";
@@ -183,7 +183,7 @@ export function createSurfaceHeaderEnsurer(opts: {
         settled.set(channel, goal);
         while (settled.size > maxTracked) settled.delete(settled.keys().next().value!);
       } catch (err) {
-        console.error("[slack] surface header ensure failed:", errMessage(err));
+        reportFailure("slack: surface header ensure", err, channel);
       } finally {
         inFlight.delete(channel);
         const again = requeued.get(channel);

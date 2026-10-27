@@ -7,7 +7,7 @@ import {
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { slackFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import { type ActorAssertion, type ChannelMeta, groupDmDisplayName, isExternallyShared, isMpim } from "./identity.ts";
 import { renderConversationView, resolveMentions } from "./conversation.ts";
 import { REACTION_DETECT_GUIDANCE, REACTION_INSTRUCTION, resolveReactionTargets } from "./reactions.ts";
@@ -558,9 +558,7 @@ async function runCoreTurn(
     await acks.settleAck();
     if (inc.unprompted) {
       if (!run.accepted) inc.ackGate?.failed(errMessage(err));
-      console.error(
-        `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
-      );
+      reportFailure("slack: unprompted turn (staying quiet)", err, `ch=${inc.channel} ts=${inc.ts}`);
     } else {
       console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
       const note = `⚠️ ${slackFailureText(err)}`;
@@ -616,7 +614,7 @@ async function deliverTurnResult(
             await uploadAttachments(client, inc.channel, replyThreadTs, result.attachments, core);
           } catch (err) {
             uploadError = err;
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+            reportFailure("slack: reply file upload", err);
           }
         }
         await acks.ack?.drain();
