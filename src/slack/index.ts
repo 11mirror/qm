@@ -149,9 +149,7 @@ function slackHistory(cfg: SlackPluginConfig, core: SlackCoreClient, conn: Slack
   const { BOT_TOKEN, webClient } = conn;
   const historyRateLimitOptions = {
     managed: Boolean(cfg.installationId && cfg.sharedServiceUrl?.trim()),
-    ...(cfg.webUiPublicUrl
-      ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/settings/slack-settings?setup=slack` }
-      : {}),
+    ...(cfg.webUiPublicUrl ? { setupUrl: `${cfg.webUiPublicUrl}/settings/slack-settings?setup=slack` } : {}),
   };
   const rateLimitNotice = createSlackRateLimitNotice({
     ...historyRateLimitOptions,

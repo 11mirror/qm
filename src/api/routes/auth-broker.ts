@@ -172,7 +172,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<RouteResult> {
     !isObj(claims) ||
     claims.purpose !== "teammate-invite" ||
     claims.org !== tenant().orgScope ||
-    claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
+    claims.aud !== deps.portalUrl ||
     typeof claims.email !== "string" ||
     typeof claims.iat !== "number" ||
     typeof claims.exp !== "number" ||

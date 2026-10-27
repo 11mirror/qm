@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { adminCronHistoryUrl, adminSessionUrl } from "../../src/util/admin-links.ts";
 
 test("admin session links are scope-free paths", () => {
-  assert.equal(adminSessionUrl("https://portal.test/", "abc-1"), "https://portal.test/settings/history/s/abc-1");
+  assert.equal(adminSessionUrl("https://portal.test", "abc-1"), "https://portal.test/settings/history/s/abc-1");
 });
 
 test("a session id whose encoding the portal's illegal-path guard rejects falls back to the query form", () => {

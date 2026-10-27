@@ -66,7 +66,7 @@ export function buildCrons(w: Head & StoresModule & RunsModule & OutboundModule)
     artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
-  const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
+  const webUiBase = config.slack?.webUiPublicUrl ?? config.publicWebUrl;
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
     surfaces: chatSurfaces,
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),

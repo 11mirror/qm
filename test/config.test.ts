@@ -228,10 +228,16 @@ test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   assert.equal(disabledWeb.publicUrl, "https://agent-api.example");
   assert.equal(disabledWeb.publicWebUrl, undefined);
 
-  const web = loadConfig({ PUBLIC_API_URL: "https://agent-api.example", PUBLIC_WEB_URL: "https://portal.example" });
+  const web = loadConfig({ PUBLIC_API_URL: "https://agent-api.example/", PUBLIC_WEB_URL: "https://portal.example//" });
   assert.equal(web.apiBaseUrl, "https://agent-api.example");
   assert.equal(web.publicUrl, "https://portal.example");
   assert.equal(web.publicWebUrl, "https://portal.example");
+  const slack = loadConfig({
+    SLACK_BOT_TOKEN: "xoxb-1",
+    SLACK_APP_TOKEN: "xapp-1",
+    WEB_UI_PUBLIC_URL: " https://web.example/ ",
+  });
+  assert.equal(slack.slack?.webUiPublicUrl, "https://web.example");
 });
 
 test("the server can boot before an admin configures a model provider", () => {

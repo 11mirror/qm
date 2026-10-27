@@ -304,7 +304,7 @@ export function createBackendBlobStaging(
 
 function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
   const { label, exec, proxyPrefix, capabilityHeader, mintToken } = deps;
-  const base = deps.apiBaseUrl.replace(/\/+$/, "");
+  const base = deps.apiBaseUrl;
   const timeoutSec = deps.timeoutSec ?? 300;
   return {
     async stageInAbs(handle, abs, blobId, callTimeoutSec): Promise<void> {

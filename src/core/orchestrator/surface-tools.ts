@@ -499,9 +499,7 @@ function searchTool(
               "[live search runs as the asking person's own Slack login, and this turn has no connected one. " +
               "Reading this conversation's history needs no personal login, so read it before concluding anything is missing; " +
               "only if the message is elsewhere, and a person asked, point them at " +
-              (deps.publicWebUrl
-                ? `${deps.publicWebUrl.replace(/\/$/, "")}/connect/slack/self-connect`
-                : "the web UI's Connectors page") +
+              (deps.publicWebUrl ? `${deps.publicWebUrl}/connect/slack/self-connect` : "the web UI's Connectors page") +
               " to connect their Slack (signing in there identifies them; no link needs minting) " +
               "instead of concluding the message doesn't exist; " +
               "on an autonomous turn just say what you couldn't search]",

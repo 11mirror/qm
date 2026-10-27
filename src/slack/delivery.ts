@@ -53,7 +53,7 @@ export function slackReplyArgs(
 }
 
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
-  const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
+  const base = webUiPublicUrl ?? "";
   if (!base || !scopeId) return undefined;
   const { kind, ref } = parseScopeId(scopeId);
   const [handle, domain] = ref.split("@");

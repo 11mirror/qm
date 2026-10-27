@@ -598,7 +598,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           ...(resolved.destination ? { destination: resolved.destination } : {}),
         });
         const incomingPath = `/v1/webhooks/incoming/${webhook.id}`;
-        const base = publicBase ? publicBase.replace(/\/$/, "") : "";
+        const base = publicBase ?? "";
         return {
           ok: true,
           webhook,

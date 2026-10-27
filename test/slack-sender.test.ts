@@ -93,7 +93,7 @@ for (const type of ["slack", "group", "principal"]) {
     const { posts, uploads } = await send(
       { type },
       "cron:morning report:fire:123",
-      "https://agent.example/web-ui/",
+      "https://agent.example/web-ui",
       text,
     );
     assert.equal(posts.length, 1);
@@ -308,7 +308,7 @@ test("an approval too long for Slack links its Deny-only card to the conversatio
   const out = await send(
     { type: "principal", target: "U1", commandApprovalId: "A1" },
     undefined,
-    "https://qm.example.com/",
+    "https://qm.example.com",
     "Approval needed",
     { approval },
   );

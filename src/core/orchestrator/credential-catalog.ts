@@ -179,7 +179,7 @@ async function mintControlTokens(
       deps.capabilityTokenCompression,
     );
     if (browserSelection) {
-      connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+      connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl}/v1/browser-model`;
       connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
         {
           ...scopeAttestation,
@@ -192,7 +192,7 @@ async function mintControlTokens(
       );
     }
     if (deps.sandboxModels && allInternal && input.runId && input.runLeaseToken) {
-      connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+      connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl}${SANDBOX_MODEL_PREFIX}`;
       connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
         {
           ...scopeAttestation,

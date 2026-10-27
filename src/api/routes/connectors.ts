@@ -278,11 +278,11 @@ async function consentMint(ctx: ApiCtx): Promise<RouteResult> {
   const provider = typeof b.provider === "string" ? b.provider : "";
   if (!oauthProvider(provider)) return unknownProvider(provider);
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
-  const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
+  const base = deps.publicUrl ?? "";
   const intendedPrincipalId = personKey(typeof b.intendedPrincipalId === "string" ? b.intendedPrincipalId : "");
   if (intendedPrincipalId && !samePerson(intendedPrincipalId, capability.actorId)) {
     const selfConnect = deps.portalUrl
-      ? `send them ${deps.portalUrl.replace(/\/$/, "")}/connect/${encodeURIComponent(provider)}/self-connect (no token needed; signing in there is what identifies them)`
+      ? `send them ${deps.portalUrl}/connect/${encodeURIComponent(provider)}/self-connect (no token needed; signing in there is what identifies them)`
       : "tell them to open the Connectors page in the org's web UI and connect it themselves";
     return reply(400, {
       error: "bad_request",
