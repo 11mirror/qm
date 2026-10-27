@@ -1,0 +1,84 @@
+import { loadDeploymentLayer, emptyDeploymentLayer } from "../deployment/load-layer.ts";
+import { resolve } from "node:path";
+import { scopeId } from "../types.ts";
+import { createPostgresAuditLog } from "../admin/postgres-audit-log.ts";
+import {
+  createDeploymentLayerStore,
+  type StoredDeploymentLayer,
+  LAYER_CREATED_BY,
+  LAYER_REVIEWER,
+  type DeploymentLayerStore,
+} from "../deployment/deployment-layer-store.ts";
+import { installSeedSkills } from "../skills/seed.ts";
+import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
+import { reportFailureAs } from "../util/errors.ts";
+import type { Config } from "../config.ts";
+import type { StoresModule } from "./stores.ts";
+
+export function buildDeploymentLayer(
+  w: Pick<StoresModule, "artifactMap" | "skills" | "skillBundles" | "advisoryLock"> & {
+    config: Config;
+    databaseUrl: string;
+  },
+) {
+  const { config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock } = w;
+
+  const deploymentLayer = config.deploymentLayerDir
+    ? loadDeploymentLayer(config.deploymentLayerDir)
+    : emptyDeploymentLayer();
+  const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
+  const brokeredTools = deploymentLayer.brokeredTools;
+  const orgScope = scopeId("org", config.orgId);
+  const auditLog = createPostgresAuditLog(databaseUrl);
+  const layerStore = createDeploymentLayerStore({
+    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    runtime: deploymentLayer,
+    skills,
+    skillBundles,
+    scopeId: orgScope,
+    advisoryLock,
+    auditPersisted: (record) =>
+      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+        at: record.updatedAt,
+        principalId: record.updatedBy,
+        action: "deployment_layer.updated",
+        resource: record.contentHash,
+        scopeLabel: orgScope,
+      }),
+    ...(config.seedSkills && layerSkillsDir
+      ? {
+          seedFallback: () =>
+            installSeedSkills(skills, {
+              dir: layerSkillsDir,
+              scopeId: orgScope,
+              createdBy: LAYER_CREATED_BY,
+              reviewer: LAYER_REVIEWER,
+            }),
+        }
+      : {}),
+  });
+  // Every instance re-applies the layer when any instance publishes one, and after a missed notification.
+  const deploymentLayerChanged = createPostgresNotifyBus<null>(databaseUrl, "deployment_layer", "deployment layer");
+  const deploymentLayerStore: DeploymentLayerStore = {
+    ...layerStore,
+    put: (bundle, by) => layerStore.put(bundle, by).finally(() => deploymentLayerChanged.emit(null)),
+  };
+  const rehydrateLayer = () => void layerStore.hydrate().catch(reportFailureAs("deployment layer refresh", undefined));
+  deploymentLayerChanged.subscribe(rehydrateLayer, { onResync: rehydrateLayer });
+  const installCatalogs = async (): Promise<void> => {
+    await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });
+    for (const dir of config.pluginSkillDirs) {
+      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
+      await installSeedSkills(skills, {
+        dir,
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+        respectArchived: true,
+      });
+    }
+  };
+  return { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerChanged };
+}
+
+export type DeploymentLayerModule = ReturnType<typeof buildDeploymentLayer>;
