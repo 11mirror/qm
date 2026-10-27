@@ -11,6 +11,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import type { JobHandler, JobWorker } from "../../src/jobs/job-worker.ts";
 import type { TriggerDeps } from "../../src/triggers/run-trigger.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
+import { MAX_SCREEN_CHARS } from "../../src/security/security-screen.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -392,7 +393,7 @@ test("history records the agent payload once per delivery without request header
   const events = await webhooks.listEvents(wh.id);
   assert.equal(events.length, 1);
   assert.match(events[0]?.payload ?? "", /truncated/);
-  assert.ok(events[0]!.payload.length < 16_100);
+  assert.ok(events[0]!.payload.length <= MAX_SCREEN_CHARS, "the recorded payload fits what the security screen reads");
   assert.equal(JSON.stringify(events).includes(SECRET), false);
   assert.equal(JSON.stringify(events).includes("x-hub-signature"), false);
 });
