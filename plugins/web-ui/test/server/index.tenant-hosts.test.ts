@@ -27,7 +27,15 @@ process.env.CORE_SIGNING_SECRET = secret;
 process.env.PORTAL_IDENTITY_SECRET = secret;
 const { startServer } = await import("../../server/index.ts");
 setEdgeTenants([
-  { slug: "home", orgId: "home-org", hosts: ["home.example.test"], status: "active", oidcAdmin: false, secrets: {} },
+  {
+    slug: "home",
+    orgId: "home-org",
+    hosts: ["home.example.test"],
+    status: "active",
+    faviconSvg: `<svg xmlns="http://www.w3.org/2000/svg"><title>home</title></svg>`,
+    oidcAdmin: false,
+    secrets: {},
+  },
   ...(["a", "b"] as const).map((name) => ({
     id: `tenant-${name}`,
     slug: name,
@@ -79,7 +87,7 @@ function get(
   });
 }
 
-test("the web surface answers each tenant's host with that tenant's org, branding and favicon", async () => {
+test("the web surface answers each tenant's host with that tenant's org, branding and favicon, and the home host with the deployment's own", async () => {
   for (const name of ["a", "b"]) {
     const host = `${name}.example.test`;
     coreHosts.clear();
