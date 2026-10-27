@@ -1,7 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compilePath, createRouter, findRoute, type Route, type BaseCtx } from "../../../src/api/routes/route.ts";
-import { apiRoutes } from "../../../src/api/routes/index.ts";
+import {
+  compilePath,
+  createRouter,
+  findRoute,
+  type Route,
+  type BaseCtx,
+  type RouteAuth,
+} from "../../../src/api/routes/route.ts";
+import { apiRoutes, rawRoutes } from "../../../src/api/routes/index.ts";
+import {
+  OAUTH_CONSENT_AUD,
+  CREDENTIAL_BROKER_AUD,
+  BROWSER_MODEL_AUD,
+  SANDBOX_MODEL_AUD,
+} from "../../../src/auth/capability-token.ts";
 
 function matched(path: string, pathname: string): Record<string, string> | null {
   const out: Record<string, string> = {};
@@ -82,4 +95,44 @@ test("createRouter prefers a literal segment over a :param regardless of table o
   assert.deepEqual(match("GET", "/v1/x/7")?.params, { id: "7" });
   assert.equal(match("GET", "/v1/x/a/b/c")?.route, routes[4], "match routes answer only when no path route does");
   assert.equal(match("POST", "/v1/x/7"), null);
+});
+
+const AUD_ROUTES = new Map<string, string>([
+  ["POST /v1/browser-model/chat/completions", BROWSER_MODEL_AUD],
+  ["GET /v1/sandbox-model/v1/models", SANDBOX_MODEL_AUD],
+  ["POST /v1/sandbox-model/v1/chat/completions", SANDBOX_MODEL_AUD],
+  ["POST /v1/sandbox-model/v1/responses", SANDBOX_MODEL_AUD],
+  ["POST /v1/sandbox-model/v1/messages", SANDBOX_MODEL_AUD],
+  ["POST /v1/connectors/oauth/consent/mint", OAUTH_CONSENT_AUD],
+  ["POST /v1/credentials/broker", CREDENTIAL_BROKER_AUD],
+]);
+test("every pinned dedicated-audience route actually resolves in the table", () => {
+  for (const key of AUD_ROUTES.keys()) {
+    const [method, pathname] = key.split(" ") as [string, string];
+    const found = findRoute(apiRoutes, method, pathname);
+    assert.ok(found, `${key} is pinned but no route serves it`);
+    assert.equal(
+      typeof found.route.auth === "object" ? found.route.auth.aud : found.route.auth,
+      AUD_ROUTES.get(key),
+      `${key} resolves with unexpected auth`,
+    );
+  }
+});
+
+test("raw routes keep their declared auth contracts (front enforces capability audiences, handlers enforce the rest)", () => {
+  const pins: Array<[string, string, RouteAuth]> = [
+    ["GET", "/healthz", "public"],
+    ["GET", "/readyz", "public"],
+    ["GET", "/v1/spend/export", "public"],
+    ["GET", "/v1/credentials/http/gitlab/acme/repo.git/info/refs", { aud: CREDENTIAL_BROKER_AUD }],
+    ["POST", "/v1/credentials/http/gitlab/acme/repo.git/git-upload-pack", { aud: CREDENTIAL_BROKER_AUD }],
+  ];
+  for (const [method, pathname, auth] of pins) {
+    const found = findRoute(rawRoutes, method, pathname);
+    assert.ok(found, `${method} ${pathname} not served by a raw route`);
+    assert.deepEqual(found.route.auth, auth, `${method} ${pathname} declares unexpected auth`);
+  }
+  for (const route of rawRoutes) {
+    assert.ok(route.auth !== undefined, "every raw route must declare its auth contract");
+  }
 });

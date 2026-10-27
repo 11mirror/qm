@@ -1,8 +1,8 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
 
 function fresh() {
   return buildApp(testConfig({ seedSkills: false }));

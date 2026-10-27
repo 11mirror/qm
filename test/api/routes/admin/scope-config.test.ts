@@ -380,3 +380,37 @@ test("cached model catalogs refresh in the background and retain dynamic entries
   await selectableModelCatalog(fetcher);
   assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
 });
+
+const putPolicy = (base: string, b: unknown) =>
+  fetch(`${base}/v1/admin/scopes/org:default-org/command-policy`, {
+    method: "PUT",
+    headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+    body: JSON.stringify(b),
+  });
+
+test("admin command-policy write validates the body and rejects invalid regexes", async () => {
+  const srv = start();
+  try {
+    const ok = await putPolicy(srv.base, {
+      mode: "denylist",
+      rules: [{ pattern: "^curl\\b", decision: "require_approval", reason: "network" }],
+    });
+    assert.equal(ok.status, 200);
+
+    const badRegex = await putPolicy(srv.base, {
+      mode: "denylist",
+      rules: [{ pattern: "(", decision: "deny" }],
+    });
+    assert.equal(badRegex.status, 400);
+    const body = (await badRegex.json()) as { message: string };
+    assert.match(body.message, /not a valid regex/);
+
+    const badMode = await putPolicy(srv.base, { mode: "blocklist", rules: [] });
+    assert.equal(badMode.status, 400);
+
+    const badShape = await putPolicy(srv.base, { mode: "denylist" });
+    assert.equal(badShape.status, 400);
+  } finally {
+    await srv.close();
+  }
+});

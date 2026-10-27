@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
-import { effectiveEgressEnforcement } from "../src/sandbox/sandbox.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../../src/sandbox/sprites-sandbox.ts";
+import { effectiveEgressEnforcement } from "../../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testAdvisoryLock, testSandboxBodies } from "../support/test-database.ts";
 
 async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "agent-computer-profile-"));

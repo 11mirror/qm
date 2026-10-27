@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolContext } from "../src/tools/tool-context.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import type { NewItem } from "../src/sessions/items.ts";
-import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createToolContext } from "../../src/tools/tool-context.ts";
+import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { scopeId, type ScopeId, type WorkspaceLayer } from "../../src/types.ts";
+import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import type { NewItem } from "../../src/sessions/items.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const at = Date.UTC(2026, 4, 31);
 

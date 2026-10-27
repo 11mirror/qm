@@ -3,18 +3,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../../../src/api/server.ts";
 import type { AdvisoryLock } from "../../../src/persistence/advisory-lock.ts";
-import { respond } from "../../../src/api/routes/route.ts";
+import { respond, type ApiCtx } from "../../../src/api/routes/route.ts";
 import { createManagedSlack } from "../../../src/surfaces/slack-managed.ts";
 import type { BuiltApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { listenLocal } from "../../support/listen-local.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "../../support/test-database.ts";
 import { createKeychain, type OAuthRefresh, type OAuthToken } from "../../../src/credentials/keychain.ts";
 import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
-import { oauthRevoke } from "../../../src/api/routes/connectors.ts";
-import { testAdvisoryLock } from "../../support/test-database.ts";
+import { oauthRevoke, gmailSent } from "../../../src/api/routes/connectors.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -618,5 +617,126 @@ test("managed deployments accept validated own apps and preserve credentials on 
     assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-own");
   } finally {
     await srv.close();
+  }
+});
+
+test("sent mail requires portal identity and ignores a forged principal query", async () => {
+  let status = 0;
+  let requestedPrincipal = "";
+  const ctx = {
+    actor: null,
+    url: new URL("http://localhost/v1/connectors/gmail/sent?principalId=someone-else"),
+    res: {
+      setHeader() {},
+      getHeader() {},
+      writeHead(code: number) {
+        status = code;
+      },
+      end() {},
+    },
+    deps: {
+      connectorTokens: {
+        async connectorDerivedAuth(_host: string, principal: string) {
+          requestedPrincipal = principal;
+          return null;
+        },
+      },
+    },
+  } as unknown as ApiCtx;
+  await respond(gmailSent, ctx);
+  assert.equal(status, 403);
+  assert.equal(requestedPrincipal, "");
+  ctx.actor = { p: "signed-in-user" } as ApiCtx["actor"];
+  await respond(gmailSent, ctx);
+  assert.equal(status, 409);
+  assert.equal(requestedPrincipal, "signed-in-user");
+  requestedPrincipal = "";
+  ctx.url.searchParams.set("accountType", "forged");
+  await respond(gmailSent, ctx);
+  assert.equal(status, 400);
+  assert.equal(requestedPrincipal, "");
+});
+
+test("sent mail resolves the connected Google account slot", async () => {
+  const requestedAccountTypes: Array<string | undefined> = [];
+  let status = 0;
+  let body = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/messages")) return Response.json({ messages: [] });
+    if (url.pathname.endsWith("/profile")) return Response.json({ emailAddress: "eve@example.com" });
+    return new Response(null, { status: 404 });
+  };
+  const ctx = {
+    actor: { p: "eve@example.com" },
+    url: new URL("http://localhost/v1/connectors/gmail/sent"),
+    params: {},
+    res: {
+      setHeader() {},
+      getHeader() {},
+      writeHead(code: number) {
+        status = code;
+      },
+      end(value: string) {
+        body = value;
+      },
+    },
+    deps: {
+      connectorTokens: {
+        async connectorDerivedAuth(_host: string, _principal: string, accountType?: string) {
+          requestedAccountTypes.push(accountType);
+          return accountType === "company" ? { accessToken: "company-token" } : null;
+        },
+      },
+    },
+  } as unknown as ApiCtx;
+  try {
+    await respond(gmailSent, ctx);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(status, 200);
+  assert.deepEqual(requestedAccountTypes, ["default", "personal", "company"]);
+  assert.deepEqual(JSON.parse(body), {
+    messages: [],
+    accountEmail: "eve@example.com",
+    accountType: "company",
+  });
+});
+
+test("Gmail upstream failures map to reconnect, not found, or retry responses without upstream bodies", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const [upstream, status, message] of [
+      [401, 409, "Reconnect Google to read sent mail."],
+      [403, 409, "Reconnect Google to read sent mail."],
+      [404, 404, "Couldn't load sent mail from Gmail. Try again."],
+      [500, 502, "Couldn't load sent mail from Gmail. Try again."],
+    ] as const) {
+      let code = 0;
+      let body = "";
+      globalThis.fetch = async () => new Response("secret upstream detail", { status: upstream });
+      await respond(gmailSent, {
+        actor: { p: "eve@example.com" },
+        url: new URL("http://localhost/v1/connectors/gmail/sent/m1"),
+        params: { messageId: "m1" },
+        res: {
+          setHeader() {},
+          getHeader() {},
+          writeHead(value: number) {
+            code = value;
+          },
+          end(value: string) {
+            body = value;
+          },
+        },
+        deps: { connectorTokens: { connectorDerivedAuth: async () => ({ accessToken: "token" }) } },
+      } as unknown as ApiCtx);
+      assert.equal(code, status);
+      assert.deepEqual(JSON.parse(body), { error: "gmail_unavailable", message });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { scopeId } from "../src/types.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { testRunStore } from "./support/turns.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { testRunStore } from "../support/turns.ts";
 
 test("batch appends keep order, roll back atomically and check leases", async () => {
   const databaseUrl = testDatabaseUrl();

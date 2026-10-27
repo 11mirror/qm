@@ -1,15 +1,13 @@
-import "./support/auto-fake-sprites.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import "../../support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "../../support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
-
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+import { createInsecureTestServer } from "../../../src/api/server.ts";
+import { type BuiltApp } from "../../../src/wiring.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { testConfig } from "../../support/test-config.ts";
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig());
@@ -22,13 +20,6 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
-
-const putPolicy = (base: string, b: unknown) =>
-  fetch(`${base}/v1/admin/scopes/org:default-org/command-policy`, {
-    method: "PUT",
-    headers: ADMIN,
-    body: JSON.stringify(b),
-  });
 
 test("a pending approval survives a surface restart: GET /v1/approvals/:id returns a replayable request", async () => {
   const srv = start();
@@ -152,33 +143,6 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
     const empty = await fetch(`${srv.base}/v1/sessions/some-other-session/approvals?viewer=U2`);
     assert.equal(empty.status, 200);
     assert.deepEqual(((await empty.json()) as { approvals: unknown[] }).approvals, []);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("admin command-policy write validates the body and rejects invalid regexes", async () => {
-  const srv = start();
-  try {
-    const ok = await putPolicy(srv.base, {
-      mode: "denylist",
-      rules: [{ pattern: "^curl\\b", decision: "require_approval", reason: "network" }],
-    });
-    assert.equal(ok.status, 200);
-
-    const badRegex = await putPolicy(srv.base, {
-      mode: "denylist",
-      rules: [{ pattern: "(", decision: "deny" }],
-    });
-    assert.equal(badRegex.status, 400);
-    const body = (await badRegex.json()) as { message: string };
-    assert.match(body.message, /not a valid regex/);
-
-    const badMode = await putPolicy(srv.base, { mode: "blocklist", rules: [] });
-    assert.equal(badMode.status, 400);
-
-    const badShape = await putPolicy(srv.base, { mode: "denylist" });
-    assert.equal(badShape.status, 400);
   } finally {
     await srv.close();
   }

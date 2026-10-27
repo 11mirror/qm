@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { InboxItem, InboxPayload } from "../../../src/types.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../../../src/inbox/sources/adapter.ts";
-import { buildGmailReplyMime, gmailAdapter, replySubject } from "../../../src/inbox/sources/gmail.ts";
+import { buildGmailReplyMime, gmailAdapter, replySubject, gmailToken } from "../../../src/inbox/sources/gmail.ts";
 import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../../../src/inbox/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../../../src/slack/delivery.ts";
 import { adapterForItem } from "../../../src/inbox/sources/index.ts";
@@ -477,4 +477,17 @@ test("Slack rejects an explicit invalid draft instead of sending the saved draft
     if (!result.ok) assert.equal(result.reason, "bad_item");
   }
   assert.equal(spy.calls.length, 0);
+});
+
+test("refresh and send read a Gmail item with the account it came from", async () => {
+  const asked: Array<string | undefined> = [];
+  const tokens = {
+    connectorAccessToken: async (_host: string, _owner: string, account?: string) => {
+      asked.push(account);
+      return account === "company" ? "company-token" : null;
+    },
+  };
+  const item = { sourcePayload: { gmail: { threadId: "t1", accountType: "company" } } } as unknown as InboxItem;
+  assert.equal(await gmailToken(tokens, "owner", item), "company-token");
+  assert.deepEqual(asked, ["company"]);
 });

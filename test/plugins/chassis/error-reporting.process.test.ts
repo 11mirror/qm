@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { traceStatus } from "../plugins/chassis/src/timing.ts";
+import { traceStatus } from "../../../plugins/chassis/src/timing.ts";
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
   const events: Record<string, any>[] = [];
@@ -44,7 +44,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
   `,
     ],
     {
-      cwd: new URL("..", import.meta.url),
+      cwd: new URL("../../../", import.meta.url),
       env: {
         ...process.env,
         SENTRY_DSN: enabled ? `http://public@127.0.0.1:${address.port}/42` : "",

@@ -7,8 +7,8 @@ import {
   evaluateCommandWithLayer,
   parseCommandPolicy,
   scannableCommand,
-} from "../src/policy/command-policy.ts";
-import type { CommandPolicy, CommandRule } from "../src/types.ts";
+} from "../../src/policy/command-policy.ts";
+import type { CommandPolicy, CommandRule } from "../../src/types.ts";
 
 test("org floor requires approval for recursive delete and denies fork bomb", () => {
   const p = defaultOrgPolicy();
