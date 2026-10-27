@@ -31,6 +31,7 @@ export const MEMORY_EXTRACTION_PROMPT = [
   "When the user's own message states an instruction, rule, or directive to the assistant about",
   "how future work should be done, record it VERBATIM as a quoted fact",
   '(e.g. `- Directive (user\'s words): "always run the linter before pushing"`), not a paraphrase.',
+  'Facts listed under "Already remembered" are saved already: never output them again, reworded or quoted.',
   "If nothing is worth remembering, output exactly: NONE",
   SENSITIVITY_PROMPT,
   "Prepend exactly SENSITIVITY: <label> on its own first line, classifying the entire extracted list.",
@@ -42,12 +43,26 @@ export function parseFacts(out: string): string[] {
   return bullets(trimmed).filter(Boolean);
 }
 
+const KNOWN_FACTS_SHOWN = 20;
+
+async function knownFacts(memory: MemoryService, scopeId: ScopeId): Promise<string[]> {
+  const facts = (await memory.facts?.(scopeId)) ?? [];
+  return facts
+    .toSorted((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, KNOWN_FACTS_SHOWN)
+    .map((fact) => fact.text);
+}
+
 async function extractFacts(
   harness: HarnessModelUtilities,
   turns: Array<{ input: string; reply: string }>,
+  known: readonly string[],
 ): Promise<{ facts: string[]; sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]> }> {
   if (!harness.oneShot) return { facts: [], sensitivity: "unknown" };
-  const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const exchanges = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const transcript = known.length
+    ? `Already remembered:\n${known.map((fact) => `- ${fact}`).join("\n")}\n\n---\n\n${exchanges}`
+    : exchanges;
   const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
   return {
     facts: parseFacts(out ?? ""),
@@ -189,7 +204,8 @@ export function createPerTurnStrategy(deps: {
   const quietMs = deps.captureQuietMs ?? 0;
   if (quietMs > 0 && !deps.pending) throw new Error("a memory capture quiet window needs a pending-capture store");
   async function flush(burst: Burst): Promise<void> {
-    const { facts, sensitivity } = await extractFacts(deps.harness, burst.turns);
+    const known = await knownFacts(deps.memory, burst.scopeId);
+    const { facts, sensitivity } = await extractFacts(deps.harness, burst.turns, known);
     if (!facts.length) return;
     const at = Date.now();
     await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });

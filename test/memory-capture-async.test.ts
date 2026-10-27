@@ -156,6 +156,7 @@ test("capture does NOT block the turn: the reply returns while extraction is sti
   const res = await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
 
   assert.equal(res.status, "ok");
+  for (let i = 0; i < 200 && g.started === 0; i++) await new Promise((r) => setTimeout(r, 10));
   assert.equal(g.started, 1, "capture extraction was kicked off");
   assert.equal(g.finished, 0, "...but the turn returned WITHOUT awaiting it (still gated) — async");
   g.release();
