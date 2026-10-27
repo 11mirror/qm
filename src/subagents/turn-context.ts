@@ -22,7 +22,7 @@ export interface TurnContext {
   peerRefusal(target: Session): string | null;
   statusOf(session: Session): Promise<"running" | "pending" | "idle">;
   visibleTitle(target: Session): string;
-  visibleHistory(target: Session, limit: number): Promise<Item[]>;
+  visibleHistory(target: Session, limit: number, beforeSeq?: number): Promise<Item[]>;
   currentCaller(): Promise<OrchestratorInput>;
 }
 
@@ -68,12 +68,13 @@ export function createTurnContext(
   }
 
   const visibleTitle = (target: Session) => target.title?.trim() || target.id;
-  async function visibleHistory(target: Session, limit: number): Promise<Item[]> {
+  async function visibleHistory(target: Session, limit: number, beforeSeq?: number): Promise<Item[]> {
     const audience = binding.request.conversation.audience.length
       ? binding.request.conversation.audience
       : [binding.request.actor];
     return deps.sessions.visibleItems(target.id, [binding.request.actor.id, ...audience.map((p) => p.id)], {
       limit,
+      ...(beforeSeq !== undefined ? { beforeSeq } : {}),
     });
   }
 
