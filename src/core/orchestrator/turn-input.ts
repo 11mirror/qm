@@ -8,7 +8,7 @@ import type { SecurityObserver } from "./security-screen.ts";
 import type { Session } from "../../types.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import { documentText, historicalDocumentMetas, loadDocumentInputs } from "../document-inputs.ts";
-import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment } from "../document-kinds.ts";
+import { MAX_DOCUMENT_BYTES, documentTokenCharges, isDocumentAttachment } from "../document-kinds.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { recentPrincipalDeliveryNote } from "../../surfaces/recent-dm-posts.ts";
 import type { Lease } from "../../sessions/session-store.ts";
@@ -240,7 +240,10 @@ async function loadTurnDocuments(
       ...(input.model ? { model: input.model } : {}),
       reservedTokens: strictReadOnly
         ? 0
-        : inbound.metas.reduce((sum, meta) => sum + (isDocumentAttachment(meta) ? estimateDocumentTokens(meta) : 0), 0),
+        : documentTokenCharges(inbound.metas.filter(isDocumentAttachment), documentBudget).reduce(
+            (sum, tokens) => sum + tokens,
+            0,
+          ),
     }),
   );
   const contextRecovered =
@@ -288,7 +291,8 @@ function observeTurnDocuments(
   void mapBounded(inputs.documents.slice(), availableParallelism(), async (document) => {
     const extracted = await documentText(document, turnAbort.signal).catch(swallowAs("document screen: extract", null));
     if (turnAbort.signal.aborted || !extracted) return;
-    for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted))
+    for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted)) {
+      if (turnAbort.signal.aborted) return;
       await observeSecurityData(chunk, actor.id, scopeId, {
         ...screenTrace,
         sessionId: session.id,
@@ -297,6 +301,7 @@ function observeTurnDocuments(
         surface: "inbound_file",
         origin: input.origin.kind,
       });
+    }
   }).catch(swallowAs("orchestrator: observed document screen", undefined));
 }
 

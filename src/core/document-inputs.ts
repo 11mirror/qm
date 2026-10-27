@@ -13,6 +13,7 @@ import {
   OFFICE_FALLBACK_EXTENSIONS,
   documentExtension,
   documentStub,
+  documentTokenCharges,
   estimateDocumentTokens,
   isDocumentAttachment,
   isTextDocument,
@@ -61,6 +62,7 @@ export async function loadDocumentInputs(
   );
   let remaining = maxBytes;
   let usedTokens = 0;
+  const candidates: Array<{ meta: AttachmentMeta; artifact: FileArtifact }> = [];
   for (const meta of [...metas].reverse()) {
     signal?.throwIfAborted();
     try {
@@ -68,21 +70,33 @@ export async function loadDocumentInputs(
       seen.add(meta.artifactId);
       const artifact = await files.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
+      if (loadedContent.has(JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]))) continue;
+      candidates.push({ meta, artifact });
+    } catch {
+      signal?.throwIfAborted();
+      notices.push(`${meta.name}: document content is unavailable.`);
+    }
+  }
+  const charges = documentTokenCharges(
+    candidates.map(({ artifact }) => artifact),
+    maxTokens,
+  );
+  for (const [index, { meta, artifact }] of candidates.entries()) {
+    signal?.throwIfAborted();
+    try {
       const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
       if (loadedContent.has(contentKey)) continue;
-      const estimate = estimateDocumentTokens(artifact);
-      const unspent = Math.max(0, maxTokens - usedTokens);
-      const tokens = isTextDocument(artifact) ? Math.min(estimate, unspent) : estimate;
+      const tokens = charges[index]!;
       if (
         artifact.sizeBytes > remaining ||
         documents.length >= maxDocuments ||
-        tokens > unspent ||
-        (estimate > 0 && tokens === 0)
+        usedTokens + tokens > maxTokens ||
+        (estimateDocumentTokens(artifact) > 0 && tokens === 0)
       ) {
         notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
         continue;
       }
-      const opened = await files.open(meta.artifactId);
+      const opened = await files.open(meta.artifactId!);
       if (!opened) {
         notices.push(`${artifact.name}: document content is unavailable.`);
         continue;

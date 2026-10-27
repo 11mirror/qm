@@ -63,6 +63,24 @@ export function estimateDocumentTokens(file: {
   return Math.ceil(bytes / DOCUMENT_BYTES_PER_TOKEN);
 }
 
+export function documentTokenCharges(
+  files: readonly { name: string; mimeType?: string; mimetype?: string; sizeBytes: number }[],
+  budget: number,
+): number[] {
+  const charges = files.map((file) => (isTextDocument(file) ? 0 : estimateDocumentTokens(file)));
+  const fitted = files
+    .map((file, index) => ({ index, estimate: estimateDocumentTokens(file) }))
+    .filter(({ index }) => isTextDocument(files[index]!))
+    .sort((a, b) => a.estimate - b.estimate);
+  let remaining = Math.max(0, budget - charges.reduce((sum, tokens) => sum + tokens, 0));
+  fitted.forEach(({ index, estimate }, position) => {
+    const share = Math.floor(remaining / (fitted.length - position));
+    charges[index] = Math.min(estimate, share);
+    remaining -= charges[index]!;
+  });
+  return charges;
+}
+
 export function replayableDocumentMetas(payload: unknown): AttachmentMeta[] {
   const attachments = (payload as { attachments?: unknown } | null)?.attachments;
   if (!Array.isArray(attachments)) return [];

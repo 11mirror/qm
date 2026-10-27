@@ -5,10 +5,7 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../../src/harness/document-inputs.ts";
-import {
-  estimateDocumentTokens,
-  isDocumentAttachment,
-} from "../../src/core/document-kinds.ts";
+import { documentTokenCharges, estimateDocumentTokens, isDocumentAttachment } from "../../src/core/document-kinds.ts";
 import {
   documentFallbackText,
   documentText,
@@ -499,4 +496,61 @@ test("output budgeting does not count native document base64 as text tokens", ()
     assert.equal(result.kind, "raised");
     if (result.kind === "raised") assert.ok(result.estimatedPromptTokens < 2000);
   }
+});
+
+test("text documents split the token budget fairly, so one large file does not stub the others", async () => {
+  const text = (name: string, sizeBytes: number) => ({ name, mimetype: "text/plain", sizeBytes });
+  assert.deepEqual(documentTokenCharges([text("big.txt", 400_000), text("small.txt", 4_000)], 30_000), [29_000, 1_000]);
+  assert.deepEqual(
+    documentTokenCharges(
+      [text("a.txt", 400_000), { name: "deck.pdf", mimetype: "application/pdf", sizeBytes: 40_000 }],
+      30_000,
+    ),
+    [20_000, 10_000],
+  );
+  assert.deepEqual(documentTokenCharges([text("a.txt", 400_000), text("b.txt", 400_000)], 30_000), [15_000, 15_000]);
+  assert.deepEqual(documentTokenCharges([text("a.txt", 400_000)], 0), [0]);
+
+  const big = Buffer.from("b".repeat(400_000));
+  const small = Buffer.from("s".repeat(4_000));
+  const artifacts = [
+    { id: "big", name: "big.txt", data: big },
+    { id: "small", name: "small.txt", data: small },
+  ].map(({ id, name, data }) => ({
+    artifact: {
+      id,
+      name,
+      mimetype: "text/plain",
+      sizeBytes: data.length,
+      sha256: createHash("sha256").update(data).digest("hex"),
+      ownerScopeId: "user:owner",
+      enabled: true,
+    } as FileArtifact,
+    data,
+  }));
+  const byId = new Map(artifacts.map((entry) => [entry.artifact.id, entry]));
+  const store = {
+    get: async (id: string) => byId.get(id)?.artifact,
+    open: async (id: string) => {
+      const entry = byId.get(id)!;
+      return { artifact: entry.artifact, sizeBytes: entry.data.length, stream: Readable.from(entry.data) };
+    },
+  } as unknown as FileArtifactStore;
+  const metas = artifacts.map(
+    ({ artifact }) =>
+      ({
+        name: artifact.name,
+        mimetype: artifact.mimetype,
+        artifactId: artifact.id,
+        sizeBytes: artifact.sizeBytes,
+        direction: "in",
+      }) as AttachmentMeta,
+  );
+  const loaded = await loadDocumentInputs(store, metas, () => true, undefined, undefined, undefined, undefined, 30_000);
+  assert.deepEqual(
+    loaded.documents.map((document) => document.name),
+    ["big.txt", "small.txt"],
+  );
+  assert.deepEqual(loaded.notices, []);
+  assert.equal(loaded.tokens, 30_000);
 });
