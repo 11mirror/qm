@@ -208,6 +208,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   const { app } = built;
   const actor = { externalId: "U1" };
   const sys = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills" },
@@ -219,6 +220,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.doesNotMatch(sys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
 
   const channelSys = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:seeded-skills", audience: [actor] },
@@ -229,6 +231,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
 
   const read = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
@@ -239,6 +242,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.match(read.reply ?? "", /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
 
   const drive = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },

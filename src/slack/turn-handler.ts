@@ -442,13 +442,13 @@ export function createTurnHandler(deps: {
       deliveryCandidates: deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName) || undefined,
       text,
       gatewayContext,
-      ...(inc.unprompted
-        ? {
-            unprompted: true,
+      origin: inc.unprompted
+        ? compact({
+            kind: "ambient" as const,
             entryTs: inc.synthetic ? undefined : inc.ts,
-            liveActor: inc.synthetic || actor.isBot || inc.botAuthored ? undefined : true,
-          }
-        : { liveActor: true, triggerTs: inc.ts }),
+            live: inc.synthetic || actor.isBot || inc.botAuthored ? undefined : true,
+          })
+        : { kind: "human", messageTs: inc.ts },
       botActor: actor.isBot ? true : undefined,
       conversationHeader: rendered?.header || undefined,
       priorTurns: rendered?.priorTurns.length ? rendered.priorTurns : undefined,

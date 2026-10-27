@@ -28,8 +28,8 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
     deliveryTarget: `${channel}:${root}`,
     text,
-    liveActor: true,
     async: true,
+    origin: { kind: "human" },
   };
 }
 

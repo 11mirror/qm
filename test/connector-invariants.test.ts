@@ -136,8 +136,15 @@ test("status/selector parity — a personal-only connection reports connected (m
 function turn(kind: "dm" | "channel", text: string): TurnRequest {
   const actor = { externalId: "U1" };
   return kind === "dm"
-    ? { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1" }, text }
+    ? {
+        origin: { kind: "direct" },
+        surface: "test",
+        actor,
+        conversation: { kind: "dm", threadRef: "dm:U1" },
+        text,
+      }
     : {
+        origin: { kind: "direct" },
         surface: "slack",
         actor,
         conversation: { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience: [actor] },
@@ -150,14 +157,14 @@ test("F1/F3 — a live DM receives only its requested connector; a channel recei
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const absent = `!run test -z "$AGENT_CREDENTIAL_TOKEN" && echo absent`;
-  assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
+  assert.equal((await built.app.turn({ ...turn("dm", absent), origin: { kind: "human" } })).reply, "absent");
   const command = brokered("u1-gmail");
   const selected = `!execute ${JSON.stringify({ command, credentials: ["connector:gmail.googleapis.com:default"] })}`;
   assert.deepEqual(
-    await brokeredConnectors((await built.app.turn({ ...turn("dm", selected), liveActor: true })).reply),
+    await brokeredConnectors((await built.app.turn({ ...turn("dm", selected), origin: { kind: "human" } })).reply),
     [{ handle: "connector:gmail.googleapis.com:default", host: "gmail.googleapis.com", ownerId: "U1" }],
   );
-  assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
+  assert.equal((await built.app.turn({ ...turn("dm", absent), origin: { kind: "human" } })).reply, "absent");
   assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
   await assert.rejects(built.app.turn(turn("channel", selected)), /not available/);
 });
@@ -168,8 +175,8 @@ function wake(text: string, readOnly: boolean): TurnRequest {
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "agent:main:cron:c1" },
     text,
-    triggered: true,
     ...(readOnly ? { readOnly: true } : {}),
+    origin: { kind: "automation" },
   };
 }
 
@@ -250,7 +257,7 @@ for (const expiredPersonal of [false, true]) {
       accesses.push(args[2]);
       return original(...args);
     };
-    const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+    const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), origin: { kind: "human" } });
     assert.deepEqual(accesses, []);
     assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:company/);
     if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
@@ -258,7 +265,7 @@ for (const expiredPersonal of [false, true]) {
     for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
       const text = `!execute ${JSON.stringify({ command: brokered(`${account}-token`), credentials: [`connector:gmail.googleapis.com:${account}`] })}`;
       const connectors = await brokeredConnectors(
-        (await built.app.turn({ ...turn("dm", text), liveActor: true })).reply,
+        (await built.app.turn({ ...turn("dm", text), origin: { kind: "human" } })).reply,
       );
       assert.equal(connectors?.[0]?.accountType, account);
     }
@@ -276,9 +283,11 @@ test("explicit default OAuth accounts remain discoverable through bulk metadata"
     { accessToken: "explicit-default-token", accountType: "default" },
     "default",
   );
-  const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+  const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), origin: { kind: "human" } });
   assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:default/);
   const text = `!execute ${JSON.stringify({ command: brokered("explicit-default-token"), credentials: ["connector:gmail.googleapis.com:default"] })}`;
-  const connectors = await brokeredConnectors((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply);
+  const connectors = await brokeredConnectors(
+    (await built.app.turn({ ...turn("dm", text), origin: { kind: "human" } })).reply,
+  );
   assert.equal(connectors?.[0]?.host, host);
 });

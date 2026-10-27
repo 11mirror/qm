@@ -1010,6 +1010,7 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
 
 const internalActor = { externalId: "U1" };
 const dm = (text: string): TurnRequest => ({
+  origin: { kind: "direct" },
   surface: "test",
   actor: internalActor,
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -1081,7 +1082,6 @@ test("orchestrator vends a capability for only the requested org credential", as
     surface: "slack",
     actor,
     botActor: true,
-    liveActor: true,
     conversation: {
       kind: "channel",
       threadRef: "ch:C1:bot",
@@ -1091,6 +1091,7 @@ test("orchestrator vends a capability for only the requested org credential", as
       publishMembers: [actor],
     },
     text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["x-firehose"] })}`,
+    origin: { kind: "human" },
   });
   const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
@@ -1141,6 +1142,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
   });
 
   const channelTurn = (channelRef: string): TurnRequest => ({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: internalActor,
     conversation: {

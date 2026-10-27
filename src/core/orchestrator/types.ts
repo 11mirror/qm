@@ -14,7 +14,6 @@ import type {
   TurnRequest,
   TurnResult,
 } from "../../types.ts";
-import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
@@ -73,20 +72,7 @@ import type { SurfaceCache } from "../../surface-cache/types.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  | "surface"
-  | "actor"
-  | "conversation"
-  | "idempotencyKey"
-  | "spawned"
-  | "async"
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
+  "surface" | "actor" | "conversation" | "idempotencyKey" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -95,7 +81,6 @@ export interface OrchestratorInput extends Omit<
   sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;
-  origin: TurnOrigin;
   runId?: string;
   attempt?: number;
   resumeCause?: RunStop;

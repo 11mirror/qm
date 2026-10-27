@@ -38,6 +38,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -169,6 +170,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },
@@ -318,6 +320,7 @@ test("a Slack DM post joins the recipient's DM conversation and shows up in thei
     );
 
     const turn: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U-alice" },
       conversation: { kind: "dm", threadRef: "dm:D-alice" },
@@ -348,6 +351,7 @@ test("conversation listing pages by keyset cursor; counts come from the backgrou
   try {
     for (let i = 0; i < 5; i++) {
       const dm: TurnRequest = {
+        origin: { kind: "direct" },
         surface: "test",
         actor: { externalId: `U${i}` },
         conversation: { kind: "dm", threadRef: `dm:U${i}:t` },

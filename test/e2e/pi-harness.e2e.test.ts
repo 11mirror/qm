@@ -24,7 +24,13 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread = "t1"): TurnRequest {
-  return { surface: "e2e", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "e2e",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("the agent loop generates and delivers an output", opts, async () => {
@@ -77,6 +83,7 @@ test("the turn is recorded in the session log (user + assistant entries)", opts,
 test("internal-only still refuses a guest even with the real harness", opts, async () => {
   const { app } = freshApp();
   const r = await app.turn({
+    origin: { kind: "direct" },
     surface: "e2e",
     actor: { externalId: "G1", isExternalGuest: true },
     conversation: { kind: "dm", threadRef: "g1" },

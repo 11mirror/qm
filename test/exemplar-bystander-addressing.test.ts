@@ -56,8 +56,8 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
       },
       deliveryTarget: `slack:${channel}:${root}`,
       text: REQUEST,
-      unprompted: true,
       async: true,
+      origin: { kind: "ambient" },
     };
     await built.app.turn(req);
 

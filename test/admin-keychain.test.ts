@@ -35,6 +35,7 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },

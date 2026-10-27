@@ -108,9 +108,9 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "web:U1:excluded-saved-model" },
       text: "hello",
-      liveActor: true,
       async: true,
       model: "gpt-5.6-terra",
+      origin: { kind: "human" },
     });
     assert.equal(refused.status, "refused");
     await s.built.config.setSetting("webuiModels", [], "org:default-org");

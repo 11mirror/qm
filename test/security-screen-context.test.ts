@@ -31,11 +31,11 @@ for (const surface of ["web", "slack"]) {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
+            origin: { kind: "human" },
             surface,
             actor: { externalId: "U1" },
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
-            liveActor: true,
           }),
         });
         assert.equal(response.status, 200);

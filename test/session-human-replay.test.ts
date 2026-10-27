@@ -62,6 +62,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
     kind: "steer",
     text: "Please continue the investigation",
     request: {
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: "sender" },
       conversation: {
@@ -118,6 +119,7 @@ test("late child signals remain pending behind approval and requestless steers r
     kind: "steer",
     text: "human followup",
     request: {
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: actor.id },
       conversation: { kind: "dm", threadRef: child.threadRef },

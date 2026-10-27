@@ -34,6 +34,7 @@ async function scopeWithoutDefault() {
   );
   await built.sandboxResources.initialize();
   const base: Omit<TurnRequest, "text"> = {
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "U1" },
     conversation: { kind: "channel", threadRef: "ch:C1:native", channelRef: "C1", audience: [{ externalId: "U1" }] },

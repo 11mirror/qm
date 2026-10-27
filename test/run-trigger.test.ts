@@ -7,6 +7,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../src/core/failure-copy.ts";
 import { testMap } from "./support/test-database.ts";
+import { automationOrigin } from "./support/turn-origin.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -61,7 +62,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal(out.ran, true);
     assert.equal(req?.surfaceTools, true, "a monitor fire wires the surface tools");
     assert.equal(req?.addressed, true, "and is addressed so it must reply-or-decline (shed fallback delivers)");
-    assert.deepEqual(req?.triggerDestination, toChannel, "the post tool aims at the arming thread");
+    assert.deepEqual(automationOrigin(req)?.destination, toChannel, "the post tool aims at the arming thread");
     assert.equal(req?.idempotencyKey, "monitor:m1:exit");
     assert.equal((await d.outbound.pending("slack")).length, 0);
   });

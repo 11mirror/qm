@@ -1,4 +1,3 @@
-import { turnOriginRequestFields } from "../turn-origin.ts";
 import { securityScreenPayload } from "../../security/security-screen.ts";
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachments.ts";
@@ -87,8 +86,7 @@ export function observeInboundTurn(
     );
     const screenPayload = securityScreenPayload({
       ...input,
-      ...turnOriginRequestFields(input.origin),
-      ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
+      origin: sessionTurn ? { kind: "automation", screenData: input.text } : input.origin,
       overheard: [],
       externalPromptData,
       verifiedSessionMessage,

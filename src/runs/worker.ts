@@ -5,7 +5,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator, OrchestratorInput } from "../core/orchestrator.ts";
 import { isNonRetryable, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import {
   errorParks,
   handbackStop,
@@ -51,7 +50,7 @@ export async function processRun(
       "messaging.message.receive.latency":
         run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
       "qm.surface": request.surface,
-      "qm.origin": resolveTurnOrigin(request).kind,
+      "qm.origin": request.origin.kind,
     },
     () => attemptRun(deps, { ...run, request }, opts),
     (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
@@ -153,7 +152,7 @@ export function runTurnInput(
 ): OrchestratorInput {
   return {
     ...run.request,
-    origin: resolveTurnOrigin(run.request),
+    origin: run.request.origin,
     runId: run.id,
     attempt: run.attempts,
     ...(run.lastStop ? { resumeCause: run.lastStop } : {}),

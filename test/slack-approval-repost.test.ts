@@ -95,6 +95,7 @@ function fixture() {
       approvalChannel: "C1",
       threadOnly: false,
       turn: {
+        origin: { kind: "direct" },
         actor: { externalId: requesterId },
         conversation: { kind: "channel", threadRef: "ch:C1:1.0", channelRef: "C1", audience: [] },
         deliveryTarget: "C1",

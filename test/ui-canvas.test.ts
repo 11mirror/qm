@@ -89,6 +89,7 @@ describe("ui canvas and ui observe", () => {
     agentBase = `http://localhost:${(agentServer.address() as AddressInfo).port}`;
     sourceBase = `http://localhost:${(sourceServer.address() as AddressInfo).port}`;
     const turn: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: THREAD },

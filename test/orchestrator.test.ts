@@ -38,7 +38,7 @@ test("human transcript entries retain authenticated identity across duplicate na
     { externalId: "U2", displayName: "Alex" },
     { externalId: "U1", displayName: "New Name" },
   ]) {
-    const result = await app.turn(channel("hello", { actor, liveActor: true }));
+    const result = await app.turn(channel("hello", { actor, origin: { kind: "human" } }));
     assert.equal(result.status, "ok", result.reason);
     const found = await app.getSession(result.sessionId!);
     const payload = found!.items.filter((entry) => isUserMessage(entry)).at(-1)!.body as {
@@ -142,7 +142,7 @@ test("a triggered turn records its synthetic wake prompt hidden so the chat neve
   const { app } = freshApp();
   const res = await app.turn(
     dm('<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>new output</why></wake>', {
-      triggered: true,
+      origin: { kind: "automation" },
     }),
   );
   assert.equal(res.status, "ok", res.reason);
@@ -248,6 +248,7 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
   );
 
   await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U-alice" },
     conversation: { kind: "dm", threadRef: "dm:D-alice" },
@@ -343,6 +344,7 @@ test("a retry of an attempt that recorded NO work continues from the recorded re
 test("a guest actor is refused (internal-only, input side)", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "G1", isExternalGuest: true },
     conversation: { kind: "dm", threadRef: "dm:G1:t1" },
@@ -356,6 +358,7 @@ test("a guest actor is refused (internal-only, input side)", async () => {
 test("a channel with a non-internal audience member is refused (internal-only, output side)", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: internalActor,
     conversation: {
@@ -453,7 +456,6 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     channel("!run echo bot", {
       actor,
       botActor: true,
-      liveActor: true,
       conversation: {
         kind: "channel",
         threadRef: "ch:C1:bot",
@@ -462,6 +464,7 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
         audience: [actor],
         publishMembers: [actor],
       },
+      origin: { kind: "human" },
     }),
   );
   assert.equal(res.status, "ok");
@@ -1062,15 +1065,15 @@ test("unattended grants enter capability claims only on non-live turns", async (
     return realProvision(layers, opts);
   };
 
-  await app.turn(dm("!run echo cron", { triggered: true, unattendedGrants: ["admin.sessions.read"] }));
+  await app.turn(dm("!run echo cron", { unattendedGrants: ["admin.sessions.read"], origin: { kind: "automation" } }));
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.deepEqual(claims?.grants, ["admin.sessions.read"]);
 
   await app.turn(
     dm("!run echo live", {
-      liveActor: true,
       conversation: { kind: "dm", threadRef: "dm:U1:live-grant" },
       unattendedGrants: ["admin.sessions.read"],
+      origin: { kind: "human" },
     }),
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
@@ -1110,6 +1113,7 @@ test("identity grounding: the roster lists this conversation's participants by t
     { principalId: "U9", displayName: "Outsider Olive", type: "internal" },
   ]);
   const prompt = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: internalActor,
     conversation: {
@@ -1137,6 +1141,7 @@ test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports 
   }));
   await directory.replace(many);
   const prompt = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "U0" },
     conversation: {
@@ -1157,6 +1162,7 @@ test("identity grounding: a participant who hasn't synced into the directory sti
   const { app, directory } = freshApp();
   await directory.replace([{ principalId: "U1", displayName: "Alice Example", type: "internal" }]);
   const prompt = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: internalActor,
     conversation: {
@@ -1179,6 +1185,7 @@ test("identity grounding: a cased-vs-lowercase duplicate participant resolves to
     { principalId: "alice@acme.com", displayName: "Alice Wonderland", type: "internal" },
   ]);
   const prompt = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: internalActor,
     conversation: {
@@ -1218,7 +1225,7 @@ test("an org admin's live turn carries the admin prompt hint and a liveness clai
     actor: { externalId: "admin-alice" },
     conversation: { kind: "dm", threadRef: "dm:admin-alice:t1" },
     text: "!run echo hi",
-    liveActor: true,
+    origin: { kind: "human" },
     ...extra,
   });
 

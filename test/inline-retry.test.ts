@@ -7,6 +7,7 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 const request: TurnRequest = {
+  origin: { kind: "direct" },
   surface: "test",
   actor: { externalId: "U1" },
   conversation: { kind: "dm", threadRef: "inline-retry" },

@@ -55,6 +55,7 @@ test("a new personal DM offers onboarding through the skills index", async () =>
   await waitForOnboardingSkill(skills);
 
   const sys = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:onboarding-new" },
@@ -78,6 +79,7 @@ test("ideas web conversations bypass onboarding on every turn without completing
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
     const sys = await app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor,
       conversation: { kind: "dm", threadRef },
@@ -87,6 +89,7 @@ test("ideas web conversations bypass onboarding on every turn without completing
   }
   assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", "U1"))), "not_started");
   const ordinary = await app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor,
     conversation: { kind: "dm", threadRef: "web:U1:ordinary" },

@@ -20,7 +20,13 @@ function freshApp() {
 
 const actor = { externalId: "U1", orgId: "acme" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
@@ -72,6 +78,7 @@ test("resolving the approval emits working, then idle once the resumed turn sett
   await settledStates(parked, "web:U1:resolve", 2);
   const got = record(built.sessionStateBus);
   await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "web:U1:resolve" },

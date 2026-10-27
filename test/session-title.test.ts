@@ -21,7 +21,13 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("names a conversation from its first completed turn (auto-title)", async () => {
@@ -171,6 +177,7 @@ test("the title is generated ONCE — a later turn does not rewrite it", async (
 test("the title ignores assembled-turn boilerplate (conversation header / manifests)", async () => {
   const { app } = freshApp();
   const r = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "web:U1:tctx" },

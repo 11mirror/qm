@@ -262,6 +262,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
     useTool = true;
     const result = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "discovery-tool-loop" },

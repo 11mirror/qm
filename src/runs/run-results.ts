@@ -3,7 +3,7 @@ import { type Destination, sourceDestination, turnSource } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
 import type { Run, RunStore } from "./run-store.ts";
 import { turnPostProvenance, type Outbound, type OutboundPost } from "../surfaces/outbound.ts";
-import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -25,7 +25,7 @@ export function runResultPost(run: Run, adminUrlFor?: AdminUrlFor): OutboundPost
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
-  const origin = resolveTurnOrigin(run.request);
+  const origin = run.request.origin;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   if (surface === "web") {

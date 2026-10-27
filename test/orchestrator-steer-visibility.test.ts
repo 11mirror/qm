@@ -31,6 +31,7 @@ for (const mode of ["retry", "handoff"] as const) {
     const backoff = retryClock(t);
     const built = buildApp(testConfig());
     const request: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "resume-steer-visibility" },

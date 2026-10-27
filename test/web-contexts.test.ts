@@ -26,7 +26,13 @@ const webTurn = (base: string, actor: string, conversation: unknown, text = "hi"
   fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ surface: "web", actor: { externalId: actor }, conversation, text }),
+    body: JSON.stringify({
+      origin: { kind: "direct" },
+      surface: "web",
+      actor: { externalId: actor },
+      conversation,
+      text,
+    }),
   });
 
 test("GET /v1/contexts: personal always; public channels and current private memberships", async () => {
@@ -119,6 +125,7 @@ test("a web turn carrying fastMode on a non-fast model is accepted; dispatch mas
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef: "web:alice:fast1" },
@@ -140,6 +147,7 @@ test("prior participation never authorizes a shared scope after directory member
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        origin: { kind: "direct" },
         surface: "slack",
         actor: { externalId: "alice" },
         conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },

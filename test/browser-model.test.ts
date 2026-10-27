@@ -145,6 +145,7 @@ test("gateway deployment provisions a browser token without exposing the company
     return provision(layers, opts);
   };
   const result = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "dm:U1:browser" },
@@ -183,6 +184,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
       return provision(layers, opts);
     };
     await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:missing" },
@@ -251,6 +253,7 @@ test("company browsing without a gateway uses current deployment credentials", a
     return provision(layers, opts);
   };
   await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "dm:U1:direct" },

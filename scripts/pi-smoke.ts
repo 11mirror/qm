@@ -22,7 +22,7 @@ const { app } = built;
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread = "t1"): TurnRequest {
-  return { surface: "smoke", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return { surface: "smoke", actor, conversation: { kind: "dm", threadRef: thread }, origin: { kind: "direct" }, text };
 }
 
 async function run(label: string, req: TurnRequest): Promise<void> {

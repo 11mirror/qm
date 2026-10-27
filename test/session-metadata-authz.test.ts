@@ -16,7 +16,13 @@ function freshApp() {
 }
 
 function dm(text: string, thread: string, externalId: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor: { externalId },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("getSessionForViewer withholds metadata from a non-participant (no session-metadata IDOR)", async () => {
@@ -46,6 +52,7 @@ test("the single-session read applies the managed-project check the session list
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   const outcome = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "member" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:project" },

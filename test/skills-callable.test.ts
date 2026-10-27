@@ -41,6 +41,7 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
   await publishPersonalSkill(skills);
 
   const sys = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -50,6 +51,7 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
   assert.match(sys.reply ?? "", /make-digest/);
 
   const read = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:t2" },
@@ -62,6 +64,7 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
   const { app, skills } = freshApp();
   await publishPersonalSkill(skills);
   const sys = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] },
@@ -90,6 +93,7 @@ test("ordinary sandbox work never touches the skills tree", async () => {
     return remove(handle, path);
   };
   await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:no-sync" },
@@ -122,6 +126,7 @@ test("skill files stay on the computer across turns", async () => {
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:archive" },
+    origin: { kind: "direct" },
   };
   const ran = await app.turn({ ...request, text: "!skill-run helper cat {dir}/scripts/run.sh" } as TurnRequest);
   assert.equal(ran.reply, "printf helper");
@@ -152,6 +157,7 @@ test("skills index order uses visible history, resets with compaction, and leave
     actor,
     conversation: { kind: "dm" as const, threadRef: "shortlist-history" },
     text: "!sysprompt",
+    origin: { kind: "direct" as const },
   };
   const promoted = (prompt: string) => prompt.indexOf("**helper-19**") < prompt.indexOf("**helper-00**");
   const first = await built.app.turn(request);

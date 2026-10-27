@@ -133,7 +133,7 @@ test("dynamic migration waits for its prerequisite schema on a fresh database", 
 
 test("cron queue shares the query pool and stopping it preserves other stores", { skip, timeout: 30_000 }, async () => {
   const { cronJobQueue } = await import("../src/cron/job-queue.ts");
-    const { createJobWorker } = await import("../src/jobs/job-worker.ts");
+  const { createJobWorker } = await import("../src/jobs/job-worker.ts");
   const store = createPgPool(direct!);
   const queue = cronJobQueue(createJobWorker(direct!), 1);
   let fired = false;

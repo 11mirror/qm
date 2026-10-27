@@ -261,6 +261,7 @@ test("thinking always reaches the run activity feed, with the model-bound signat
 test("channel session for an all-internal audience runs and is channel-scoped", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: internalActor,
     conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [internalActor] },
@@ -440,7 +441,7 @@ test("a failure before the harness records the user message back-fills it — no
   assert.equal(t1.status, "ok");
 
   await assert.rejects(
-    app.turn(dm("use the fancy model", { model: "not-a-real-model", liveActor: true })),
+    app.turn(dm("use the fancy model", { model: "not-a-real-model", origin: { kind: "human" } })),
     /not approved/,
   );
 
@@ -642,7 +643,10 @@ test("observe screening never waits on a hung classifier", async () => {
   const built = freshApp({}, { provider: "fixture-screen", classify: () => new Promise(() => {}) });
   const started = Date.now();
   const inbound = await built.app.turn(
-    dm("summarize the event", { surface: "webhook", triggered: true, securityScreenData: "ordinary fixture data" }),
+    dm("summarize the event", {
+      surface: "webhook",
+      origin: { kind: "automation", screenData: "ordinary fixture data" },
+    }),
   );
   const tool = await built.app.turn(dm("!screened-run printf observe-ok"));
   assert.equal(inbound.status, "ok");
@@ -653,7 +657,10 @@ test("observe screening never waits on a hung classifier", async () => {
 test("screening observes: would-block verdicts are recorded without quarantine", async () => {
   const built = freshApp({}, fixtureScreen());
   const inbound = await built.app.turn(
-    dm("summarize the event", { surface: "webhook", triggered: true, securityScreenData: "SCREENING_FIXTURE_BLOCK" }),
+    dm("summarize the event", {
+      surface: "webhook",
+      origin: { kind: "automation", screenData: "SCREENING_FIXTURE_BLOCK" },
+    }),
   );
   assert.equal(inbound.status, "ok");
   const detail = JSON.parse((await screenEvent(built, "would_block")).detail!) as Record<string, unknown>;

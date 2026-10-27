@@ -79,6 +79,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },

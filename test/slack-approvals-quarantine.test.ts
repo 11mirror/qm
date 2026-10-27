@@ -34,6 +34,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
     approvalChannel: "D1",
     threadOnly: false,
     turn: {
+      origin: { kind: "direct" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:D1", audience: [{ externalId: "U1" }] },
       deliveryTarget: "D1",

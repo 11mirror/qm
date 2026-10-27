@@ -13,6 +13,19 @@ import type { TurnCtx } from "./turn-context.ts";
 import type { buildCredentialCatalog } from "./credential-catalog.ts";
 import type { Session } from "../../types.ts";
 
+async function purposeRuntime(ctx: TurnCtx, session: Session) {
+  const { deps, input, humanInput } = ctx;
+  const runtimePurpose = turnRuntimePurpose(input, !!session.parentSessionId);
+  const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+  const wantsOrgFastMode =
+    typeof input.fastMode !== "boolean" &&
+    !purposeDefault &&
+    humanInput &&
+    (await deps.config?.settingDurable("interactiveFastMode"));
+  const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
+  return { runtimePurpose, purposeDefault, effectiveFastMode };
+}
+
 export async function selectTurnRuntime(
   ctx: TurnCtx,
   turn: {
@@ -28,17 +41,7 @@ export async function selectTurnRuntime(
     typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0
       ? input.turnWallClockMs
       : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
-  const runtimePurpose = turnRuntimePurpose(
-    { surface: input.surface, triggered: automatedTurn },
-    !!session.parentSessionId,
-  );
-  const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
-  const wantsOrgFastMode =
-    typeof input.fastMode !== "boolean" &&
-    !purposeDefault &&
-    humanInput &&
-    (await deps.config?.settingDurable("interactiveFastMode"));
-  const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
+  const { runtimePurpose, purposeDefault, effectiveFastMode } = await purposeRuntime(ctx, session);
   const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
     let userProviderKeys: ProviderKeys | undefined;
     let userModelOverride: string | undefined;

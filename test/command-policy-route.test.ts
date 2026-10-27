@@ -36,6 +36,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
     await selectDefaultSandbox(srv.built, "U1", "personal:U1");
     const command = "git push --force origin main";
     const turn = {
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U1", displayName: "Alice" },
       conversation: { kind: "dm", threadRef: "dm:U1:t-approval-recovery" },
@@ -109,6 +110,7 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
   try {
     const command = "git push --force origin main";
     const turn = {
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U2", displayName: "Bob" },
       conversation: { kind: "dm", threadRef: "dm:U2:t-approvals-list" },

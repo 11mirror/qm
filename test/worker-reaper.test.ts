@@ -389,6 +389,7 @@ test("shutdown mid-turn through the harness leaves no stop marker, and the resum
   const built = buildApp(testConfig({ workers: 1, shutdownDrainMs: 30 }));
   const threadRef = "harness-shutdown-resume";
   const queued = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef },
@@ -502,6 +503,7 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
   const config = testConfig({ workers: 1, leaseTtlMs: 5_000, reaperIntervalMs: 60_000 });
   const built = buildApp(config);
   const a = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "t1" },
@@ -509,6 +511,7 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
     async: true,
   });
   const b = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "t2" },
@@ -535,6 +538,7 @@ test("a worker pool drains a queued run end-to-end", async () => {
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t1" },
@@ -559,6 +563,7 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t1" },
@@ -673,6 +678,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
   };
   const enqueue = (threadRef: string) =>
     built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef },
@@ -730,6 +736,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
   };
   const turn = (threadRef: string, async = false) =>
     built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef },
@@ -777,6 +784,7 @@ test("final shutdown waits for an already-started completion instead of releasin
     return complete(...args);
   };
   const queued = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "bounded-worker" },
@@ -842,9 +850,9 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
           actor: { externalId: "U1" },
           conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
           text: "test message",
-          liveActor: true,
           async: true,
           [flag]: true,
+          origin: { kind: "human" },
         });
         assert.ok(admitted.runId);
         const run = (await built.runs.claimById(admitted.runId, "worker", 10_000))!;
@@ -875,6 +883,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     return append(lease, entry);
   };
   const inline = built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "inline-shutdown" },

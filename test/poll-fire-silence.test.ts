@@ -22,16 +22,18 @@ function monitorFire(text: string, channel: string, root: string, fireKey: strin
     actor: { externalId: "U1" },
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel },
     text,
-    triggered: true,
     surfaceTools: true,
     addressed: true,
-    triggerDestination: {
-      type: "slack",
-      target: `slack:${channel}:${root}`,
-      audienceScopeId: scopeId("channel", channel),
-    },
     idempotencyKey: fireKey,
     async: false,
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "slack",
+        target: `slack:${channel}:${root}`,
+        audienceScopeId: scopeId("channel", channel),
+      },
+    },
   };
 }
 
@@ -106,8 +108,8 @@ test("interactive mention: the first-block ack still posts immediately (unchange
       },
       deliveryTarget: "slack:C-live:900.1",
       text: "!preamble On it — checking.",
-      liveActor: true,
       async: true,
+      origin: { kind: "human" },
     });
     const deadline = Date.now() + 5_000;
     let ack: any;

@@ -9,7 +9,6 @@ import {
   type ActorAssertion,
   turnSource,
 } from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheard, isReply, isUserMessage, type Item } from "../../sessions/items.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -172,7 +171,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
-    ...turnOriginRequestFields(input.origin),
+    origin: input.origin,
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),

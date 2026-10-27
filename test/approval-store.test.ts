@@ -11,6 +11,7 @@ function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
     command: "publish",
     createdAt,
     request: {
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef },

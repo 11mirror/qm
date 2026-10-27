@@ -16,6 +16,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { idleCronQueue } from "./support/cron-slots.ts";
+import { automationOrigin } from "./support/turn-origin.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -197,7 +198,7 @@ test("a personal cron with a principal destination delivers its real output to t
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
-  assert.deepEqual(calls[0]?.triggerDestination, {
+  assert.deepEqual(automationOrigin(calls[0])?.destination, {
     type: "principal",
     target: "U-alice",
     audienceScopeId: scopeId("personal", "U-alice"),

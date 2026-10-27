@@ -49,7 +49,7 @@ export function inboundTurn(surface: InboundSurface, message: InboundMessage): T
     deliveryTarget: surfaceDeliveryTarget(ref),
     idempotencyKey: `${surface.name}:${message.account}:${message.messageId}`,
     addressed: true,
-    liveActor: true,
+    origin: { kind: "human" },
     ...(message.author.timezone ? { timezone: message.author.timezone } : {}),
     async: true,
   };

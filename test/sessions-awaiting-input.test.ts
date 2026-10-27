@@ -16,7 +16,13 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
@@ -51,6 +57,7 @@ test("the awaitingInput flag clears once the pending approval is resolved", asyn
   assert.equal((await app.listSessions("U1")).find((s) => s.id === sid)?.awaitingInput, true);
 
   await app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:resolve" },

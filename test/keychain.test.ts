@@ -1252,6 +1252,7 @@ function channelTurn(
   audience: Array<{ externalId: string; displayName?: string }>,
 ): TurnRequest {
   return {
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: actorId },
     conversation: { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience },

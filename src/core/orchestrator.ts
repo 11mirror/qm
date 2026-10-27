@@ -98,8 +98,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const bounded = securityScreenPayload({
         surface: "external",
         text: "",
-        triggered: true,
-        securityScreenData: payload,
+        origin: { kind: "automation", screenData: payload },
       });
       if (!bounded || bounded.truncated) return;
       void observeSecurityData(bounded.content, actor.id, deps.resolution.scopeFor(conversation, actor), {

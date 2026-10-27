@@ -36,6 +36,7 @@ const getJson = async (base: string, path: string, headers: Record<string, strin
   (await get(base, path, headers)).json();
 
 const dm = (principal: string, text: string): TurnRequest => ({
+  origin: { kind: "direct" },
   surface: "test",
   actor: { externalId: principal },
   conversation: { kind: "dm", threadRef: `dm:${principal}:t1` },

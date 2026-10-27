@@ -151,6 +151,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
       body: JSON.stringify(body),
     });
   const request = {
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm" as const, threadRef: "semantic-http" },

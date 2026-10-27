@@ -35,7 +35,7 @@ async function post(body: unknown): Promise<{ http: number; json: any }> {
   const res = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ origin: { kind: "direct" }, ...(body as object) }),
   });
   return { http: res.status, json: await res.json() };
 }

@@ -29,6 +29,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
   const headers = { "x-admin-actor": "admin-alice@default-org" };
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:paging" },

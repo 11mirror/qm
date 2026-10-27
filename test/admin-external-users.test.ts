@@ -232,6 +232,7 @@ test("an address that already belongs to an org member cannot be invited", async
     await s.built.admin.createGrant(alice, { principalId: "ceo@other.example", role: "org_admin", scopeId: ORG });
     await s.built.directory.replace([{ principalId: "dana@slack.example", displayName: "Dana", type: "internal" }]);
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "seen@elsewhere.example" },
       conversation: { kind: "dm", threadRef: "dm:seen:t1" },

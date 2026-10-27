@@ -44,6 +44,7 @@ async function main(): Promise<void> {
     const left = randomUUID();
     const right = randomUUID();
     const result = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "qualification",
       actor: { externalId: actorId },
       conversation: { kind: "dm", threadRef: `qualification:${randomUUID()}` },

@@ -15,6 +15,7 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
+import { automationOrigin } from "./support/turn-origin.ts";
 
 const policy = {
   companyDomains: ["company.example"],
@@ -191,7 +192,7 @@ function handoffFixture() {
     text: "Invite Alex and Morgan next Tuesday.",
     priorTurns: [{ role: "user", text: "Alex: alex@outside.example; Morgan: morgan@outside.example" }],
     attachments: [{ name: "agenda.txt", mimetype: "text/plain", blobId: "public-agenda", sizeBytes: 8 }],
-    triggerTs: "1.0",
+    origin: { kind: "direct" },
   };
   const submissions: Omit<TurnRequest, "surface">[] = [];
   const work = new Set<string>();
@@ -251,9 +252,8 @@ test("handoff preserves request and participant list, runs in requester DM, and 
   assert.match(request.text, /Invite Alex and Morgan/);
   assert.deepEqual(request.priorTurns, f.source.priorTurns);
   assert.deepEqual(request.attachments, f.source.attachments);
-  assert.equal(request.liveActor, true);
   assert.equal(request.origin?.kind, "human");
-  assert.equal(request.triggerDestination, undefined);
+  assert.equal(automationOrigin(request)?.destination, undefined);
   assert.equal(request.deliveryCandidates, undefined);
 });
 

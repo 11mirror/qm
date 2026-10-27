@@ -25,6 +25,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   assert.equal(
     (
       await app.turn({
+        origin: { kind: "direct" },
         surface: "cron",
         actor: admin,
         conversation: { kind: "dm", threadRef: "dm:admin-alice:auto" },
@@ -36,6 +37,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "an autonomous turn must not attest liveness");
   const autoPrompt = await app.turn({
+    origin: { kind: "direct" },
     surface: "cron",
     actor: admin,
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
@@ -57,8 +59,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
           publishMembers: [admin, { externalId: "bob" }],
         },
         text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
+        origin: { kind: "ambient", live: true },
       })
     ).status,
     "ok",
@@ -76,8 +77,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
       publishMembers: [admin, { externalId: "bob" }],
     },
     text: "!sysprompt",
-    liveActor: true,
-    unprompted: true,
+    origin: { kind: "ambient", live: true },
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
   assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
@@ -96,8 +96,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
         actor: admin,
         conversation: { kind: "dm", threadRef: "dm:admin-alice:det" },
         text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
+        origin: { kind: "ambient", live: true },
       })
     ).status,
     "ok",
@@ -114,8 +113,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
         actor: admin,
         conversation: { kind: "group", threadRef: "grp:G2:det", channelRef: "G2", audience: [admin] },
         text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
+        origin: { kind: "ambient", live: true },
       })
     ).status,
     "ok",
@@ -131,7 +129,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
         actor: admin,
         conversation: { kind: "dm", threadRef: "dm:admin-alice:det2" },
         text: "!run echo hi",
-        unprompted: true,
+        origin: { kind: "ambient" },
       })
     ).status,
     "ok",
@@ -148,8 +146,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
         actor: admin,
         conversation: { kind: "dm", threadRef: "dm:admin-alice:trigger-live" },
         text: "!run echo hi",
-        triggered: true,
-        liveActor: true,
+        origin: { kind: "automation" },
       })
     ).status,
     "ok",
@@ -175,7 +172,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
           publishMembers: [admin, { externalId: "visitor", isExternalGuest: true }],
         },
         text: "!run echo hi",
-        liveActor: true,
+        origin: { kind: "human" },
       })
     ).status,
     "ok",
@@ -199,7 +196,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
             ...(publishMembers ? { publishMembers } : {}),
           },
           text: "!run echo hi",
-          liveActor: true,
+          origin: { kind: "human" },
         })
       ).status,
       "ok",
@@ -511,7 +508,7 @@ test("an unexpected turn fault is recorded to the error log (then rethrown → 5
 
 test("an unprompted thread message the colleague wouldn't answer is silent (no run, no writes)", async () => {
   const { app } = freshApp();
-  const res = await app.turn(channel("ok sounds good to me", { unprompted: true }));
+  const res = await app.turn(channel("ok sounds good to me", { origin: { kind: "ambient" as const } }));
   assert.equal(res.status, "silent");
   assert.ok(res.sessionId);
   const found = await app.getSession(res.sessionId!);
@@ -528,7 +525,7 @@ test("a poll fire that ends with no message resolves to silent, not a delivered 
     actor: internalActor,
     conversation: { kind: "dm" as const, threadRef: "dm:U1:cron" },
     text: "!silent",
-    triggered: true,
+    origin: { kind: "automation" as const },
   };
   const res = await app.turn(cron);
   assert.equal(res.status, "silent", "the agent had nothing to add, so the turn is silent");
@@ -542,7 +539,7 @@ test("a poll fire whose reply is a bracketed token is an ordinary reply; only fi
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron2" },
     text: "!run printf %s 'Nothing changed.\n\n[no-update]'",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(res.status, "ok");
   assert.equal(res.reply, "Nothing changed.\n\n[no-update]");
@@ -551,7 +548,7 @@ test("a poll fire whose reply is a bracketed token is an ordinary reply; only fi
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron2b" },
     text: "!finish-silent",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(silenced.status, "silent");
 });
@@ -563,7 +560,7 @@ test("a poll fire with a real reply still delivers (status ok), and a non-trigge
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron3" },
     text: "!run printf %s 'PTO is due today'",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(real.status, "ok");
   assert.match(real.reply ?? "", /PTO is due today/);
@@ -578,7 +575,7 @@ test("a poll fire whose only output is an attached file delivers it — files, n
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron6" },
     text: "!writeattach digest.png PNG",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(res.status, "ok", "files are a real update — the empty reply must not silence the fire");
   assert.equal(res.reply, "");
@@ -595,7 +592,7 @@ test("a poll fire that attaches a file and then finishes silently still delivers
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron7" },
     text: "!attachsilent digest.png PNG",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(res.status, "ok", "the file was confirmed to the model, so silence must not discard it");
   assert.deepEqual(
@@ -611,7 +608,7 @@ test("a poll fire that calls finish_silently ends the turn with an empty reply a
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron4" },
     text: "!finish-silent",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(res.status, "silent", "the tool terminates the turn — the empty closing reply is the silence");
   assert.equal(res.reply, undefined, "nothing is delivered — the model never gets a step to narrate its silence");
@@ -631,7 +628,7 @@ test("finish_silently on a poll fire wins over a coexisting collected approval",
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron5" },
     text: "!finish-silent-approval",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(res.status, "silent", "explicit silence must win over the pending-approval branch");
   assert.equal(res.reply, undefined, "no narration leaks");
@@ -645,7 +642,7 @@ test("a poll fire that PAUSED on a gated command is never silenced — the appro
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron7" },
     text: "!finish-silent-paused",
-    triggered: true,
+    origin: { kind: "automation" },
   });
   assert.equal(
     res.status,
@@ -657,7 +654,7 @@ test("a poll fire that PAUSED on a gated command is never silenced — the appro
 
 test("an unprompted acknowledgement gets an emoji reaction, not a reply (no run, no writes)", async () => {
   const { app } = freshApp();
-  const res = await app.turn(channel("thanks, that's perfect", { unprompted: true }));
+  const res = await app.turn(channel("thanks, that's perfect", { origin: { kind: "ambient" } }));
   assert.equal(res.status, "react");
   assert.ok((res.reactions ?? []).length > 0);
   assert.ok(res.sessionId);
@@ -670,7 +667,9 @@ test("an unprompted acknowledgement gets an emoji reaction, not a reply (no run,
 
 test("on a surface without reactions, the same acknowledgement just stays silent (no REACT leaks)", async () => {
   const { app } = freshApp();
-  const res = await app.turn(channel("thanks, that's perfect", { unprompted: true, gatewayContext: undefined }));
+  const res = await app.turn(
+    channel("thanks, that's perfect", { gatewayContext: undefined, origin: { kind: "ambient" } }),
+  );
   assert.equal(res.status, "silent");
   assert.equal((res.reactions ?? []).length, 0);
   const found = await app.getSession(res.sessionId!);
@@ -682,7 +681,7 @@ test("on a surface without reactions, the same acknowledgement just stays silent
 
 test("an unprompted thread question gets a reply (turn detection chimes in)", async () => {
   const { app } = freshApp();
-  const res = await app.turn(channel("what does everyone think about the rollout?", { unprompted: true }));
+  const res = await app.turn(channel("what does everyone think about the rollout?", { origin: { kind: "ambient" } }));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: what does everyone think/);
   const found = await app.getSession(res.sessionId!);
@@ -696,12 +695,12 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
   const { app } = freshApp();
   const res = await app.turn(
     channel("!priorturns", {
-      unprompted: true,
       priorTurns: [
         { role: "user", name: "U2", text: "I think we ship Friday" },
         { role: "user", name: "U3", text: "I'd wait for QA" },
         { role: "assistant", text: "let me check the dashboard" },
       ],
+      origin: { kind: "ambient" },
     }),
   );
   assert.equal(res.status, "ok");
@@ -773,7 +772,9 @@ test("a message answered on one turn is not re-imported as overheard on the next
   const { app } = freshApp();
   const overheardEntries = (entries: Item[]) => entries.filter((e) => isOverheard(e));
 
-  const r1 = await app.turn(channel("run it now on the first 20 emails", { liveActor: true, triggerTs: "200.001" }));
+  const r1 = await app.turn(
+    channel("run it now on the first 20 emails", { origin: { kind: "human", messageTs: "200.001" } }),
+  );
   assert.equal(r1.status, "ok");
   const s1 = await app.getSession(r1.sessionId!);
   const trigger = s1!.items.find((e) => isUserMessage(e) && messageTs(e) === "200.001");
@@ -786,9 +787,8 @@ test("a message answered on one turn is not re-imported as overheard on the next
 
   const r2 = await app.turn(
     channel("did that work?", {
-      liveActor: true,
-      triggerTs: "200.002",
       overheard: [{ ts: "200.001", role: "user", name: "Avery", text: "run it now on the first 20 emails" }],
+      origin: { kind: "human", messageTs: "200.002" },
     }),
   );
   assert.equal(r2.status, "ok");
@@ -809,7 +809,7 @@ test("an unprompted thread-follow (no triggerTs) is stamped via entryTs and not 
   const overheardEntries = (entries: Item[]) => entries.filter((e) => isOverheard(e));
 
   const followText = "should I actually skip the last one?";
-  const r1 = await app.turn(channel(followText, { unprompted: true, entryTs: "300.001" }));
+  const r1 = await app.turn(channel(followText, { origin: { kind: "ambient", entryTs: "300.001" } }));
   assert.equal(r1.status, "ok");
   const s1 = await app.getSession(r1.sessionId!);
   const trigger = s1!.items.find((e) => isUserMessage(e) && messageTs(e) === "300.001");
@@ -817,9 +817,8 @@ test("an unprompted thread-follow (no triggerTs) is stamped via entryTs and not 
 
   const r2 = await app.turn(
     channel("ok done?", {
-      liveActor: true,
-      triggerTs: "300.002",
       overheard: [{ ts: "300.001", role: "user", name: "Avery", text: followText }],
+      origin: { kind: "human", messageTs: "300.002" },
     }),
   );
   assert.equal(r2.status, "ok");
@@ -883,10 +882,13 @@ test("the situational conversationHeader rides in the <environment> block, not a
 
 test("a reply in a thread the agent STARTED chimes in, even as a bare statement (deploy-notification-reply bug)", async () => {
   const { app } = freshApp();
-  const bare = await app.turn(channel("looks good to me", { unprompted: true }));
+  const bare = await app.turn(channel("looks good to me", { origin: { kind: "ambient" } }));
   assert.equal(bare.status, "silent");
   const withOpener = await app.turn(
-    channel("looks good to me", { unprompted: true, detectOpener: "deploy abc123 — auth refactor (#125)" }),
+    channel("looks good to me", {
+      detectOpener: "deploy abc123 — auth refactor (#125)",
+      origin: { kind: "ambient" },
+    }),
   );
   assert.equal(withOpener.status, "ok");
 });
@@ -894,7 +896,10 @@ test("a reply in a thread the agent STARTED chimes in, even as a bare statement 
 test("detectOpener drives turn detection but is NOT rendered into the prompt", async () => {
   const { app } = freshApp();
   const res = await app.turn(
-    channel("looks good to me", { unprompted: true, detectOpener: "deploy abc123 — auth refactor (#125)" }),
+    channel("looks good to me", {
+      detectOpener: "deploy abc123 — auth refactor (#125)",
+      origin: { kind: "ambient" },
+    }),
   );
   assert.equal(res.status, "ok");
   assert.doesNotMatch(res.reply ?? "", /auth refactor/);

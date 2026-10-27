@@ -128,7 +128,7 @@ export async function webTurnBase(
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    liveActor: true,
+    origin: { kind: "human" },
     deliveryTarget: threadRef,
     ...(inboxContext ? { conversationHeader: inboxContext } : {}),
     ...(appSlug

@@ -559,17 +559,9 @@ export interface TurnRequest {
     publishMembers?: ActorAssertion[];
   };
   text: string;
-  origin?: TurnOrigin;
-  triggerTs?: string;
-  entryTs?: string;
+  origin: TurnOrigin;
   gatewayContext?: GatewayContext;
-  triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
-  triggerDestination?: Destination;
-  ownerKeychainUnion?: boolean;
-  unprompted?: boolean;
-  liveActor?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
