@@ -11,6 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { settledRun } from "./support/turns.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -250,7 +251,7 @@ test("a completed long stream replays its bounded tail with absolute offsets and
       }),
     )
   ).json()) as { runId: string };
-  await built.runs.waitFor(submit.runId, 10_000);
+  await settledRun(built.runs, submit.runId, 10_000);
   const res = await fetch(
     `${webBase}/api/runs/${submit.runId}/events`,
     asUser("alice", {

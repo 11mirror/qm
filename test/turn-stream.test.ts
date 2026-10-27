@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settledRun } from "./support/turns.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -116,7 +117,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
       text: "hello",
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     const run = await built.app.getRun(ack.runId!);
     assert.equal(run?.replyComplete, true, "a completed reply is flagged replyComplete");
@@ -141,7 +142,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
       async: true,
     });
     assert.equal(ack.status, "queued");
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
 
     const run = await built.app.getRun(ack.runId!);
@@ -170,7 +171,7 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
 
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
 
     const run = await built.app.getRun(ack.runId!);
@@ -243,7 +244,7 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
       text: "!preamble On it — checking.",
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     const run = await built.app.getRun(ack.runId!);
     assert.equal(run?.firstBlock, "On it — checking.", "the opening block is exposed for the surface to harvest");
@@ -266,7 +267,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
       text: "!preamble On it — checking.",
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.equal(finished.deliveryState?.replying, true, "Slack engagement survives outside the worker stream");
     assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
@@ -288,7 +289,7 @@ test("a long first block is harvested too (no length gate) and stripped from the
       text: `!preamble ${long}`,
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.equal(
       finished.result?.reply,
@@ -312,7 +313,7 @@ test("a non-slack surface never strips the first block from the reply", async ()
       text: "!preamble On it — checking.",
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.ok(
       finished.result?.reply?.startsWith("On it — checking."),
@@ -396,7 +397,7 @@ test("monitor wakes persist engagement after the reply gate", async () => {
       text: "!preamble Checking background results.",
       async: true,
     });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await settledRun(built.runs, ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.equal(finished.deliveryState?.replying, true);
   } finally {

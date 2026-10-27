@@ -8,15 +8,19 @@ import { bindTurnLedger } from "../../src/turns/turn-engine.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { testMigratedDatabaseUrl } from "./test-database.ts";
 
-type Runs = Pick<RunStore, "get" | "waitFor" | "activeForThread" | "list">;
+type Runs = Pick<RunStore, "get" | "activeForThread" | "list">;
 
-export async function settledRun(runs: Pick<Runs, "get" | "waitFor">, runId: string): Promise<Run> {
-  const run = await runs.get(runId);
-  return run && isTerminal(run.status) ? run : runs.waitFor(runId, 30_000);
+/** Poll the run store until `runId` reaches a terminal state. */
+export async function settledRun(runs: Pick<Runs, "get">, runId: string, timeoutMs = 30_000): Promise<Run> {
+  for (const deadline = Date.now() + timeoutMs; ; await new Promise((r) => setTimeout(r, 25))) {
+    const run = await runs.get(runId);
+    if (run && isTerminal(run.status)) return run;
+    if (Date.now() > deadline) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
+  }
 }
 
 export async function settledTurn(
-  built: { app: Pick<App, "turn">; runs: Pick<Runs, "get" | "waitFor"> },
+  built: { app: Pick<App, "turn">; runs: Pick<Runs, "get"> },
   request: TurnRequest,
 ): Promise<TurnResult> {
   const result = await built.app.turn(request);

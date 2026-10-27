@@ -189,17 +189,6 @@ test("a handed-back turn records why its last attempt stopped", () =>
     assert.deepEqual((await runs.get(r.id))?.lastStop, stop, "a handback before the attempt started keeps the cause");
   }));
 
-test("waitFor resolves when the run completes", () =>
-  withStore(async ({ runs, ledger }) => {
-    const r = (await runs.enqueue({ sessionId: "s1", request: turn("hi") })).run;
-    const claimed = (await claimTurn(ledger, r.id))!;
-    const pending = runs.waitFor(r.id, 2_000);
-    await finishTurn(claimed, { status: "ok", reply: "ok" });
-    const finished = await pending;
-    assert.equal(finished.status, "done");
-    assert.equal(finished.result?.reply, "ok");
-  }));
-
 test("a failed turn keeps its reason and provider error code on the result", () =>
   withStore(async ({ runs, ledger }) => {
     const r = (await runs.enqueue({ sessionId: "s1", request: turn("hi"), maxAttempts: 1 })).run;

@@ -1,7 +1,6 @@
 import type { Config } from "../config.ts";
 import type { AppOverrides } from "../wiring.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { createSweeper as createUntrackedSweeper } from "../util/sweeper.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import type { App } from "../api/app.ts";
 import type { createApprovalStore } from "../core/approval-store.ts";
@@ -32,7 +31,6 @@ export interface Head {
   overrides: AppOverrides;
   gates: Gates;
   admittedWork: AdmittedWork;
-  createSweeper: typeof createUntrackedSweeper;
   late: Late;
   databaseUrl: string;
   connectorSecretKey: string;

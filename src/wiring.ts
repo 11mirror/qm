@@ -79,7 +79,6 @@ import { type SecurityScreener } from "./security/security-screener.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
 import { type RunStore } from "./runs/run-store.ts";
 import { type TurnLedger } from "./turns/turn-ledger.ts";
-import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { type ProcessRegistry } from "./processes/process-registry.ts";
 import { type MonitorStore } from "./monitors/monitor-store.ts";
 import { type SessionStateBus } from "./runs/session-state-bus.ts";
@@ -318,8 +317,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || gates.backgroundAdmission(),
   });
-  const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
-    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   // Values built later in buildApp that earlier modules reach through closures.
   const late = {} as Late;
   const databaseUrl = config.databaseUrl;
@@ -340,7 +337,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
   mkdirSync(config.dataDir, { recursive: true });
-  const w0: Head = { config, overrides, gates, admittedWork, createSweeper, late, databaseUrl, connectorSecretKey };
+  const w0: Head = { config, overrides, gates, admittedWork, late, databaseUrl, connectorSecretKey };
   const w1 = { ...w0, ...buildStores(w0) };
   const w2 = { ...w1, ...buildModelCredentials(w1) };
   const w3 = { ...w2, ...buildFiles(w2) };
