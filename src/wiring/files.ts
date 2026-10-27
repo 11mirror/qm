@@ -1,3 +1,4 @@
+import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
 import { createPostgresToolOutputStore } from "../sessions/tool-output.ts";
 import { createAclStore } from "../acl/acl-store.ts";
@@ -24,10 +25,12 @@ import { createPostgresFileUploadStore } from "../files/file-upload-store.ts";
 import { createMcpServerStore } from "../mcp/mcp-server-store.ts";
 import { withErrorReporting } from "../admin/error-log.ts";
 import { createPostgresErrorLog } from "../admin/postgres-error-log.ts";
-import type { StoresModule } from "./stores.ts";
 
-export function buildFiles(w: Head & StoresModule) {
-  const { databaseUrl, managesArtifactHome, config, configStore, pgPool } = w;
+type FilesInputs = Pick<Head, "config"> & { stores: StoresModule };
+
+export function buildFiles(deps: FilesInputs) {
+  const { databaseUrl, managesArtifactHome, configStore, pgPool, every } = deps.stores;
+  const { config } = deps;
 
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
@@ -57,7 +60,6 @@ export function buildFiles(w: Head & StoresModule) {
       ...(config.s3Region ? { region: config.s3Region } : {}),
       prefix: `${config.s3Prefix ?? ""}${prefix}`,
     });
-  // S3 under `prefix` when a bucket is configured, else local disk under dataDir/localDir.
   const byteStore = (prefix: string, localDir: string): DurableByteStore =>
     config.s3Bucket ? s3Bytes(config.s3Bucket, prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
   const fileBytes = byteStore("", "docstore");
@@ -77,6 +79,8 @@ export function buildFiles(w: Head & StoresModule) {
     pool: pgPool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
+  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true });
+  every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
   return {
     toolOutput,
     errors,

@@ -1,3 +1,6 @@
+import type { StoresModule } from "./stores.ts";
+import type { HarnessModule } from "./harness.ts";
+import type { FilesModule } from "./files.ts";
 import type { Head } from "./late.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import { createPostgresMemoryService } from "../memory/postgres-memory-service.ts";
@@ -6,13 +9,18 @@ import { withMemoryTidy } from "../memory/tidy.ts";
 import { classifiedMemory } from "../memory/classification.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { errMessage } from "../util/errors.ts";
-import type { StoresModule } from "./stores.ts";
-import type { ModelKeysModule } from "./model-keys.ts";
-import type { HarnessModule } from "./harness.ts";
-import type { FilesModule } from "./files.ts";
 
-export function buildMemory(w: Head & StoresModule & ModelKeysModule & HarnessModule & FilesModule) {
-  const { databaseUrl, configStore, resolveMemoryEmbedder, late, harness, config, errors } = w;
+type MemoryInputs = Pick<Head, "late" | "config"> & {
+  stores: StoresModule;
+  harness: HarnessModule;
+  files: FilesModule;
+};
+
+export function buildMemory(deps: MemoryInputs) {
+  const { databaseUrl, configStore, every } = deps.stores;
+  const { resolveMemoryEmbedder, harness } = deps.harness;
+  const { late, config } = deps;
+  const { errors } = deps.files;
 
   const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
@@ -31,6 +39,8 @@ export function buildMemory(w: Head & StoresModule & ModelKeysModule & HarnessMo
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
+  every("memory-vector-index", 30_000, () => semanticMemory.index(), { immediate: true });
+  every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
   return { memory, memoryStrategy, baseMemory, semanticMemory };
 }
 

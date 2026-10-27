@@ -1,3 +1,5 @@
+import type { StoresModule } from "./stores.ts";
+import type { RunsModule } from "./runs.ts";
 import type { Head } from "./late.ts";
 import { createIdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { createRecentDmPosts } from "../surfaces/recent-dm-posts.ts";
@@ -8,11 +10,13 @@ import { swallowAs } from "../util/errors.ts";
 import { createSlackSurface } from "../surfaces/slack-surface.ts";
 import { createSurfaceRegistry } from "../surfaces/registry.ts";
 import { createHttpChatSurface } from "../surfaces/http-chat.ts";
-import type { StoresModule } from "./stores.ts";
-import type { RunsModule } from "./runs.ts";
 
-export function buildOutbound(w: Head & StoresModule & RunsModule) {
-  const { databaseUrl, sessions, sessionStateBus, config, late } = w;
+type OutboundInputs = Pick<Head, "config" | "late"> & { stores: StoresModule; runs: RunsModule };
+
+export function buildOutbound(deps: OutboundInputs) {
+  const { databaseUrl, sessions, every } = deps.stores;
+  const { sessionStateBus } = deps.runs;
+  const { config, late } = deps;
 
   const idempotency = createIdempotencyStore(databaseUrl);
   const transcripts = { sessions, sessionStates: sessionStateBus };
@@ -55,6 +59,7 @@ export function buildOutbound(w: Head & StoresModule & RunsModule) {
     outbound,
     turn: (request) => late.app.turn(request),
   });
+  every("queued-post-retry", 30_000, () => outbound.retryQueued());
   return { outbound, chatSurfaces, recentDmPosts, slackSurface, idempotency };
 }
 

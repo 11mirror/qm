@@ -3,7 +3,7 @@ import { runTrigger, type TriggerDeps } from "../../src/triggers/run-trigger.ts"
 import { recordingOutbound, type PostLog } from "../support/recording-outbound.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { scopeId, type Destination, type TurnRequest, type TurnResult, type ScopeId } from "../../src/types.ts";
+import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../../src/core/failure-copy.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
@@ -364,7 +364,7 @@ function unknownChannelDirectory() {
 
 function runTriggerHomeScopeDeps(
   dir: ReturnType<typeof unknownChannelDirectory>,
-  opts: { sessions?: TriggerDeps["sessions"]; onRun?: () => void } = {},
+  opts: { onRun?: () => void } = {},
 ): TriggerDeps {
   const databaseUrl = testDatabaseUrl();
   const run = async (_r: TurnRequest): Promise<TurnResult> => {
@@ -378,7 +378,6 @@ function runTriggerHomeScopeDeps(
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
-    ...(opts.sessions ? { sessions: opts.sessions } : {}),
   };
 }
 
@@ -394,36 +393,14 @@ function spec(key: string) {
 }
 
 describe("runTrigger home-scope gate when the directory snapshot dropped the channel", () => {
-  it("falls back to session participation and runs", async () => {
+  it("skips with a note naming the snapshot gap, not lost membership", async () => {
     let ranTurn = false;
-    const sessions = {
-      participantScopes: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: SCOPE }] : [],
-    };
-    const d = runTriggerHomeScopeDeps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
-    const out = await runTrigger(d, spec("participant"));
-    assert.equal(ranTurn, true, "a session participant in the home scope keeps running through a roster sync gap");
-    assert.equal(out.status, "ok");
-    assert.equal(out.note, undefined);
-  });
-
-  it("skips with a note naming the snapshot gap, not lost membership, when there is no session either", async () => {
-    let ranTurn = false;
-    const sessions = { participantScopes: async (): Promise<readonly { scopeId: ScopeId }[]> => [] };
-    const d = runTriggerHomeScopeDeps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
-    const out = await runTrigger(d, spec("stranger"));
-    assert.equal(ranTurn, false);
+    const d = runTriggerHomeScopeDeps(unknownChannelDirectory(), { onRun: () => (ranTurn = true) });
+    const out = await runTrigger(d, spec("gap"));
+    assert.equal(ranTurn, false, "session history in the channel is not membership");
     assert.equal(out.authzFailed, false, "skip-not-disable survives");
     assert.match(out.note ?? "", /missing from the directory snapshot/);
     assert.doesNotMatch(out.note ?? "", /no longer a member/);
-  });
-
-  it("skips the same way when no session store is wired", async () => {
-    let ranTurn = false;
-    const d = runTriggerHomeScopeDeps(unknownChannelDirectory(), { onRun: () => (ranTurn = true) });
-    const out = await runTrigger(d, spec("no-sessions"));
-    assert.equal(ranTurn, false);
-    assert.match(out.note ?? "", /missing from the directory snapshot/);
   });
 
   it("a directory that affirmatively knows the private channel and excludes the actor still skips as lost membership", async () => {
@@ -433,12 +410,9 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
       channelPrivacy: async (): Promise<boolean | undefined> => true,
     };
     let ranTurn = false;
-    const sessions = {
-      participantScopes: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: SCOPE }],
-    };
-    const d = runTriggerHomeScopeDeps(dir, { sessions, onRun: () => (ranTurn = true) });
+    const d = runTriggerHomeScopeDeps(dir, { onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("kicked"));
-    assert.equal(ranTurn, false, "an affirmative roster still wins over session history");
+    assert.equal(ranTurn, false, "an affirmative roster skips");
     assert.match(out.note ?? "", /no longer a member/);
   });
 });
@@ -458,20 +432,15 @@ function groupSpec(key: string) {
 }
 
 describe("runTrigger home-scope gate for group homes", () => {
-  it("a group missing from the snapshot falls back to session participation and runs", async () => {
+  it("a group missing from the snapshot skips with the snapshot-gap note", async () => {
     let ranTurn = false;
-    const dir = unknownChannelDirectory();
-    const sessions = {
-      participantScopes: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: GSCOPE }] : [],
-    };
-    const d = runTriggerHomeScopeDeps(dir, { sessions, onRun: () => (ranTurn = true) });
+    const d = runTriggerHomeScopeDeps(unknownChannelDirectory(), { onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("gap"));
-    assert.equal(ranTurn, true);
-    assert.equal(out.note, undefined);
+    assert.equal(ranTurn, false);
+    assert.match(out.note ?? "", /missing from the directory snapshot/);
   });
 
-  it("a group the snapshot affirmatively knows, excluding the actor, skips as lost membership despite session history", async () => {
+  it("a group the snapshot affirmatively knows, excluding the actor, skips as lost membership", async () => {
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
@@ -481,24 +450,18 @@ describe("runTrigger home-scope gate for group homes", () => {
         { principalId: "kim@example.com", displayName: "Kim" },
       ],
     };
-    const sessions = {
-      participantScopes: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
-    };
-    const d = runTriggerHomeScopeDeps(dir, { sessions, onRun: () => (ranTurn = true) });
+    const d = runTriggerHomeScopeDeps(dir, { onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("kicked"));
-    assert.equal(ranTurn, false, "an affirmative group roster wins over session history");
+    assert.equal(ranTurn, false, "an affirmative group roster skips");
     assert.match(out.note ?? "", /no longer a member/);
   });
 
-  it("without currentScopeMembers wired, an affirmative tri-state non-membership wins over session history", async () => {
+  it("without currentScopeMembers wired, an affirmative tri-state non-membership skips", async () => {
     const databaseUrl = testDatabaseUrl();
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
       groupMembership: async (): Promise<boolean | undefined> => false,
-    };
-    const sessions = {
-      participantScopes: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
     };
     const d: TriggerDeps = {
       outbound: recordingOutbound(),
@@ -509,7 +472,6 @@ describe("runTrigger home-scope gate for group homes", () => {
         return { status: "ok", reply: "posted" };
       },
       directory: dir,
-      sessions,
     };
     const out = await runTrigger(d, groupSpec("tri-state"));
     assert.equal(ranTurn, false);

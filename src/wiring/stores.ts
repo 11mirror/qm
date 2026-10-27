@@ -1,4 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, configurePgCaTrust, configurePgPooling } from "../persistence/pg-pool.ts";
 import type { Head } from "./late.ts";
 import { registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { type AdvisoryLock, createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -13,7 +13,7 @@ import { createSkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
 import { scopeId } from "../types.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
+import { type SessionStore, LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
 import { createPostgresSessionStore } from "../sessions/postgres-session-store.ts";
 import { createAdminGrantStore } from "../admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../admin/postgres-admin-grant-store.ts";
@@ -33,9 +33,26 @@ import {
 import { createPostgresDecisionStore } from "../decisions/store.ts";
 import { createConnectorStatusCache } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
+import { mkdirSync } from "node:fs";
+import { createJobWorker } from "../jobs/job-worker.ts";
 
-export function buildStores(w: Head) {
-  const { databaseUrl, config, connectorSecretKey } = w;
+type StoresInputs = Pick<Head, "databaseUrl" | "config" | "connectorSecretKey" | "admittedWork">;
+
+export function buildStores(deps: StoresInputs) {
+  const { databaseUrl, config, connectorSecretKey, admittedWork } = deps;
+  configurePgPooling({
+    databaseUrl,
+    ...(config.databasePoolUrl && !config.multitenant ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
+    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
+    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
+    tenancy: config.multitenant,
+  });
+  configurePgCaTrust({
+    ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
+    ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
+  });
+  mkdirSync(config.dataDir, { recursive: true });
 
   const pgPool = createPgPool(databaseUrl, []);
   registerAbsurdSchema(databaseUrl);
@@ -67,9 +84,9 @@ export function buildStores(w: Head) {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity });
   const managesArtifactHome = createManagesArtifactHome(
     { managedGroups: projects, directory, identity, teams },
     canManageScope,
@@ -82,6 +99,16 @@ export function buildStores(w: Head) {
   const decisions = createPostgresDecisionStore(databaseUrl);
   const connectorStatusCache = createConnectorStatusCache(databaseUrl);
   const slackInstallation = createSlackInstallationStore(config.orgId, databaseUrl, connectorSecretKey);
+  const jobs = createJobWorker(databaseUrl);
+  const every = (name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }) =>
+    jobs.every(name, everyMs, () => admittedWork.run(fn), opts);
+  every("spend:refresh", 60_000, () => sessions.refreshSpendRollup(), { immediate: true });
+  every("llm-capture:retention", 5 * 60_000, async () => {
+    const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
+      deadline: Date.now() + 30_000,
+    });
+    if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
+  });
   return {
     managesArtifactHome,
     skills,
@@ -108,6 +135,9 @@ export function buildStores(w: Head) {
     skillPacks,
     slackInstallation,
     principalLinks,
+    jobs,
+    every,
+    databaseUrl,
   };
 }
 

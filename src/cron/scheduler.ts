@@ -80,7 +80,6 @@ export interface SchedulerDeps {
   };
   jobs: Pick<JobWorker, "handle" | "spawn">;
   fireConcurrency?: number;
-  sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   deleteCron?: (id: string) => Promise<void>;
@@ -251,7 +250,6 @@ async function fireEnabled(
         run: deps.run,
         ...(deps.directory ? { directory: deps.directory } : {}),
         ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-        ...(deps.sessions ? { sessions: deps.sessions } : {}),
         ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
       },
       {

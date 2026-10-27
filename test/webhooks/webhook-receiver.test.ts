@@ -56,7 +56,7 @@ function inlineJobs(): Pick<JobWorker, "handle" | "spawn"> {
 
 function harness(
   runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" },
-  extra: Partial<Pick<TriggerDeps, "directory" | "sessions" | "currentScopeMembers">> = {},
+  extra: Partial<Pick<TriggerDeps, "directory" | "currentScopeMembers">> & { sessions?: unknown } = {},
 ) {
   const url = testDatabaseUrl();
   const webhooks = tracked(createWebhookStore(url));
@@ -140,31 +140,27 @@ test("a channel-owned webhook runs as a channel turn", async () => {
   assert.equal(calls[0]?.conversation.channelRef, "C9");
 });
 
-test("a channel webhook whose channel privacy is unknown falls back to the owner's sessions, like a cron", async () => {
+test("a channel webhook whose membership the directory cannot settle is skipped, even with past sessions there", async () => {
   const directory = {
     channelMember: async () => false,
     groupMember: async () => false,
     get: async () => null,
     channelPrivacy: async () => undefined,
   };
-  const participant = harness(undefined, {
+  const h = harness(undefined, {
     directory,
     sessions: { participantScopes: async () => [{ scopeId: scopeId("channel", "C9") }] },
   });
-  const outsider = harness(undefined, { directory, sessions: { participantScopes: async () => [] } });
-  for (const h of [participant, outsider]) {
-    const wh = await h.webhooks.create({
-      ownerScopeId: scopeId("channel", "C9"),
-      owner: "U1",
-      createdBy: "U1",
-      action: "summarize",
-      verification: { scheme: "github", secret: SECRET },
-    });
-    await h.receiver.deliver(wh.id, githubReq("{}"));
-    await flush();
-  }
-  assert.equal(participant.calls.length, 1, "an owner with a session in the channel still gets the run");
-  assert.equal(outsider.calls.length, 0, "an owner with no session there is skipped");
+  const wh = await h.webhooks.create({
+    ownerScopeId: scopeId("channel", "C9"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "summarize",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  await h.receiver.deliver(wh.id, githubReq("{}"));
+  await flush();
+  assert.equal(h.calls.length, 0, "session history in the channel is not membership");
 });
 
 test("a bad signature is rejected (401) and fires no turn", async () => {
