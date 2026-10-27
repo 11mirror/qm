@@ -12,36 +12,16 @@ import { CliError, errMessage, step, warn } from "../log.ts";
 import { deploymentSecretValue, isInvalidSecret, readEnvFile } from "../util.ts";
 import { templateUrl } from "../templates.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
+import { parse } from "yaml";
 import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
-    const parsed = JSON.parse(manifest) as { oauth_config?: { scopes?: { bot?: string[] } } };
-    return parsed.oauth_config?.scopes?.bot ?? [];
+    const parsed = parse(manifest) as { oauth_config?: { scopes?: { bot?: unknown } } } | null;
+    const bot = parsed?.oauth_config?.scopes?.bot;
+    return Array.isArray(bot) ? bot.filter((scope): scope is string => typeof scope === "string" && scope !== "") : [];
   } catch {
-    const clean = (item: string): string =>
-      item
-        .split(/\s+#/)[0]!
-        .trim()
-        .replace(/^["']|["']$/g, "")
-        .trim();
-    const lines = manifest.split("\n");
-    const inline = lines.map((line) => line.match(/^\s*bot:\s*\[(.*)\]\s*(?:#.*)?$/)).find(Boolean);
-    if (inline) return inline[1]!.split(",").map(clean).filter(Boolean);
-    const start = lines.findIndex((line) => /^\s*bot:\s*(?:#.*)?$/.test(line));
-    if (start === -1) return [];
-    const indent = lines[start]!.match(/^\s*/)![0].length;
-    const scopes: string[] = [];
-    for (const line of lines.slice(start + 1)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      if (line.match(/^\s*/)![0].length <= indent) break;
-      const item = trimmed.match(/^-\s*(.+)$/);
-      if (!item) break;
-      const scope = clean(item[1]!);
-      if (scope) scopes.push(scope);
-    }
-    return scopes;
+    return [];
   }
 }
 
