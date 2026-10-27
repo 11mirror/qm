@@ -14,7 +14,7 @@ import { JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { tenantLockKey } from "../persistence/pg-pool.ts";
+import { pgPoolMax, tenantLockKey } from "../persistence/pg-pool.ts";
 import { withoutTenant, withTenant } from "../tenant.ts";
 import { activeTenant, activeTenants } from "../tenants/directory.ts";
 
@@ -48,7 +48,6 @@ const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const UNKNOWN_JOB_RETRY_MS = 60_000;
 const TENANT_NOT_READY_RETRY_MS = 5_000;
 const BUSY_RETRY_MS = 1000;
-const MAX_CONCURRENCY = 32;
 const POLL_MS = 1000;
 const CLAIM_TIMEOUT_SEC = 120;
 const CLAIM_EXTEND_MS = 30_000;
@@ -56,7 +55,8 @@ const CLAIM_EXTEND_MS = 30_000;
 const DONE_RETENTION_SEC = 7 * 24 * 60 * 60;
 const CLEANUP_BATCH = 1000;
 
-const clampConcurrency = (n: number) => Math.min(MAX_CONCURRENCY, Math.max(1, Math.trunc(n)));
+const claimBudget = () => pgPoolMax("query");
+const clampConcurrency = (n: number) => Math.min(claimBudget(), Math.max(1, Math.trunc(n)));
 
 function serializeStart(worker: JobWorker): JobWorker {
   let starting: Promise<void> | null = null;
@@ -126,7 +126,6 @@ async function runRecurring(job: string, fn: () => unknown, context?: string): P
 
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
-  const limit = MAX_CONCURRENCY;
   const worker = `jobs:${randomUUID()}`;
   const handlers: JobHandlers = new Map();
   const recurring: Array<{ job: string; immediate: boolean }> = [];
@@ -144,6 +143,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   async function poll(): Promise<void> {
     const mine = new Set<Promise<void>>();
     while (started) {
+      const limit = claimBudget();
       const free = limit - mine.size;
       let claimed = 0;
       if (free > 0) {
@@ -199,7 +199,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
           });
           return owner ? withTenant(owner, () => run(params)) : Date.now() + TENANT_NOT_READY_RETRY_MS;
         },
-        concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY),
+        concurrency: clampConcurrency(opts.concurrency ?? claimBudget()),
         running: 0,
       });
     },
