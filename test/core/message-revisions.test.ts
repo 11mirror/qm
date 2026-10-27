@@ -493,3 +493,20 @@ test("an edit the ingest path could not record is caught up at the end of the ne
     await built.runtime.stop();
   }
 });
+
+test("the anchor walks back past any number of system entries to the last conversation entry", async () => {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
+  const conversationAt = (await sessions.getItems(session.id)).at(-1)!.createdAt;
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  await sessions.appendMany(
+    lease!,
+    Array.from({ length: 40 }, (_, i) => ({
+      kind: "Wake" as const,
+      wakeCause: "cron" as const,
+      body: { text: `w${i}` },
+    })),
+  );
+  await sessions.releaseLease(lease!);
+  assert.equal(await revisionAnchorAt(sessions, session.id), conversationAt);
+});
