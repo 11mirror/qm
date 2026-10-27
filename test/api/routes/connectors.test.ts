@@ -1,6 +1,5 @@
 import "../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { oauthRevoke } from "../../../src/api/routes/connectors.ts";
 import { createInsecureTestServer } from "../../../src/api/server.ts";
@@ -18,6 +17,7 @@ import type { BuiltApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { testAdvisoryLock, testMap } from "../../support/test-database.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -494,8 +494,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

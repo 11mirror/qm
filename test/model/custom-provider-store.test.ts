@@ -17,6 +17,7 @@ import { createCustomProviderStore } from "../../src/model/custom-provider-store
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "../support/model-verification-upstream.ts";
 import { testMap } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -65,8 +66,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
 
   try {
@@ -198,8 +198,7 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
   const spec = {
     name: "Responses Provider",
@@ -309,8 +308,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const r = await fetch(`${base}/v1/admin/custom-providers/antcompat`, {
       method: "PUT",
@@ -423,8 +421,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
     admin: built.admin,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const r = await fetch(`${base}/v1/admin/custom-providers/own`, {
       method: "PUT",

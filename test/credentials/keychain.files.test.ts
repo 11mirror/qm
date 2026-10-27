@@ -8,32 +8,11 @@ import {
   renderKeychainManifest,
   fileCredentialEnvironment,
   KeychainError,
-  type Keychain,
 } from "../../src/credentials/keychain.ts";
 import { deriveConnectorKey, encryptSecret } from "../../src/connectors/connector-client-store.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testMap } from "../support/test-database.ts";
-
-const KEY = deriveConnectorKey("keychain-test-key");
-
-function kc(now?: () => number): Keychain {
-  return createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-    ...(now ? { now } : {}),
-  });
-}
-
-const GH = {
-  ownerId: "U1",
-  service: "github",
-  secret: "ghp_secret",
-  envKey: "GITHUB_TOKEN",
-  accountLabel: "AliceBell",
-};
+import { KEY, kc, GH } from "../support/keychain-store.ts";
 
 test("file bundles: one item per service, materialize to a /tmp script with env pointers, never the home volume", async () => {
   const k = kc();

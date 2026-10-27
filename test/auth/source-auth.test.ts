@@ -14,6 +14,7 @@ import {
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const SECRET = "unit-test-secret";
 const W = SOURCE_AUTH_REPLAY_WINDOW_MS;
@@ -116,8 +117,7 @@ function start(signingSecret?: string): { base: string; close: () => Promise<voi
   const server = signingSecret
     ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret })
     : createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -260,8 +260,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     signingSecret: GATE_SECRET,
     blobTransfer: built.blobTransfer,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const body = Buffer.from("payload bytes");
     const sha = createHash("sha256").update(body).digest("hex");

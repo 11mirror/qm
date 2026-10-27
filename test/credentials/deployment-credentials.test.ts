@@ -3,7 +3,6 @@ import { selectDefaultSandbox } from "../support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
 import { buildApp } from "../support/build-app.ts";
 import { loadConfig } from "../../src/config.ts";
@@ -22,6 +21,7 @@ import type { TurnRequest } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -204,8 +204,7 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
         ...deps,
         signingSecret: SECRET,
       });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

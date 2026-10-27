@@ -1,6 +1,5 @@
 import "../../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../../../../src/api/server.ts";
 import { deriveConnectorKey } from "../../../../src/connectors/connector-client-store.ts";
@@ -9,6 +8,7 @@ import { scopeId, type TurnRequest } from "../../../../src/types.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import { testConfig } from "../../../support/test-config.ts";
 import { testAdminGrantStore, testAdvisoryLock, testMap } from "../../../support/test-database.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 function start() {
   const built = buildApp(testConfig());
@@ -17,8 +17,7 @@ function start() {
     sessions: built.sessions,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -302,8 +301,7 @@ function keychainStart() {
     auditLog: built.auditLog,
     keychain,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, keychain, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

@@ -19,6 +19,7 @@ import type { BuiltApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 const SECRET = "portal-actor-binding-signing-secret";
 const ALICE = "alice@default-org";
@@ -53,8 +54,7 @@ test("routes that act as a caller-named principal bind it to the signed portal i
     capabilitySecret: `${SECRET}-cap`,
     portalIdentitySecret: `${SECRET}-portal`,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const call = async (
     method: string,
     path: string,

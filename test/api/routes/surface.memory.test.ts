@@ -2,11 +2,11 @@ import "../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../../../src/api/server.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { scopeId } from "../../../src/types.ts";
 import { testConfig } from "../../support/test-config.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 function start() {
   const built = buildApp(testConfig());
@@ -17,8 +17,7 @@ function start() {
     workspace: built.workspace,
     sessions: built.sessions,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -141,8 +140,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
 test("memory routes 404 when no MemoryService is wired", async () => {
   const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, { admin: built.admin, auditLog: built.auditLog });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     assert.equal((await fetch(`${base}/v1/memory?principalId=U1`)).status, 404);
     assert.equal((await fetch(`${base}/v1/admin/memory?scope=org:default-org`, { headers: ALICE_ADMIN })).status, 404);

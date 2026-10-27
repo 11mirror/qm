@@ -1,6 +1,5 @@
 import "../../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { cacheHitRatio } from "../../../../src/api/routes/admin/spend.ts";
 import { createInsecureTestServer, createServer } from "../../../../src/api/server.ts";
@@ -14,6 +13,7 @@ import { buildApp } from "../../../support/build-app.ts";
 import { bill } from "../../../support/spend-usage.ts";
 import { testConfig } from "../../../support/test-config.ts";
 import { testDatabaseUrl } from "../../../support/test-database.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 const DAY = 86_400_000;
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -28,8 +28,7 @@ function start(sessions?: SessionStore) {
     auditLog: built.auditLog,
     runs: built.runs,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -430,8 +429,7 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
     ...(sessions ? { sessions } : {}),
     ...(token ? { spendExportToken: token } : {}),
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const get = (path: string, headers: Record<string, string> = { authorization: `Bearer ${exportToken}` }) =>
     fetch(base + path, { headers });
   return { built, sessions, get, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };

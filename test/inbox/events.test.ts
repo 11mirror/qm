@@ -5,12 +5,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../../src/inbox/events.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { cronId: "cron-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
@@ -62,8 +62,7 @@ test("GET /v1/cron-items/events streams inbox writes as SSE frames, stamped with
   const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
   built.runtime.start();
   const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
-  core.listen(0);
-  const base = `http://localhost:${(core.address() as AddressInfo).port}`;
+  const base = listenLocal(core);
   try {
     const res = await fetch(`${base}/v1/cron-items/events`, { signal: AbortSignal.timeout(15_000) });
     assert.equal(res.status, 200);

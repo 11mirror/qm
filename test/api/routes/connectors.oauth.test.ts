@@ -1,6 +1,5 @@
 import "../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createServer } from "../../../src/api/server.ts";
 import {
@@ -16,6 +15,7 @@ import type { BuiltApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { settle } from "../../support/settle.ts";
 import { testConfig } from "../../support/test-config.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -46,8 +46,7 @@ function start(
     oauthEnv: opts.oauthEnv ?? oauthEnv,
     oauthFetch: fetchImpl,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -297,8 +296,7 @@ async function oauthConsentBridgeStart(
     publicUrl: "http://callback.test",
     ...(opts.portalUrl ? { portalUrl: opts.portalUrl } : {}),
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 

@@ -2,12 +2,12 @@ import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { buildApp } from "../support/build-app.ts";
 import { computeUsers } from "../../src/admin/users.ts";
 import type { TurnRequest } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -68,8 +68,7 @@ function start() {
     memory: built.memory,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -252,8 +251,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     auditLog: built.auditLog,
     directory: built.directory,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     await built.directory.replace([
       { principalId: "dana@example.com", displayName: "Dana Example", type: "internal" },
