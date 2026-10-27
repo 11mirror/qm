@@ -89,6 +89,7 @@ interface SurfaceProfile {
 
 const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
   web: {
+    promptFlavor: "web",
     traits: { ...NO_TRAITS, transcript: true, sidebar: true, pickModel: true, editableTurns: true, memberGate: true },
   },
   slack: {
