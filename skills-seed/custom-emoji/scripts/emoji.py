@@ -1,26 +1,6 @@
-import argparse, base64, io, json, math, os, random, statistics, sys, urllib.request
+import argparse, base64, io, json, math, os, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageSequence
-
-LIGHT, DARK = (255, 255, 255), (26, 29, 33)
-JUDGE = os.environ.get("EMOJI_JUDGE_MODEL", "gpt-5.5")
-STYLE = (
-    "A Slack custom emoji: {subject}. Draw it like the best-loved Slack emoji (Google blob emoji, party parrot): a cartoon "
-    "character or object with real personality and one big, readable expression or gesture. Composition: one compact, chunky "
-    "silhouette, centered, with a small even margin; nothing touches or crosses the edge of the canvas. Built from a handful of "
-    "big simple shapes so it still reads at 22 pixels. Flat colour only: no gradients, no glossy highlights, no shading, no "
-    "texture. Bright saturated colours. Either no outline at all, or a thin outline in a darker shade of each fill colour; "
-    "never a black outline. No text, no smoke, sparkles, motion lines, scenery or drop shadow. Transparent background."
-)
-DERIVE = (
-    "Redraw this exact character, keeping the hat, beard, face colour, eyes, outline treatment, proportions and flat "
-    "sticker style identical. Change only this: {change}. Same framing and size. Do not add a sticker border or glow. "
-    "Transparent background, no text, nothing else in frame."
-)
-REFS = [
-    "1643514680/6827/blob_aww.png", "1643514688/6901/blob_rofl.png", "1643514693/6950/blob_wave.png",
-    "1623519268/44552/rocket-pop.png", "1643514140/990/party_parrot.gif", "1622916972/43564/facepalm.png",
-]
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 
 def broker(url, payload):
@@ -35,50 +15,32 @@ def broker(url, payload):
     return json.loads(reply["body"])
 
 
-def ask(text, images, effort="medium"):
-    content = [{"type": "input_text", "text": text}] + [{"type": "input_image", "image_url": data_url(i)} for i in images]
-    data = broker("https://api.openai.com/v1/responses", {
-        "model": JUDGE, "reasoning": {"effort": effort}, "text": {"format": {"type": "json_object"}},
-        "input": [{"role": "user", "content": content}]})
-    return json.loads(next(c["text"] for o in data["output"] if o["type"] == "message"
-                           for c in o["content"] if c["type"] == "output_text"))
-
-
 def data_url(im):
     buf = io.BytesIO()
     im.save(buf, "PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def generate(subject, model, out):
+def generate(prompt, model, out):
     data = broker("https://api.openai.com/v1/images/generations", {
-        "model": model, "prompt": STYLE.format(subject=subject), "size": "1024x1024",
+        "model": model, "prompt": prompt, "size": "1024x1024",
         "background": "transparent", "output_format": "png", "quality": "high"})
     Image.open(io.BytesIO(base64.b64decode(data["data"][0]["b64_json"]))).convert("RGBA").save(out)
     return out
 
 
-def derive(base, change, model, out):
+def derive(base, prompt, model, out):
     data = broker("https://api.openai.com/v1/responses", {
-        "model": JUDGE, "reasoning": {"effort": "low"},
+        "model": "gpt-5.5", "reasoning": {"effort": "low"},
         "tools": [{"type": "image_generation", "model": model, "background": "transparent", "quality": "high",
                    "size": "1024x1024", "output_format": "png"}],
         "tool_choice": {"type": "image_generation"},
         "input": [{"role": "user", "content": [
-            {"type": "input_text", "text": DERIVE.format(change=change)},
+            {"type": "input_text", "text": prompt},
             {"type": "input_image", "image_url": data_url(Image.open(base))}]}]})
     call = next(o for o in data["output"] if o["type"] == "image_generation_call")
     Image.open(io.BytesIO(base64.b64decode(call["result"]))).convert("RGBA").save(out)
     return out
-
-
-def same_character(base, cand, change):
-    reply = ask("Image 1 is a character; image 2 should be the same character with only this change: "
-                f'"{change}". Rate 1-10 how faithfully image 2 keeps the hat, beard, face colour, eye style, '
-                "outline treatment and proportions, where 10 is identical apart from the change and 5 or below "
-                'means a noticeably different design. Reply JSON: {"consistency": <1-10>, "differences": "<under 15 words>"}',
-                [Image.open(base), Image.open(cand)])
-    return reply["consistency"] >= 7, reply["differences"]
 
 
 def strip_background(im):
@@ -106,24 +68,17 @@ def square(im, size):
     return out
 
 
-def finish(im, colors=32):
-    alpha = im.getchannel("A")
-    out = im.convert("RGB").quantize(colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).convert("RGBA")
-    out.putalpha(alpha)
-    return out
-
-
 def process(src, out, opaque=None):
     hi = square(strip_background(Image.open(src)), 512)
     hi.save(out.removesuffix(".png") + ".src.png")
-    im = finish(square(hi, 128))
+    im = square(hi, 128)
     if opaque:
         im = Image.alpha_composite(Image.new("RGBA", im.size, opaque + (255,)), im)
     im.save(out, optimize=True)
     return out
 
 
-def defects(raw):
+def warnings(raw, outputs):
     a = Image.open(raw).convert("RGBA").getchannel("A").point(lambda v: 255 if v > 32 else 0)
     w, h = a.size
     edge = any(a.getpixel((x, y)) for i in range(w) for x, y in ((i, 0), (i, h - 1), (0, i * h // w), (w - 1, i * h // w)))
@@ -133,73 +88,13 @@ def defects(raw):
     holes = hist[0] / max(1, hist[255])
     found = []
     if edge:
-        found.append("cut off at the canvas edge")
+        found.append("the subject touches the canvas edge; it may be cut off")
     if holes > 0.03:
-        found.append(f"see-through holes inside the subject ({round(holes * 100)}% of its area)")
+        found.append(f"see-through holes inside the subject ({round(holes * 100)}% of its area); white areas often come back transparent")
+    for path in outputs:
+        if os.path.getsize(path) > 128 * 1024:
+            found.append(f"{os.path.basename(path)} is over Slack's 128KB limit")
     return found
-
-
-def tile(im):
-    im = im.convert("RGBA")
-    im.thumbnail((128, 128))
-    out = Image.new("RGB", (472, 128), (200, 200, 200))
-    for i, bg in enumerate([LIGHT, DARK]):
-        t = Image.new("RGBA", (128, 128), bg + (255,))
-        t.alpha_composite(im, ((128 - im.width) // 2, (128 - im.height) // 2))
-        out.paste(t.convert("RGB"), (i * 128, 0))
-        out.paste(t.resize((22, 22), Image.LANCZOS).resize((88, 88), Image.NEAREST).convert("RGB"), (276 + i * 108, 20))
-    return out
-
-
-def numbered(im, n):
-    t = tile(im)
-    c = Image.new("RGB", (t.width, t.height + 22), (200, 200, 200))
-    c.paste(t, (0, 22))
-    ImageDraw.Draw(c).text((4, 2), f"#{n}", fill="black", font=ImageFont.load_default(16))
-    return c
-
-
-def references():
-    cache = os.path.expanduser("~/.cache/custom-emoji-refs")
-    os.makedirs(cache, exist_ok=True)
-    refs = []
-    for ref in REFS:
-        path = os.path.join(cache, os.path.basename(ref))
-        if not os.path.exists(path):
-            try:
-                urllib.request.urlretrieve("https://emojis.slackmojis.com/emojis/images/" + ref, path)
-            except OSError:
-                continue
-        refs.append(Image.open(path).convert("RGBA"))
-    return refs
-
-
-def panel(cands, refs, seed):
-    items = [("ref", r) for r in refs] + [(k, Image.open(p)) for k, p in cands.items()]
-    random.Random(seed).shuffle(items)
-    ask_text = (f"Here are {len(items)} Slack custom emoji, #1..#{len(items)}, each shown at 128px on light and dark Slack "
-                "themes, then at 22px zoomed 4x. Rate each 1-10: would people love using it? Judge charm and personality, "
-                "how instantly it reads at 22px on both themes, a clean silhouette and crop with nothing cut off, and craft. "
-                "Use the full scale and be discriminating. Also say in under 8 words what each one depicts. "
-                'Reply JSON: {"scores": {"1": n}, "depicts": {"1": "..."}}')
-    out = ask(ask_text, [numbered(im, i + 1) for i, (_, im) in enumerate(items)])
-    return [(k, out["scores"][str(i + 1)], out["depicts"][str(i + 1)]) for i, (k, _) in enumerate(items)]
-
-
-def judge(cands, subject):
-    refs = references()
-    with ThreadPoolExecutor(2) as pool:
-        rounds = list(pool.map(lambda s: panel(cands, refs, s), [1, 2]))
-    bar = statistics.median(s for r in rounds for k, s, _ in r if k == "ref") if refs else 7
-    depicts = {k: d for k, _, d in rounds[0] if k != "ref"}
-    match = ask(f'Intended emoji: "{subject}". Each line below is a judge\'s short description of one candidate. Does the '
-                'candidate show the same main subject and gesture? Ignore colour, style and small details. '
-                'Reply JSON: {"match": {"<key>": true}}\n' + json.dumps(depicts), [], "low")["match"]
-    result = {}
-    for k in cands:
-        score = statistics.mean(s for r in rounds for kk, s, _ in r if kk == k)
-        result[k] = {"score": round(score, 1), "depicts": depicts[k], "on_subject": bool(match.get(k))}
-    return result, bar
 
 
 MOTIONS = {
@@ -240,30 +135,6 @@ def frame(src, t, motion, size=128, matte=None):
     return rgb
 
 
-def flat_palette(src, share=0.004, merge=40):
-    rgb = src.convert("RGB")
-    rgb.paste((255, 0, 255), mask=src.getchannel("A").point(lambda a: 255 if a < 255 else 0))
-    buckets = {}
-    for n, c in rgb.getcolors(1 << 16):
-        if c != (255, 0, 255):
-            b = buckets.setdefault(tuple(v >> 4 for v in c), [0, 0, 0, 0])
-            b[0] += n
-            for i in range(3):
-                b[i + 1] += n * c[i]
-    opaque = sum(b[0] for b in buckets.values())
-    pal = []
-    for n, r, g, b in sorted(buckets.values(), reverse=True):
-        c = (r // n, g // n, b // n)
-        if n < share * opaque:
-            break
-        if all(sum((x - y) ** 2 for x, y in zip(c, pal[i:i + 3])) > merge ** 2 for i in range(0, len(pal), 3)):
-            pal += c
-    pal += [255, 0, 255]
-    img = Image.new("P", (1, 1))
-    img.putpalette(pal + [0] * (768 - len(pal)))
-    return img, len(pal) // 3 - 1
-
-
 def animate(src_path, out, motion, frames=10, loop_ms=700, matte=(140, 140, 140), opaque=None):
     if not 8 <= frames <= 12 or not 300 <= loop_ms <= 900:
         sys.exit("use 8-12 frames and a 300-900 ms loop")
@@ -271,105 +142,41 @@ def animate(src_path, out, motion, frames=10, loop_ms=700, matte=(140, 140, 140)
     if src.width < 256:
         src = src.resize((512, 512), Image.LANCZOS)
     shots = [frame(src, i / frames, motion, matte=None if opaque else matte) for i in range(frames)]
+    strip = Image.new("RGB", (128 * frames, 128), opaque or matte or (255, 0, 255))
+    for i, s in enumerate(shots):
+        if opaque:
+            s = Image.alpha_composite(Image.new("RGBA", s.size, opaque + (255,)), s)
+            shots[i] = s
+        strip.paste(s.convert("RGB"), (128 * i, 0), s.getchannel("A"))
     if opaque:
-        shots = [Image.alpha_composite(Image.new("RGBA", s.size, opaque + (255,)), s) for s in shots]
-        strip = Image.new("RGB", (128 * frames, 128))
-        for i, s in enumerate(shots):
-            strip.paste(s.convert("RGB"), (128 * i, 0))
         pal = strip.quantize(64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
         out_frames = [s.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE) for s in shots]
         out_frames[0].save(out, save_all=True, append_images=out_frames[1:], duration=round(loop_ms / frames), loop=0, optimize=False)
         return out
-    if matte:
-        strip = Image.new("RGB", (128 * frames, 128), matte)
-        for i, s in enumerate(shots):
-            strip.paste(s.convert("RGB"), (128 * i, 0), s.getchannel("A"))
-        pal = strip.quantize(63, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-        pal.putpalette(pal.getpalette()[: 63 * 3] + [255, 0, 255])
-        clear = 63
-    else:
-        pal, clear = flat_palette(src)
+    pal = strip.quantize(63, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    pal.putpalette(pal.getpalette()[: 63 * 3] + [255, 0, 255])
     out_frames = []
     for shot in shots:
         q = shot.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
-        q.paste(clear, mask=shot.getchannel("A").point(lambda a: 255 - a))
+        q.paste(63, mask=shot.getchannel("A").point(lambda a: 255 - a))
         out_frames.append(q)
     out_frames[0].save(out, save_all=True, append_images=out_frames[1:], duration=round(loop_ms / frames),
-                       loop=0, disposal=2, transparency=clear, optimize=False)
+                       loop=0, disposal=2, transparency=63, optimize=False)
     return out
 
 
-def review_motion(gif, subject):
-    g = Image.open(gif)
-    shots = [f.convert("RGBA") for f in ImageSequence.Iterator(g)]
-    clipped = [i + 1 for i, f in enumerate(shots) if any(f.getchannel("A").crop(b).getextrema()[1] > 128
-                                                         for b in [(0, 0, 128, 1), (0, 127, 128, 128), (0, 0, 1, 128), (127, 0, 128, 128)])]
-    verdict = ask(f"These {len(shots)} images are the consecutive frames, in order, of a looping animated Slack emoji of "
-                  f"\"{subject}\" ({g.info.get('duration')} ms per frame, then it loops back to frame 1). Picture it playing. "
-                  "Describe the motion a viewer perceives, and say whether that motion makes sense for the subject, loops "
-                  "smoothly, and keeps the whole subject in frame. "
-                  'Reply JSON: {"motion": "...", "makes_sense": true, "problems": "..."}', [numbered(f, i + 1) for i, f in enumerate(shots)])
-    verdict["frames_touching_edge"] = clipped
-    return verdict
-
-
-def pick(a, name, subject, draw, minimum=0, base=None, change=None):
+def build(a, name, draw):
     keys = [chr(65 + i) for i in range(a.n)]
     with ThreadPoolExecutor(a.n) as pool:
         raws = dict(zip(keys, pool.map(lambda k: draw(f"{a.out}/{name}-{k}.raw.png"), keys)))
-    cands = {k: process(raws[k], f"{a.out}/{name}-{k}.png", a.opaque) for k in keys}
-    scores, bar = judge(cands, subject)
+    result = {}
     for k in keys:
-        scores[k]["defects"] = defects(raws[k])
-        if base:
-            scores[k]["same_character"], scores[k]["differences"] = same_character(base, cands[k], change)
-        scores[k]["passes"] = (scores[k]["on_subject"] and not scores[k]["defects"] and scores[k]["score"] >= max(bar, minimum)
-                               and scores[k].get("same_character", True))
-    best = max(keys, key=lambda k: (scores[k]["passes"], scores[k]["on_subject"], not scores[k]["defects"], scores[k]["score"]))
-    result = {"reference_median": bar, "candidates": scores, "best": best, "passes": scores[best]["passes"], "png": f"{a.out}/{name}.png",
-              "src": f"{a.out}/{name}-{best}.src.png"}
-    Image.open(cands[best]).save(result["png"])
+        png = process(raws[k], f"{a.out}/{name}-{k}.png", a.opaque)
+        files = [png]
+        if a.motion:
+            files.append(animate(f"{a.out}/{name}-{k}.src.png", f"{a.out}/{name}-{k}.gif", a.motion, a.frames, a.loop_ms, a.matte, a.opaque))
+        result[k] = {"files": files, "warnings": warnings(raws[k], files)}
     return result
-
-
-def finish_result(a, result, name, subject, motion):
-    if motion:
-        result["gif"] = animate(result["src"], f"{a.out}/{name}.gif", motion, a.frames, a.loop_ms, a.matte, a.opaque)
-        result["motion_review"] = review_motion(result["gif"], subject)
-    for k in ("png", "gif"):
-        if k in result and os.path.getsize(result[k]) > 128 * 1024:
-            result["warning"] = f"{k} is over Slack's 128KB limit"
-    return result
-
-
-def make(a):
-    os.makedirs(a.out, exist_ok=True)
-    result = pick(a, a.name, a.subject, lambda out: generate(a.subject, a.image_model, out))
-    finish_result(a, result, a.name, a.subject, a.motion)
-    print(json.dumps(result, indent=2))
-    if not result["passes"]:
-        sys.exit(2)
-
-
-def pack(a):
-    os.makedirs(a.out, exist_ok=True)
-    if a.base:
-        base = {"src": a.base, "passes": True}
-    else:
-        base = pick(a, a.name, a.subject, lambda out: generate(a.subject, a.image_model, out), a.min)
-        finish_result(a, base, a.name, a.subject, None)
-    result = {"base": base, "variants": {}}
-    if not base["passes"]:
-        print(json.dumps(result, indent=2))
-        sys.exit(2)
-    for name, change, *motion in a.variant:
-        subject = f"{a.subject}; {change}"
-        r = pick(a, name, subject, lambda out: derive(base["src"], change, a.image_model, out), base=base["src"], change=change)
-        result["variants"][name] = finish_result(a, r, name, subject, motion[0] if motion else None)
-        print(json.dumps({name: {k: r[k] for k in ("best", "passes", "png") if k in r}}), file=sys.stderr)
-    print(json.dumps(result, indent=2))
-    if not all(v["passes"] for v in result["variants"].values()):
-        sys.exit(2)
 
 
 def colour(text):
@@ -379,59 +186,42 @@ def colour(text):
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
-    m = sub.add_parser("make")
-    m.add_argument("subject")
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--motion", choices=sorted(MOTIONS))
+    shared.add_argument("--frames", type=int, default=10)
+    shared.add_argument("--loop-ms", type=int, default=700)
+    shared.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
+    shared.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
+    m = sub.add_parser("make", parents=[shared], help="generate candidates from your prompt, passed through verbatim")
+    m.add_argument("prompt")
     m.add_argument("--name", required=True)
     m.add_argument("--out", default="/tmp/emoji")
     m.add_argument("--n", type=int, default=4)
-    m.add_argument("--motion", choices=sorted(MOTIONS))
-    m.add_argument("--frames", type=int, default=10)
-    m.add_argument("--loop-ms", type=int, default=700)
     m.add_argument("--image-model", default="gpt-image-1.5")
-    m.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
-    m.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
-    pk = sub.add_parser("pack", help="one character in many poses: a judged base, then variants drawn from it as a reference")
-    pk.add_argument("subject", help="the base character, e.g. 'a blob head in a black tricorn with a dark beard, calm'")
+    pk = sub.add_parser("pack", parents=[shared], help="redraw a finished .src.png with your prompt, using it as the reference image")
+    pk.add_argument("base")
+    pk.add_argument("prompt")
     pk.add_argument("--name", required=True)
     pk.add_argument("--out", default="/tmp/emoji")
-    pk.add_argument("--n", type=int, default=3)
-    pk.add_argument("--min", type=float, default=7.5, help="minimum judge score for the base")
-    pk.add_argument("--base", help="a finished base .src.png to reuse instead of generating one")
-    pk.add_argument("--variant", nargs="+", action="append", default=[], metavar=("NAME CHANGE", "MOTION"),
-                    help="emoji name, the one change from the base, and an optional motion; repeatable")
-    pk.add_argument("--frames", type=int, default=10)
-    pk.add_argument("--loop-ms", type=int, default=700)
+    pk.add_argument("--n", type=int, default=2)
     pk.add_argument("--image-model", default="gpt-image-1.5")
-    pk.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
-    pk.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
-    pr = sub.add_parser("process")
+    pr = sub.add_parser("process", parents=[shared])
     pr.add_argument("src")
     pr.add_argument("out")
-    pr.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
-    an = sub.add_parser("animate")
+    an = sub.add_parser("animate", parents=[shared])
     an.add_argument("src")
     an.add_argument("out")
-    an.add_argument("subject")
-    an.add_argument("--motion", choices=sorted(MOTIONS), required=True)
-    an.add_argument("--frames", type=int, default=10)
-    an.add_argument("--loop-ms", type=int, default=700)
-    an.add_argument("--matte", type=colour, default="8c8c8c", help="hex mid-tone the GIF silhouette edge blends toward; 'flat' for a hard edge")
-    an.add_argument("--opaque", type=colour, help="hex background colour to fill the whole canvas instead of transparency")
-    jd = sub.add_parser("judge")
-    jd.add_argument("subject")
-    jd.add_argument("images", nargs="+")
     a = p.parse_args()
-    if a.cmd == "make":
-        make(a)
-    elif a.cmd == "pack":
-        pack(a)
+    if a.cmd in ("make", "pack"):
+        os.makedirs(a.out, exist_ok=True)
+        draw = (lambda out: generate(a.prompt, a.image_model, out)) if a.cmd == "make" else (lambda out: derive(a.base, a.prompt, a.image_model, out))
+        print(json.dumps(build(a, a.name, draw), indent=2))
     elif a.cmd == "process":
         print(process(a.src, a.out, a.opaque))
-    elif a.cmd == "animate":
-        print(json.dumps(review_motion(animate(a.src, a.out, a.motion, a.frames, a.loop_ms, a.matte, a.opaque), a.subject), indent=2))
     else:
-        scores, bar = judge({os.path.basename(i): i for i in a.images}, a.subject)
-        print(json.dumps({"reference_median": bar, "candidates": scores}, indent=2))
+        if not a.motion:
+            sys.exit("animate needs --motion")
+        print(animate(a.src, a.out, a.motion, a.frames, a.loop_ms, a.matte, a.opaque))
 
 
 if __name__ == "__main__":
