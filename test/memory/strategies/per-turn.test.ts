@@ -56,6 +56,39 @@ test("autonomous and system-actor turns capture nothing; only a human turn extra
   assert.deepEqual(systems, [MEMORY_EXTRACTION_PROMPT], "one extraction, for the human turn only");
 });
 
+test("automatic capture sees what the notebook already holds, so an explicit save is not restated", async () => {
+  const prompts: string[] = [];
+  const harness: HarnessModelUtilities = {
+    oneShot(_system, prompt) {
+      prompts.push(prompt);
+      return Promise.resolve(
+        prompt.includes("- Regan's QA fruit is kumquat\n")
+          ? "NONE"
+          : '- User asked to remember: "Regan\'s QA fruit is kumquat"',
+      );
+    },
+  };
+  const { memory } = freshMemory();
+  const scope = "user:U-known-facts";
+  await memory.capture(scope, ["Regan's QA fruit is kumquat"], 1_000, "U1", { mode: "explicit" });
+  const strategy = createPerTurnStrategy({ harness, memory });
+  await strategy.onTurnEnd!({
+    scopeId: scope,
+    input: "remember my QA fruit is kumquat",
+    reply: "Saved.",
+    actorId: "U1",
+  });
+
+  assert.equal(
+    prompts[0],
+    "Already remembered:\n- Regan's QA fruit is kumquat\n\n---\n\nUser said:\nremember my QA fruit is kumquat\n\nAssistant replied:\nSaved.",
+  );
+  assert.deepEqual(
+    (await memory.facts!(scope)).map((fact) => fact.text),
+    ["Regan's QA fruit is kumquat"],
+  );
+});
+
 test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("- a\n* b\n  - c \nplain"), ["a", "b", "c"]);
   assert.deepEqual(parseFacts("NONE"), []);
