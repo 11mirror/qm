@@ -93,7 +93,7 @@ export const ANNOTATE_JS = String.raw`
       const blob = await (await fetch(uri)).blob();
       if (blob.size <= 20 * 1024 * 1024) files.push(new File([blob], "annotation-" + (index + 1) + ".png", { type: "image/png" }));
     }
-    const details = JSON.stringify(data, (key, value) => /^(elementScreenshot|imageDataUri|screenshotDataUri|videoBlobUrl|thumbnailDataUri)$/.test(key) ? undefined : value, 2);
+    const details = JSON.stringify(data, (key, value) => ["elementScreenshot", "imageDataUri", "screenshotDataUri", "videoBlobUrl", "thumbnailDataUri"].includes(key) ? undefined : value, 2);
     const text = ["App annotation: " + annotation.type, "Page: " + context.url,
       "Viewport: " + context.viewport.width + " × " + context.viewport.height,
       ...(annotation.comments || []).map((comment) => comment.text), details,

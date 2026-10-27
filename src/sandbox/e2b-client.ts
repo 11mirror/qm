@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { errMessage } from "../util/errors.ts";
 import { egressProxyHost } from "./sandbox-env.ts";
 import type { ExecResult } from "./sandbox.ts";
@@ -128,7 +129,7 @@ export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
   const url = new URL(egressProxyUrl);
   const host = egressProxyHost(egressProxyUrl);
   const port = url.port || HOSTNAME_MATCHED_PORTS[url.protocol] || "";
-  const ipLiteral = /^[\d.]+$/.test(host) || host.includes(":");
+  const ipLiteral = isIP(host) !== 0;
   if (!ipLiteral && port !== "80" && port !== "443")
     throw new Error(
       `E2B egress proxy ${egressProxyUrl}: E2B matches allowed hostnames only on ports 80 and 443; give the proxy on one of those ports or by IP address`,

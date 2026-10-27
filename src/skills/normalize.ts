@@ -102,7 +102,7 @@ export function normalizeSkill(raw: string, path: string, cfg?: PackConfig): Nor
   else if (typeof attrs.visibility === "string") scopeRaw = attrs.visibility;
   const scopeHint = scopeRaw?.trim().toLowerCase() || undefined;
 
-  const isPrivate = PRIVATE_FLAGS.some((k) => isTruthy(attrs[k])) || /THE-AGENT-ONLY/.test(body);
+  const isPrivate = PRIVATE_FLAGS.some((k) => isTruthy(attrs[k])) || body.includes("THE-AGENT-ONLY");
 
   let declaredCreds = asStringArray(attrs.declaredCreds);
   if (declaredCreds.length === 0) declaredCreds = extractEnvRefs(body);

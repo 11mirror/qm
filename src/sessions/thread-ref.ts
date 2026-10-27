@@ -6,22 +6,22 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
-/** Thread refs carry their origin in one of two live shapes: `agent:main:<origin>:<id>` for a background
- * thread that persists across runs, and `<origin>:<id>[:…]` for one fire (a cron slot, a webhook delivery,
- * a swarm). Both are parsed here and nowhere else. */
-const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
-const AGENT_ORIGIN_RE = new RegExp(`^agent:main:${ORIGIN_ALTERNATION}:[^:]+$`);
-const FIRE_ORIGIN_RE = new RegExp(`^${ORIGIN_ALTERNATION}:[^:]+(:.+)?$`);
-const AGENT_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
-const FIRE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
+const ORIGINS: ReadonlySet<string> = new Set(["cron", "webhook", "monitor", "loop", "swarm"]);
+const AGENT_PREFIX = "agent:main:";
+
+function parseThreadRef(threadRef: string | null | undefined): { origin: SessionOrigin; id: string } | null {
+  const ref = threadRef ?? "";
+  const agent = ref.startsWith(AGENT_PREFIX);
+  const [origin = "", id, ...rest] = (agent ? ref.slice(AGENT_PREFIX.length) : ref).split(":");
+  if (!ORIGINS.has(origin) || !id || (agent ? rest.length > 0 : rest.length === 1 && !rest[0])) return null;
+  return { origin: origin as SessionOrigin, id };
+}
 
 export function sessionOrigin(threadRef: string | null | undefined): SessionOrigin {
-  const match = AGENT_ORIGIN_RE.exec(threadRef ?? "") ?? FIRE_ORIGIN_RE.exec(threadRef ?? "");
-  if (match) return match[1] as SessionOrigin;
-  return "conversation";
+  return parseThreadRef(threadRef)?.origin ?? "conversation";
 }
 
 export function cronIdOf(threadRef: string | null | undefined): string | null {
-  const m = AGENT_CRON_ID_RE.exec(threadRef ?? "") ?? FIRE_CRON_ID_RE.exec(threadRef ?? "");
-  return m ? m[1]! : null;
+  const parsed = parseThreadRef(threadRef);
+  return parsed?.origin === "cron" ? parsed.id : null;
 }
