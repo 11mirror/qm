@@ -35,6 +35,8 @@ export interface SwarmBoard {
   thread(swarmId: string, rootId: string, after: number | undefined, limit: number): Promise<SwarmBoardPost[]>;
   post(swarmId: string, id: string): Promise<SwarmBoardPost | null>;
   insert(post: SwarmBoardPost): Promise<void>;
+  unnotified(swarmId: string, before: number): Promise<SwarmBoardPost[]>;
+  markNotified(swarmId: string, id: string): Promise<void>;
   subscribe(swarmId: string, memberId: string, channel: string): Promise<void>;
   unsubscribe(swarmId: string, memberId: string, channel: string): Promise<boolean>;
   subscribers(swarmId: string, channel: string): Promise<string[]>;
@@ -55,25 +57,36 @@ function toPost(row: Record<string, unknown>): SwarmBoardPost {
   };
 }
 
-export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
-  const pg = createPgPool(connectionString, "swarm-board/0001", [
-    `CREATE TABLE IF NOT EXISTS swarm_boards(
+const BOARD_TABLES = [
+  `CREATE TABLE IF NOT EXISTS swarm_boards(
         swarm_id TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at BIGINT NOT NULL
       )`,
-    `CREATE TABLE IF NOT EXISTS swarm_board_channels(
+  `CREATE TABLE IF NOT EXISTS swarm_board_channels(
         swarm_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
         created_by TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (swarm_id, name)
       )`,
-    `CREATE TABLE IF NOT EXISTS swarm_board_posts(
+  `CREATE TABLE IF NOT EXISTS swarm_board_posts(
         id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, channel TEXT NOT NULL, thread_id TEXT,
         author_id TEXT NOT NULL, author_name TEXT NOT NULL, body TEXT NOT NULL, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_channel ON swarm_board_posts(swarm_id, channel, created_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_thread ON swarm_board_posts(swarm_id, thread_id, created_at)`,
-    `CREATE TABLE IF NOT EXISTS swarm_board_subscriptions(
+  `CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_channel ON swarm_board_posts(swarm_id, channel, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_thread ON swarm_board_posts(swarm_id, thread_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS swarm_board_subscriptions(
         swarm_id TEXT NOT NULL, member_id TEXT NOT NULL, channel TEXT NOT NULL,
         PRIMARY KEY (swarm_id, member_id, channel)
       )`,
+];
+
+export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
+  const pg = createPgPool(connectionString, [
+    { id: "swarm-board/0001", statements: BOARD_TABLES },
+    {
+      id: "swarm-board/0002",
+      statements: [
+        "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notify_pending BOOLEAN NOT NULL DEFAULT false",
+        "CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_notify ON swarm_board_posts(swarm_id, created_at) WHERE notify_pending",
+      ],
+    },
   ]);
   return {
     async ensure(swarmId, createdBy, now) {
@@ -160,16 +173,21 @@ export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
       return rows[0] ? toPost(rows[0]) : null;
     },
     async insert(post) {
-      await pg.q(`INSERT INTO swarm_board_posts(${POST_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [
-        post.id,
-        post.swarmId,
-        post.channel,
-        post.threadId,
-        post.authorId,
-        post.authorName,
-        post.body,
-        post.createdAt,
-      ]);
+      await pg.q(
+        `INSERT INTO swarm_board_posts(${POST_COLUMNS}, notify_pending) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+        [post.id, post.swarmId, post.channel, post.threadId, post.authorId, post.authorName, post.body, post.createdAt],
+      );
+    },
+    async unnotified(swarmId, before) {
+      const rows = await pg.q(
+        `SELECT ${POST_COLUMNS} FROM swarm_board_posts
+          WHERE swarm_id = $1 AND notify_pending AND created_at < $2 ORDER BY created_at LIMIT 50`,
+        [swarmId, before],
+      );
+      return rows.map(toPost);
+    },
+    async markNotified(swarmId, id) {
+      await pg.q("UPDATE swarm_board_posts SET notify_pending = false WHERE swarm_id = $1 AND id = $2", [swarmId, id]);
     },
     async subscribe(swarmId, memberId, channel) {
       await pg.q(
