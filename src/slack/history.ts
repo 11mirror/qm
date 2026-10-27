@@ -150,7 +150,7 @@ function mirroredMessage(deps: HistoryDeps, m: CachedMessage): SlackHistoryMessa
 export function createSlackHistoryReader(deps: HistoryDeps): SlackHistoryReader {
   const limit = historyLimit(deps);
   const readStored = (channel: string, timestamps: string[]): Promise<CachedMessage[]> =>
-    deps.core.readSurfaceMessages!(channel, { timestamps, limit: 500, noFallback: true, includeDeleted: true });
+    deps.core.readSurfaceMessages!(channel, { timestamps, noFallback: true, includeDeleted: true });
 
   const backfilled = new Set<string>();
   return async (client, channel, threadTs, before, expandThreads, live) => {

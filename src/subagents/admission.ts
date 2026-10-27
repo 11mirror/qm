@@ -76,7 +76,6 @@ export async function openSubagent(
     const threadRef = `${SUBAGENT_THREAD_PREFIX}${
       input.requestId ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40) : randomUUID()
     }`;
-    // Count against the tree the child already sits in (a retried child may have been detached).
     const placed = (await deps.sessions.getByThread(threadRef)) ?? (await deps.sessions.get(binding.session.id));
     const root = placed ? await sessionTreeRoot(deps.sessions, placed) : binding.session;
     return lock.withLock(admissionKey(root), async (): Promise<SessionOpenResult> => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DEFAULT_INLINE_TOKENS } from "../../src/sessions/tool-output.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -367,6 +368,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const bytes = createMemoryDurableByteStore();
   const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes, now: () => clock.at });
   const appends: Promise<unknown>[] = [];
+  const turnId = randomUUID();
   const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {
     ...fakeToolContext(),
@@ -377,7 +379,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     current: tc,
     emit: (e) => {
       emitted.push(emittedItem(e));
-      appends.push(store.append({ ...lease, turnId: "run-park" }, e));
+      appends.push(store.append({ ...lease, turnId }, e));
     },
     scopeLabel: "personal:U1",
   };

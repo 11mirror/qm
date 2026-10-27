@@ -133,6 +133,7 @@ export interface SessionSyscallDeps {
     | "setSpawnMeta"
     | "childrenOf"
     | "descendantsOf"
+    | "listByParticipant"
     | "addParticipant"
     | "updateTitle"
     | "getItems"
@@ -142,7 +143,14 @@ export interface SessionSyscallDeps {
   >;
   runs: Pick<
     RunStore,
-    "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw" | "cancelTree"
+    | "enqueue"
+    | "inFlightForThread"
+    | "inFlightForThreads"
+    | "latestForThread"
+    | "getByDedupKey"
+    | "get"
+    | "withdraw"
+    | "cancelTree"
   >;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;

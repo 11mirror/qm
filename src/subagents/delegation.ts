@@ -23,7 +23,7 @@ export async function delegatedAuthorizationOrigin(
 ): Promise<OrchestratorInput["origin"] | undefined> {
   const seen = new Set<string>();
   let current = request;
-  for (let depth = 0; depth < 32; depth++) {
+  for (;;) {
     if (
       current.origin.kind === "automation" ||
       current.readOnly ||

@@ -69,12 +69,16 @@ test("pg items keep turn, author and time in typed columns", async () => {
     const user = await store.append(turn, { kind: "UserMessage", text: "hi", author: "alice" });
     await store.append(turn, { kind: "SteeringMessage", text: "also", author: "bob" });
     await store.append(turn, { kind: "AgentMessage", text: "hello", author: "ignored-on-agent-items" });
-    await store.append({ ...lease, turnId: "not-a-uuid" }, { kind: "ToolCall", tool: "execute", callId: "c1" });
+    await store.append(lease, { kind: "ToolCall", tool: "execute", callId: "c1" });
     await store.append(lease, { kind: "Error", errorCode: "turn_failure", text: "x" });
     const stopped = await store.append(turn, { kind: "Stop", author: "alice", body: { reason: "user" } });
     const read = await store.getItem(session.id, stopped.seq);
     assert.equal(read?.turnId, runId);
     assert.deepEqual(read?.body, { reason: "user" });
+    await assert.rejects(
+      store.append({ ...lease, turnId: "not-a-uuid" }, { kind: "ToolCall", tool: "execute", callId: "c2" }),
+      /malformed turn id/,
+    );
     await store.releaseLease(lease);
 
     const rows = (
@@ -180,8 +184,10 @@ test("pg tool output: the inline cap comes from qm_settings and parked text read
       );
       const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
       assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
-      assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), { text: full });
-      assert.equal(await outputs.read(session.id, parkedOutputKey("tool-output/missing")!), null);
+      const shortPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, "toolu_short")!.text)![0];
+      assert.deepEqual(await outputs.read(session.id, parkedOutputKey(shortPath)!), { text: full });
+      assert.equal(parkedOutputKey("tool-output/toolu_short"), null);
+      assert.equal(await outputs.read(session.id, { digest: "0".repeat(32) }), null);
       assert.equal(await outputs.read("other-session", parkedOutputKey(markerPath)!), null);
       const row = (
         await raw.query(

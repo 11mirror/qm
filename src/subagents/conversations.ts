@@ -1,6 +1,5 @@
 import { errMessage } from "../util/errors.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { Session } from "../types.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import type { SessionStartInput, SessionStartResult, SessionSummary, SessionListResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
@@ -27,7 +26,7 @@ export async function searchSessions(
 }
 
 export async function listSessions(ctx: TurnContext): Promise<SessionListResult> {
-  const { deps, binding, sidebarRefusal, statusOf, currentCaller } = ctx;
+  const { deps, binding, sidebarRefusal, statusesOf, currentCaller } = ctx;
   await currentCaller();
   const conversations = deps.conversations;
   if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
@@ -39,20 +38,19 @@ export async function listSessions(ctx: TurnContext): Promise<SessionListResult>
   const candidates = (await conversations.list(binding.request.actor.id)).filter(
     (s) => s.scopeId === binding.scopeId && !s.parentSessionId && !isSubagentThreadRef(s.threadRef) && !s.archived,
   );
-  const visible: Session[] = [];
-  for (const session of candidates) {
-    const seen = await Promise.all(audience.map((person) => deps.sessions.getForParticipant(session.id, person.id)));
-    if (seen.every(Boolean)) visible.push(session);
-  }
-  const recent = visible.sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
-  const sessions: SessionSummary[] = [];
-  for (const session of recent)
-    sessions.push({
-      sessionId: session.id,
-      title: session.title?.trim() || "Untitled",
-      status: await statusOf(session),
-      current: session.id === binding.session.id,
-    });
+  const seenBy = await Promise.all(
+    audience.map(async (person) => new Set((await deps.sessions.listByParticipant(person.id)).map(({ id }) => id))),
+  );
+  const recent = candidates
+    .filter((session) => seenBy.every((seen) => seen.has(session.id)))
+    .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
+  const statuses = await statusesOf(recent);
+  const sessions: SessionSummary[] = recent.map((session) => ({
+    sessionId: session.id,
+    title: session.title?.trim() || "Untitled",
+    status: statuses.get(session.threadRef) ?? "idle",
+    current: session.id === binding.session.id,
+  }));
   return { ok: true, sessions };
 }
 

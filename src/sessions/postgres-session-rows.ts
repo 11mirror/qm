@@ -1,7 +1,6 @@
 import type { Session, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type { ParticipantWindow } from "./session-store.ts";
-import { isWebThread } from "./session-store.ts";
 import { ITEM_COLUMNS, type Item, msOf } from "./items.ts";
 
 export function rowToGoal(r: Record<string, unknown>): GoalRecord {
@@ -53,7 +52,7 @@ export function rowToParticipantSession(r: Record<string, unknown>): Session {
   if (r.p_archived) s.archived = true;
   if (r.p_pinned) s.pinned = true;
   if (r.p_color != null) s.color = r.p_color as string;
-  if (r.agent_last_reply != null && Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) && isWebThread(s.threadRef))
+  if (r.agent_last_reply != null && Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) && s.surface === "web")
     s.unread = true;
   if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
   if (r.has_entries != null) s.hasEntries = Boolean(r.has_entries);
@@ -66,7 +65,7 @@ export function rowToParticipantWindow(r: Record<string, unknown>): ParticipantW
     principalId: r.principal_id as string,
     validFrom: Number(r.valid_from),
     validTo: r.valid_to == null ? null : Number(r.valid_to),
-    validFromSeq: r.valid_from_seq == null ? null : Number(r.valid_from_seq),
+    validFromSeq: Number(r.valid_from_seq),
     validToSeq: r.valid_to_seq == null ? null : Number(r.valid_to_seq),
   };
 }
@@ -79,11 +78,6 @@ export function rowToItem(r: Record<string, unknown>): Item {
   };
   for (const [, key, type] of ITEM_COLUMNS)
     item[key] = type === "bigint" && r[key] != null ? Number(r[key]) : (r[key] ?? null);
-  const body = item.body as Record<string, unknown> | null;
-  if (item.callId === null && (item.kind === "ToolCall" || item.kind === "ToolResult") && body) {
-    const { callId, ...rest } = body;
-    if (typeof callId === "string" && callId) Object.assign(item, { callId, body: rest });
-  }
   return item as unknown as Item;
 }
 

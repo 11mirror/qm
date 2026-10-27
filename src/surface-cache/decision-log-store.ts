@@ -1,10 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { tenant } from "../tenant.ts";
 
-/**
- * An org-scoped, append-only log of model decisions (ambient judgments, ack-emoji picks): record one,
- * page through them newest first by a container and an outcome filter, read one in full, count outcomes.
- */
 export interface DecisionLogStore<Row, Outcome extends string, Summary = Row> {
   record(row: Row): Promise<void>;
   list(opts?: {
@@ -23,14 +19,10 @@ type ColumnType = "text" | "int";
 
 export interface DecisionLogSpec<Outcome extends string> {
   table: string;
-  /** Column that list/counts narrow by (a channel or a container). */
   scopeColumn: string;
-  /** Column holding the outcome counted by `counts`. */
   outcomeColumn: string;
   outcomes: readonly Outcome[];
-  /** Record fields in insert order: [column, row key, type, required?]. */
   columns: ReadonlyArray<readonly [column: string, key: string, type: ColumnType, required?: true]>;
-  /** Row keys `list` leaves out (large payloads only `get` returns). */
   omitFromList: readonly string[];
 }
 

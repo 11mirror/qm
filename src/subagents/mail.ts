@@ -35,7 +35,6 @@ export function renderSubagentMail(input: {
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
     "</wake>",
   ].join("\n");
 }

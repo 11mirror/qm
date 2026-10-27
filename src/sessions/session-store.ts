@@ -9,12 +9,7 @@ export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
   if (envelope == null) return null;
-  let body: string;
-  try {
-    body = JSON.stringify(envelope);
-  } catch {
-    return null;
-  }
+  const body: string | undefined = JSON.stringify(envelope);
   if (body === undefined) return null;
   return { hash: createHash("sha256").update(body).digest("hex"), body };
 }
@@ -41,7 +36,6 @@ export interface Lease {
   fenceToken?: string;
 }
 
-/** Who holds a session lease: a turn, compaction, a fork copy, or an out-of-turn append (delivery, failure record, goal cancel). */
 export type LeaseHolder = "turn" | "compaction" | "fork" | "append";
 
 export interface LeaseAttempt {
@@ -114,7 +108,6 @@ export interface SessionPin extends NewSessionPin {
   createdAt: number;
 }
 
-export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
 export interface GetItemsOptions {
   transcript?: boolean;
@@ -236,7 +229,6 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
-/** A past security screening, recovered from its captured request — the replay corpus for flagger tests. */
 export interface ScreenSample {
   id: string;
   sessionId: string;
@@ -267,21 +259,12 @@ export interface ParticipantWindow {
   principalId: string;
   validFrom: number;
   validTo: number | null;
-  validFromSeq: number | null;
+  validFromSeq: number;
   validToSeq: number | null;
 }
 
-export function itemWithinTenure(
-  entry: Pick<Item, "seq" | "createdAt">,
-  window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
-): boolean {
-  const fromOk = window.validFromSeq !== null ? entry.seq >= window.validFromSeq : entry.createdAt >= window.validFrom;
-  const toOk =
-    window.validToSeq !== null
-      ? entry.seq < window.validToSeq
-      : window.validTo === null || entry.createdAt < window.validTo;
-  return fromOk && toOk;
-}
+export const seqWithinTenure = (seq: number, window: Pick<ParticipantWindow, "validFromSeq" | "validToSeq">): boolean =>
+  seq >= window.validFromSeq && (window.validToSeq === null || seq < window.validToSeq);
 
 export interface AttributedTurn {
   principalId: string;
@@ -365,14 +348,7 @@ export interface SessionSummary {
 }
 
 export function userMessagePreview(text: string | null | undefined, maxLen = 160): string {
-  const raw = text ?? "";
-  const kept =
-    raw
-      .split("\n\n")
-      .filter((p) => !/^\s*\[/.test(p))
-      .join("\n\n")
-      .trim() || raw.trim();
-  const oneLine = kept.replace(/\s+/g, " ").trim();
+  const oneLine = (text ?? "").replace(/\s+/g, " ").trim();
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
@@ -385,24 +361,17 @@ const MODEL_ONLY_FIELDS: Partial<Record<Item["kind"], ReadonlySet<string>>> = {
   SteeringMessage: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
   Reasoning: new Set(["thinkingSignature"]),
 };
-const WALK_DEPTH = 8;
-
-function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
+function shortenStrings(value: unknown): { value: unknown; truncated: boolean } {
   if (typeof value === "string") {
     return value.length > ITEM_STRING_BUDGET
       ? { value: value.slice(0, ITEM_STRING_BUDGET), truncated: true }
       : { value, truncated: false };
   }
   if (value === null || typeof value !== "object") return { value, truncated: false };
-  if (depth >= WALK_DEPTH) {
-    return payloadBytes(value, depth) > ITEM_STRING_BUDGET
-      ? { value: null, truncated: true }
-      : { value, truncated: false };
-  }
   let truncated = false;
   if (Array.isArray(value)) {
     const next = value.map((item) => {
-      const walked = shortenStrings(item, depth + 1);
+      const walked = shortenStrings(item);
       truncated ||= walked.truncated;
       return walked.value;
     });
@@ -410,7 +379,7 @@ function shortenStrings(value: unknown, depth: number): { value: unknown; trunca
   }
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    const walked = shortenStrings(item, depth + 1);
+    const walked = shortenStrings(item);
     truncated ||= walked.truncated;
     next[key] = walked.value;
   }
@@ -434,29 +403,10 @@ function projectItem(item: Item): TranscriptItem {
   const modelOnly = MODEL_ONLY_FIELDS[item.kind];
   if (modelOnly) return withoutModelContext(item, modelOnly);
   if ((item.kind !== "ToolCall" && item.kind !== "ToolResult") || postsToTheConversation(item)) return item;
-  const body = shortenStrings(item.body, 0);
-  const text = shortenStrings(item.text, 0);
+  const body = shortenStrings(item.body);
+  const text = shortenStrings(item.text);
   if (!body.truncated && !text.truncated) return item;
   return { ...item, body: body.value as Record<string, unknown>, text: text.value as string | null, truncated: true };
-}
-
-function payloadBytes(value: unknown, depth: number): number {
-  if (typeof value === "string") return value.length + 2;
-  if (value === null || typeof value !== "object") return 8;
-  if (depth >= WALK_DEPTH) {
-    try {
-      return JSON.stringify(value)?.length ?? 8;
-    } catch {
-      return 8;
-    }
-  }
-  let bytes = 2;
-  if (Array.isArray(value)) {
-    for (const item of value) bytes += payloadBytes(item, depth + 1) + 1;
-    return bytes;
-  }
-  for (const [key, item] of Object.entries(value)) bytes += key.length + payloadBytes(item, depth + 1) + 4;
-  return bytes;
 }
 
 export function windowedTranscript(
@@ -537,7 +487,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
   purgeLlmCaptures(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
@@ -559,12 +508,10 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  /** Items every listed principal may read (each one's participation window covers them). */
   visibleItems(sessionId: string, principals: string | readonly string[], opts?: GetItemsOptions): Promise<Item[]>;
 
   searchItems(principalId: string, query: string, limit?: number): Promise<ItemSearchHit[]>;
 
-  /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
   countSessions(): Promise<number>;

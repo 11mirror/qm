@@ -77,7 +77,6 @@ export function renderAmbientPrompt(batch: AmbientBatch): string {
   ].join("\n");
 }
 
-/** A judge reply we cannot read means "stay quiet" — logged so a broken judge prompt is visible. */
 function unparseable(raw: string): AmbientDecision {
   console.warn(`[ambient] judge output is not a JSON decision; staying quiet: ${raw.slice(0, 200)}`);
   return { act: false };
@@ -90,7 +89,7 @@ export function parseAmbientDecision(raw: string | undefined): AmbientDecision {
   try {
     const parsed = JSON.parse(object) as { act?: unknown; reason?: unknown; asked_by?: unknown };
     if (parsed.act !== true) return { act: false };
-    const askedBy = typeof parsed.asked_by === "string" ? parsed.asked_by.trim().replace(/^\[|\]$/g, "") : "";
+    const askedBy = typeof parsed.asked_by === "string" ? parsed.asked_by.trim() : "";
     return {
       act: true,
       ...(typeof parsed.reason === "string" && parsed.reason.trim() ? { reason: parsed.reason.trim() } : {}),

@@ -387,13 +387,13 @@ test("directory push stores the workspace URL; /v1/directory/meta serves it", as
   }
 });
 
-async function newSession(base: string, threadRef: string): Promise<string> {
+async function newSession(base: string, threadRef: string, surface = "test"): Promise<string> {
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       origin: { kind: "direct" },
-      surface: "test",
+      surface,
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef },
       text: "hello",
@@ -462,7 +462,7 @@ test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", asyn
 test("surface session route marks a conversation unread and read", async () => {
   const srv = start();
   try {
-    const id = await newSession(srv.base, "web:U1:unread");
+    const id = await newSession(srv.base, "web:U1:unread", "web");
     const unread = await patch(srv.base, id, { principalId: "U1", unread: true });
     assert.equal(unread.status, 200);
     assert.equal(unread.session?.unread, true);

@@ -1,7 +1,6 @@
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 
-/** Whether every principal may read item `seq` of the session — one indexed lookup. */
 export async function itemVisibleToAll(
   sessions: Pick<SessionStore, "visibleItems">,
   sessionId: string,

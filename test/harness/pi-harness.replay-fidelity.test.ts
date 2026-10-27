@@ -520,13 +520,14 @@ async function withPgSession(
     const session = await store.getOrCreateByThread("web:replay", "dm", "personal:tester" as ScopeId);
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
+    const turnId = randomUUID();
     await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
         bytesFor: () => createMemoryDurableByteStore(),
       }),
-      emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
+      emit: (entry) => store.append({ ...lease, turnId }, entry),
       history: async () => forModelContext(await store.getItems(session.id)),
     });
     await store.releaseLease(lease);

@@ -22,7 +22,6 @@ export interface ToolOutputRef {
 
 export interface ParkedOutputKey {
   digest: string;
-  callId?: string;
 }
 
 export interface ToolOutputStore {
@@ -40,13 +39,10 @@ export function inlineTokensFrom(value: unknown): number {
 const md5Hex = (text: string): string => createHash("md5").update(text, "utf8").digest("hex");
 
 export function parkedOutputKey(path: string): ParkedOutputKey | null {
-  if (!path.startsWith(TOOL_OUTPUT_PATH)) return null;
-  const name = path.slice(TOOL_OUTPUT_PATH.length);
-  if (name.startsWith(DIGEST_DIR)) {
-    const digest = name.slice(DIGEST_DIR.length);
-    return digest.length === 32 && Buffer.from(digest, "hex").toString("hex") === digest ? { digest } : null;
-  }
-  return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
+  const prefix = `${TOOL_OUTPUT_PATH}${DIGEST_DIR}`;
+  if (!path.startsWith(prefix)) return null;
+  const digest = path.slice(prefix.length);
+  return digest.length === 32 && Buffer.from(digest, "hex").toString("hex") === digest ? { digest } : null;
 }
 
 function cutMarker(text: string, head: string, tail: string, kept: string): string {
@@ -156,9 +152,8 @@ export function createPostgresToolOutputStore(opts: {
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
           WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
-            AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
-            AND i.blob_sha IS NOT NULL`,
-        [sessionId, ref.digest, ref.callId ?? null],
+            AND md5(i.call_id) = $2 AND i.blob_sha IS NOT NULL`,
+        [sessionId, ref.digest],
       );
       const row = rows[0];
       if (!row) return null;

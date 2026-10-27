@@ -223,8 +223,8 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     const users = computeUsers({
       grants,
       participants: [
-        { sessionId: "s1", principalId: OIDC, validFrom: 10, validTo: null, validFromSeq: null, validToSeq: null },
-        { sessionId: "s2", principalId: EMAIL, validFrom: 20, validTo: null, validFromSeq: null, validToSeq: null },
+        { sessionId: "s1", principalId: OIDC, validFrom: 10, validTo: null, validFromSeq: 0, validToSeq: null },
+        { sessionId: "s2", principalId: EMAIL, validFrom: 20, validTo: null, validFromSeq: 0, validToSeq: null },
       ],
       turns: [],
     });

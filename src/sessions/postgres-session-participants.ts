@@ -9,24 +9,17 @@ import type {
   SessionDescendant,
   SessionStore,
 } from "./session-store.ts";
-import { TENANT, participantWindowBounds } from "./postgres-session-sql.ts";
+import { TENANT } from "./postgres-session-sql.ts";
 import { rowToParticipantSession, LIST_COLUMNS, USER_ACTIVITY } from "./postgres-session-rows.ts";
 import { lockSession, type SessionStoreCtx } from "./postgres-session-items.ts";
 import { msOf, AGENT_REPLY_ITEM } from "./items.ts";
 
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 
-const [fromBounds, toBounds] = participantWindowBounds("x", "p");
-const participantPresenceSql = fromBounds
-  .flatMap((from) =>
-    toBounds.map(
-      (to) => `SELECT 1 FROM items x WHERE x.tenant_id = ${TENANT} AND x.session_id = s.id AND ${from} AND ${to}`,
-    ),
-  )
-  .join(" UNION ALL ");
-const SEES_ITEMS = `CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
+const SEES_ITEMS = `CASE WHEN p.valid_to_seq IS NULL
          THEN COALESCE(s.messages, 0) > p.valid_from_seq
-         ELSE EXISTS (${participantPresenceSql}) END`;
+         ELSE EXISTS (SELECT 1 FROM items x WHERE x.tenant_id = ${TENANT} AND x.session_id = s.id
+                        AND x.seq >= p.valid_from_seq AND x.seq < p.valid_to_seq) END`;
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
 export const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
   `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
@@ -134,7 +127,6 @@ const descendantsOf = async (q: PgPool["q"], rootIds: readonly string[]): Promis
     scopeId: r.scope_id as ScopeId,
   }));
 };
-/** Rows hanging off a session that its delete must take with it (items cascade on their own). */
 const deleteSessionChildren = async (client: PoolClient, sessionId: string): Promise<void> => {
   for (const table of ["session_llm_requests", "session_leases", "participants", "session_pins"])
     await client.query(`DELETE FROM ${table} WHERE session_id = $1`, [sessionId]);
@@ -225,11 +217,16 @@ export function sessionParticipantMethods(ctx: SessionStoreCtx) {
     },
 
     async listDescendantsForParticipant(rootId, principalId, limit): Promise<Session[]> {
-      const ids = (await descendantsOf(q, [rootId])).map((d) => d.id).slice(0, Math.max(0, Math.floor(limit)));
-      if (!ids.length) return [];
       const rows = await q(
-        participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
-        [principalId, ids],
+        participantSessionsSql(
+          ` AND s.id IN (WITH RECURSIVE tree(id) AS (
+                SELECT id FROM sessions WHERE parent_session_id = $2
+                UNION
+                SELECT c.id FROM sessions c JOIN tree t ON c.parent_session_id = t.id
+              ) SELECT id FROM tree)`,
+          LIST_COLUMNS,
+        ) + " ORDER BY s.created_at, s.id LIMIT $3",
+        [principalId, rootId, Math.max(0, Math.floor(limit))],
       );
       return rows.map(rowToParticipantSession);
     },
@@ -239,41 +236,21 @@ export function sessionParticipantMethods(ctx: SessionStoreCtx) {
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {
-      if (patch.title !== undefined) {
-        await q("UPDATE participants SET title = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.title,
-        ]);
-      }
-      if (patch.archived !== undefined) {
-        await q("UPDATE participants SET archived = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.archived,
-        ]);
-      }
-      if (patch.pinned !== undefined) {
-        await q("UPDATE participants SET pinned = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.pinned,
-        ]);
-      }
-      if (patch.color !== undefined) {
-        await q("UPDATE participants SET color = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.color,
-        ]);
-      }
-      if (patch.readAt !== undefined) {
-        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.readAt,
-        ]);
-      }
+      const set = (
+        [
+          ["title", patch.title],
+          ["archived", patch.archived],
+          ["pinned", patch.pinned],
+          ["color", patch.color],
+          ["read_at", patch.readAt],
+        ] as const
+      ).filter(([, value]) => value !== undefined);
+      if (!set.length) return;
+      await q(
+        `UPDATE participants SET ${set.map(([column], i) => `${column} = $${i + 3}`).join(", ")}
+          WHERE session_id = $1 AND principal_id = $2`,
+        [sessionId, principalId, ...set.map(([, value]) => value)],
+      );
     },
   } satisfies Partial<SessionStore>;
 }

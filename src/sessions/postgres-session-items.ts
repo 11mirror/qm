@@ -13,7 +13,6 @@ import {
   storedItem,
   type Item,
   type NewItem,
-  USER_ITEM_KINDS,
 } from "./items.ts";
 
 export interface SessionStoreCtx {
@@ -148,7 +147,7 @@ export const insertItems = async (
       startSeq,
       firstUser ? storedPreview(firstUser.text, FIRST_PREVIEW_LEN) : null,
       lastUser ? storedPreview(lastUser.text, LAST_PREVIEW_LEN) : null,
-      full.some((item) => USER_ITEM_KINDS.includes(item.kind)),
+      full.some(isUserMessage),
     ],
   );
   return full;

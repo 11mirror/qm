@@ -1,6 +1,6 @@
 import { swallowAs } from "../util/errors.ts";
 import { type Session } from "../types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 
@@ -31,13 +31,11 @@ export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, se
 
 export async function sessionTreeWorking(
   sessions: Pick<SessionStore, "descendantsOf">,
-  runs: Pick<RunStore, "activeForThread">,
+  runs: Pick<RunStore, "inFlightForThreads">,
   root: Session,
 ): Promise<boolean> {
-  for (const session of await treeSessions(sessions, root)) {
-    if (session.scopeId === root.scopeId && (await runs.activeForThread(session.threadRef))) return true;
-  }
-  return false;
+  const sameScope = (await treeSessions(sessions, root)).filter((session) => session.scopeId === root.scopeId);
+  return (await runs.inFlightForThreads(sameScope.map((session) => session.threadRef))).length > 0;
 }
 
 export async function workingSessionThreadRefs(
@@ -62,7 +60,6 @@ export async function workingSessionThreadRefs(
 
 type TreeNode = Pick<Session, "id" | "threadRef" | "scopeId">;
 
-/** The root and every descendant, in one recursive query. */
 async function treeSessions(sessions: Pick<SessionStore, "descendantsOf">, root: Session): Promise<TreeNode[]> {
   return [root, ...(await sessions.descendantsOf([root.id])).filter((node) => node.id !== root.id)];
 }
@@ -88,28 +85,27 @@ export async function sessionRunCancelled(
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "descendantsOf">;
-    runs: Pick<RunStore, "inFlightForThread" | "cancelTree">;
+    runs: Pick<RunStore, "inFlightForThreads" | "cancelTree">;
     signals: Pick<RunSignalStore, "send">;
   },
   root: Session,
   reason?: string,
 ): Promise<boolean> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
-  const inFlight: Run[] = [];
-  for (const session of tree) inFlight.push(...(await deps.runs.inFlightForThread(session.threadRef)));
-  for (const run of inFlight) await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-  await deps.runs.cancelTree(tree.map((session) => session.threadRef));
+  const threadRefs = tree.map((session) => session.threadRef);
+  const inFlight = await deps.runs.inFlightForThreads(threadRefs);
+  await Promise.all(
+    inFlight.map((run) => deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) })),
+  );
+  await deps.runs.cancelTree(threadRefs);
   return inFlight.length > 0;
 }
 
 export async function sessionTreeRunCount(
   sessions: Pick<SessionStore, "descendantsOf">,
-  runs: Pick<RunStore, "inFlightForThread">,
+  runs: Pick<RunStore, "inFlightForThreads">,
   root: Session,
 ): Promise<number> {
-  let live = 0;
-  for (const session of await treeSessions(sessions, root)) {
-    live += (await runs.inFlightForThread(session.threadRef)).length;
-  }
-  return live;
+  const tree = await treeSessions(sessions, root);
+  return (await runs.inFlightForThreads(tree.map((session) => session.threadRef))).length;
 }

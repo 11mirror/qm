@@ -105,9 +105,18 @@ function runReads(
   | "unsettledTerminal"
   | "activeForThread"
   | "inFlightForThread"
+  | "inFlightForThreads"
   | "activeSessionIds"
   | "list"
 > {
+  const inFlightForThreads = async (sessionIds: readonly string[]): Promise<Run[]> => {
+    if (!sessionIds.length) return [];
+    const { rows } = await q(
+      "SELECT * FROM runs WHERE session_id = ANY($1::text[]) AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC",
+      [[...sessionIds]],
+    );
+    return rows.map(rowToRun);
+  };
   return {
     async getByDedupKey(dedupKey) {
       const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
@@ -174,13 +183,8 @@ function runReads(
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    async inFlightForThread(sessionId: string): Promise<Run[]> {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC",
-        [sessionId],
-      );
-      return rows.map(rowToRun);
-    },
+    inFlightForThread: (sessionId: string): Promise<Run[]> => inFlightForThreads([sessionId]),
+    inFlightForThreads,
 
     async activeSessionIds(): Promise<string[]> {
       const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('queued','pending','running')");
