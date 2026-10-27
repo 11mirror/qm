@@ -1,7 +1,7 @@
 import { isDeferred, type CronStore } from "../../src/cron/cron-store.ts";
 import { recoverNextFireAt } from "../../src/cron/schedule.ts";
 import type { Cron } from "../../src/types.ts";
-import type { CronJobQueue } from "../../src/cron/job-queue.ts";
+import type { JobWorker } from "../../src/jobs/job-worker.ts";
 
 /** Crons whose current slot is due at `now`, as the scheduler's fire path sees them. */
 export async function dueCrons(crons: CronStore, now: number): Promise<Array<Cron & { scheduledAt: number }>> {
@@ -22,13 +22,7 @@ export async function markFired(crons: CronStore, id: string, at: number, schedu
   if (slot !== undefined) await crons.claimSlot(id, slot, at);
 }
 
-/** A cron job queue that never claims: for tests that drive fires through `scheduler.tick`. */
-export function idleCronQueue(): CronJobQueue {
-  return {
-    async start() {},
-    async enqueueFire() {},
-    healthy: () => true,
-    async stopClaims() {},
-    async stop() {},
-  };
+/** A job worker that never claims: for tests that drive fires through `scheduler.tick`. */
+export function idleJobs(): Pick<JobWorker, "handle" | "spawn"> {
+  return { handle() {}, async spawn() {} };
 }

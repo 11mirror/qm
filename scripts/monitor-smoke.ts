@@ -14,7 +14,6 @@ import { createOutbound, type OutboundPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { loadConfig } from "../src/config.ts";
-import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -103,7 +102,6 @@ const monitorBroker = createMonitorBroker({
 
 const wakes: TurnRequest[] = [];
 const poller = createMonitorPoller({
-  leaderLease: createNoopLeaderLease(),
   monitors,
   processes: registry,
   sandbox: sb,

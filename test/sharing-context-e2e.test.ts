@@ -19,8 +19,6 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   await built.identity.hydrate();
   await built.start();
   t.after(async () => {
-    built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let members = ["U1", "U2", "U3"];
