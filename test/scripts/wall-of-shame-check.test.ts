@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { wallOfShameLenses, wallOfShameProblems } from "../scripts/wall-of-shame-check.ts";
+import { wallOfShameLenses, wallOfShameProblems } from "../../scripts/wall-of-shame-check.ts";
 
 const spec =
   "## Wall of shame\n\n### Overengineering (6 examples)\n\n### Regex\n\n### Honorable mentions\n\n## Later\n\n### Not a lens\n";

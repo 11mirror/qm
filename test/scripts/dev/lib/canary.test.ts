@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { discoverCanaryChannel, pickCanaryChannel } from "../scripts/dev/lib/canary.ts";
+import { discoverCanaryChannel, pickCanaryChannel } from "../../../../scripts/dev/lib/canary.ts";
 
 test("pickCanaryChannel prefers #dev-canary, then ci-*, never plain human channels", () => {
   const human = { id: "C1", name: "project-alpha" };

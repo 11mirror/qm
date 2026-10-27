@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
+import { DEFAULT_AGENT_MODEL_ID } from "../../src/model/pi-models.ts";
 
-const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const readme = read("README.md");
 const boot = read("src/tenants/boot.ts");
 const toolWrappers = read("src/harness/agent-tools/wrappers.ts");

@@ -141,7 +141,7 @@ function readTrackedContent(path: string): Buffer | null {
   }
 }
 
-const provisionedInfrastructure = ["test/deploy-notice.test.ts"];
+const provisionedInfrastructure = ["test/scripts/deploy-notice.test.ts"];
 
 test("tracked files use only QM branding", () => {
   const paths = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })

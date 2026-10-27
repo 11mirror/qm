@@ -10,7 +10,7 @@ import {
   initializeErrorReporting,
   markFirstToken,
   traceQueued,
-} from "../plugins/chassis/src/error-reporting.ts";
+} from "../../../plugins/chassis/src/error-reporting.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";

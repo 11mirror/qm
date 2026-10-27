@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { brokenTaskDefinition } from "../scripts/aws/ecs-blue-green-drill.ts";
+import { brokenTaskDefinition } from "../../../scripts/aws/ecs-blue-green-drill.ts";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { QmConfig } from "../cli/src/config.ts";
-import { deleteDrill, validateDrillIdentifier, verifyScript } from "../scripts/aws/rds-restore-drill.ts";
+import type { QmConfig } from "../../../cli/src/config.ts";
+import { deleteDrill, validateDrillIdentifier, verifyScript } from "../../../scripts/aws/rds-restore-drill.ts";
 
 test("restore drills accept only scoped temporary database identifiers", () => {
   assert.equal(

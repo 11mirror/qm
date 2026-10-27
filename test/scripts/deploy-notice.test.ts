@@ -1,9 +1,9 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
-mock.module("../src/util/async.ts", { namedExports: { sleep: async () => {} } });
+mock.module("../../src/util/async.ts", { namedExports: { sleep: async () => {} } });
 
-const { formatDeployNotice, postDeployNotice } = await import("../scripts/deploy-notice.ts");
+const { formatDeployNotice, postDeployNotice } = await import("../../scripts/deploy-notice.ts");
 
 const REPO = "yc-software/qm";
 const SHA = "82e6c9550aa11bb22cc33dd44ee55ff66aa77bb8";

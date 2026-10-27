@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const head = "a".repeat(40);
-const watcher = fileURLToPath(new URL("../skills-seed/github-gitlab/scripts/watch-ci.mjs", import.meta.url));
+const watcher = fileURLToPath(new URL("../../../skills-seed/github-gitlab/scripts/watch-ci.mjs", import.meta.url));
 const view = { operation: "view", json: { headRefOid: head } };
 const pass = { operation: "checks", json: [{ name: "CI", bucket: "pass" }] };
 const pending = { operation: "checks", json: [{ name: "CI", bucket: "pending" }], code: 8 };

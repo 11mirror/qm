@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const security = readFileSync(new URL("../SECURITY.md", import.meta.url), "utf8");
+const security = readFileSync(new URL("../../SECURITY.md", import.meta.url), "utf8");
 
 test("the public threat model covers the documented material limitations", () => {
   for (const heading of [

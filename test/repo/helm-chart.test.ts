@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-const chart = fileURLToPath(new URL("../deploy/helm", import.meta.url));
+const chart = fileURLToPath(new URL("../../deploy/helm", import.meta.url));
 const helm = process.env.HELM_BIN || "helm";
 const helmAvailable = spawnSync(helm, ["version", "--short"]).status === 0;
 if (process.env.CI) assert.ok(helmAvailable, "Install Helm 3 before running the chart regression tests in CI");

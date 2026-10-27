@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
-import { ensureDeps } from "../scripts/dev/lib/deps.ts";
-import { run, spawnCommand } from "../scripts/dev/lib/proc.ts";
+import { ensureDeps } from "../../../scripts/dev/lib/deps.ts";
+import { run, spawnCommand } from "../../../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envSha, errMessage, formatAge } from "../scripts/dev/lib/util.ts";
+import { envSha, errMessage, formatAge } from "../../../scripts/dev/lib/util.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -19,7 +19,7 @@ import {
   slotTokens,
   slotValid,
   writeSlotFlag,
-} from "../scripts/dev/lib/pool.ts";
+} from "../../../scripts/dev/lib/pool.ts";
 import {
   claimPortSlot,
   claimSlotPorts,
@@ -34,10 +34,10 @@ import {
   releaseSlotLock,
   writeHeartbeat,
   writeMeta,
-} from "../scripts/dev/lib/lease.ts";
-import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
-import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
+} from "../../../scripts/dev/lib/lease.ts";
+import { assembleEnv, completeDevSecuritySecrets } from "../../../scripts/dev/lib/envctx.ts";
+import { buildChildSpecs, type SpecInputs } from "../../../scripts/dev/supervisor/specs.ts";
+import type { LeaseInfo } from "../../../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
   const store = mkdtempSync(join(tmpdir(), "qm-dev-test-"));

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const dockerfile = readFileSync(new URL("../deploy/core/Dockerfile", import.meta.url), "utf8");
+const dockerfile = readFileSync(new URL("../../deploy/core/Dockerfile", import.meta.url), "utf8");
 const webStage = dockerfile.slice(dockerfile.indexOf("AS web-ui-build"), dockerfile.indexOf("npm run build"));
 
 test("the core image builds the web bundle with its referenced static assets", () => {

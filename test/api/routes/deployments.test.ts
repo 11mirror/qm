@@ -1,14 +1,37 @@
 import assert from "node:assert/strict";
-import { createServer as createHttpServer, type Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer as createHttpServer, type Server, request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { after, before, describe, it } from "node:test";
-import type { App, RedeployInput } from "../../../src/api/app.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import test, { after, before, describe, it } from "node:test";
+import { deriveKey, seal } from "../../../plugins/portal/src/session.ts";
+import { createAclStore } from "../../../src/acl/acl-store.ts";
+import { createPostgresGrantStore } from "../../../src/acl/postgres-grant-store.ts";
+import { deployRef, encodeRef } from "../../../src/acl/resource-ref.ts";
+import { type App, type RedeployInput, createApp } from "../../../src/api/app.ts";
+import type { ServerDeps } from "../../../src/api/deps.ts";
 import { createServer } from "../../../src/api/server.ts";
-import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../../../src/auth/capability-token.ts";
+import {
+  CAPABILITY_TTL_MS,
+  CONTROL_PLANE_AUD,
+  mintCapabilityToken,
+  CREDENTIAL_BROKER_AUD,
+  DEPLOYMENT_CREDENTIAL_TTL_MS,
+} from "../../../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 import { signRequest } from "../../../src/auth/source-auth.ts";
-import { scopeId } from "../../../src/types.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
+import { createDeployService } from "../../../src/deploy/deploy-service.ts";
+import { createDeployStore, type Deployment } from "../../../src/deploy/deploy-store.ts";
+import { portalSession } from "../../../src/deploy/viewer-session.ts";
+import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
+import type { FeatureFlagStore } from "../../../src/feature-flags.ts";
+import { createIdentityService } from "../../../src/identity/identity-service.ts";
+import { createPostgresSessionStore } from "../../../src/sessions/postgres-session-store.ts";
+import { scopeId, personalScope } from "../../../src/types.ts";
+import { singleProcessDeps } from "../../support/single-process.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "../../support/test-database.ts";
 
 const SECRET = "agent-deployment-fetch-secret".repeat(2);
 
@@ -292,5 +315,340 @@ describe("deployment redeploy route", () => {
       const response = await post("/v1/deployments/envy/redeploy", { ...valid, ...bad });
       assert.equal(response.status, 400, JSON.stringify(bad));
     }
+  });
+});
+
+const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
+
+const secret = "app-only-gateway-test-secret-long-enough";
+const guest = "guest@partner.test";
+const key = deriveKey(secret, "portal.session.v1");
+function token(appOnly: unknown = true) {
+  const now = Math.floor(Date.now() / 1000);
+  return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
+}
+test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
+  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
+  for (const marker of ["false", null, 0, {}])
+    assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
+});
+
+test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "app-only-gateway-"));
+  let upstreamHits = 0;
+  const upstream = createHttpServer((req, res) => {
+    upstreamHits++;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(req.headers));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deploy = createDeployService({
+    ...singleProcessDeps(),
+    externalSharingAllowed: async () => true,
+    deployStore: createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } })),
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
+      destroy: async () => {},
+    },
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl,
+    deployDir: join(dir, "deploy"),
+  });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const app = createApp({
+    deploy,
+    acl,
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    identity,
+  } as unknown as Parameters<typeof createApp>[0]);
+  const ownerScopeId = scopeId("personal", "owner@example.test");
+  const shared = await app.deploy({
+    ownerScopeId,
+    createdBy: "owner@example.test",
+    entrypoint: "node app.js",
+    files: [],
+    name: "shared",
+  });
+  await app.deploy({
+    ownerScopeId: scopeId("org", "acme"),
+    createdBy: "owner@example.test",
+    entrypoint: "node app.js",
+    files: [],
+    name: "org-app",
+  });
+  app.canManageDeployment = async () => {
+    throw new Error("app-only must not consult management authority");
+  };
+  app.effectiveDeploymentPermission = async () => {
+    throw new Error("app-only must not consult inherited permission");
+  };
+  const server = createServer(app, {
+    featureFlags: externalSharingOn,
+    identity,
+    signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    deployAppsDomain: "apps.example.test",
+    deployGateSecret: "gate",
+    deployAppsSessionSecret: secret,
+    deployAppsLoginUrl: "https://portal.example.test",
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const cookie = `portal_session=${token()}`;
+  const get = (name: string, path = "/", method = "GET") =>
+    new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port,
+          path,
+          method,
+          headers: {
+            host: `${name}.apps.example.test`,
+            cookie,
+            "sec-fetch-dest": "document",
+            accept: "application/json",
+            "x-portal-identity": "forged",
+          },
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => {
+            body += chunk;
+          });
+          res.on("end", () => resolve({ status: res.statusCode!, body }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    assert.equal((await get("shared")).status, 403);
+    assert.equal((await get("org-app")).status, 403, "org ownership is not an app-only entitlement");
+    for (const granteeScopeId of [scopeId("org", "acme"), scopeId("channel", "C1")]) {
+      await acl.grant({
+        ownerScopeId,
+        ref: encodeRef(deployRef(shared.id)),
+        granteeScopeId,
+        permission: "read",
+        grantedBy: "owner@example.test",
+      });
+    }
+    assert.equal((await get("shared")).status, 403, "scope grants never admit app-only sessions");
+    await acl.grant({
+      ownerScopeId,
+      ref: encodeRef(deployRef(shared.id)),
+      granteeScopeId: scopeId("personal", guest),
+      permission: "write",
+      grantedBy: "owner@example.test",
+    });
+    assert.equal((await get("shared")).status, 403, "a write grant cannot confer app-only management access");
+    assert.equal(upstreamHits, 0);
+    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
+    const granted = await get("shared", "/api/data", "POST");
+    assert.equal(granted.status, 200, "read grants allow using the app, including its POST API");
+    assert.equal(JSON.parse(granted.body).cookie, undefined, "gateway cookie never reaches app");
+    assert.notEqual(JSON.parse(granted.body)["x-portal-identity"], "forged");
+    assert.equal((await get("shared", "/__claw__/version")).status, 200, "request goes to app, never management shell");
+    assert.equal((await get("org-app")).status, 403, "grant is for one deployment only");
+    await identity.deactivate(guest, "manual");
+    assert.equal((await get("shared")).status, 403, "manual deactivation overrides the current direct grant");
+    await identity.reactivate(guest);
+    await app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
+    assert.equal((await get("shared")).status, 403, "same session is refused immediately after revoke");
+    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
+    await app.renameDeployment(shared.id, "renamed");
+    await app.deploy({
+      ownerScopeId,
+      createdBy: "owner@example.test",
+      entrypoint: "node app.js",
+      files: [],
+      name: "shared",
+    });
+    assert.equal((await get("shared")).status, 403, "reused name does not inherit old immutable-ID grant");
+    assert.equal((await get("renamed")).status, 200, "same immutable app retains its grant after rename");
+    await app.archiveDeployment(shared.id);
+    assert.equal((await get("renamed")).status, 404, "archived app cannot be reached even with its grant");
+    await app.setDeploymentPublic("shared", true, { createdBy: "owner@example.test" });
+    const publicVisit = await get("shared");
+    assert.equal(publicVisit.status, 200);
+    assert.equal(JSON.parse(publicVisit.body)["x-portal-identity"], undefined, "public link access remains anonymous");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const DEPLOYMENT_TOKEN_GATE_SECRET = "deployment-token-gate-secret".repeat(2);
+
+describe("a published app's broker token follows the app it was minted for, on every broker route", () => {
+  let server: Server;
+  let base: string;
+  let deploymentsAllowed = true;
+  let scopeAuthorized = true;
+  let offboarded = false;
+  const authorized: unknown[] = [];
+  const deployments = new Map<string, Deployment>();
+  const running = (id: string, createdBy = "publisher"): Deployment => ({
+    id,
+    createdBy,
+    ownerScopeId: personalScope(createdBy),
+    currentVersion: 1,
+    status: "running",
+    endpoint: null,
+    versions: [],
+  });
+
+  const tokenFor = (deployment: string, actorId = "publisher", aud = CREDENTIAL_BROKER_AUD) =>
+    mintCapabilityToken(
+      {
+        actorId,
+        scopeId: personalScope(actorId),
+        aud,
+        credentials: ["sample-api"],
+        deployment,
+        exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+      },
+      DEPLOYMENT_TOKEN_GATE_SECRET,
+    );
+
+  const routes = {
+    broker: (token: string) =>
+      fetch(`${base}/v1/credentials/broker`, {
+        method: "POST",
+        headers: { "x-agent-capability": token, "content-type": "application/json" },
+        body: JSON.stringify({ credential: "sample-api", url: "https://relay.example/sample-api/me" }),
+      }),
+    git: (token: string) =>
+      fetch(`${base}/v1/credentials/http/sample-api/sample-api/repo.git/info/refs?service=git-upload-pack`, {
+        headers: { "x-agent-capability": token },
+      }),
+  };
+  const statuses = async (token: () => Promise<string>) => ({
+    broker: (await routes.broker(await token())).status,
+    git: (await routes.git(await token())).status,
+  });
+
+  before(async () => {
+    const app = {
+      authorizesCapabilityScope: async (claims: unknown) => {
+        authorized.push(claims);
+        return scopeAuthorized;
+      },
+      getDeployment: async (id: string) => deployments.get(id) ?? null,
+    } as unknown as App;
+    const deps = {
+      identity: {
+        refresh: async () => {},
+        classify: () => ({ type: offboarded ? "offboarded" : "internal" }),
+      },
+      serviceCreds: {
+        getServiceCredentialSecret: async () => ({
+          slug: "sample-api",
+          name: "Sample",
+          secret: "s3cret",
+          host: "relay.example",
+          allowedMethods: ["GET", "POST"],
+          allowedPathPrefixes: ["/sample-api"],
+          enabled: true,
+          deployments: deploymentsAllowed,
+        }),
+      },
+      brokerFetch: async () => ({ status: 200, text: async () => "{}" }),
+      credentialHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
+    } as unknown as Partial<ServerDeps>;
+    server = createServer(app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: DEPLOYMENT_TOKEN_GATE_SECRET,
+      ...deps,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("reaches upstream while the app is running and the credential is on for apps", async () => {
+    deployments.set("d1", running("d1"));
+    assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 200, git: 200 });
+  });
+
+  it("is refused once the app is stopped, archived or gone, and for a token whose actor is not the publisher", async () => {
+    const refused = { broker: 401, git: 401 };
+    deployments.set("d1", { ...running("d1"), status: "stopped" });
+    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+    deployments.set("d1", { ...running("d1"), status: "archived" });
+    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+    deployments.delete("d1");
+    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+    deployments.set("d2", running("d2", "someone-else"));
+    assert.deepEqual(await statuses(() => tokenFor("d2", "publisher")), refused);
+  });
+
+  it("is refused when an admin switches the credential off for published apps", async () => {
+    deployments.set("d1", running("d1"));
+    deploymentsAllowed = false;
+    try {
+      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
+    } finally {
+      deploymentsAllowed = true;
+    }
+  });
+
+  it("is refused without a token, with the wrong audience, and after scope membership is revoked", async () => {
+    deployments.set("d1", running("d1"));
+    assert.equal((await fetch(`${base}/v1/credentials/http/sample-api/sample-api/repo.git/info/refs`)).status, 401);
+    assert.deepEqual(await statuses(() => tokenFor("d1", "publisher", CONTROL_PLANE_AUD)), { broker: 403, git: 403 });
+    scopeAuthorized = false;
+    try {
+      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
+    } finally {
+      scopeAuthorized = true;
+    }
+  });
+
+  it("is refused once the publisher is offboarded", async () => {
+    deployments.set("d1", running("d1"));
+    offboarded = true;
+    try {
+      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 401, git: 401 });
+    } finally {
+      offboarded = false;
+    }
+  });
+
+  it("checks scope membership with the token's bot and member claims on both routes", async () => {
+    const token = () =>
+      mintCapabilityToken(
+        {
+          actorId: "B1",
+          scopeId: "channel:C1",
+          aud: CREDENTIAL_BROKER_AUD,
+          credentials: ["sample-api"],
+          botActor: true,
+          liveActor: true,
+          members: [{ id: "B1", type: "internal" }],
+          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+        },
+        DEPLOYMENT_TOKEN_GATE_SECRET,
+      );
+    authorized.length = 0;
+    assert.deepEqual(await statuses(token), { broker: 200, git: 200 });
+    const expected = {
+      actorId: "B1",
+      scopeId: "channel:C1",
+      botActor: true,
+      liveActor: true,
+      members: [{ id: "B1", type: "internal" }],
+    };
+    assert.deepEqual(authorized, [expected, expected]);
   });
 });

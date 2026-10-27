@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 test("core deploy image includes git", () => {
   const dockerfile = readFileSync(join(repoRoot, "deploy/core/Dockerfile"), "utf8");

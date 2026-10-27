@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, readReceipt, reusableCi } from "../../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -282,7 +282,7 @@ test("receipt parser rejects missing, multiple and malformed job output", () => 
   assert.throws(() => readReceipt(line + line));
 });
 
-const workflow = readFileSync(new URL("../.github/workflows/cicd.yml", import.meta.url), "utf8");
+const workflow = readFileSync(new URL("../../.github/workflows/cicd.yml", import.meta.url), "utf8");
 const jobs = Object.fromEntries(
   [...workflow.split("jobs:\n")[1]!.matchAll(/^ {2}([a-z-]+):\n(.*?)(?=^ {2}[a-z-]+:|$(?![\s\S]))/gms)].map(
     (match): [string, string] => [match[1]!, match[2]!],

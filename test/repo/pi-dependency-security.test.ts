@@ -9,7 +9,7 @@ const piCodingAgentTarball =
   "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz";
 
 function installedVersion(path: string): string {
-  const manifestUrl = new URL(`../node_modules/${path}/package.json`, import.meta.url);
+  const manifestUrl = new URL(`../../node_modules/${path}/package.json`, import.meta.url);
   const manifest = JSON.parse(readFileSync(manifestUrl, "utf8")) as { version?: unknown };
   if (typeof manifest.version !== "string") throw new Error(`${path} has no package version`);
   return manifest.version;
@@ -35,12 +35,12 @@ function lockedVersions(packages: Record<string, { version?: unknown }>, depende
 }
 
 test("Pi and MCP security overrides are materialized by the root lockfile", () => {
-  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+  const lock = JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")) as {
     packages?: Record<string, { resolved?: unknown; version?: unknown; hasShrinkwrap?: unknown }>;
   };
   const packages = lock.packages ?? {};
   const pi = packages["node_modules/@earendil-works/pi-coding-agent"];
-  const piManifest = new URL("../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url);
+  const piManifest = new URL("../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url);
   const minimatchManifest = createRequire(piManifest).resolve("minimatch/package.json");
 
   assert.equal(pi?.resolved, piCodingAgentTarball);
@@ -58,14 +58,14 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
   assert.deepEqual(lockedVersions(packages, "@hono/node-server"), ["2.0.10"]);
   assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.12");
   for (const dependency of ["ajv"]) {
-    const parentManifest = new URL(`../node_modules/${dependency}/package.json`, import.meta.url);
+    const parentManifest = new URL(`../../node_modules/${dependency}/package.json`, import.meta.url);
     assert.equal(dependencyVersion(parentManifest, "fast-uri"), "3.1.9");
   }
   assert.equal(dependencyVersion(piManifest, "undici"), "8.12.3");
   assert.equal(dependencyVersion(piManifest, "protobufjs"), "7.6.5");
   assert.equal(installedVersion("@hono/node-server"), "2.0.10");
   assert.match(
-    readFileSync(new URL("../node_modules/@earendil-works/pi-coding-agent/LICENSE", import.meta.url), "utf8"),
+    readFileSync(new URL("../../node_modules/@earendil-works/pi-coding-agent/LICENSE", import.meta.url), "utf8"),
     /Copyright \(c\) 2025 Mario Zechner/,
   );
 });
@@ -90,7 +90,7 @@ const advisoryFixes = {
 };
 
 test("the root lockfile carries the releases that fix production dependency advisories", () => {
-  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+  const lock = JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")) as {
     packages?: Record<string, { version?: unknown }>;
   };
   for (const [dependency, floor] of Object.entries(advisoryFixes)) {
