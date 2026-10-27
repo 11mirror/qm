@@ -228,7 +228,7 @@ test("a sandbox-model token is refused on every other route", async (t) => {
 test("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async (t) => {
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
-    apiBaseUrl: "https://core.example.test/",
+    apiBaseUrl: "https://core.example.test",
     modelGateway: { url: "https://models.invalid", apiKey: key, apiKeyHeader: "api-key", models: routes },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
