@@ -477,4 +477,22 @@ describe("runTrigger home-scope gate for group homes", () => {
     assert.equal(ranTurn, false);
     assert.match(out.note ?? "", /no longer a member/);
   });
+
+  it("without currentScopeMembers wired, an unknown tri-state membership skips with the snapshot-gap note", async () => {
+    const databaseUrl = testDatabaseUrl();
+    let ranTurn = false;
+    const d: TriggerDeps = {
+      outbound: recordingOutbound(),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
+      run: async () => {
+        ranTurn = true;
+        return { status: "ok", reply: "posted" };
+      },
+      directory: { ...unknownChannelDirectory(), groupMembership: async () => undefined },
+    };
+    const out = await runTrigger(d, groupSpec("tri-state-unknown"));
+    assert.equal(ranTurn, false);
+    assert.match(out.note ?? "", /missing from the directory snapshot/);
+  });
 });

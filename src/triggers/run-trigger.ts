@@ -115,7 +115,10 @@ async function actorMayReadScope(
   if (kind === "group") {
     if (await isVisible(deps.directory, actorId, { kind: "group", groupId: ref })) return { ok: true };
     if (snapshotGap) return { ok: false, note: UNKNOWN_HOME_SKIP_NOTE };
-    return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+    const known = await deps.directory
+      .groupMembership?.(ref, actorId)
+      .catch(reportFailureAs("run-trigger: group membership lookup", undefined, ref));
+    return { ok: false, note: known === undefined ? UNKNOWN_HOME_SKIP_NOTE : MEMBERSHIP_SKIP_NOTE };
   }
   if (kind !== "channel") return { ok: true };
   const isPrivate = await deps.directory.channelPrivacy?.(ref);
@@ -224,13 +227,7 @@ async function resolveHomeAccess(
   } else if (!deps.directory) {
     homeAccess = { ok: true };
   } else {
-    homeAccess = await actorMayReadScope(
-      deps,
-      actorId,
-      ownerKind,
-      ownerRef,
-      deps.currentScopeMembers !== undefined,
-    );
+    homeAccess = await actorMayReadScope(deps, actorId, ownerKind, ownerRef, deps.currentScopeMembers !== undefined);
   }
   return homeAccess;
 }
