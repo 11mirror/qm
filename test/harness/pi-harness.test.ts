@@ -656,6 +656,35 @@ test("a refused goal round falls back to another model and the goal keeps going"
   }
 });
 
+test("each governor checkpoint sees only the work since the last checkpoint, not the whole session", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  const entries: Item[] = [];
+  const realFetch = globalThis.fetch;
+  const checkpoints: string[] = [];
+  let rounds = 0;
+  globalThis.fetch = (async () => {
+    rounds++;
+    if (rounds >= 8) controller.abort();
+    return textStream(`reply ${rounds}`);
+  }) as typeof globalThis.fetch;
+  try {
+    const turn = goalTurn("goal-checkpoint-window", controller.signal, entries);
+    turn.governGoal = async (input) => {
+      checkpoints.push(input.recentWork);
+      return { verdict: "continue", reasons: "keep going" };
+    };
+    await harness.turns.runTurn(turn).catch(() => undefined);
+    assert.ok(checkpoints.length >= 2, `at least two checkpoints ran (${checkpoints.length})`);
+    const [first, second] = checkpoints;
+    assert.match(first!, /reply 1/);
+    assert.doesNotMatch(second!, /reply 1\b/, "the second checkpoint does not resend work the first one judged");
+    assert.match(second!, /reply [4-7]/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("a goal never falls back to a model that already refused in the same turn", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();

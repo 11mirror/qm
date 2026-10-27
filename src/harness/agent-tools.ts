@@ -86,6 +86,7 @@ export interface ToolContextRef {
   governGoal?: GoalGovernor;
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
+  goalWorkChecked?: () => void;
   observeToolResult?: (input: ToolResultScreenInput) => void;
   toolApprovalGate?: (callKey: string) => boolean;
   approvedToolCalls?: Map<string, string>;
