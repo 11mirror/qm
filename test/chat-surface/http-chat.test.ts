@@ -102,6 +102,19 @@ test("http-chat treats authors as guests unless their email is in an internal do
   assert.equal((await authorOf({ id: 1 }))?.guest, true);
   const channel = dmEvent({ chat: { id: 42, kind: "channel" }, message: { id: 1, text: "hi", mentions_bot: true } });
   assert.deepEqual(await receive(signed(channel)), { status: 200, messages: [] });
+  const wide = dmEvent({
+    chat: {
+      id: 42,
+      kind: "dm",
+      members: Array.from({ length: 600 }, (_, i) => ({ id: i, email: `u${i}@example.com` })),
+    },
+    message: {
+      id: 9002,
+      text: "x".repeat(200_000),
+      attachments: Array.from({ length: 30 }, (_, i) => ({ id: `f${i}`, url: `https://x.test/f${i}` })),
+    },
+  });
+  assert.equal((await receive(signed(wide))).status, 200, "the signed body, not a per-field cap, bounds an event");
   assert.equal((await receive(signed(dmEvent({ chat: { id: "4:2", kind: "dm" } })))).status, 400);
   assert.equal((await receive(signed(dmEvent({ chat: { id: 2 ** 60, kind: "dm" } })))).status, 400);
 });

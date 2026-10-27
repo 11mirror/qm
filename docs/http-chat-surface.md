@@ -27,8 +27,8 @@ cards, and Markdown text.
 
 Signed exactly like QM source-auth requests: `x-timestamp` (Unix seconds) and
 `x-signature: v0=<hex HMAC-SHA256(signingSecret, "v0:<timestamp>:POST\n<path?query>\n<body>")>`.
-Requests older than five minutes are rejected. Event types other than `message` are accepted
-and ignored.
+Requests older than five minutes are rejected, as is any body over QM's 1 MB request limit;
+no field has a cap of its own. Event types other than `message` are accepted and ignored.
 
 ```json
 {
