@@ -65,6 +65,12 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<RouteResul
     return ok({ sent: true, ts });
   };
   let attemptedSend = false;
+  const notLinked = () =>
+    reply(send ? 409 : 200, {
+      connected: false,
+      error: "slack_link_required",
+      message: "Link your personal Slack account to reply.",
+    });
   const replyVia = async (connection: {
     user?: string;
     workspace?: string;
@@ -117,12 +123,14 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<RouteResul
       (await hasSlackAccount(ctx)) || !(await nativeSlackConfigured(ctx)) ? await composioSlackConnection(ctx) : null;
     if (connection === undefined) return;
     if (connection) return await replyVia(connection);
-    return reply(send ? 409 : 200, {
-      connected: false,
-      error: "slack_link_required",
-      message: "Link your personal Slack account to reply.",
-    });
+    return notLinked();
   } catch (error) {
+    const status = (error as { status?: unknown }).status;
+    // Composio answers 4xx when the linked account can no longer be used; for the read-only probe that just means "not linked".
+    if (!send && typeof status === "number" && status >= 400 && status < 500 && status !== 401 && status !== 429) {
+      console.debug(`[slack reply] Composio ${status} on the reply probe; treating as not linked`);
+      return notLinked();
+    }
     reportFailure("slack reply", error, `session=${body.sessionId}`);
     if (slackConfirmed)
       return reply(502, {

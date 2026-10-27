@@ -20,8 +20,8 @@ export async function composioSlackConnection(ctx: ApiCtx) {
     try {
       return await composioRequest(...args);
     } catch (error) {
-      const sanitized = new Error(createExactSecretValueMasker([access.key])(redactSecrets(errMessage(error))));
-      throw sanitized;
+      const message = createExactSecretValueMasker([access.key])(redactSecrets(errMessage(error)));
+      throw Object.assign(new Error(message), { status: (error as { status?: unknown }).status });
     }
   };
   for (const id of personIds(access.principal)) {

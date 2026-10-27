@@ -1138,6 +1138,16 @@ test("Slack reply status verifies personal access without posting", async () => 
   assert.equal(f.calls.length, 3);
 });
 
+test("Slack reply status treats a Composio 4xx as not linked but still fails on 5xx", async () => {
+  const f = await slackReplyFixture();
+  f.replies.push(f.account, new Response("bad request", { status: 400 }));
+  const quiet = await f.invoke("/v1/composio/slack/reply-status", f.message);
+  assert.equal(quiet.status, 200);
+  assert.equal(quiet.data.connected, false);
+  f.replies.push(f.account, new Response("upstream down", { status: 500 }));
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).status, 502);
+});
+
 test("Slack replies cannot target hidden sessions or accept blank messages", async () => {
   const f = await slackReplyFixture();
   assert.equal((await f.invoke("/v1/composio/slack/reply", { ...f.message, sessionId: "hidden" })).status, 404);
