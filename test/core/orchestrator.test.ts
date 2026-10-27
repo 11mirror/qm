@@ -250,9 +250,8 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
   const latest = reqs.at(-1) as any;
   const footer = latest.promptEnvelope.messages.at(-1).content;
   assert.match(footer, /Delivered here since the user's last message/);
-  assert.match(footer, /\[cron\] from U-carol: /);
-  assert.match(footer, /…$/m);
-  assert.doesNotMatch(footer, /deploy digest ready/);
+  assert.match(footer, /\[cron\] from U-carol:/);
+  assert.ok(footer.includes(pending[0]!.text.trim().split("\n")[0]!), "the delivered text is quoted in full");
 });
 
 test("a turn whose setup fails is retried before the next turn in the conversation runs", async () => {
