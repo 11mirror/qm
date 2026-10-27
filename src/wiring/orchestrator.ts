@@ -253,7 +253,7 @@ function orchestratorDepsTail(w: BuildOrchestratorInputs) {
     outbound,
     recentDmPosts,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
+    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
