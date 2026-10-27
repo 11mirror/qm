@@ -29,7 +29,6 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import {
-  MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   deliveryCandidatesFor,
   filterConnectorSkills,
   loadActiveBundles,
@@ -259,7 +258,7 @@ async function listVisibleSkills(
       const key = hashId([skill.scopeId, skill.id, payload], 64);
       if (observedSkillScreens.has(key)) return;
       observedSkillScreens.add(key);
-      if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
+      if (bundles === null) return;
       for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
         await observeSecurityData(chunk, actor.id, scopeId, {
           ...screenTrace,
