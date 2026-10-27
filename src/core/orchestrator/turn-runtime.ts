@@ -22,7 +22,7 @@ export async function selectTurnRuntime(
     scopeAttestation: Awaited<ReturnType<typeof buildCredentialCatalog>>["scopeAttestation"];
   },
 ) {
-  const { deps, input, actor, external, automatedTurn, humanInput, liveAuthorTurn, scopeId, filterHistory } = ctx;
+  const { deps, input, actor, automatedTurn, humanInput, liveAuthorTurn, scopeId, filterHistory } = ctx;
   const { session, isRetry, controlClaims, scopeAttestation } = turn;
   const effectiveTurnWallClockMs =
     typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0
@@ -39,60 +39,12 @@ export async function selectTurnRuntime(
     humanInput &&
     (await deps.config?.settingDurable("interactiveFastMode"));
   const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
-  const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-    let userProviderKeys: ProviderKeys | undefined;
-    let userModelOverride: string | undefined;
-    let personalAuth = false;
-    let authLabel = "api-key";
-    const userCredStore = external ? undefined : deps.userModelCredentials;
-    const account = external
-      ? "company"
-      : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
-    if (userCredStore && humanInput && account !== "company") {
-      const [anthCred, oaiCred] = await Promise.all([
-        account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
-        account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
-      ]);
-      const routing = resolveIndividualAuthRouting(
-        anthCred ?? null,
-        oaiCred ?? null,
-        account === "personal" || input.surface === "web"
-          ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-          : (runtime.modelId ?? purposeDefault?.modelId),
-      );
-      if (routing?.kind === "apikey") {
-        personalAuth = true;
-        userProviderKeys = { [routing.provider]: routing.apiKey };
-        userModelOverride = routing.model;
-      } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-        const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-        if (derived) {
-          userProviderKeys = { anthropic: derived.accessToken };
-          authLabel = "claude-oauth-pi";
-          personalAuth = true;
-          userModelOverride = routing.model;
-        }
-      } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-        const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-        if (derived) {
-          userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-          authLabel = "codex-oauth-pi";
-          personalAuth = true;
-          userModelOverride = routing.model;
-        }
-      }
-      if (!personalAuth) {
-        throw new NonRetryableTurnError(
-          "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-        );
-      }
-    }
-    return { userProviderKeys, userModelOverride, personalAuth, authLabel };
-  };
-  const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
-    (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
   const requestedModel = input.model ?? purposeDefault?.modelId;
-  const { userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth({});
+  const { userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth(
+    ctx,
+    purposeDefault,
+    {},
+  );
   if (
     (input.surface === "web" || purposeDefault) &&
     personalAuth &&
@@ -120,33 +72,10 @@ export async function selectTurnRuntime(
     input.runId && isRetry
       ? recoveredRuntime(filterHistory(await deps.sessions.getItems(session.id)), input.runId, actor.id)
       : undefined;
-  const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
-    try {
-      const auth = await loadRuntimeAuth(choice);
-      if (auth.personalAuth && !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
-        return "Your connected AI account cannot serve this model. Choose a compatible runtime from get.";
-      return null;
-    } catch (error) {
-      return errMessage(error);
-    }
-  };
-  const runtimeState: {
-    userProviderKeys: ProviderKeys | undefined;
-    userModelOverride: string | undefined;
-    personalAuth: boolean;
-    authLabel: string;
-    requestedRuntime: Partial<RuntimeChoice>;
-    agentSwitch?: "task" | "scope";
-  } = { userProviderKeys, userModelOverride, personalAuth, authLabel, requestedRuntime };
-  const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
-    const error = await checkRuntimeAuth(choice);
-    if (error) throw new NonRetryableTurnError(error);
-    runtimeState.agentSwitch = lifetime;
-    Object.assign(runtimeState, await loadRuntimeAuth(choice));
-    runtimeState.requestedRuntime = runtimeState.userModelOverride
-      ? { ...choice, modelId: runtimeState.userModelOverride }
-      : choice;
-  };
+  const runtimeState: RuntimeState = { userProviderKeys, userModelOverride, personalAuth, authLabel, requestedRuntime };
+  const checkRuntimeAuth = (choice: RuntimeChoice) => checkTurnRuntimeAuth(ctx, purposeDefault, choice);
+  const adoptRuntime = (choice: RuntimeChoice, lifetime: "task" | "scope") =>
+    adoptTurnRuntime(ctx, purposeDefault, runtimeState, choice, lifetime);
   if (restoredRuntime) await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
   if (automatedTurn && input.model) {
     const error = await deps.validateScheduledRuntime?.(
@@ -171,4 +100,100 @@ export async function selectTurnRuntime(
     adoptRuntime,
     runtimeState,
   };
+}
+
+type PurposeDefault = Awaited<ReturnType<NonNullable<TurnCtx["deps"]["config"]>["getPurposeRuntimeDurable"]>>;
+type RuntimeState = {
+  userProviderKeys: ProviderKeys | undefined;
+  userModelOverride: string | undefined;
+  personalAuth: boolean;
+  authLabel: string;
+  requestedRuntime: Partial<RuntimeChoice>;
+  agentSwitch?: "task" | "scope";
+};
+
+const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
+  (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
+
+async function loadRuntimeAuth(ctx: TurnCtx, purposeDefault: PurposeDefault, runtime: Partial<RuntimeChoice>) {
+  const { deps, input, actor, external, humanInput } = ctx;
+  let userProviderKeys: ProviderKeys | undefined;
+  let userModelOverride: string | undefined;
+  let personalAuth = false;
+  let authLabel = "api-key";
+  const userCredStore = external ? undefined : deps.userModelCredentials;
+  const account = external
+    ? "company"
+    : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+  if (userCredStore && humanInput && account !== "company") {
+    const [anthCred, oaiCred] = await Promise.all([
+      account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
+      account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
+    ]);
+    const routing = resolveIndividualAuthRouting(
+      anthCred ?? null,
+      oaiCred ?? null,
+      account === "personal" || input.surface === "web"
+        ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
+        : (runtime.modelId ?? purposeDefault?.modelId),
+    );
+    if (routing?.kind === "apikey") {
+      personalAuth = true;
+      userProviderKeys = { [routing.provider]: routing.apiKey };
+      userModelOverride = routing.model;
+    } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
+      const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
+      if (derived) {
+        userProviderKeys = { anthropic: derived.accessToken };
+        authLabel = "claude-oauth-pi";
+        personalAuth = true;
+        userModelOverride = routing.model;
+      }
+    } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
+      const derived = await userCredStore.derivedOAuth(actor.id, "openai");
+      if (derived) {
+        userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
+        authLabel = "codex-oauth-pi";
+        personalAuth = true;
+        userModelOverride = routing.model;
+      }
+    }
+    if (!personalAuth) {
+      throw new NonRetryableTurnError(
+        "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
+      );
+    }
+  }
+  return { userProviderKeys, userModelOverride, personalAuth, authLabel };
+}
+
+async function checkTurnRuntimeAuth(
+  ctx: TurnCtx,
+  purposeDefault: PurposeDefault,
+  choice: RuntimeChoice,
+): Promise<string | null> {
+  try {
+    const auth = await loadRuntimeAuth(ctx, purposeDefault, choice);
+    if (auth.personalAuth && !servesModel(choice.modelId, auth.userModelOverride, auth.userProviderKeys))
+      return "Your connected AI account cannot serve this model. Choose a compatible runtime from get.";
+    return null;
+  } catch (error) {
+    return errMessage(error);
+  }
+}
+
+async function adoptTurnRuntime(
+  ctx: TurnCtx,
+  purposeDefault: PurposeDefault,
+  runtimeState: RuntimeState,
+  choice: RuntimeChoice,
+  lifetime: "task" | "scope",
+): Promise<void> {
+  const error = await checkTurnRuntimeAuth(ctx, purposeDefault, choice);
+  if (error) throw new NonRetryableTurnError(error);
+  runtimeState.agentSwitch = lifetime;
+  Object.assign(runtimeState, await loadRuntimeAuth(ctx, purposeDefault, choice));
+  runtimeState.requestedRuntime = runtimeState.userModelOverride
+    ? { ...choice, modelId: runtimeState.userModelOverride }
+    : choice;
 }
