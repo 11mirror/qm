@@ -4378,7 +4378,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         });
       }
     });
-  check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
+  await checkAsync("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
   check("deploy role", () => {
     const expectedSubject = githubTrustSubject(configDir, aws.deployBranch, aws.deployEnvironment);
     const role = awsJson<{ Role?: { Arn?: string; AssumeRolePolicyDocument?: { Statement?: unknown } } }>(aws, [
