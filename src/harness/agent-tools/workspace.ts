@@ -38,7 +38,7 @@ function skillTools(kit: ToolKit) {
           : {}),
         source: optionalString("A carried source from the sharing context; omit for current scope and org."),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1 })),
       }),
       async execute(callId, params) {
         if (!ref.current) return text("[error] no active tool context");
@@ -67,10 +67,9 @@ function skillTools(kit: ToolKit) {
       path: optionalString("Relative file to return instead of SKILL.md."),
       sandbox_id: optionalString("Sandbox to sync into; omit for the default."),
     }),
-    async execute(callId, params) {
+    async execute(callId, p) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const p = params as { name: string; path?: string; sandbox_id?: string; source?: string };
       await recordCall(callId, {
         tool: "skills",
         action: "read",

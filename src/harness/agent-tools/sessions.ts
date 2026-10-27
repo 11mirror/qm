@@ -67,26 +67,10 @@ function subagentParams() {
 }
 
 /** Runs one subagents-tool action: open, follow up, message, read or wait. */
-async function runSubagentAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof subagentParams>>) {
+async function runSubagentAction(kit: ToolKit, callId: string, p: Static<ReturnType<typeof subagentParams>>) {
   const { ref, delegateWork, recordCall, recordCoreAuthoredResult, recordText, recordFail } = kit;
   const tc = ref.current;
   const syscalls = tc?.sessionSyscalls;
-  const p = params as {
-    action: "open" | "read" | "send_message" | "followup_task" | "wait";
-    timeoutMs?: number;
-    requestId?: string;
-    thinkingLevel?: string;
-    fastMode?: boolean;
-    task?: string;
-    name?: string;
-    noComputer?: boolean;
-    model?: string;
-    target?: string;
-    text?: string;
-    interrupt?: boolean;
-    limit?: number;
-    maxChars?: number;
-  };
   await recordCall(callId, {
     tool: "subagents",
     action: p.action,
@@ -295,18 +279,8 @@ function sessionToolFor(kit: ToolKit) {
       offset: optionalInteger("list: page offset from the previous footer."),
       maxChars: optionalInteger("read: transcript characters to show, newest first (default 4000)."),
     }),
-    async execute(callId, params) {
+    async execute(callId, p) {
       const syscalls = ref.current?.sessionSyscalls;
-      const p = params as {
-        action: "search" | "list" | "read" | "send_message" | "new" | "fork";
-        query?: string;
-        target?: string;
-        text?: string;
-        title?: string;
-        limit?: number;
-        offset?: number;
-        maxChars?: number;
-      };
       await recordCall(callId, {
         tool: "sessions",
         action: p.action,

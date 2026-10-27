@@ -5,7 +5,6 @@ import {
   applyGovernorVerdict,
   cancelGoal,
   GOAL_STEP_BACK_PROMPT,
-  type GoalCreateInput,
   GoalCreateParams,
   goalFloorMeter,
   goalFromParams,
@@ -56,8 +55,7 @@ function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
       'Register a goal only when the user explicitly asks for sustained work ("grind on X for 30 minutes", "keep going until the tests pass"); never infer one. Create it first, before any work, with the floor set to exactly the amount named (20 minutes = minMs 1200000; never subtract time already spent), even if the task looks hard or impossible. ' +
       "The harness then answers any attempt to end a reply with a keep-going prompt while the goal is active or the floor unmet (token_cap or a governor pause also ends it); only the user can cancel it. Fails if an unfinished goal exists.",
     parameters: GoalCreateParams,
-    async execute(callId, params) {
-      const p = params as GoalCreateInput;
+    async execute(callId, p) {
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
       if (goalIsOpen(turnGoal.current())) {
         return recordCoreAuthoredResult(
@@ -156,16 +154,10 @@ async function runUpdateGoal(
   kit: ToolKit,
   turnGoal: TurnGoal,
   callId: string,
-  params: Static<ReturnType<typeof updateGoalParams>>,
+  p: Static<ReturnType<typeof updateGoalParams>>,
 ) {
   const { ref, recordCall, recordCoreAuthoredResult } = kit;
-  const p = params as {
-    status?: "complete" | "resume" | "cancel";
-    note: string;
-    files?: string[];
-    sandbox_id?: string;
-  };
-  const status = p.status ?? "complete";
+  const status = p.status;
   await recordCall(callId, {
     tool: "goal",
     action: "update",
@@ -199,7 +191,7 @@ async function runUpdateGoal(
         true,
       );
   }
-  const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id))];
+  const evidence = [p.note, ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id))];
   let verdict: GovernorVerdict;
   try {
     const governGoal = turnGoal.governor();
