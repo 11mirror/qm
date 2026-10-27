@@ -167,7 +167,6 @@ export async function completeRun(db: AbsurdDb, queue: AbsurdQueue, runId: strin
   ]);
 }
 
-/** Re-arm a failed task with a fresh run; false when it is no longer failed. */
 export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<boolean> {
   const [task] = await call(db, `SELECT state, attempts FROM ${tasksTable(queue)} WHERE task_id = $1`, [taskId]);
   if (task?.state !== "failed") return false;

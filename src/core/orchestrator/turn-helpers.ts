@@ -82,7 +82,6 @@ export async function loadActiveBundles(store: SkillBundleStore, resolved: Skill
   return bundles.filter((b): b is SkillBundle => b !== null);
 }
 
-/** The sandbox egress claim: the scope's host policy, with private networks denied except the core API host. */
 export function egressClaimAllowingControlPlane(egress: EgressPolicy, apiBaseUrl: string): EgressPolicy {
   const allowedHosts = egress.allowedHosts ?? [];
   const deniedHosts = egress.deniedHosts ?? [];

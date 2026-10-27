@@ -25,11 +25,6 @@ interface SecurityScreenContext {
   thread?: string;
 }
 
-/**
- * Screen external data in the background and audit the verdict. Screening observes: it never
- * blocks, rewrites or delays what the agent sees. The returned promise settles once the verdict is
- * audited and never rejects; turn code does not wait for it.
- */
 export type SecurityObserver = (
   payload: string,
   actorId: string,

@@ -442,7 +442,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const provisionOwnerAuth = ownerAuthAvailable
     ? async (): Promise<SandboxHandle> => {
-        // Recheck each command, including commands reusing this turn's isolated computer.
         if (openSpeakerKeychain && !(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)))
           throw new Error("Open speaker keychain access is no longer authorized");
         if (ownerAuthBox.handle) return ownerAuthBox.handle;

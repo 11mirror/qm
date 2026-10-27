@@ -25,8 +25,6 @@ interface RefreshDeps {
 
 export type InboxSourceRefresh = (owner: string, items: InboxItem[], mode?: "avatars") => Promise<void>;
 
-// Reuse the inbox's existing refresh cycle, not a second provider poller. Cache only
-// results/identities, never credentials, and share in-flight reads between tabs.
 export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh {
   const checked = new LRUCache<string, boolean>({ max: 2000, ttl: 60_000 });
   const info = new LRUCache<string, Record<string, unknown>>({ max: 2000, ttl: 300_000 });
@@ -145,7 +143,6 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     let visited = 0;
     for (; visited < ordered.length && now() < deadline; visited += 4)
       await Promise.all(ordered.slice(visited, visited + 4).map((item) => one(owner, item, mode)));
-    // Slow sources must neither block the whole inbox nor starve later cards.
     if (items.length > 1) positions.set(positionKey, (start + visited) % items.length);
   };
 }

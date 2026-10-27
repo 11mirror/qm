@@ -91,9 +91,6 @@ export async function buildCredentialCatalog(
       throw new Error("Open speaker keychain access is no longer authorized");
     }
   };
-  // Brokered credentials (shared org credentials and connected-app OAuth tokens) never enter the
-  // sandbox: each selected one resolves to the same AGENT_CREDENTIAL_TOKEN, minted once per command
-  // over every brokered handle that command requested; the broker injects auth server-side.
   type CredentialBroker = ReturnType<typeof credentialBroker>;
   const credentialBroker = (requested: readonly string[]) => {
     const credentials: string[] = [];
@@ -278,8 +275,6 @@ export async function buildCredentialCatalog(
     }
   };
   await registerConnectorCredentials(addCredentialToCatalog, catalogBroker);
-  // Service credentials: one read of the org's credential list and one grant scan feed both
-  // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
   const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
     new Set(
       (
@@ -323,9 +318,6 @@ export async function buildCredentialCatalog(
     }
   };
   if (!strictReadOnly && allInternal && deps.serviceCreds) {
-    // Env delivery is gated by the same service-cred grants as the broker: the env var rides
-    // only when every internal participant in this conversation is entitled to the credential.
-
     const browseSteps = deps.config?.setting("browseMaxSteps", tenant().orgScope);
     if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
       connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);

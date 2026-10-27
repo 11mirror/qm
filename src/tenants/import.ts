@@ -365,8 +365,6 @@ function formatCounts(counts: readonly TableCount[]): string {
   return lines.join("\n");
 }
 
-// Some stores create their tables at runtime rather than in a registered migration, so either side may lack a table
-// the other has. A table only the target has receives no rows; a table only staging has is fatal only if it holds rows.
 async function checkUnsharedTables(
   staging: pg.Client,
   stagingTables: ReadonlySet<string>,
@@ -410,8 +408,6 @@ export async function importTenant(options: TenantImportOptions): Promise<Tenant
     try {
       counts = await copyToTarget(options, tenantId, staging, target, targetTables);
       options.log(formatCounts(counts));
-      // Triggers on copied tables can derive extra rows (dirty markers, version bumps), so the target may hold more
-      // rows than staging; fewer means rows were lost.
       for (const count of counts.filter((count) => count.target > count.staging)) {
         options.log(
           `warning: ${count.table} has ${count.target} target rows for ${count.staging} staging rows (trigger-derived rows)`,
@@ -457,8 +453,6 @@ export function migrateWithBuild(
   options: { tenantize: boolean; orgId?: string },
 ): (stagingUrl: string) => Promise<void> {
   const entry = new URL("../migrate-main.ts", import.meta.url).pathname;
-  // The staging database is not the deployment's database: drop the deployment's pooler URL (it must match
-  // DATABASE_URL) and run as the imported company's org, which its configuration rows belong to.
   const { DATABASE_POOL_URL: _poolUrl, DATABASE_POOL_CA_CERT: _poolCa, ...base } = env;
   const childEnv = { ...base, ...(options.orgId ? { ORG_ID: options.orgId } : {}) };
   return async (stagingUrl) => {

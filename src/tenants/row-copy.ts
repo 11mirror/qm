@@ -23,7 +23,6 @@ export async function insertableColumns(client: Client, table: TableRef): Promis
 export interface PrimaryKey {
   constraint: string;
   columns: string[];
-  /** Columns that an UPDATE may not assign (GENERATED ALWAYS AS IDENTITY). */
   fixed: string[];
 }
 
@@ -70,7 +69,6 @@ export async function copyRows(
   return copied;
 }
 
-// Rows a trigger derived while earlier tables were copied are overwritten by the copied row.
 function conflictClause(columns: readonly string[], key: PrimaryKey | undefined): string {
   if (!key) return "";
   const assignable = columns.filter((column) => !key.columns.includes(column) && !key.fixed.includes(column));

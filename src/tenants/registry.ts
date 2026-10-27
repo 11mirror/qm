@@ -1,10 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
-// The tenant registry: one row per company served from this database. `env` and `secretEnv` are per-service
-// environment overlays ({ core: {...}, portal: {...}, "web-ui": {...} }) applied on top of the deployment's own
-// environment; `secretEnv` is stored AES-256-GCM encrypted under QM_TENANT_SECRETS_KEY.
-
 type ServiceEnv = Record<string, Record<string, string>>;
 
 export interface TenantRecord {
@@ -85,7 +81,6 @@ export async function homeTenantId(pool: PgPool): Promise<string> {
   return id;
 }
 
-/** Refuse to serve several tenants from a login that ignores row-level security. */
 export async function assertRowSecurityEnforced(pool: PgPool): Promise<void> {
   const rows = await pool.q("SELECT rolsuper OR rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
   if (rows[0]?.bypass === true) {
