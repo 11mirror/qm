@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
+import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -19,13 +20,11 @@ import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-datab
 async function fixture() {
   let now = Date.now();
   let member = true;
-  const grants = testMap<KeychainGrant>();
-  const asks = testMap<KeychainAsk>();
+  const store = createKeychainStore(testDatabaseUrl());
+  const { grants, asks } = store;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants,
-    asks,
+    store,
     key: deriveConnectorKey("native-approval-test"),
     now: () => now,
   });
@@ -90,7 +89,7 @@ test("native approval persists the explicit duration, resumes once, and replays 
   outcomes.push(await decide("deny"));
   assert.ok(outcomes.every((view) => view.ask.status === "approved"));
   assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "approved");
-  const grants = await f.grants.all();
+  const grants = await f.grants.list();
   assert.equal(grants.length, 1);
   assert.equal(grants[0]!.mode, "standing");
   assert.equal(grants[0]!.audienceScopeId, f.ask.requesterScopeId);
@@ -103,7 +102,7 @@ test("one-time and denial decisions keep their exact meaning", async () => {
     const f = await fixture();
     const view = await f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, decision);
     assert.equal(view.ask.status, decision === "deny" ? "declined" : "approved");
-    assert.equal((await f.grants.all()).length, decision === "deny" ? 0 : 1);
+    assert.equal((await f.grants.list()).length, decision === "deny" ? 0 : 1);
     if (decision === "once") assert.equal(view.mode, "once");
   }
 });
@@ -125,8 +124,8 @@ test("wrong owner, revoked membership, and expired requests never grant access",
     (await expired.approvals.decide(expired.ask.id, { externalId: "alice@example.com" }, "standing")).ask.status,
     "expired",
   );
-  assert.equal((await f.grants.all()).length, 0);
-  assert.equal((await expired.grants.all()).length, 0);
+  assert.equal((await f.grants.list()).length, 0);
+  assert.equal((await expired.grants.list()).length, 0);
 });
 
 test("the card links the conversation inline and omits command-policy fields", async () => {
@@ -229,7 +228,7 @@ test("a crash after grant persistence recovers approval before denial or expiry"
     const replay = await f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "deny");
     assert.equal(replay.ask.status, "approved");
     assert.equal(replay.mode, "standing");
-    assert.equal((await f.grants.all()).length, 1);
+    assert.equal((await f.grants.list()).length, 1);
     assert.equal((await f.keychain.unnotifiedResolvedAsks(Date.now())).length, 1);
   }
 });
@@ -246,10 +245,10 @@ test("an expired notification cannot hide an approval recovered after a failed w
     const paused = new Promise<void>((resolve) => {
       release = resolve;
     });
-    f.grants.putIfAbsent = async (id, grant) => {
+    f.grants.putIfAbsent = async (grant) => {
       entered();
       await paused;
-      return put(id, grant);
+      return put(grant);
     };
     const merge = f.asks.merge.bind(f.asks);
     f.asks.merge = async (id, patch) => {

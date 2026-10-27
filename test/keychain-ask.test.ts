@@ -16,6 +16,7 @@ import {
   type Keychain,
   type KeychainAsk,
 } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { createAskExpirySweep, fireAskResolution } from "../src/triggers/keychain-ask.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
@@ -30,7 +31,6 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -39,9 +39,7 @@ const SECRET = "keychain-ask-route-secret".repeat(3);
 function kcAt(now: () => number): Keychain {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     now,
   });
@@ -314,22 +312,24 @@ test("sweep is the durable retry for approve/decline resolutions that never fire
 test("a sweep over ask history makes one grant query and no per-ask lookups", async () => {
   let t = 1_000_000;
   const lookups: string[] = [];
-  const counted = <T>(name: string, map: DurableMap<T>): DurableMap<T> => ({
-    ...map,
-    get: (id) => {
+  const store = createKeychainStore(testDatabaseUrl());
+  const { creds, grants } = store;
+  const countedGet =
+    <T>(name: string, get: (id: string) => Promise<T>) =>
+    (id: string) => {
       lookups.push(name);
-      return map.get(id);
-    },
-    selectEntries: (query) => {
-      lookups.push(`${name} batch`);
-      return map.selectEntries(query);
-    },
-  });
+      return get(id);
+    };
+  creds.get = countedGet("creds", creds.get);
+  grants.get = countedGet("grants", grants.get);
+  const forAsks = grants.forAsks;
+  grants.forAsks = (ids) => {
+    lookups.push("grants batch");
+    return forAsks(ids);
+  };
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: counted("creds", testMap()),
-    grants: counted("grants", testMap()),
-    asks: testMap(),
+    store,
     key: KEY,
     now: () => t,
   });

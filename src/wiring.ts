@@ -214,35 +214,31 @@ import {
   type OAuthToken,
   type Keychain,
   type KeychainAsk,
-  type KeychainCredential,
   type KeychainGrant,
   type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
+import { createKeychainStore } from "./credentials/keychain-store.ts";
 import {
   fireAskResolution,
   fireDropResolution,
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
+import { createSecretDropStore, type SecretDropStore } from "./credentials/secret-drop.ts";
+import { createConnectorStatusCache } from "./credentials/connector-status.ts";
 import { createFeatureFlagStore, externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
-import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
+import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
   type SecretKey,
 } from "./connectors/connector-client-store.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "./connectors/browser-session-store.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "./connectors/browser-session-store.ts";
 import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
+import { createConsentLinkStore, type ConsentLinkStore } from "./connectors/consent-link.ts";
 import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
 import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
@@ -549,7 +545,7 @@ export function buildApp(
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
-    backing: artifactMap("model_credentials"),
+    databaseUrl,
     keyMaterial: connectorSecretKey,
     fallback: {
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
@@ -615,7 +611,7 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const decisions = createPostgresDecisionStore(databaseUrl);
-  const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
+  const connectorStatusCache = createConnectorStatusCache(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
@@ -948,9 +944,7 @@ export function buildApp(
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
   const credentialStore: Keychain = createKeychain({
-    creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
-    grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
-    asks: artifactMap<KeychainAsk>("keychain_asks"),
+    store: createKeychainStore(databaseUrl),
     key: credentialKey,
     lock: advisoryLock,
     refreshConnector: (() => {
@@ -1017,13 +1011,13 @@ export function buildApp(
       : {}),
   });
   const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
-    sessions: artifactMap<StoredBrowserSession>("browser_sessions"),
+    databaseUrl,
     key: credentialKey,
   });
   const connectorTokens = credentialStore;
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(databaseUrl);
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
+  const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
   const modelGateway = createModelGateway();
 
   const toolOutput = createPostgresToolOutputStore({
@@ -1040,7 +1034,7 @@ export function buildApp(
     });
   const customProviders = createCustomProviderStore({
     write: writeModelRegistry,
-    backing: artifactMap("custom_model_providers"),
+    databaseUrl,
     keyMaterial: connectorSecretKey,
   });
   const refreshCustomProviders = async () => {

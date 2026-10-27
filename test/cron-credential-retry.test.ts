@@ -6,6 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
@@ -114,13 +115,11 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     entered.resolve();
     return release.promise;
   });
-  const asks = testMap<KeychainAsk>();
-  await asks.put(f.ask.id, f.ask);
+  const store = createKeychainStore(testDatabaseUrl());
+  await store.asks.put(f.ask);
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks,
+    store,
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });
   const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });

@@ -8,9 +8,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createKeychain } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("../skills-seed/interactive-login/scripts/save-login.mjs", import.meta.url));
@@ -18,9 +19,7 @@ const script = fileURLToPath(new URL("../skills-seed/interactive-login/scripts/s
 test("save-login uploads a private login home and re-saving keeps the entry and its grants", async (t) => {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("synthetic-test-key"),
   });
   const server = createServer(async (req, res) => {

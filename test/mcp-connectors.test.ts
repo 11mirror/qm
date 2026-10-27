@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -277,9 +278,7 @@ test("unknown tool call rejects", async () => {
 function tokenStore() {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("mcp-test-encryption-key"),
   });
 }

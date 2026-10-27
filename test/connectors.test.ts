@@ -1,15 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createKeychain,
-  type KeychainCredential,
-  type OAuthRefresh,
-  type OAuthToken,
-} from "../src/credentials/keychain.ts";
+import { createKeychain, type OAuthRefresh, type OAuthToken } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { selectEntries, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
@@ -19,15 +14,13 @@ function makeKeychain(
     now?: () => number;
     skewMs?: number;
     refresh?: OAuthRefresh;
-    creds?: DurableMap<KeychainCredential>;
+    databaseUrl?: string;
     lock?: AdvisoryLock;
   } = {},
 ) {
   const keychain = createKeychain({
     lock: opts.lock ?? testAdvisoryLock(),
-    creds: opts.creds ?? testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(opts.databaseUrl ?? testDatabaseUrl()),
     key: KEY,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.skewMs !== undefined ? { oauthSkewMs: opts.skewMs } : {}),
@@ -165,7 +158,7 @@ test("connector token refresh: concurrent callers single-flight; connection meta
 });
 
 test("connector token refresh: two instances sharing the store refresh a rotating token once", async () => {
-  const creds = testMap<KeychainCredential>();
+  const databaseUrl = testDatabaseUrl();
   let calls = 0;
   let release = () => {};
   const gate = new Promise<void>((r) => {
@@ -177,8 +170,8 @@ test("connector token refresh: two instances sharing the store refresh a rotatin
     return { accessToken: "fresh", refreshToken: "rt-rotated", expiresAt: 1_000_000 };
   };
   const lock = testAdvisoryLock();
-  const first = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, creds, lock });
-  const second = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, creds, lock });
+  const first = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, databaseUrl, lock });
+  const second = makeKeychain({ now: () => 10_000, skewMs: 0, refresh, databaseUrl, lock });
   await first.setConnectorToken("gmail.googleapis.com", "U1", {
     accessToken: "stale",
     refreshToken: "rt",
@@ -200,8 +193,13 @@ test("connector token refresh failures are logged and never poison the stored to
     errors.push(args.map(String).join(" "));
   });
 
-  const creds = testMap<KeychainCredential>();
-  const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
+  const databaseUrl = testDatabaseUrl();
+  const keychain = makeKeychain({
+    databaseUrl,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => ({ accessToken: "" }),
+  });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
     refreshToken: "rt",
@@ -225,7 +223,7 @@ test("connector token refresh failures are logged and never poison the stored to
   assert.match(errors[0]!, /token refresh failed for api\.github\.com/);
 
   const throwing = makeKeychain({
-    creds,
+    databaseUrl,
     now: () => 10_000,
     skewMs: 0,
     refresh: async () => {
@@ -244,7 +242,7 @@ test("connector token refresh failures are logged and never poison the stored to
   });
 
   const recovered = makeKeychain({
-    creds,
+    databaseUrl,
     now: () => 20_000,
     skewMs: 0,
     refresh: async (_host, t) => ({ accessToken: "fresh", refreshToken: t.refreshToken, expiresAt: 1_000_000 }),
@@ -269,83 +267,8 @@ test("connector tokens: expired non-refreshable connector tokens need reconnect"
   });
 });
 
-test("connector token keys are Postgres-safe (no NUL byte) — round-trip through a NUL-rejecting backing", async () => {
-  const store = new Map<string, KeychainCredential>();
-  const seenKeys: string[] = [];
-  const rejectNul = (k: string): void => {
-    if (k.includes("\u0000")) throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
-    seenKeys.push(k);
-  };
-  const creds: DurableMap<KeychainCredential> = {
-    async mutateMany() {
-      throw new Error("unused in connector token test");
-    },
-    async insertIfAbsent() {
-      throw new Error("unused in connector token test");
-    },
-    async update() {
-      throw new Error("unused in connector token test");
-    },
-    async deleteIf() {
-      throw new Error("unused in connector token test");
-    },
-    async deleteBelow() {
-      throw new Error("unused in connector token test");
-    },
-    async deleteMany() {
-      throw new Error("unused in connector token test");
-    },
-    async all() {
-      return [...store.values()];
-    },
-    async entries() {
-      return [...store.entries()];
-    },
-    async select<K extends Extract<keyof KeychainCredential, string> = never>(
-      query: DurableMapSelect<KeychainCredential, K>,
-    ) {
-      return selectEntries([...store.entries()], query).map(([, value]) => value);
-    },
-    async selectEntries<K extends Extract<keyof KeychainCredential, string> = never>(
-      query: DurableMapSelect<KeychainCredential, K>,
-    ) {
-      return selectEntries([...store.entries()], query);
-    },
-    async get(k: string) {
-      rejectNul(k);
-      return store.get(k) ?? null;
-    },
-    async put(k: string, v: KeychainCredential) {
-      rejectNul(k);
-      store.set(k, v);
-    },
-    async putIfAbsent(k: string, v: KeychainCredential) {
-      rejectNul(k);
-      const e = store.get(k);
-      if (e) return e;
-      store.set(k, v);
-      return v;
-    },
-    async merge(k: string, patch: Partial<KeychainCredential>) {
-      rejectNul(k);
-      const v = store.get(k);
-      if (!v) return null;
-      const merged = { ...v, ...patch };
-      store.set(k, merged);
-      return merged;
-    },
-    async delete(k: string) {
-      rejectNul(k);
-      store.delete(k);
-    },
-    async take(k: string) {
-      rejectNul(k);
-      const v = store.get(k) ?? null;
-      store.delete(k);
-      return v;
-    },
-  };
-  const keychain = makeKeychain({ creds });
+test("connector token keys are Postgres-safe (no NUL byte) and round-trip through Postgres", async () => {
+  const keychain = makeKeychain();
 
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" }, "personal");
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), "tok");
@@ -353,9 +276,9 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
   await keychain.setConnectorToken("slack.com", "U2", { accessToken: "tok2" });
   assert.equal(await keychain.connectorAccessToken("slack.com", "U2"), "tok2");
 
-  assert.ok(seenKeys.length > 0);
+  const connectors = await keychain.listConnectorsByOwners(["U1", "U2"]);
   assert.ok(
-    seenKeys.every((k) => !k.includes("\u0000")),
+    [...connectors.values()].flat().every((c) => !c.credentialId.includes("\u0000")),
     "connector record keys must contain no NUL byte (Postgres-incompatible)",
   );
 });
@@ -390,8 +313,7 @@ test("connector token account-type sub-key: a principal holds personal AND compa
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
-  const creds = testMap<KeychainCredential>();
-  const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
+  const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
   await keychain.save({ ownerId: "U1", service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
 
@@ -406,8 +328,8 @@ test("connector tokens are hidden from keychain listings and own-credential mate
     ["GITHUB_TOKEN"],
   );
 
-  const connector = (await creds.all()).find((c) => c.managed === "connector")!;
-  assert.equal(await keychain.remove("U1", connector.id), false);
+  const [connector] = (await keychain.listConnectorsByOwners(["U1"])).get("U1")!;
+  assert.equal(await keychain.remove("U1", connector!.credentialId), false);
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "tok");
 });
 

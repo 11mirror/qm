@@ -6,6 +6,7 @@ import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -20,9 +21,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 function fixture() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));

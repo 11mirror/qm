@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createKeychain, KeychainError, ASK_TTL_MS } from "../src/credentials/keychain.ts";
+import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
@@ -16,9 +17,7 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 function keychain(now = Date.now) {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("shared-credential-resumption-test"),
     now,
   });
