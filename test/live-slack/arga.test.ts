@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  provisionSlackTwin,
-  teardownTwin,
-  seedTwinUsers,
-  type TwinAdmin,
-  type TwinSession,
-} from "./live-slack/arga.ts";
+import { provisionSlackTwin, teardownTwin, seedTwinUsers, type TwinAdmin, type TwinSession } from "./arga.ts";
 
 const READY_TWIN = {
   status: "ready",
