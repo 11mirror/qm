@@ -9,7 +9,7 @@ import { cleanBrandingLabel, resolveBranding } from "../../resolution/branding.t
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import { supportsScopeProfile } from "../../sandbox/sandbox.ts";
-import { isPollSurface } from "../../triggers/run-trigger.ts";
+import { isWakeTrigger } from "../../triggers/provenance.ts";
 import {
   renderKeychainManifest,
   type PublicServiceCredential,
@@ -336,7 +336,7 @@ export async function finishSystemPrompt(
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
   }
-  if (automatedTurn && input.surface && isPollSurface(input.surface)) {
+  if (automatedTurn && input.surface && isWakeTrigger(input.surface)) {
     systemPrompt += `\n\n${POLL_SILENCE_MD}`;
   }
   if (reachAvailable) {

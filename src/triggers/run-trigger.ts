@@ -78,9 +78,6 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
   return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
 }
 
-const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
-export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
-
 function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResult): DeliveryProvenance {
   return {
     trigger: spec.surface,
@@ -97,8 +94,7 @@ function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResu
 
 async function relayAttribution(deps: TriggerDeps, spec: TriggerSpec): Promise<string | undefined> {
   if (spec.message === undefined || !deps.directory) return undefined;
-  const member = await deps.directory.get(spec.owner).catch(() => null);
-  return member?.displayName;
+  return (await deps.directory.get(spec.owner))?.displayName;
 }
 
 async function actorMayReadScope(
