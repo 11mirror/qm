@@ -586,7 +586,7 @@ test(
       [legacy, thread, JSON.stringify(request(thread)), Date.now()],
     );
     const queued = await admit(`web:alice:${randomUUID()}`);
-    const settle = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0015-settle-legacy-in-flight")!;
+    const settle = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0015-settle-unclaimed-in-flight")!;
     for (const statement of settle.statements) await admin.query(statement);
     const failed = await runStore.runs.get(legacy);
     assert.equal(failed?.status, "failed");

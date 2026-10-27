@@ -2,9 +2,9 @@ import type { StoresModule } from "./stores.ts";
 import { LOOPS_TO_CRONS_MIGRATION } from "../cron/migrations.ts";
 import { INBOX_ITEM_SOURCE_MIGRATION, inboxConversationKeyMigration } from "../inbox/ledger.ts";
 
-type LegacyMigrationsInputs = { stores: StoresModule };
+type UpgradeMigrationsInputs = { stores: StoresModule };
 
-export function registerLegacyMigrations(deps: LegacyMigrationsInputs) {
+export function registerLegacyMigrations(deps: UpgradeMigrationsInputs) {
   const { pgPool } = deps.stores;
 
   pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
