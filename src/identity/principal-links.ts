@@ -43,7 +43,7 @@ const PRINCIPAL_LINKS: TableSpec = {
   columns: cols(`principalId text!, canonicalId text!, evidence text!, linkedBy text!, createdAt bigint!`),
 };
 
-export const PRINCIPAL_LINKS_MIGRATION = mapToTableMigration("identity/principal-links/0001-typed", PRINCIPAL_LINKS);
+const PRINCIPAL_LINKS_MIGRATION = mapToTableMigration("identity/principal-links/0001-typed", PRINCIPAL_LINKS);
 
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;

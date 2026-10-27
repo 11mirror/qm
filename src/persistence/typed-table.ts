@@ -81,6 +81,10 @@ function shape(spec: TableSpec) {
   return { keyCol, renamed: keyCol !== `"id"`, cols, fields };
 }
 
+const conversions = new Map<string, MapConversion>();
+
+export const mapConversions = (): MapConversion[] => [...conversions.values()];
+
 export function mapToTableMigration(
   id: string,
   spec: TableSpec,
@@ -175,7 +179,9 @@ export function mapToTableMigration(
       END $contract$`,
     ],
   };
-  return { id, statements, spec, dropKeys: opts.dropKeys ?? [], contract };
+  const conversion = { id, statements, spec, dropKeys: opts.dropKeys ?? [], contract };
+  conversions.set(id, conversion);
+  return conversion;
 }
 
 function toParam(value: unknown, type: ColumnType): unknown {

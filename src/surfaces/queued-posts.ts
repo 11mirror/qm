@@ -14,7 +14,7 @@ const QUEUED_POSTS: TableSpec = {
   columns: cols(`post jsonb!, firstFailedAt bigint!, lastError text!`),
 };
 
-export const QUEUED_POSTS_MIGRATION = mapToTableMigration("surfaces/queued-posts/0001-typed", QUEUED_POSTS);
+const QUEUED_POSTS_MIGRATION = mapToTableMigration("surfaces/queued-posts/0001-typed", QUEUED_POSTS);
 
 export function createQueuedPosts(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [QUEUED_POSTS_MIGRATION]);

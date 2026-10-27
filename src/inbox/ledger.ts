@@ -254,7 +254,7 @@ const CRON_ITEMS: TableSpec = {
     updatedAt bigint!`),
 };
 
-export const CRON_ITEMS_MIGRATION = mapToTableMigration("triggers/cron-items/0001-typed", CRON_ITEMS, {
+const CRON_ITEMS_MIGRATION = mapToTableMigration("triggers/cron-items/0001-typed", CRON_ITEMS, {
   statements: [
     `CREATE INDEX IF NOT EXISTS cron_items_cron_id ON cron_items (cron_id)`,
     `CREATE INDEX IF NOT EXISTS cron_items_conversation_key ON cron_items (conversation_key)`,

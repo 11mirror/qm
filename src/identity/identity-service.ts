@@ -50,11 +50,11 @@ const EXTERNAL_MEMBERS: TableSpec = {
     createdAt bigint!, updatedAt bigint!`),
 };
 
-export const DEACTIVATED_PRINCIPALS_MIGRATION = mapToTableMigration(
+const DEACTIVATED_PRINCIPALS_MIGRATION = mapToTableMigration(
   "identity/deactivated-principals/0001-typed",
   DEACTIVATED_PRINCIPALS,
 );
-export const EXTERNAL_MEMBERS_MIGRATION = mapToTableMigration("identity/external-members/0001-typed", EXTERNAL_MEMBERS);
+const EXTERNAL_MEMBERS_MIGRATION = mapToTableMigration("identity/external-members/0001-typed", EXTERNAL_MEMBERS);
 
 export function actorAssertionActive(
   identity: Pick<IdentityService, "classify" | "isInternal">,

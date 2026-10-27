@@ -102,7 +102,7 @@ const MEMORY_CAPTURE_PENDING: TableSpec = {
     sensitivity text, inheritedFacts jsonb, turns jsonb!, token text!, at bigint!`),
 };
 
-export const MEMORY_CAPTURE_PENDING_MIGRATION = mapToTableMigration(
+const MEMORY_CAPTURE_PENDING_MIGRATION = mapToTableMigration(
   "memory/capture-pending/0001-typed",
   MEMORY_CAPTURE_PENDING,
 );

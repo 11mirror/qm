@@ -19,7 +19,7 @@ const OAUTH_FLOWS: TableSpec = {
     orgId text, accountType text, clientRef text, codeVerifier text, consentLinkId text`),
 };
 
-export const OAUTH_FLOWS_MIGRATION = mapToTableMigration("connectors/oauth-flows/0001-typed", OAUTH_FLOWS);
+const OAUTH_FLOWS_MIGRATION = mapToTableMigration("connectors/oauth-flows/0001-typed", OAUTH_FLOWS);
 
 export function createOAuthFlowStore(
   databaseUrl: string,

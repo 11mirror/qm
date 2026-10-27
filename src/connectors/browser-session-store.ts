@@ -21,10 +21,7 @@ const BROWSER_SESSIONS: TableSpec = {
   columns: cols(`stateEnc text!, updatedAt bigint!`),
 };
 
-export const BROWSER_SESSIONS_MIGRATION = mapToTableMigration(
-  "connectors/browser-sessions/0001-typed",
-  BROWSER_SESSIONS,
-);
+const BROWSER_SESSIONS_MIGRATION = mapToTableMigration("connectors/browser-sessions/0001-typed", BROWSER_SESSIONS);
 
 export function createBrowserSessionStore(deps: {
   databaseUrl: string;

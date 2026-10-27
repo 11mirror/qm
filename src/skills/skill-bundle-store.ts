@@ -33,7 +33,7 @@ const SKILL_BUNDLES: TableSpec = {
   columns: cols(`commit text!, files jsonb!, hash text!`),
 };
 
-export const SKILL_BUNDLES_MIGRATION = mapToTableMigration("skills/bundles/0001-typed", SKILL_BUNDLES);
+const SKILL_BUNDLES_MIGRATION = mapToTableMigration("skills/bundles/0001-typed", SKILL_BUNDLES);
 
 export function createSkillBundleStore(databaseUrl: string): SkillBundleStore {
   const table = typedTable<SkillBundle>(createPgPool(databaseUrl, [SKILL_BUNDLES_MIGRATION]), SKILL_BUNDLES);

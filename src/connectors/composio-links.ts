@@ -30,11 +30,8 @@ const SLACK_ACCOUNTS: TableSpec = {
   columns: cols(`accountId text!, memberId text!, userId text!, teamId text!, user text!, workspace text!`),
 };
 
-export const COMPOSIO_RETURNS_MIGRATION = mapToTableMigration(
-  "connectors/composio-returns/0001-typed",
-  COMPOSIO_RETURNS,
-);
-export const SLACK_ACCOUNTS_MIGRATION = mapToTableMigration("connectors/slack-accounts/0001-typed", SLACK_ACCOUNTS);
+const COMPOSIO_RETURNS_MIGRATION = mapToTableMigration("connectors/composio-returns/0001-typed", COMPOSIO_RETURNS);
+const SLACK_ACCOUNTS_MIGRATION = mapToTableMigration("connectors/slack-accounts/0001-typed", SLACK_ACCOUNTS);
 
 export function createComposioReturns(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [COMPOSIO_RETURNS_MIGRATION]);

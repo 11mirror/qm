@@ -22,7 +22,7 @@ const SESSION_MAILBOX: TableSpec = {
     audience jsonb!, createdAt bigint!, consumed boolean`),
 };
 
-export const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX, {
+const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX, {
   statements: [`CREATE INDEX IF NOT EXISTS session_mailbox_recipient ON session_mailbox (recipient_id)`],
 });
 

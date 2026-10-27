@@ -36,7 +36,7 @@ const MODEL_CREDENTIALS: TableSpec = {
   columns: cols(`secretEnc text, disabled boolean, updatedAt bigint!, updatedBy text!`),
 };
 
-export const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-typed", MODEL_CREDENTIALS);
+const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-typed", MODEL_CREDENTIALS);
 
 export function createModelCredentialStore(input: {
   databaseUrl: string;

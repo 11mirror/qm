@@ -21,7 +21,7 @@ export interface ConsentLinkStore {
 
 const CONSENT_LINK_TTL_MS = 24 * 60 * 60_000;
 
-export const CONSENT_LINKS_MIGRATION = mapToTableMigration("connectors/consent-links/0001-typed", {
+const CONSENT_LINKS_MIGRATION = mapToTableMigration("connectors/consent-links/0001-typed", {
   table: "consent_links",
   key: "id",
   columns: cols(`principalId text!, orgId text, provider text!, accountType text!, redirectUri text!,

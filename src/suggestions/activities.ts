@@ -64,7 +64,7 @@ const SUGGESTED_ACTIVITY_PROFILES: TableSpec = {
   },
 };
 
-export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = mapToTableMigration(
+const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = mapToTableMigration(
   "suggestions/activity-profiles/0001-typed",
   SUGGESTED_ACTIVITY_PROFILES,
   { dropKeys: ["lastCadenceCheckAt", "managedSchedule"] },

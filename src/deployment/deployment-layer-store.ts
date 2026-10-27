@@ -92,7 +92,7 @@ const DEPLOYMENT_LAYER: TableSpec = {
     resolved jsonb!, pendingAudits jsonb`),
 };
 
-export const DEPLOYMENT_LAYER_MIGRATION = mapToTableMigration("deployment/layer/0001-typed", DEPLOYMENT_LAYER);
+const DEPLOYMENT_LAYER_MIGRATION = mapToTableMigration("deployment/layer/0001-typed", DEPLOYMENT_LAYER);
 
 export const LAYER_CREATED_BY = "system:deployment-layer";
 export const LAYER_REVIEWER = "system:deployment-layer-reviewer";

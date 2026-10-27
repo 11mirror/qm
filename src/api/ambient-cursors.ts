@@ -12,7 +12,7 @@ const AMBIENT_CURSORS: TableSpec = {
   columns: cols(`lastJudgedTs text!, lastJudgedAt bigint`),
 };
 
-export const AMBIENT_CURSORS_MIGRATION = mapToTableMigration("api/ambient-cursors/0001-typed", AMBIENT_CURSORS);
+const AMBIENT_CURSORS_MIGRATION = mapToTableMigration("api/ambient-cursors/0001-typed", AMBIENT_CURSORS);
 
 export function createAmbientCursors(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [AMBIENT_CURSORS_MIGRATION]);

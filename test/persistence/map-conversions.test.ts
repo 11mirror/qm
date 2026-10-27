@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { FEATURE_FLAGS_MIGRATION } from "../../src/feature-flags.ts";
-import { IDEMPOTENCY_MIGRATION } from "../../src/idempotency/idempotency-store.ts";
-import { SESSION_MAILBOX_MIGRATION } from "../../src/sessions/session-mailbox.ts";
-import { mapToTableMigration } from "../../src/persistence/typed-table.ts";
+import "../../src/wiring.ts";
+import { mapConversions, mapToTableMigration } from "../../src/persistence/typed-table.ts";
 import { assertMapConversion } from "../support/map-conversion.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
-const CONVERSIONS = [FEATURE_FLAGS_MIGRATION, IDEMPOTENCY_MIGRATION, SESSION_MAILBOX_MIGRATION];
+const CONVERSIONS = mapConversions();
+
+test("every former durable-map table has a conversion", () => assert.equal(CONVERSIONS.length, 80));
 
 for (const conversion of CONVERSIONS)
   test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
