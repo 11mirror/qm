@@ -636,7 +636,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 }
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -690,7 +690,7 @@ test("each governor checkpoint sees only the work since the last checkpoint, not
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;

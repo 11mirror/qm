@@ -28,7 +28,6 @@ function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | 
 }
 
 export const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
-const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
   return (
@@ -80,15 +79,12 @@ export function providerRefusalError(session: AssistantTextSession, messagesBefo
   return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
-export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
-
 export function refusalFallbackModelId(
   fromId: string,
-  configuredId?: string,
-  usable: (id: string) => boolean = () => true,
+  configuredId: string | undefined,
+  usable: (id: string) => boolean,
 ): string | undefined {
-  if (configuredId && configuredId !== fromId && usable(configuredId)) return configuredId;
-  return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
+  return configuredId && configuredId !== fromId && usable(configuredId) ? configuredId : undefined;
 }
 
 export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
@@ -172,7 +168,7 @@ export function createTurnRecovery(o: {
     const failed = message as AssistantMessage | undefined;
     if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
     const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
-    if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
+    if (failure?.code !== "context_too_long") return;
     documentRejection = failure;
     request.stubDocuments();
     console.error(

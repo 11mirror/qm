@@ -100,7 +100,6 @@ export async function piCompactHistory(
       !(error instanceof ProviderTurnError) ||
       error.code !== "refusal" ||
       !fallbackId ||
-      !resolveModel(access.servedId(fallbackId)) ||
       access.servedId(fallbackId) === access.servedId(primaryId)
     )
       throw error;
