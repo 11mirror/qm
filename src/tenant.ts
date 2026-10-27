@@ -3,7 +3,6 @@ import { processOrgId, processTenantSettings } from "./config.ts";
 import { configurePgTenantSource } from "./persistence/pg-pool.ts";
 import type { TenantSettings } from "./tenants/registry.ts";
 import { scopeId, type ScopeId } from "./types.ts";
-import { reportFailure } from "./util/errors.ts";
 
 export interface Tenant {
   readonly id?: string;
@@ -28,6 +27,10 @@ export function tenant(): Tenant {
   const orgId = processOrgId();
   if (processTenant?.orgId !== orgId) processTenant = tenantFor(orgId);
   return processTenant;
+}
+
+export function scopedTenant(): Tenant | undefined {
+  return current.getStore();
 }
 
 export function withTenant<T>(t: Tenant, fn: () => T): T {
@@ -63,13 +66,4 @@ export function perTenant<T>(create: () => T): () => T {
     }
     return state;
   };
-}
-
-export function reportForeignTenant(claimed: string | undefined, credential: string): void {
-  const serving = tenant().orgId;
-  if (claimed === undefined || claimed === serving) return;
-  reportFailure(
-    "tenant: credential issued for another tenant",
-    new Error(`${credential} names tenant ${claimed}; this process serves ${serving}`),
-  );
 }

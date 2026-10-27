@@ -13,7 +13,7 @@ import {
   type TenantSettings,
 } from "./tenant-settings.ts";
 
-export type TenantService = "core" | "portal" | "web-ui";
+export type TenantService = "portal" | "web-ui";
 
 interface TenantRegistrySnapshot {
   homeId: string;
@@ -160,12 +160,10 @@ function registeredTenantEnv(base: Env, tenant: TenantSettings & { id: string })
   );
 }
 
-export function tenantServiceEnv(base: Env, tenant: TenantSettings, service: TenantService): Record<string, string> {
+export function tenantServiceEnv(base: Env, tenant: TenantSettings): Record<string, string> {
   const merged: Env = tenant.id ? registeredTenantEnv(base, { ...tenant, id: tenant.id }) : { ...base };
-  if (service !== "core") {
-    merged.CORE_ORG_ID = tenant.orgId;
-    if (tenant.hosts[0]) merged.CORE_TENANT_HOST = tenant.hosts[0];
-  }
+  merged.CORE_ORG_ID = tenant.orgId;
+  if (tenant.hosts[0]) merged.CORE_TENANT_HOST = tenant.hosts[0];
   return Object.fromEntries(
     Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
@@ -225,7 +223,7 @@ interface TenantFront {
 
 export async function serveTenantsByHost(opts: {
   entry: URL;
-  service: Exclude<TenantService, "core">;
+  service: TenantService;
   port: number;
   env: Env;
 }): Promise<TenantFront> {
@@ -235,7 +233,7 @@ export async function serveTenantsByHost(opts: {
   const routes: HostRoute<HostTarget>[] = [];
   let homeTarget: HostTarget | undefined;
   for (const tenant of [home, ...registry.tenants.filter((t) => t.id !== registry.homeId)]) {
-    const serviceEnv = tenantServiceEnv(opts.env, tenant, opts.service);
+    const serviceEnv = tenantServiceEnv(opts.env, tenant);
     const env = tenant === home ? serviceEnv : await relocateEmbeddedAuth(serviceEnv);
     const worker = await startTenantWorker(opts.entry, env);
     workers.push(worker);
