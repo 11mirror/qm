@@ -100,6 +100,13 @@ test("a thread from a Slack account with an external policy still refuses trigge
   const b = await setup(t);
   const channelRef = `${namespace}:C1`;
   const threadRef = `${channelRef}:1700000000.000200`;
+  await b.app.upsertChannels(
+    [{ channelId: channelRef, name: "c1", isPrivate: true }],
+    [
+      { channelId: channelRef, principalId: "U_ALICE" },
+      { channelId: channelRef, principalId: "U_BOB" },
+    ],
+  );
   const seeded = await b.app.turn({
     origin: { kind: "human" },
     surface: "slack",
