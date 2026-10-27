@@ -71,7 +71,7 @@ const MAX_LIMIT = 100;
 const PREVIEW_CHARS = 500;
 const THREAD_CHARS = 64_000;
 const OPEN_CONCURRENCY = 4;
-const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 
 function memberNote(swarmId: string, coordinator: string): string {
   return `You are a member of the swarm "${coordinator}" (swarm ID ${swarmId}). It has a shared board you reach with the swarm tool: read channels, threads and posts, search, post or reply, and subscribe to a channel to be told about new posts. Board use is voluntary. Your final answer still returns to the coordinator as with any subagent.`;
@@ -165,7 +165,7 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       if (!channel || !CHANNEL_NAME.test(channel))
         return {
           ok: false,
-          message: "create_channel requires `channel`: lowercase letters, digits, - or _, up to 40.",
+          message: "create_channel requires `channel`: lowercase letters, digits, - or _.",
         };
       const created = await ctx.board.createChannel(
         swarmId,
