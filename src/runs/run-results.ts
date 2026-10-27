@@ -101,23 +101,29 @@ export type TurnFailureSessions = Pick<
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
-export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
-  if (run.status !== "failed") return false;
+export type FailureEntryOutcome = "recorded" | "present" | "unneeded" | "busy";
+
+export async function recordRunFailureEntry(
+  sessions: TurnFailureSessions,
+  run: Run,
+  waitMs = FAILURE_RECORD_WAIT_MS,
+): Promise<FailureEntryOutcome> {
+  if (run.status !== "failed") return "unneeded";
   const session = await sessions.getByThread(run.sessionId);
   if (!session) {
     console.error(
       `[run-results] failed run ${run.id} targets ${run.sessionId}, which has no session — no turn_failure entry recorded`,
     );
-    return false;
+    return "unneeded";
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "append", FAILURE_RECORD_WAIT_MS);
+  const { lease } = await acquireLeaseWithin(sessions, session.id, "append", waitMs);
   if (!lease) {
     console.error(`[run-results] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
-    return false;
+    return "busy";
   }
   try {
     const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
-    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
+    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return "present";
     await sessions.append(
       lease,
       turnFailureItem(
@@ -125,7 +131,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
         run.id,
       ),
     );
-    return true;
+    return "recorded";
   } finally {
     await sessions.releaseLease(lease);
   }
@@ -170,12 +176,9 @@ export function wireRunResultPosts(
     return true;
   };
   runs.onTerminal((run) => {
-    if (opts.sessions)
-      void recordRunFailureEntry(opts.sessions, run).catch(
-        reportFailureAs("run results: record turn_failure entry", undefined, `run=${run.id}`),
-      );
-    if (!owed(run)) return;
     void (async () => {
+      const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run) : "unneeded";
+      if (failure === "busy" || !owed(run)) return;
       const surface = run.request.surface;
       if (!surfaceHas(surface, "transcript") && !(surface && opts.postsImmediately?.(surface)))
         await new Promise((resolve) => setTimeout(resolve, graceMs).unref?.());
@@ -194,6 +197,12 @@ export function wireRunResultPosts(
         for (const run of batch) {
           const post = owed(run);
           try {
+            const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run, 0) : "unneeded";
+            if (failure === "busy") continue;
+            if (failure === "recorded") {
+              console.error(`[run-results] failed run ${run.id} had no turn_failure entry — recorded it`);
+              recovered += 1;
+            }
             if (!post) await settled(run, false);
             else if (await postOwed(run, post)) {
               console.error(`[run-results] terminal run ${run.id} still owed its reply — posted it`);
